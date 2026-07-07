@@ -17,7 +17,7 @@
 // (le cas le plus fréquent avec WebRTC : la négociation ICE échoue sans erreur JS explicite).
 
 const PEER_ID_PREFIX = 'bridge-bid-v1-';
-const CONNECTION_TIMEOUT_MS = 25000; // au-delà, on considère que ça n'aboutira pas
+const CONNECTION_TIMEOUT_MS = 45000; // au-delà, on considère que ça n'aboutira pas
 
 // Configuration ICE explicite : serveurs STUN publics de Google (découverte d'adresse),
 // complétés par un serveur TURN (ExpressTURN, compte gratuit) qui relaie réellement les
@@ -155,21 +155,25 @@ class BridgePeerConnection {
             conn.on('open', markConnected);
         }
 
-        // Diagnostic fin : état de la négociation ICE sous-jacente (utile en console pour
-        // comprendre POURQUOI une connexion reste bloquée : "checking" qui ne passe jamais
-        // à "connected"/"completed" indique généralement un blocage réseau/pare-feu).
-        conn.on('iceStateChanged', (state) => {
-            this._log('État ICE :', state);
-        });
-        if (conn.peerConnection) {
+        // Diagnostic fin : état de la négociation ICE sous-jacente. conn.peerConnection
+        // n'existe pas forcément encore à cet instant précis (créé un peu plus tard en
+        // interne par PeerJS) : on réessaye toutes les 150ms jusqu'à ce qu'il soit là, pour
+        // ne rater aucune transition d'état.
+        // IMPORTANT : on utilise addEventListener (jamais une affectation directe genre
+        // pc.onicecandidate = ...), pour ne surtout pas écraser la gestion interne de
+        // PeerJS — qui a justement besoin de onicecandidate pour transmettre les candidats
+        // à l'autre joueur. Écraser cette référence casserait l'échange ICE en silence.
+        const attachPCDiagnostics = () => {
             const pc = conn.peerConnection;
-            pc.oniceconnectionstatechange = () => {
+            if (!pc) {
+                if (!this._settled) setTimeout(attachPCDiagnostics, 150);
+                return;
+            }
+            this._log('Diagnostic attaché à peerConnection, état actuel :', pc.iceConnectionState);
+            pc.addEventListener('iceconnectionstatechange', () => {
                 this._log('État ICE (peerConnection) :', pc.iceConnectionState);
-            };
-            // Diagnostic détaillé : quel type de candidat ICE est effectivement récolté
-            // (host = réseau local, srflx = via STUN, relay = via TURN). Si aucun candidat
-            // "relay" n'apparaît, le serveur TURN configuré n'est pas joignable/valide.
-            pc.onicecandidate = (event) => {
+            });
+            pc.addEventListener('icecandidate', (event) => {
                 if (event.candidate) {
                     const parts = event.candidate.candidate.split(' ');
                     const typIndex = parts.indexOf('typ');
@@ -178,11 +182,12 @@ class BridgePeerConnection {
                 } else {
                     this._log('Récolte des candidats ICE terminée.');
                 }
-            };
-            pc.onicecandidateerror = (event) => {
+            });
+            pc.addEventListener('icecandidateerror', (event) => {
                 this._log('Erreur candidat ICE :', event.errorCode, event.errorText, event.url);
-            };
-        }
+            });
+        };
+        attachPCDiagnostics();
     }
 
     _armTimeouts() {
@@ -190,11 +195,11 @@ class BridgePeerConnection {
             if (this._settled) return;
             this._log('Toujours pas connecté après 10s...');
             if (this.handlers.onSlowConnection) this.handlers.onSlowConnection();
-        }, 12000);
+        }, 15000);
 
         this._connectTimeoutId = setTimeout(() => {
             if (this._settled) return;
-            this._log('Délai dépassé (25s) : abandon.');
+            this._log('Délai dépassé (45s) : abandon.');
             if (this.handlers.onTimeout) this.handlers.onTimeout();
         }, CONNECTION_TIMEOUT_MS);
     }

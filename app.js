@@ -111,7 +111,7 @@ function uiCreateRoom() {
         },
         onTimeout: () => {
             document.getElementById('hostWaitingStatus').innerHTML =
-                "⚠️ La connexion n'a pas abouti après 25 secondes. Ouvre la console (F12) pour plus de détails, " +
+                "⚠️ La connexion n'a pas abouti après 45 secondes. Ouvre la console (F12) pour plus de détails, " +
                 "et réessaie (recharge la page pour générer un nouveau code).";
         },
         onData: handlePeerData,
@@ -154,7 +154,7 @@ function uiJoinRoom() {
         onTimeout: () => {
             showScreen('screen-landing');
             showLandingError(
-                "⚠️ La connexion n'a pas abouti après 25 secondes. Vérifie le code, que l'hôte est " +
+                "⚠️ La connexion n'a pas abouti après 45 secondes. Vérifie le code, que l'hôte est " +
                 "toujours connecté, et ouvre la console (F12) pour plus de détails avant de réessayer."
             );
         },
