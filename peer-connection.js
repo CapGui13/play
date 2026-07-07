@@ -38,9 +38,52 @@ const ICE_CONFIG = {
             urls: 'turn:free.expressturn.com:3478?transport=tcp',
             username: '000000002098770532',
             credential: 'zIohrx8x/vvzdIwz7VVCZ1nj2fI='
+        },
+        {
+            urls: 'turns:free.expressturn.com:443?transport=tcp',
+            username: '000000002098770532',
+            credential: 'zIohrx8x/vvzdIwz7VVCZ1nj2fI='
         }
     ]
 };
+
+// Test isolé : force tout le trafic à passer par TURN (iceTransportPolicy:'relay'), sans
+// STUN ni connexion directe. Si aucun candidat "relay" n'apparaît ici, le problème est
+// bien le serveur TURN lui-même (injoignable depuis ce réseau, ou identifiants refusés) —
+// indépendamment de PeerJS. Résultat loggué dans le panneau de diagnostic.
+function testTurnConnectivity() {
+    const log = (typeof pushDebugLog === 'function') ? pushDebugLog : (s => console.log(s));
+    log('--- Test TURN isolé (iceTransportPolicy=relay) ---');
+
+    const pc = new RTCPeerConnection({ iceServers: ICE_CONFIG.iceServers, iceTransportPolicy: 'relay' });
+    let gotRelay = false;
+
+    pc.onicecandidate = (event) => {
+        if (event.candidate) {
+            log('Test TURN — candidat reçu, type = ' + (event.candidate.type || '?'));
+            if (event.candidate.type === 'relay') gotRelay = true;
+        } else {
+            log('Test TURN — récolte terminée. Résultat : ' + (gotRelay ? '✅ TURN joignable !' : '❌ Aucun relais obtenu.'));
+            pc.close();
+        }
+    };
+    pc.onicecandidateerror = (event) => {
+        log('Test TURN — erreur : ' + event.errorCode + ' ' + event.errorText + ' (' + event.url + ')');
+    };
+    pc.oniceconnectionstatechange = () => {
+        log('Test TURN — état ICE : ' + pc.iceConnectionState);
+    };
+
+    pc.createDataChannel('test');
+    pc.createOffer()
+        .then(offer => pc.setLocalDescription(offer))
+        .catch(err => log('Test TURN — erreur createOffer : ' + err.message));
+
+    setTimeout(() => {
+        if (!gotRelay) log('Test TURN — toujours rien après 12s, abandon du test.');
+        pc.close();
+    }, 12000);
+}
 
 function makeRoomCode() {
     const letters = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // sans caractères ambigus (0/O, 1/I)
