@@ -116,8 +116,25 @@ class BridgePeerConnection {
             this._log('État ICE :', state);
         });
         if (conn.peerConnection) {
-            conn.peerConnection.oniceconnectionstatechange = () => {
-                this._log('État ICE (peerConnection) :', conn.peerConnection.iceConnectionState);
+            const pc = conn.peerConnection;
+            pc.oniceconnectionstatechange = () => {
+                this._log('État ICE (peerConnection) :', pc.iceConnectionState);
+            };
+            // Diagnostic détaillé : quel type de candidat ICE est effectivement récolté
+            // (host = réseau local, srflx = via STUN, relay = via TURN). Si aucun candidat
+            // "relay" n'apparaît, le serveur TURN configuré n'est pas joignable/valide.
+            pc.onicecandidate = (event) => {
+                if (event.candidate) {
+                    const parts = event.candidate.candidate.split(' ');
+                    const typIndex = parts.indexOf('typ');
+                    const candType = typIndex !== -1 ? parts[typIndex + 1] : '?';
+                    this._log('Candidat ICE récolté, type =', candType);
+                } else {
+                    this._log('Récolte des candidats ICE terminée.');
+                }
+            };
+            pc.onicecandidateerror = (event) => {
+                this._log('Erreur candidat ICE :', event.errorCode, event.errorText, event.url);
             };
         }
     }
