@@ -1,0 +1,475 @@
+/* ===== Tokens ===== */
+:root {
+    --felt-deep: #0b3d2e;
+    --felt-mid: #145c43;
+    --brass: #c9a227;
+    --brass-bright: #e0bc4a;
+    --cream: #f6f1e3;
+    --ink: #17231d;
+    --ink-soft: #4a5750;
+    --card-red: #b5382f;
+    --card-red-bright: #d94f43;
+    --line: rgba(201, 162, 39, 0.35);
+
+    --font-display: 'Fraunces', 'Georgia', serif;
+    --font-body: 'Work Sans', 'Segoe UI', sans-serif;
+    --font-mono: 'IBM Plex Mono', 'Consolas', monospace;
+}
+
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Work+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap');
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+    font-family: var(--font-body);
+    background: radial-gradient(ellipse at top, var(--felt-mid) 0%, var(--felt-deep) 70%);
+    color: var(--cream);
+    min-height: 100vh;
+    padding: 20px;
+}
+
+.app-container {
+    max-width: 980px;
+    margin: 0 auto;
+}
+
+/* ===== Barre de connexion ===== */
+.connection-bar {
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    display: flex;
+    justify-content: center;
+    gap: 16px;
+    align-items: center;
+    background: rgba(11, 61, 46, 0.92);
+    backdrop-filter: blur(4px);
+    padding: 8px 16px;
+    font-family: var(--font-mono);
+    font-size: 13px;
+    z-index: 100;
+    border-bottom: 1px solid var(--line);
+}
+
+.connection-status.connected { color: #7fd99a; }
+.connection-status.disconnected { color: #e0857a; }
+
+.room-code-badge {
+    color: var(--brass-bright);
+    letter-spacing: 1px;
+}
+
+/* ===== Écran d'accueil ===== */
+.screen { padding-top: 20px; }
+
+.felt-hero {
+    text-align: center;
+    padding: 50px 20px 40px;
+}
+
+.hero-suits {
+    font-size: 22px;
+    letter-spacing: 12px;
+    color: var(--brass);
+    margin-bottom: 18px;
+}
+
+.felt-hero h1 {
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: 3rem;
+    letter-spacing: 0.5px;
+    margin-bottom: 14px;
+}
+
+.tagline {
+    color: rgba(246, 241, 227, 0.75);
+    font-size: 1.05rem;
+    max-width: 480px;
+    margin: 0 auto;
+    line-height: 1.6;
+}
+
+.landing-choices {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+    margin-top: 30px;
+}
+
+@media (max-width: 700px) {
+    .landing-choices { grid-template-columns: 1fr; }
+    .felt-hero h1 { font-size: 2.2rem; }
+}
+
+.landing-card {
+    background: rgba(0, 0, 0, 0.18);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 28px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.landing-card h2 {
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: 1.4rem;
+    color: var(--brass-bright);
+}
+
+.landing-card p {
+    color: rgba(246, 241, 227, 0.7);
+    font-size: 0.92rem;
+    line-height: 1.5;
+    flex-grow: 1;
+}
+
+/* ===== Boutons ===== */
+.btn {
+    font-family: var(--font-body);
+    font-weight: 600;
+    font-size: 0.95rem;
+    padding: 12px 22px;
+    border-radius: 8px;
+    border: none;
+    cursor: pointer;
+    transition: transform 0.15s, box-shadow 0.15s, opacity 0.15s;
+}
+
+.btn:hover { transform: translateY(-1px); }
+.btn:active { transform: translateY(0); }
+
+.btn-primary {
+    background: linear-gradient(180deg, var(--brass-bright), var(--brass));
+    color: var(--ink);
+    box-shadow: 0 3px 10px rgba(201, 162, 39, 0.3);
+}
+
+.btn-secondary {
+    background: transparent;
+    color: var(--cream);
+    border: 1.5px solid var(--line);
+}
+
+.btn-success {
+    background: #2f8f5b;
+    color: white;
+}
+
+.btn-small {
+    padding: 8px 14px;
+    font-size: 0.82rem;
+}
+
+.code-input {
+    font-family: var(--font-mono);
+    font-size: 1.3rem;
+    letter-spacing: 4px;
+    text-align: center;
+    text-transform: uppercase;
+    padding: 12px;
+    border-radius: 8px;
+    border: 1.5px solid var(--line);
+    background: rgba(0, 0, 0, 0.25);
+    color: var(--cream);
+}
+
+.code-input:focus {
+    outline: none;
+    border-color: var(--brass);
+}
+
+.error-banner {
+    margin-top: 18px;
+    background: rgba(180, 60, 50, 0.2);
+    border: 1px solid rgba(217, 79, 67, 0.5);
+    color: #f3c9c4;
+    padding: 12px 16px;
+    border-radius: 8px;
+    font-size: 0.9rem;
+}
+
+/* ===== Écrans d'attente ===== */
+#screen-host-waiting, #screen-guest-waiting {
+    text-align: center;
+    max-width: 520px;
+    margin: 40px auto 0;
+    background: rgba(0, 0, 0, 0.18);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 36px;
+}
+
+#screen-host-waiting h2, #screen-guest-waiting h2 {
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: 1.6rem;
+    margin-bottom: 10px;
+    color: var(--brass-bright);
+}
+
+.room-code-display {
+    font-family: var(--font-mono);
+    font-size: 2.6rem;
+    letter-spacing: 10px;
+    color: var(--brass-bright);
+    background: rgba(0, 0, 0, 0.3);
+    border-radius: 10px;
+    padding: 16px;
+    margin: 18px 0;
+}
+
+.share-link-row {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 20px;
+}
+
+.share-link-input {
+    flex-grow: 1;
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    padding: 10px;
+    border-radius: 6px;
+    border: 1px solid var(--line);
+    background: rgba(0, 0, 0, 0.25);
+    color: var(--cream);
+}
+
+.waiting-status {
+    font-size: 0.95rem;
+    color: rgba(246, 241, 227, 0.8);
+    margin-bottom: 10px;
+}
+
+.host-setup-panel {
+    margin-top: 20px;
+    padding-top: 20px;
+    border-top: 1px solid var(--line);
+    text-align: left;
+}
+
+.host-setup-panel h3 {
+    font-family: var(--font-display);
+    font-size: 1.15rem;
+    margin-bottom: 14px;
+    text-align: center;
+}
+
+.form-group { margin-bottom: 16px; }
+
+.form-group label {
+    display: block;
+    font-size: 0.85rem;
+    font-weight: 600;
+    margin-bottom: 6px;
+    color: rgba(246, 241, 227, 0.85);
+}
+
+.form-group input[type="file"] {
+    width: 100%;
+    padding: 8px;
+    border-radius: 6px;
+    background: rgba(0, 0, 0, 0.25);
+    border: 1px solid var(--line);
+    color: var(--cream);
+    font-size: 0.85rem;
+}
+
+.seat-choice {
+    display: flex;
+    gap: 20px;
+    font-size: 0.9rem;
+}
+
+.seat-choice label { display: flex; align-items: center; gap: 6px; font-weight: 500; }
+
+/* ===== Écran de jeu ===== */
+.game-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 18px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--line);
+}
+
+.board-number-label {
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: 1.3rem;
+    display: block;
+}
+
+.dealer-vuln-label {
+    font-size: 0.85rem;
+    color: rgba(246, 241, 227, 0.7);
+}
+
+.game-body {
+    display: grid;
+    grid-template-columns: 260px 1fr;
+    gap: 24px;
+}
+
+@media (max-width: 760px) {
+    .game-body { grid-template-columns: 1fr; }
+}
+
+.hands-panel { display: flex; flex-direction: column; gap: 14px; }
+
+.hand-card {
+    background: var(--cream);
+    color: var(--ink);
+    border-radius: 10px;
+    padding: 14px 16px;
+    box-shadow: 0 3px 10px rgba(0,0,0,0.25);
+}
+
+.hand-card-title {
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: 0.95rem;
+    margin-bottom: 8px;
+    color: var(--felt-deep);
+}
+
+.hand-cards { font-family: var(--font-mono); font-size: 0.95rem; }
+
+.card-line {
+    display: grid;
+    grid-template-columns: 20px 1fr;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 3px;
+}
+
+.suit-symbol { font-size: 1rem; text-align: center; }
+.suit-symbol.spades, .suit-symbol.clubs { color: var(--ink); }
+.suit-symbol.hearts, .suit-symbol.diamonds { color: var(--card-red); }
+
+.cards { letter-spacing: 1px; font-weight: 600; }
+
+/* Ledger d'enchères */
+.auction-panel {
+    background: rgba(0, 0, 0, 0.18);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 18px;
+}
+
+.auction-ledger {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: var(--font-mono);
+    margin-bottom: 16px;
+}
+
+.auction-ledger th {
+    font-size: 0.8rem;
+    padding: 8px 4px;
+    color: var(--brass-bright);
+    border-bottom: 1.5px solid var(--line);
+}
+
+.auction-ledger th.dealer-col {
+    color: var(--ink);
+    background: var(--brass);
+    border-radius: 4px 4px 0 0;
+}
+
+.auction-ledger td {
+    text-align: center;
+    padding: 7px 4px;
+    font-size: 0.92rem;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+
+.contract-result {
+    background: rgba(201, 162, 39, 0.15);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 12px 14px;
+    margin-bottom: 16px;
+    font-size: 0.95rem;
+    text-align: center;
+}
+
+.contract-result .info-text {
+    font-size: 0.8rem;
+    color: rgba(246, 241, 227, 0.6);
+    margin-top: 6px;
+    font-style: italic;
+}
+
+/* Boîte d'enchères */
+.bidding-box { margin-bottom: 12px; }
+
+.special-calls-row {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+
+.bid-grid { display: flex; flex-direction: column; gap: 6px; }
+
+.bid-row { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+
+.call-btn {
+    font-family: var(--font-mono);
+    font-weight: 600;
+    font-size: 0.85rem;
+    padding: 9px 4px;
+    border-radius: 6px;
+    border: 1px solid var(--line);
+    background: rgba(246, 241, 227, 0.06);
+    color: var(--cream);
+    cursor: pointer;
+    transition: background 0.15s, transform 0.1s;
+}
+
+.call-btn:not(:disabled):hover {
+    background: rgba(201, 162, 39, 0.25);
+    transform: translateY(-1px);
+}
+
+.call-btn:disabled {
+    opacity: 0.28;
+    cursor: not-allowed;
+}
+
+.call-btn.hearts, .call-btn.diamonds { color: var(--card-red-bright); }
+.call-btn.notrump { color: var(--brass-bright); }
+
+.call-btn-special {
+    flex: 1;
+    background: rgba(0,0,0,0.2);
+}
+
+.turn-indicator {
+    text-align: center;
+    font-size: 0.9rem;
+    font-weight: 600;
+    padding: 8px;
+    border-radius: 6px;
+}
+
+.turn-indicator.my-turn {
+    background: rgba(47, 143, 91, 0.25);
+    color: #8fe3ac;
+}
+
+.turn-indicator.their-turn {
+    color: rgba(246, 241, 227, 0.5);
+}
+
+.next-board-panel {
+    text-align: center;
+    margin-top: 20px;
+}
+
+.info-text {
+    font-size: 0.85rem;
+    color: rgba(246, 241, 227, 0.6);
+}
