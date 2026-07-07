@@ -20,8 +20,8 @@ const PEER_ID_PREFIX = 'bridge-bid-v1-';
 const CONNECTION_TIMEOUT_MS = 25000; // au-delà, on considère que ça n'aboutira pas
 
 // Configuration ICE explicite : serveurs STUN publics de Google (découverte d'adresse),
-// complétés par un serveur TURN public gratuit (Open Relay Project) qui relaie réellement
-// les données quand une connexion directe échoue — cas fréquent avec les NAT restrictifs,
+// complétés par un serveur TURN (ExpressTURN, compte gratuit) qui relaie réellement les
+// données quand une connexion directe échoue — cas fréquent avec les NAT restrictifs,
 // certains pare-feux, ou le "NAT hairpinning" (deux appareils sur le même réseau qui
 // n'arrivent pas à se joindre via leur IP publique commune).
 const ICE_CONFIG = {
@@ -30,19 +30,14 @@ const ICE_CONFIG = {
         { urls: 'stun:stun1.l.google.com:19302' },
         { urls: 'stun:stun2.l.google.com:19302' },
         {
-            urls: 'turn:openrelay.metered.ca:80',
-            username: 'openrelayproject',
-            credential: 'openrelayproject'
+            urls: 'turn:free.expressturn.com:3478',
+            username: '000000002098770532',
+            credential: 'zIohrx8x/vvzdIwz7VVCZ1nj2fI='
         },
         {
-            urls: 'turn:openrelay.metered.ca:443',
-            username: 'openrelayproject',
-            credential: 'openrelayproject'
-        },
-        {
-            urls: 'turn:openrelay.metered.ca:443?transport=tcp',
-            username: 'openrelayproject',
-            credential: 'openrelayproject'
+            urls: 'turn:free.expressturn.com:3478?transport=tcp',
+            username: '000000002098770532',
+            credential: 'zIohrx8x/vvzdIwz7VVCZ1nj2fI='
         }
     ]
 };
