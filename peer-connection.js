@@ -17,16 +17,33 @@
 // (le cas le plus fréquent avec WebRTC : la négociation ICE échoue sans erreur JS explicite).
 
 const PEER_ID_PREFIX = 'bridge-bid-v1-';
-const CONNECTION_TIMEOUT_MS = 20000; // au-delà, on considère que ça n'aboutira pas
+const CONNECTION_TIMEOUT_MS = 25000; // au-delà, on considère que ça n'aboutira pas
 
-// Configuration ICE explicite (serveurs STUN publics de Google), plutôt que de compter
-// uniquement sur la config par défaut de PeerJS — plus robuste si leur config par défaut
-// est temporairement indisponible ou mal adaptée au réseau de l'utilisateur.
+// Configuration ICE explicite : serveurs STUN publics de Google (découverte d'adresse),
+// complétés par un serveur TURN public gratuit (Open Relay Project) qui relaie réellement
+// les données quand une connexion directe échoue — cas fréquent avec les NAT restrictifs,
+// certains pare-feux, ou le "NAT hairpinning" (deux appareils sur le même réseau qui
+// n'arrivent pas à se joindre via leur IP publique commune).
 const ICE_CONFIG = {
     iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
         { urls: 'stun:stun1.l.google.com:19302' },
-        { urls: 'stun:stun2.l.google.com:19302' }
+        { urls: 'stun:stun2.l.google.com:19302' },
+        {
+            urls: 'turn:openrelay.metered.ca:80',
+            username: 'openrelayproject',
+            credential: 'openrelayproject'
+        },
+        {
+            urls: 'turn:openrelay.metered.ca:443',
+            username: 'openrelayproject',
+            credential: 'openrelayproject'
+        },
+        {
+            urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+            username: 'openrelayproject',
+            credential: 'openrelayproject'
+        }
     ]
 };
 
@@ -110,11 +127,11 @@ class BridgePeerConnection {
             if (this._settled) return;
             this._log('Toujours pas connecté après 10s...');
             if (this.handlers.onSlowConnection) this.handlers.onSlowConnection();
-        }, 10000);
+        }, 12000);
 
         this._connectTimeoutId = setTimeout(() => {
             if (this._settled) return;
-            this._log('Délai dépassé (20s) : abandon.');
+            this._log('Délai dépassé (25s) : abandon.');
             if (this.handlers.onTimeout) this.handlers.onTimeout();
         }, CONNECTION_TIMEOUT_MS);
     }
