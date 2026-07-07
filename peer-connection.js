@@ -72,6 +72,14 @@ class BridgePeerConnection {
 
     _log(...args) {
         console.log('[peer]', ...args);
+        if (typeof pushDebugLog === 'function') {
+            const text = args.map(a => {
+                if (a instanceof Error) return a.message;
+                if (typeof a === 'object') { try { return JSON.stringify(a); } catch (e) { return String(a); } }
+                return String(a);
+            }).join(' ');
+            pushDebugLog(text);
+        }
     }
 
     _clearTimers() {

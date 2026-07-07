@@ -39,10 +39,51 @@ function showLandingError(msg) {
     el.style.display = 'block';
 }
 
+// ===== Panneau de diagnostic (visible à l'écran, utile sur mobile sans accès aux DevTools) =====
+
+const debugLogLines = [];
+
+function pushDebugLog(line) {
+    const timestamp = new Date().toLocaleTimeString('fr-FR');
+    debugLogLines.push(`[${timestamp}] ${line}`);
+    const content = document.getElementById('debugLogContent');
+    if (content) {
+        content.textContent = debugLogLines.join('\n');
+        content.scrollTop = content.scrollHeight;
+    }
+}
+
+function uiToggleDebugPanel() {
+    const panel = document.getElementById('debugPanel');
+    panel.style.display = panel.style.display === 'none' ? 'flex' : 'none';
+}
+
+function uiCopyDebugLog() {
+    const text = debugLogLines.join('\n');
+    if (navigator.clipboard) {
+        navigator.clipboard.writeText(text).catch(() => {
+            fallbackCopyDebugLog(text);
+        });
+    } else {
+        fallbackCopyDebugLog(text);
+    }
+}
+
+function fallbackCopyDebugLog(text) {
+    const content = document.getElementById('debugLogContent');
+    const range = document.createRange();
+    range.selectNodeContents(content);
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    document.execCommand('copy');
+}
+
 // ===== Écran d'accueil : créer / rejoindre =====
 
 function uiCreateRoom() {
     document.getElementById('landingError').style.display = 'none';
+    document.getElementById('debugPanel').style.display = 'flex';
     if (peerConn) peerConn.destroy();
 
     peerConn = new BridgePeerConnection({
@@ -83,6 +124,7 @@ function uiCreateRoom() {
 
 function uiJoinRoom() {
     document.getElementById('landingError').style.display = 'none';
+    document.getElementById('debugPanel').style.display = 'flex';
     if (peerConn) peerConn.destroy();
     const code = document.getElementById('joinCodeInput').value.trim().toUpperCase();
     if (code.length !== 4) {

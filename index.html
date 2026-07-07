@@ -8,9 +8,21 @@
 </head>
 <body>
 
-<div id="connectionBar" class="connection-bar" style="display:none;">
-    <span id="connectionStatus" class="connection-status">🔴 Déconnecté</span>
+<div id="connectionBar" class="connection-bar">
+    <span id="connectionStatus" class="connection-status">⚪ Pas encore connecté</span>
     <span id="roomCodeBadge" class="room-code-badge" style="display:none;"></span>
+    <button type="button" class="debug-toggle-btn" onclick="uiToggleDebugPanel()">🐞</button>
+</div>
+
+<div id="debugPanel" class="debug-panel" style="display:none;">
+    <div class="debug-panel-header">
+        <span>Journal de diagnostic</span>
+        <div>
+            <button type="button" class="btn btn-secondary btn-small" onclick="uiCopyDebugLog()">Copier</button>
+            <button type="button" class="btn btn-secondary btn-small" onclick="uiToggleDebugPanel()">Fermer</button>
+        </div>
+    </div>
+    <pre id="debugLogContent" class="debug-log-content"></pre>
 </div>
 
 <div class="app-container">

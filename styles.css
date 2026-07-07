@@ -25,7 +25,7 @@ body {
     background: radial-gradient(ellipse at top, var(--felt-mid) 0%, var(--felt-deep) 70%);
     color: var(--cream);
     min-height: 100vh;
-    padding: 20px;
+    padding: 56px 20px 20px;
 }
 
 .app-container {
@@ -56,6 +56,63 @@ body {
 .room-code-badge {
     color: var(--brass-bright);
     letter-spacing: 1px;
+}
+
+.debug-toggle-btn {
+    background: transparent;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    color: var(--cream);
+    font-size: 13px;
+    padding: 2px 8px;
+    cursor: pointer;
+    margin-left: auto;
+}
+
+.debug-toggle-btn:hover {
+    background: rgba(201, 162, 39, 0.2);
+}
+
+.debug-panel {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    max-height: 45vh;
+    background: rgba(5, 20, 15, 0.97);
+    border-top: 2px solid var(--brass);
+    z-index: 200;
+    display: flex;
+    flex-direction: column;
+}
+
+.debug-panel-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 14px;
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    color: var(--brass-bright);
+    border-bottom: 1px solid var(--line);
+    flex-shrink: 0;
+}
+
+.debug-panel-header .btn-small {
+    padding: 4px 10px;
+    font-size: 0.72rem;
+}
+
+.debug-log-content {
+    margin: 0;
+    padding: 12px 14px;
+    overflow-y: auto;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    line-height: 1.6;
+    color: rgba(246, 241, 227, 0.9);
+    white-space: pre-wrap;
+    word-break: break-word;
 }
 
 /* ===== Écran d'accueil ===== */
