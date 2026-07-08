@@ -133,7 +133,6 @@ function fallbackCopyDebugLog(text) {
 
 function uiCreateRoom() {
     document.getElementById('landingError').style.display = 'none';
-    document.getElementById('debugPanel').style.display = 'flex';
     if (peerConn) peerConn.destroy();
 
     gameMode = document.getElementById('gameModeSelect').value;
@@ -188,7 +187,6 @@ function uiCreateRoom() {
 
 function uiJoinRoom() {
     document.getElementById('landingError').style.display = 'none';
-    document.getElementById('debugPanel').style.display = 'flex';
     if (peerConn) peerConn.destroy();
     const code = document.getElementById('joinCodeInput').value.trim().toUpperCase();
     if (code.length !== 4) {
