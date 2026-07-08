@@ -618,5 +618,6 @@ window.addEventListener('DOMContentLoaded', () => {
     const room = params.get('room');
     if (room) {
         document.getElementById('joinCodeInput').value = room.toUpperCase();
+        uiJoinRoom();
     }
 });
