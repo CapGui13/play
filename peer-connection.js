@@ -1,20 +1,25 @@
-// peer-connection.js — Connexion directe entre les deux navigateurs (WebRTC via PeerJS).
+// peer-connection.js — Connexion directe entre les navigateurs (WebRTC via PeerJS).
 //
 // Un joueur "crée" une partie : un identifiant PeerJS est généré à partir d'un code à
 // 4 lettres facile à partager (ex: "BQXK"), préfixé pour éviter les collisions avec
-// d'autres usagers du service public PeerJS. L'autre joueur "rejoint" avec ce code.
-// Une fois la connexion établie, les deux navigateurs s'échangent directement des
-// messages JSON (voir PROTOCOL_NOTES ci-dessous), sans jamais passer par un serveur à nous.
+// d'autres usagers du service public PeerJS. Le(s) autre(s) joueur(s) "rejoignent" avec
+// ce code. Une fois connectés, les navigateurs s'échangent directement des messages JSON
+// (voir PROTOCOL_NOTES ci-dessous), sans jamais passer par un serveur à nous.
 //
-// PROTOCOL_NOTES — messages échangés sur le DataConnection, tous de la forme { type, ... } :
-//   'deals'        { type:'deals', deals:[...], hostSeats:[...] }        — envoyé par l'hôte, tout le paquet de donnes
-//   'goto-board'   { type:'goto-board', boardIndex }                     — changer de donne (déclenché par n'importe qui)
-//   'call'         { type:'call', boardIndex, seat, call }                — une annonce a été faite
-//   'reset-auction'{ type:'reset-auction', boardIndex }                   — recommencer l'enchère de la donne en cours
+// Deux topologies possibles selon le mode de jeu :
+//   - 2 joueurs (modes "binôme" / "diagonale") : un hôte, un invité, connexion directe.
+//   - 3 joueurs (mode "maître du jeu") : un hôte accepte 2 invités. Les invités ne sont
+//     jamais connectés entre eux — l'hôte agit comme relais central (topologie en étoile) :
+//     tout message reçu d'un invité est ré-émis par l'hôte vers l'autre invité.
+//
+// PROTOCOL_NOTES — messages échangés, tous de la forme { type, ... } :
+//   'deals'          { type:'deals', deals:[...], seatAssignment:{...} } — envoyé par l'hôte, une fois
+//   'goto-board'     { type:'goto-board', boardIndex }
+//   'call'           { type:'call', boardIndex, seat, call }
+//   'reset-auction'  { type:'reset-auction', boardIndex }
 //
 // Diagnostic : tout ce qui touche à l'établissement de la connexion est aussi loggué en
-// console (F12) avec le préfixe "[peer]", pour pouvoir diagnostiquer un blocage silencieux
-// (le cas le plus fréquent avec WebRTC : la négociation ICE échoue sans erreur JS explicite).
+// console (F12) et dans le panneau de diagnostic à l'écran (préfixe "[peer]").
 
 const PEER_ID_PREFIX = 'bridge-bid-v1-';
 const CONNECTION_TIMEOUT_MS = 45000; // au-delà, on considère que ça n'aboutira pas
@@ -22,8 +27,7 @@ const CONNECTION_TIMEOUT_MS = 45000; // au-delà, on considère que ça n'abouti
 // Configuration ICE explicite : serveurs STUN publics de Google (découverte d'adresse),
 // complétés par un serveur TURN (ExpressTURN, compte gratuit) qui relaie réellement les
 // données quand une connexion directe échoue — cas fréquent avec les NAT restrictifs,
-// certains pare-feux, ou le "NAT hairpinning" (deux appareils sur le même réseau qui
-// n'arrivent pas à se joindre via leur IP publique commune).
+// certains pare-feux, ou le "NAT hairpinning".
 const ICE_CONFIG = {
     iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
@@ -48,9 +52,7 @@ const ICE_CONFIG = {
 };
 
 // Test isolé : force tout le trafic à passer par TURN (iceTransportPolicy:'relay'), sans
-// STUN ni connexion directe. Si aucun candidat "relay" n'apparaît ici, le problème est
-// bien le serveur TURN lui-même (injoignable depuis ce réseau, ou identifiants refusés) —
-// indépendamment de PeerJS. Résultat loggué dans le panneau de diagnostic.
+// STUN ni connexion directe. Résultat loggué dans le panneau de diagnostic.
 function testTurnConnectivity() {
     const log = (typeof pushDebugLog === 'function') ? pushDebugLog : (s => console.log(s));
     log('--- Test TURN isolé (iceTransportPolicy=relay) ---');
@@ -96,16 +98,24 @@ function makeRoomCode() {
 
 class BridgePeerConnection {
     constructor(handlers) {
-        // handlers: { onOpen(role, roomCode), onData(msg), onPeerConnected(), onPeerDisconnected(),
-        //             onError(err), onTimeout(), onSlowConnection() }
+        // handlers: { onOpen(role, roomCode), onData(msg, guestIndex), onGuestConnected(guestIndex, connectedCount, maxGuests),
+        //             onAllConnected(), onPeerConnected(), onPeerDisconnected(guestIndex), onError(err),
+        //             onTimeout(), onSlowConnection() }
+        // (onPeerConnected / onPeerDisconnected sans index restent déclenchés aussi, pour compat avec les modes à 2 joueurs)
         this.handlers = handlers || {};
         this.peer = null;
-        this.conn = null;
-        this.role = null; // 'host' | 'guest'
+        this.conns = [];       // connexions actives, dans l'ordre de connexion (index = "guestIndex")
+        this.role = null;      // 'host' | 'guest'
         this.roomCode = null;
+        this.maxGuests = 1;
         this._connectTimeoutId = null;
         this._slowHintTimeoutId = null;
-        this._settled = false; // vrai une fois connecté avec succès (désarme les timeouts)
+        this._settled = false; // vrai une fois au moins une connexion établie (désarme les timeouts)
+    }
+
+    get conn() {
+        // Alias pour compatibilité : la première (et souvent unique) connexion.
+        return this.conns[0] || null;
     }
 
     _log(...args) {
@@ -125,28 +135,29 @@ class BridgePeerConnection {
         if (this._slowHintTimeoutId) { clearTimeout(this._slowHintTimeoutId); this._slowHintTimeoutId = null; }
     }
 
-    _wireConnection(conn) {
-        this.conn = conn;
-
+    _wireConnection(conn, guestIndex) {
         conn.on('data', (msg) => {
-            if (this.handlers.onData) this.handlers.onData(msg);
+            if (this.handlers.onData) this.handlers.onData(msg, guestIndex);
         });
 
         conn.on('close', () => {
-            this._log('DataConnection fermée');
-            if (this.handlers.onPeerDisconnected) this.handlers.onPeerDisconnected();
+            this._log(`DataConnection #${guestIndex} fermée`);
+            if (this.handlers.onPeerDisconnected) this.handlers.onPeerDisconnected(guestIndex);
         });
 
         conn.on('error', (err) => {
-            this._log('Erreur DataConnection :', err);
+            this._log(`Erreur DataConnection #${guestIndex} :`, err);
             if (this.handlers.onError) this.handlers.onError(err);
         });
 
         const markConnected = () => {
             this._settled = true;
             this._clearTimers();
-            this._log('DataConnection ouverte, connexion établie ✅');
-            if (this.handlers.onPeerConnected) this.handlers.onPeerConnected();
+            this._log(`DataConnection #${guestIndex} ouverte, connexion établie ✅`);
+            const connectedCount = this.conns.filter(c => c && c.open).length;
+            if (this.handlers.onGuestConnected) this.handlers.onGuestConnected(guestIndex, connectedCount, this.maxGuests);
+            if (this.handlers.onPeerConnected) this.handlers.onPeerConnected(guestIndex);
+            if (connectedCount >= this.maxGuests && this.handlers.onAllConnected) this.handlers.onAllConnected();
         };
 
         if (conn.open) {
@@ -157,8 +168,7 @@ class BridgePeerConnection {
 
         // Diagnostic fin : état de la négociation ICE sous-jacente. conn.peerConnection
         // n'existe pas forcément encore à cet instant précis (créé un peu plus tard en
-        // interne par PeerJS) : on réessaye toutes les 150ms jusqu'à ce qu'il soit là, pour
-        // ne rater aucune transition d'état.
+        // interne par PeerJS) : on réessaye toutes les 150ms jusqu'à ce qu'il soit là.
         // IMPORTANT : on utilise addEventListener (jamais une affectation directe genre
         // pc.onicecandidate = ...), pour ne surtout pas écraser la gestion interne de
         // PeerJS — qui a justement besoin de onicecandidate pour transmettre les candidats
@@ -166,25 +176,25 @@ class BridgePeerConnection {
         const attachPCDiagnostics = () => {
             const pc = conn.peerConnection;
             if (!pc) {
-                if (!this._settled) setTimeout(attachPCDiagnostics, 150);
+                if (!conn.open) setTimeout(attachPCDiagnostics, 150);
                 return;
             }
-            this._log('Diagnostic attaché à peerConnection, état actuel :', pc.iceConnectionState);
+            this._log(`[#${guestIndex}] Diagnostic attaché à peerConnection, état actuel :`, pc.iceConnectionState);
             pc.addEventListener('iceconnectionstatechange', () => {
-                this._log('État ICE (peerConnection) :', pc.iceConnectionState);
+                this._log(`[#${guestIndex}] État ICE (peerConnection) :`, pc.iceConnectionState);
             });
             pc.addEventListener('icecandidate', (event) => {
                 if (event.candidate) {
                     const parts = event.candidate.candidate.split(' ');
                     const typIndex = parts.indexOf('typ');
                     const candType = typIndex !== -1 ? parts[typIndex + 1] : '?';
-                    this._log('Candidat ICE récolté, type =', candType);
+                    this._log(`[#${guestIndex}] Candidat ICE récolté, type =`, candType);
                 } else {
-                    this._log('Récolte des candidats ICE terminée.');
+                    this._log(`[#${guestIndex}] Récolte des candidats ICE terminée.`);
                 }
             });
             pc.addEventListener('icecandidateerror', (event) => {
-                this._log('Erreur candidat ICE :', event.errorCode, event.errorText, event.url);
+                this._log(`[#${guestIndex}] Erreur candidat ICE :`, event.errorCode, event.errorText, event.url);
             });
         };
         attachPCDiagnostics();
@@ -193,7 +203,7 @@ class BridgePeerConnection {
     _armTimeouts() {
         this._slowHintTimeoutId = setTimeout(() => {
             if (this._settled) return;
-            this._log('Toujours pas connecté après 10s...');
+            this._log('Toujours pas connecté après 15s...');
             if (this.handlers.onSlowConnection) this.handlers.onSlowConnection();
         }, 15000);
 
@@ -204,12 +214,14 @@ class BridgePeerConnection {
         }, CONNECTION_TIMEOUT_MS);
     }
 
-    // Crée une partie : génère un code, ouvre un Peer, attend qu'un adversaire se connecte.
-    createRoom() {
+    // Crée une partie : génère un code, ouvre un Peer, attend que `maxGuests` invité(s)
+    // se connectent (1 pour les modes à 2 joueurs, 2 pour le mode "maître du jeu").
+    createRoom(maxGuests = 1) {
         this.role = 'host';
+        this.maxGuests = maxGuests;
         this.roomCode = makeRoomCode();
         const id = PEER_ID_PREFIX + this.roomCode;
-        this._log('Création de la partie, id =', id);
+        this._log('Création de la partie, id =', id, '— invités attendus :', maxGuests);
         this.peer = new Peer(id, { config: ICE_CONFIG, debug: 1 });
 
         this.peer.on('open', () => {
@@ -219,10 +231,11 @@ class BridgePeerConnection {
 
         this.peer.on('connection', (conn) => {
             this._log('Connexion entrante reçue de', conn.peer);
-            // On n'accepte qu'un seul adversaire à la fois (2 joueurs)
-            if (this.conn) { conn.close(); return; }
+            if (this.conns.length >= this.maxGuests) { conn.close(); return; }
+            const guestIndex = this.conns.length;
+            this.conns.push(conn);
             this._armTimeouts();
-            this._wireConnection(conn);
+            this._wireConnection(conn, guestIndex);
         });
 
         this.peer.on('disconnected', () => {
@@ -238,6 +251,7 @@ class BridgePeerConnection {
     // Rejoint une partie déjà créée via son code à 4 lettres.
     joinRoom(roomCode) {
         this.role = 'guest';
+        this.maxGuests = 1; // du point de vue d'un invité, il n'y a qu'une connexion : vers l'hôte
         this.roomCode = roomCode.toUpperCase().trim();
         const targetId = PEER_ID_PREFIX + this.roomCode;
         this.peer = new Peer({ config: ICE_CONFIG, debug: 1 });
@@ -245,8 +259,9 @@ class BridgePeerConnection {
         this.peer.on('open', () => {
             this._log('Peer invité ouvert, tentative de connexion à', targetId);
             const conn = this.peer.connect(targetId, { reliable: true });
+            this.conns = [conn];
             this._armTimeouts();
-            this._wireConnection(conn);
+            this._wireConnection(conn, 0);
             if (this.handlers.onOpen) this.handlers.onOpen('guest', this.roomCode);
         });
 
@@ -261,19 +276,40 @@ class BridgePeerConnection {
         });
     }
 
-    send(message) {
-        if (this.conn && this.conn.open) {
-            this.conn.send(message);
+    // Envoie un message. Sans guestIndex : diffusé à toutes les connexions actives
+    // (utile côté hôte en mode "maître du jeu" pour relayer à tout le monde).
+    send(message, guestIndex) {
+        if (guestIndex !== undefined) {
+            const conn = this.conns[guestIndex];
+            if (conn && conn.open) conn.send(message);
+            return;
         }
+        this.conns.forEach(conn => {
+            if (conn && conn.open) conn.send(message);
+        });
+    }
+
+    // Diffuse à toutes les connexions SAUF celle d'index excludeIndex (utile côté hôte
+    // pour relayer le message d'un invité vers l'autre, sans le lui renvoyer à lui-même).
+    sendExcept(message, excludeIndex) {
+        this.conns.forEach((conn, i) => {
+            if (i === excludeIndex) return;
+            if (conn && conn.open) conn.send(message);
+        });
     }
 
     isConnected() {
-        return !!(this.conn && this.conn.open);
+        return this.conns.some(c => c && c.open);
+    }
+
+    allConnected() {
+        return this.conns.length >= this.maxGuests && this.conns.every(c => c && c.open);
     }
 
     destroy() {
         this._clearTimers();
-        if (this.conn) this.conn.close();
+        this.conns.forEach(c => c && c.close());
+        this.conns = [];
         if (this.peer) this.peer.destroy();
     }
 }

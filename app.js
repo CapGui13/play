@@ -1,6 +1,27 @@
 // app.js — État de l'application et rendu de l'interface.
 // S'appuie sur bidding-rules.js (logique pure), deal-parser.js (lecture PBN/LIN)
 // et peer-connection.js (connexion WebRTC) chargés avant ce fichier.
+//
+// MODES DE JEU :
+//   'pair'     — 2 joueurs : hôte = Nord ou Sud (à son choix), invité = l'autre.
+//                Est-Ouest est joué par un robot qui passe systématiquement.
+//   'diagonal' — 2 joueurs : hôte = Sud+Ouest ou Nord+Est (à son choix), invité = la paire complémentaire.
+//   'master'   — 3 joueurs : hôte = Est+Ouest ("maître du jeu"), 2 invités = Nord et Sud.
+//                Seul l'hôte peut naviguer entre les donnes (recommencer / donne suivante).
+//   'four'     — 4 joueurs : hôte = Nord, 3 invités = Est, Sud, Ouest (dans l'ordre de connexion).
+//                Chacun ne voit que sa propre main.
+//
+// TOPOLOGIE : à partir de 2 invités (modes 'master' et 'four'), les invités ne sont jamais
+// connectés entre eux — l'hôte relaie tout message reçu d'un invité vers les autres
+// (voir relayIfHost). Ce mécanisme est générique et ne nécessite aucune logique spécifique
+// par mode : il suffit que l'hôte relaie tout ce qu'il reçoit, aux autres que l'expéditeur.
+
+const GAME_MODES = {
+    pair: { maxGuests: 1 },
+    diagonal: { maxGuests: 1 },
+    master: { maxGuests: 2 },
+    four: { maxGuests: 3 }
+};
 
 const ALL_SEATS_PAIRS = { NS: ['N', 'S'], EW: ['E', 'W'] };
 const SUIT_SYMBOLS = { S: '♠', H: '♥', D: '♦', C: '♣' };
@@ -9,13 +30,44 @@ const SEAT_FULL_NAME = { N: 'Nord', E: 'Est', S: 'Sud', W: 'Ouest' };
 const VULN_LABEL = { None: 'Non vulnérable', NS: 'NS vulnérable', EW: 'EO vulnérable', Both: 'Tous vulnérables' };
 
 let peerConn = null;
-let mySeats = null;      // ['N','S'] ou ['E','W'] — les deux mains que ce joueur voit et contrôle
+let gameMode = 'pair';
+let myRole = null;       // 'host' | 'guest'
+let mySeats = null;      // sièges contrôlés par ce joueur, ex: ['N'], ['N','S'], ['S','W']...
+let autoPassSeats = [];  // sièges joués par le robot "passe" (mode 'pair' uniquement)
 let deals = null;        // tableau de donnes parsées
 let boardIndex = 0;
 let auctionHistory = []; // historique de la donne en cours : [{seat, call}, ...]
 
 function currentDeal() {
     return deals[boardIndex];
+}
+
+// Seul le "maître du jeu" (mode 'master') a une restriction de contrôle : dans tous les
+// autres modes, n'importe quel joueur peut recommencer l'enchère ou passer à la donne suivante.
+function canControlBoard() {
+    if (gameMode === 'master') return myRole === 'host';
+    return true;
+}
+
+// Calcule qui joue quoi selon le mode choisi et, le cas échéant, le choix de l'hôte.
+function computeSeatAssignment(mode, hostChoice) {
+    if (mode === 'pair') {
+        const hostSeats = [hostChoice]; // 'N' ou 'S'
+        const guestSeat = hostChoice === 'N' ? 'S' : 'N';
+        return { hostSeats, guestSeatsList: [[guestSeat]], autoPassSeats: ['E', 'W'] };
+    }
+    if (mode === 'diagonal') {
+        const hostSeats = hostChoice === 'SW' ? ['S', 'W'] : ['N', 'E']; // hostChoice: 'SW' ou 'NE'
+        const guestSeats = hostChoice === 'SW' ? ['N', 'E'] : ['S', 'W'];
+        return { hostSeats, guestSeatsList: [guestSeats], autoPassSeats: [] };
+    }
+    if (mode === 'master') {
+        return { hostSeats: ['E', 'W'], guestSeatsList: [['N'], ['S']], autoPassSeats: [] };
+    }
+    if (mode === 'four') {
+        return { hostSeats: ['N'], guestSeatsList: [['E'], ['S'], ['W']], autoPassSeats: [] };
+    }
+    return { hostSeats: ['N', 'S'], guestSeatsList: [['E', 'W']], autoPassSeats: [] };
 }
 
 // ===== Navigation entre écrans =====
@@ -61,9 +113,7 @@ function uiToggleDebugPanel() {
 function uiCopyDebugLog() {
     const text = debugLogLines.join('\n');
     if (navigator.clipboard) {
-        navigator.clipboard.writeText(text).catch(() => {
-            fallbackCopyDebugLog(text);
-        });
+        navigator.clipboard.writeText(text).catch(() => fallbackCopyDebugLog(text));
     } else {
         fallbackCopyDebugLog(text);
     }
@@ -86,6 +136,9 @@ function uiCreateRoom() {
     document.getElementById('debugPanel').style.display = 'flex';
     if (peerConn) peerConn.destroy();
 
+    gameMode = document.getElementById('gameModeSelect').value;
+    const maxGuests = GAME_MODES[gameMode].maxGuests;
+
     peerConn = new BridgePeerConnection({
         onOpen: (role, roomCode) => {
             document.getElementById('roomCodeDisplay').textContent = roomCode;
@@ -94,20 +147,31 @@ function uiCreateRoom() {
             document.getElementById('shareLinkInput').value = url.toString();
             document.getElementById('roomCodeBadge').textContent = 'Code : ' + roomCode;
             document.getElementById('roomCodeBadge').style.display = 'inline';
+            document.getElementById('hostWaitingStatus').textContent = maxGuests === 1
+                ? "⏳ En attente de connexion de l'adversaire..."
+                : `⏳ En attente des joueurs... (0/${maxGuests} connectés)`;
             showScreen('screen-host-waiting');
         },
-        onPeerConnected: () => {
+        onGuestConnected: (guestIndex, connectedCount, maxG) => {
             setConnectionStatus(true);
-            document.getElementById('hostWaitingStatus').textContent = "✅ Adversaire connecté !";
+            document.getElementById('hostWaitingStatus').textContent = maxG === 1
+                ? "✅ Adversaire connecté !"
+                : `⏳ En attente des joueurs... (${connectedCount}/${maxG} connectés)`;
+        },
+        onAllConnected: () => {
+            document.getElementById('hostWaitingStatus').textContent = maxGuests === 1
+                ? "✅ Adversaire connecté !"
+                : `✅ Tous les joueurs sont connectés ! (${maxGuests + 1} au total)`;
+            renderHostSeatChoice(gameMode);
             document.getElementById('hostSetupPanel').style.display = 'block';
         },
         onPeerDisconnected: () => {
-            setConnectionStatus(false);
+            setConnectionStatus(peerConn ? peerConn.isConnected() : false);
         },
         onSlowConnection: () => {
             document.getElementById('hostWaitingStatus').innerHTML =
-                "⏳ Toujours en attente... Vérifie que l'autre joueur a bien collé le code exact, " +
-                "et que vous êtes tous les deux connectés à internet.";
+                "⏳ Toujours en attente... Vérifie que le(s) autre(s) joueur(s) ont bien collé le code exact, " +
+                "et que vous êtes tous connectés à internet.";
         },
         onTimeout: () => {
             document.getElementById('hostWaitingStatus').innerHTML =
@@ -119,7 +183,7 @@ function uiCreateRoom() {
             showLandingError('Erreur de connexion : ' + ((err && (err.message || err.type)) || err));
         }
     });
-    peerConn.createRoom();
+    peerConn.createRoom(maxGuests);
 }
 
 function uiJoinRoom() {
@@ -138,7 +202,7 @@ function uiJoinRoom() {
             document.getElementById('roomCodeBadge').style.display = 'inline';
             showScreen('screen-guest-waiting');
         },
-        onPeerConnected: () => {
+        onGuestConnected: () => {
             setConnectionStatus(true);
             document.getElementById('guestWaitingTitle').textContent = 'Connecté !';
             document.getElementById('guestWaitingText').textContent = "En attente que l'hôte charge les donnes...";
@@ -180,6 +244,46 @@ function uiCopyShareLink() {
     }
 }
 
+// Génère le choix de siège adapté au mode (ou un simple texte informatif quand il n'y a
+// pas de choix à faire, l'assignation étant fixe).
+function renderHostSeatChoice(mode) {
+    const container = document.getElementById('hostSeatChoiceContainer');
+    if (mode === 'pair') {
+        container.innerHTML = `
+            <div class="form-group">
+                <label>Votre siège</label>
+                <div class="seat-choice">
+                    <label><input type="radio" name="hostSeatChoice" value="N" checked> Nord</label>
+                    <label><input type="radio" name="hostSeatChoice" value="S"> Sud</label>
+                </div>
+            </div>
+        `;
+    } else if (mode === 'diagonal') {
+        container.innerHTML = `
+            <div class="form-group">
+                <label>Votre paire</label>
+                <div class="seat-choice">
+                    <label><input type="radio" name="hostSeatChoice" value="SW" checked> Sud + Ouest</label>
+                    <label><input type="radio" name="hostSeatChoice" value="NE"> Nord + Est</label>
+                </div>
+            </div>
+        `;
+    } else if (mode === 'master') {
+        container.innerHTML = `<div class="seat-info-text">Vous jouez <strong>Est-Ouest</strong> (maître du jeu). Les deux invités joueront Nord et Sud.</div>`;
+    } else if (mode === 'four') {
+        container.innerHTML = `<div class="seat-info-text">Vous jouez <strong>Nord</strong>. Les invités joueront Est, Sud et Ouest (dans l'ordre de connexion).</div>`;
+    }
+}
+
+function getHostSeatChoiceValue(mode) {
+    if (mode === 'pair' || mode === 'diagonal') {
+        const checked = document.querySelector('input[name="hostSeatChoice"]:checked');
+        if (checked) return checked.value;
+        return mode === 'pair' ? 'N' : 'SW';
+    }
+    return null;
+}
+
 // ===== Démarrage de la partie (hôte) =====
 
 function uiStartGameAsHost() {
@@ -206,13 +310,20 @@ function uiStartGameAsHost() {
             return;
         }
 
-        const seatChoice = document.querySelector('input[name="hostSeatChoice"]:checked').value;
+        const hostChoice = getHostSeatChoiceValue(gameMode);
+        const assignment = computeSeatAssignment(gameMode, hostChoice);
+
         deals = parsedDeals;
-        mySeats = ALL_SEATS_PAIRS[seatChoice];
+        mySeats = assignment.hostSeats;
+        autoPassSeats = assignment.autoPassSeats;
+        myRole = 'host';
         boardIndex = 0;
         auctionHistory = [];
 
-        peerConn.send({ type: 'deals', deals, hostSeats: mySeats });
+        assignment.guestSeatsList.forEach((seats, guestIndex) => {
+            peerConn.send({ type: 'deals', deals, yourSeats: seats, gameMode }, guestIndex);
+        });
+
         enterGameScreen();
     };
 
@@ -224,16 +335,17 @@ function uiStartGameAsHost() {
     reader.readAsText(file);
 }
 
-// ===== Réception des messages de l'autre joueur =====
+// ===== Réception des messages des autres joueurs =====
 
-function handlePeerData(msg) {
+function handlePeerData(msg, guestIndex) {
     if (!msg || !msg.type) return;
 
     switch (msg.type) {
         case 'deals': {
             deals = msg.deals;
-            const hostIsNS = msg.hostSeats.includes('N');
-            mySeats = hostIsNS ? ALL_SEATS_PAIRS.EW : ALL_SEATS_PAIRS.NS;
+            mySeats = msg.yourSeats;
+            gameMode = msg.gameMode;
+            myRole = 'guest';
             boardIndex = 0;
             auctionHistory = [];
             enterGameScreen();
@@ -249,6 +361,7 @@ function handlePeerData(msg) {
                 return;
             }
             applyCall(msg.seat, msg.call);
+            relayIfHost(msg, guestIndex);
             break;
         }
 
@@ -258,6 +371,7 @@ function handlePeerData(msg) {
             renderAuctionLedger();
             renderBiddingBox();
             checkAuctionEnd();
+            relayIfHost(msg, guestIndex);
             break;
         }
 
@@ -266,9 +380,48 @@ function handlePeerData(msg) {
             boardIndex = msg.boardIndex;
             auctionHistory = [];
             renderBoard();
+            relayIfHost(msg, guestIndex);
             break;
         }
     }
+}
+
+// Quand l'hôte reçoit un message d'un invité, il le relaie aux AUTRES invités (les invités
+// ne sont jamais connectés entre eux). Générique : ne fait rien de plus en mode 2 joueurs
+// (il n'y a alors personne d'autre à qui relayer), et rien du tout côté invité.
+function relayIfHost(msg, fromGuestIndex) {
+    if (myRole === 'host') {
+        peerConn.sendExcept(msg, fromGuestIndex);
+    }
+}
+
+// ===== Robot "passe automatique" (mode 'pair' uniquement) =====
+//
+// Seul l'hôte injecte les passes automatiques (pour ne jamais les déclencher en double),
+// puis les diffuse comme n'importe quelle annonce — l'invité les reçoit et les applique
+// normalement via le cas 'call' de handlePeerData, sans rien savoir de spécial.
+function maybeAutoPass() {
+    if (myRole !== 'host') return;
+    if (!autoPassSeats || autoPassSeats.length === 0) return;
+    if (!deals || isAuctionOver(auctionHistory)) return;
+
+    const deal = currentDeal();
+    const turnSeat = currentTurnSeat(deal.dealer, auctionHistory);
+    if (!autoPassSeats.includes(turnSeat)) return;
+
+    const boardAtSchedule = boardIndex;
+    const historyLengthAtSchedule = auctionHistory.length;
+
+    setTimeout(() => {
+        if (boardIndex !== boardAtSchedule) return;
+        if (auctionHistory.length !== historyLengthAtSchedule) return; // quelque chose a changé entretemps
+        if (isAuctionOver(auctionHistory)) return;
+        const stillTurnSeat = currentTurnSeat(currentDeal().dealer, auctionHistory);
+        if (stillTurnSeat !== turnSeat) return;
+
+        applyCall(turnSeat, 'PASS');
+        peerConn.send({ type: 'call', boardIndex, seat: turnSeat, call: 'PASS' });
+    }, 700);
 }
 
 // ===== Écran de jeu =====
@@ -288,13 +441,20 @@ function renderBoard() {
     renderAuctionLedger();
     renderBiddingBox();
     checkAuctionEnd();
+    updateBoardControlVisibility();
+    maybeAutoPass();
+}
+
+function updateBoardControlVisibility() {
+    const resetBtn = document.getElementById('resetAuctionBtn');
+    if (resetBtn) resetBtn.style.display = canControlBoard() ? '' : 'none';
 }
 
 function renderGameHeader() {
     const deal = currentDeal();
     document.getElementById('boardNumberLabel').textContent = `Donne #${deal.board} (${boardIndex + 1}/${deals.length})`;
     document.getElementById('dealerVulnLabel').textContent =
-        `Donneur : ${seatFullName(deal.dealer)} · ${VULN_LABEL[deal.vulnerable]}`;
+        `Donneur : ${seatFullName(deal.dealer)} · ${VULN_LABEL[deal.vulnerable]} · Vous jouez : ${mySeats.map(seatFullName).join(' + ')}`;
 }
 
 function renderMyHands() {
@@ -359,7 +519,7 @@ function renderBiddingBox() {
 
     turnPanel.textContent = myTurn
         ? `À vous d'enchérir (${seatFullName(turnSeat)})`
-        : `En attente de l'adversaire (${seatFullName(turnSeat)})...`;
+        : `En attente de ${seatFullName(turnSeat)}...`;
     turnPanel.className = 'turn-indicator ' + (myTurn ? 'my-turn' : 'their-turn');
 
     const specialLabels = { PASS: 'Passe', X: 'X', XX: 'XX' };
@@ -401,6 +561,7 @@ function applyCall(seat, call) {
     renderAuctionLedger();
     renderBiddingBox();
     checkAuctionEnd();
+    maybeAutoPass();
 }
 
 function checkAuctionEnd() {
@@ -422,13 +583,18 @@ function checkAuctionEnd() {
     }
 
     const isLastBoard = boardIndex >= deals.length - 1;
-    nextPanel.style.display = isLastBoard ? 'none' : 'block';
+    const iCanNavigate = canControlBoard();
+    nextPanel.style.display = (isLastBoard || !iCanNavigate) ? 'none' : 'block';
+
     if (isLastBoard) {
         resultEl.innerHTML += '<div class="info-text">Dernière donne du fichier chargé.</div>';
+    } else if (!iCanNavigate) {
+        resultEl.innerHTML += '<div class="info-text">En attente que le maître du jeu passe à la donne suivante.</div>';
     }
 }
 
 function uiResetAuction() {
+    if (!canControlBoard()) return;
     auctionHistory = [];
     renderAuctionLedger();
     renderBiddingBox();
@@ -437,6 +603,7 @@ function uiResetAuction() {
 }
 
 function uiNextBoard() {
+    if (!canControlBoard()) return;
     if (boardIndex >= deals.length - 1) return;
     boardIndex++;
     auctionHistory = [];

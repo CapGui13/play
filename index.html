@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Table d'enchères — Bridge à distance</title>
-<link rel="stylesheet" href="styles.css?v=4">
+<link rel="stylesheet" href="styles.css?v=5">
 </head>
 <body>
 
@@ -39,7 +39,16 @@
         <div class="landing-choices">
             <div class="landing-card">
                 <h2>Créer une partie</h2>
-                <p>Vous chargerez le fichier de donnes (.pbn ou .lin) et partagerez un code à votre partenaire d'enchères.</p>
+                <p>Vous chargerez le fichier de donnes (.pbn ou .lin) et partagerez un code avec le(s) autre(s) joueur(s).</p>
+                <div class="form-group">
+                    <label>Mode de jeu</label>
+                    <select id="gameModeSelect" class="mode-select">
+                        <option value="pair">Binôme — Nord-Sud ensemble, Est-Ouest passe (2 joueurs)</option>
+                        <option value="diagonal">Diagonale — Sud+Ouest / Nord+Est (2 joueurs)</option>
+                        <option value="master">Maître du jeu — vous = Est-Ouest, 2 invités en Nord/Sud (3 joueurs)</option>
+                        <option value="four">4 joueurs — chacun une seule main (4 joueurs)</option>
+                    </select>
+                </div>
                 <button class="btn btn-primary" onclick="uiCreateRoom()">Créer une partie</button>
             </div>
             <div class="landing-card">
@@ -61,7 +70,7 @@
             <input type="text" id="shareLinkInput" class="share-link-input" readonly>
             <button class="btn btn-secondary" onclick="uiCopyShareLink()">Copier le lien</button>
         </div>
-        <div id="hostWaitingStatus" class="waiting-status">⏳ En attente de connexion de l'adversaire...</div>
+        <div id="hostWaitingStatus" class="waiting-status">⏳ En attente de connexion...</div>
 
         <div id="hostSetupPanel" class="host-setup-panel" style="display:none;">
             <h3>Charger les donnes</h3>
@@ -69,13 +78,7 @@
                 <label>Fichier .pbn ou .lin exporté depuis le générateur</label>
                 <input type="file" id="dealFileInput" accept=".pbn,.lin,text/plain">
             </div>
-            <div class="form-group">
-                <label>Votre camp</label>
-                <div class="seat-choice">
-                    <label><input type="radio" name="hostSeatChoice" value="NS" checked> Nord-Sud</label>
-                    <label><input type="radio" name="hostSeatChoice" value="EW"> Est-Ouest</label>
-                </div>
-            </div>
+            <div id="hostSeatChoiceContainer"></div>
             <div id="hostSetupError" class="error-banner" style="display:none;"></div>
             <button class="btn btn-success" onclick="uiStartGameAsHost()">Commencer la partie</button>
         </div>
@@ -95,7 +98,7 @@
                 <span id="dealerVulnLabel" class="dealer-vuln-label"></span>
             </div>
             <div class="game-actions">
-                <button class="btn btn-secondary btn-small" onclick="uiResetAuction()">↺ Recommencer l'enchère</button>
+                <button id="resetAuctionBtn" class="btn btn-secondary btn-small" onclick="uiResetAuction()">↺ Recommencer l'enchère</button>
             </div>
         </div>
 
@@ -128,9 +131,9 @@
 </div>
 
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
-<script src="bidding-rules.js?v=4"></script>
-<script src="deal-parser.js?v=4"></script>
-<script src="peer-connection.js?v=4"></script>
-<script src="app.js?v=4"></script>
+<script src="bidding-rules.js?v=5"></script>
+<script src="deal-parser.js?v=5"></script>
+<script src="peer-connection.js?v=5"></script>
+<script src="app.js?v=5"></script>
 </body>
 </html>

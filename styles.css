@@ -240,6 +240,36 @@ body {
     border-color: var(--brass);
 }
 
+.mode-select {
+    width: 100%;
+    font-family: var(--font-body);
+    font-size: 0.9rem;
+    font-weight: 500;
+    padding: 10px 12px;
+    border-radius: 8px;
+    border: 1.5px solid var(--line);
+    background: rgba(0, 0, 0, 0.25);
+    color: var(--cream);
+}
+
+.mode-select:focus {
+    outline: none;
+    border-color: var(--brass);
+}
+
+.mode-select option {
+    background: var(--felt-deep);
+    color: var(--cream);
+}
+
+.seat-info-text {
+    font-size: 0.85rem;
+    color: rgba(246, 241, 227, 0.75);
+    background: rgba(0,0,0,0.15);
+    border-radius: 6px;
+    padding: 8px 12px;
+}
+
 .error-banner {
     margin-top: 18px;
     background: rgba(180, 60, 50, 0.2);

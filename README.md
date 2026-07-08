@@ -1,12 +1,27 @@
 # Table d'enchères — Bridge à distance
 
-Application web statique permettant à deux joueurs, chacun sur son propre écran, de
+Application web statique permettant à 2, 3 ou 4 joueurs, chacun sur son propre écran, de
 s'entraîner aux enchères en temps réel sur des donnes importées (fichier `.pbn` ou `.lin`
 exporté depuis le générateur de donnes).
 
-Aucun serveur : la connexion entre les deux navigateurs se fait directement en pair-à-pair
-(WebRTC, via le service public gratuit PeerJS pour la mise en relation initiale). Le site
-peut donc être hébergé gratuitement sur GitHub Pages.
+Aucun serveur : la connexion entre les navigateurs se fait directement en pair-à-pair
+(WebRTC, via le service public gratuit PeerJS pour la mise en relation initiale, et un
+relais TURN gratuit en secours si la connexion directe échoue). Le site peut donc être
+hébergé gratuitement sur GitHub Pages.
+
+## Modes de jeu
+
+À la création d'une partie, l'hôte choisit un mode :
+
+| Mode | Joueurs | Répartition |
+|---|---|---|
+| **Binôme** | 2 | Hôte = Nord ou Sud (à son choix), invité = l'autre siège. Est-Ouest est joué par un robot qui passe systématiquement — utile pour s'entraîner à son système d'enchères sans interférence adverse. |
+| **Diagonale** | 2 | Hôte = Sud+Ouest ou Nord+Est (à son choix), invité = la paire complémentaire. |
+| **Maître du jeu** | 3 | Hôte = Est+Ouest ("maître du jeu"), 2 invités = Nord et Sud. Seul l'hôte peut recommencer l'enchère ou passer à la donne suivante. |
+| **4 joueurs** | 4 | Hôte = Nord, 3 invités = Est, Sud, Ouest (dans l'ordre de connexion). Chacun ne voit que sa propre main. |
+
+Dans tous les modes, chaque joueur ne voit que les mains qu'il contrôle, et la boîte
+d'enchères n'autorise que les annonces légales, uniquement quand c'est son tour.
 
 ## Déploiement sur GitHub Pages
 
@@ -31,39 +46,39 @@ Aucune clé, aucun compte externe à configurer : tout fonctionne dès la mise e
 
 ## Utilisation
 
-**Le premier joueur (hôte)** :
-1. Ouvre le site, clique sur **"Créer une partie"**.
+**L'hôte (celui qui crée la partie)** :
+1. Ouvre le site, choisit un **mode de jeu**, clique sur **"Créer une partie"**.
 2. Un code à 4 lettres apparaît (et un lien à partager, qui contient déjà le code).
-3. Partage ce code ou ce lien au deuxième joueur (message, chat, etc.).
-4. Une fois que l'autre joueur est connecté, choisis le fichier `.pbn` ou `.lin` à
-   charger et ton camp (Nord-Sud ou Est-Ouest), puis clique sur **"Commencer la partie"**.
+3. Partage ce code ou ce lien au(x) autre(s) joueur(s).
+4. Une fois que tous les invités attendus sont connectés (1, 2 ou 3 selon le mode),
+   choisis le fichier `.pbn` ou `.lin` à charger et, si le mode le propose, ton siège,
+   puis clique sur **"Commencer la partie"**.
 
-**Le deuxième joueur** :
-1. Ouvre le lien partagé (le code est alors pré-rempli), ou saisis le code manuellement
-   sur l'écran d'accueil, puis clique sur **"Rejoindre"**.
-2. Une fois la partie démarrée par l'hôte, la table apparaît automatiquement.
+**Les invités** :
+1. Ouvrent le lien partagé (le code est alors pré-rempli), ou saisissent le code
+   manuellement sur l'écran d'accueil, puis cliquent sur **"Rejoindre"**.
+2. Une fois la partie démarrée par l'hôte, la table apparaît automatiquement, avec le(s)
+   siège(s) qui leur a/ont été attribué(s).
 
 **Pendant la partie** :
-- Chaque joueur ne voit que les deux mains de son camp (Nord+Sud, ou Est+Ouest) —
-  comme lors d'un vrai entraînement d'enchères en partenariat.
+- Chaque joueur ne voit que les mains qu'il contrôle (une ou deux selon le mode).
 - La boîte d'enchères n'autorise que les annonces légales, et seulement quand c'est
   votre tour.
 - Une fois l'enchère terminée (3 passes après une annonce, ou 4 passes d'entrée), le
   contrat final s'affiche, avec un bouton pour passer à la donne suivante.
-- Le bouton **"Recommencer l'enchère"** relance l'enchère de la donne en cours pour les
-  deux joueurs (utile après une erreur).
+- Le bouton **"Recommencer l'enchère"** relance l'enchère de la donne en cours. En mode
+  "Maître du jeu", seul l'hôte peut recommencer l'enchère ou passer à la donne suivante.
 
 ## Limites connues
 
-- **Connexion directe (WebRTC)** : fonctionne dans l'immense majorité des cas, mais peut
-  échouer si l'un des deux joueurs est derrière un réseau très restrictif (certains
-  Wi-Fi d'entreprise, VPN). Si la connexion échoue systématiquement, réessayer depuis un
-  autre réseau (4G, Wi-Fi personnel) résout généralement le problème.
-- Les deux joueurs doivent être en ligne **en même temps** pour établir la connexion.
-  Si l'un des deux ferme son onglet, il faut recréer une partie (nouveau code).
+- **Connexion directe (WebRTC)** : fonctionne dans l'immense majorité des cas grâce au
+  relais TURN de secours, mais la mise en relation initiale peut occasionnellement
+  prendre jusqu'à une trentaine de secondes sur certains réseaux.
+- Tous les joueurs doivent être en ligne **en même temps** pour établir la connexion.
+  Si l'un d'eux ferme son onglet, il faut recréer une partie (nouveau code).
 - Seule la phase d'**enchères** est couverte (pas le jeu de la carte).
-- Le fichier de donnes n'est chargé que par l'hôte ; l'invité le reçoit automatiquement
-  via la connexion, il n'a rien à importer de son côté.
+- Le fichier de donnes n'est chargé que par l'hôte ; les invités le reçoivent
+  automatiquement via la connexion, ils n'ont rien à importer de leur côté.
 
 ## Fichiers
 
@@ -73,5 +88,5 @@ Aucune clé, aucun compte externe à configurer : tout fonctionne dès la mise e
 | `styles.css` | Habillage visuel |
 | `bidding-rules.js` | Logique pure des enchères (légalité des annonces, calcul du contrat) |
 | `deal-parser.js` | Lecture des fichiers `.pbn` et `.lin` |
-| `peer-connection.js` | Connexion WebRTC entre les deux navigateurs (via PeerJS) |
-| `app.js` | État de l'application et rendu de l'interface |
+| `peer-connection.js` | Connexion WebRTC entre les joueurs (via PeerJS), topologie en étoile pour les modes à 3+ joueurs |
+| `app.js` | État de l'application, modes de jeu, attribution des sièges, et rendu de l'interface |
