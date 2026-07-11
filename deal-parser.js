@@ -79,11 +79,44 @@ function parsePBN(text) {
             };
         });
 
+        const parMatch = block.match(/\[OptimumScore\s+"([NSEW]+)\s+(-?\d+)"\]/i);
+        const parContractMatch = block.match(/\[OptimumContract\s+"([1-7](?:NT|[CDHS]))"\]/i);
+        const parDeclarerMatch = block.match(/\[OptimumDeclarer\s+"([NESW])"\]/i);
+        let par = null;
+        if (parMatch) {
+            par = {
+                side: parMatch[1].toUpperCase() === 'EW' ? 'EW' : 'NS',
+                score: parseInt(parMatch[2], 10),
+                contract: parContractMatch ? parContractMatch[1].toUpperCase() : null,
+                declarer: parDeclarerMatch ? parDeclarerMatch[1].toUpperCase() : null
+            };
+        }
+
+        // Table complète du double mort, si présente (tag PBN standard [OptimumResultTable],
+        // suivi de 20 lignes "Déclarant Dénomination Levées"). Contrairement à [OptimumScore]
+        // (un simple score), cette table donne le détail complet, couleur par couleur et
+        // déclarant par déclarant — l'ordre des lignes n'a pas d'importance pour le parsing.
+        let ddTable = null;
+        const ortMatch = block.match(/\[OptimumResultTable\s+"[^"]*"\]\s*\n((?:[NESW]\s+(?:NT|[SHDC])\s+\d+\s*\n?)+)/i);
+        if (ortMatch) {
+            ddTable = { N: {}, S: {}, H: {}, D: {}, C: {} }; // N ici = SA (sans-atout), pas Nord
+            const rows = ortMatch[1].trim().split('\n');
+            for (const row of rows) {
+                const rowMatch = row.trim().match(/^([NESW])\s+(NT|[SHDC])\s+(\d+)$/i);
+                if (!rowMatch) continue;
+                const declarer = rowMatch[1].toUpperCase();
+                const strainKey = rowMatch[2].toUpperCase() === 'NT' ? 'N' : rowMatch[2].toUpperCase();
+                ddTable[strainKey][declarer] = parseInt(rowMatch[3], 10);
+            }
+        }
+
         deals.push({
             board: boardMatch ? parseInt(boardMatch[1], 10) || boardCounter : boardCounter,
             dealer: dealerMatch ? dealerMatch[1].trim().toUpperCase() : 'N',
             vulnerable: normalizeVulnerable(vulnMatch ? vulnMatch[1] : 'None'),
-            hands
+            hands,
+            par,
+            ddTable
         });
     }
 
@@ -176,7 +209,9 @@ function parseLIN(text) {
             board: boardNumMatch ? parseInt(boardNumMatch[1], 10) : boardCounter,
             dealer,
             vulnerable: LIN_VULN_CODE[(svMatch ? svMatch[1] : '-').trim()] || 'None',
-            hands
+            hands,
+            par: null, // le format LIN ne transporte pas d'information de par
+            ddTable: null
         });
     }
 

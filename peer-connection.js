@@ -18,6 +18,21 @@
 //   'call'           { type:'call', boardIndex, seat, call }
 //   'reset-auction'  { type:'reset-auction', boardIndex }
 //
+//   Demande d'annulation (undo) — voir app.js pour le détail, l'hôte arbitre toujours :
+//   'undo-request'   { type:'undo-request', boardIndex, requesterId, historyLengthAtRequest }
+//   'undo-ask'       { type:'undo-ask', boardIndex, requesterId, historyLengthAtRequest }
+//   'undo-answer'    { type:'undo-answer', boardIndex, requesterId, historyLengthAtRequest, approved }
+//   'undo-apply'     { type:'undo-apply', boardIndex }
+//   'undo-rejected'  { type:'undo-rejected', boardIndex, requesterId, reason }
+//
+//   Reconnexion — voir app.js pour le détail. Chaque invité porte un jeton persistant
+//   (sessionStorage) transmis en métadonnées de connexion PeerJS (conn.metadata), qui sert
+//   d'identifiant stable indépendant du numéro de connexion (guestIndex) — celui-ci change
+//   à chaque reconnexion, contrairement au jeton :
+//   'resync'           { type:'resync', deals, boardIndex, auctionHistory, yourSeats, botSeats }
+//   (botSeats reste celui décidé au lancement de la partie — un joueur déconnecté n'est
+//   PAS remplacé par un robot, son siège attend simplement sa reconnexion)
+//
 // Diagnostic : tout ce qui touche à l'établissement de la connexion est aussi loggué en
 // console (F12) et dans le panneau de diagnostic à l'écran (préfixe "[peer]").
 
@@ -98,7 +113,7 @@ function makeRoomCode() {
 
 class BridgePeerConnection {
     constructor(handlers) {
-        // handlers: { onOpen(role, roomCode), onData(msg, guestIndex), onGuestConnected(guestIndex, connectedCount, maxGuests),
+        // handlers: { onOpen(role, roomCode), onData(msg, guestIndex), onGuestConnected(guestIndex, metadata),
         //             onAllConnected(), onPeerConnected(), onPeerDisconnected(guestIndex), onError(err),
         //             onTimeout(), onSlowConnection() }
         // (onPeerConnected / onPeerDisconnected sans index restent déclenchés aussi, pour compat avec les modes à 2 joueurs)
@@ -142,6 +157,10 @@ class BridgePeerConnection {
 
         conn.on('close', () => {
             this._log(`DataConnection #${guestIndex} fermée`);
+            // On libère le créneau (au lieu de laisser traîner la connexion fermée) pour
+            // qu'il puisse être réutilisé par une reconnexion, et pour ne pas finir par
+            // épuiser artificiellement `maxGuests` au fil des déconnexions/reconnexions.
+            if (this.conns[guestIndex] === conn) this.conns[guestIndex] = null;
             if (this.handlers.onPeerDisconnected) this.handlers.onPeerDisconnected(guestIndex);
         });
 
@@ -154,10 +173,10 @@ class BridgePeerConnection {
             this._settled = true;
             this._clearTimers();
             this._log(`DataConnection #${guestIndex} ouverte, connexion établie ✅`);
-            const connectedCount = this.conns.filter(c => c && c.open).length;
-            if (this.handlers.onGuestConnected) this.handlers.onGuestConnected(guestIndex, connectedCount, this.maxGuests);
+            // conn.metadata : ce que l'invité a passé à peer.connect(..., {metadata}) côté
+            // joinRoom — sert notamment à transmettre un jeton de reconnexion (voir app.js).
+            if (this.handlers.onGuestConnected) this.handlers.onGuestConnected(guestIndex, conn.metadata || {});
             if (this.handlers.onPeerConnected) this.handlers.onPeerConnected(guestIndex);
-            if (connectedCount >= this.maxGuests && this.handlers.onAllConnected) this.handlers.onAllConnected();
         };
 
         if (conn.open) {
@@ -214,26 +233,35 @@ class BridgePeerConnection {
         }, CONNECTION_TIMEOUT_MS);
     }
 
-    // Crée une partie : génère un code, ouvre un Peer, attend que `maxGuests` invité(s)
-    // se connectent (1 pour les modes à 2 joueurs, 2 pour le mode "maître du jeu").
-    createRoom(maxGuests = 1) {
+    // Crée une partie : génère un code, ouvre un Peer, accepte les invités au fil de l'eau
+    // (jusqu'à `cap`, une limite de sécurité — la composition réelle de la table est décidée
+    // librement par l'hôte dans le salon, pas à la création de la partie).
+    createRoom(cap = 6) {
         this.role = 'host';
-        this.maxGuests = maxGuests;
+        this.maxGuests = cap;
         this.roomCode = makeRoomCode();
         const id = PEER_ID_PREFIX + this.roomCode;
-        this._log('Création de la partie, id =', id, '— invités attendus :', maxGuests);
+        this._log('Création de la partie, id =', id);
         this.peer = new Peer(id, { config: ICE_CONFIG, debug: 1 });
 
         this.peer.on('open', () => {
-            this._log('Peer hôte ouvert, en attente de connexion entrante...');
+            this._log('Peer hôte ouvert, en attente de connexions...');
             if (this.handlers.onOpen) this.handlers.onOpen('host', this.roomCode);
         });
 
         this.peer.on('connection', (conn) => {
             this._log('Connexion entrante reçue de', conn.peer);
-            if (this.conns.length >= this.maxGuests) { conn.close(); return; }
-            const guestIndex = this.conns.length;
-            this.conns.push(conn);
+            // Réutilise un créneau libéré par un départ précédent plutôt que d'en créer un
+            // nouveau à chaque fois — sinon `maxGuests` finit par être atteint artificiellement
+            // après plusieurs allers-retours de connexion, et plus personne ne peut rejoindre.
+            let guestIndex = this.conns.findIndex(c => c === null);
+            if (guestIndex === -1) {
+                if (this.conns.length >= this.maxGuests) { conn.close(); return; }
+                guestIndex = this.conns.length;
+                this.conns.push(conn);
+            } else {
+                this.conns[guestIndex] = conn;
+            }
             this._armTimeouts();
             this._wireConnection(conn, guestIndex);
         });
@@ -248,8 +276,10 @@ class BridgePeerConnection {
         });
     }
 
-    // Rejoint une partie déjà créée via son code à 4 lettres.
-    joinRoom(roomCode) {
+    // Rejoint une partie déjà créée via son code à 4 lettres. `metadata` (optionnel) est
+    // transmis tel quel à l'hôte via conn.metadata — utilisé par app.js pour porter un
+    // jeton de reconnexion stable.
+    joinRoom(roomCode, metadata) {
         this.role = 'guest';
         this.maxGuests = 1; // du point de vue d'un invité, il n'y a qu'une connexion : vers l'hôte
         this.roomCode = roomCode.toUpperCase().trim();
@@ -258,7 +288,7 @@ class BridgePeerConnection {
 
         this.peer.on('open', () => {
             this._log('Peer invité ouvert, tentative de connexion à', targetId);
-            const conn = this.peer.connect(targetId, { reliable: true });
+            const conn = this.peer.connect(targetId, { reliable: true, metadata: metadata || {} });
             this.conns = [conn];
             this._armTimeouts();
             this._wireConnection(conn, 0);

@@ -4,13 +4,14 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Table d'enchères — Bridge à distance</title>
-<link rel="stylesheet" href="styles.css?v=7">
+<link rel="stylesheet" href="styles.css?v=23">
 </head>
 <body>
 
 <div id="connectionBar" class="connection-bar">
     <span id="connectionStatus" class="connection-status">⚪ Pas encore connecté</span>
     <span id="roomCodeBadge" class="room-code-badge" style="display:none;"></span>
+    <button type="button" id="reconnectBtn" class="btn btn-primary btn-small" style="display:none;" onclick="uiReconnect()">🔌 Se reconnecter</button>
     <button type="button" class="debug-toggle-btn" onclick="uiToggleDebugPanel()">🐞</button>
 </div>
 
@@ -39,16 +40,7 @@
         <div class="landing-choices">
             <div class="landing-card">
                 <h2>Créer une partie</h2>
-                <p>Vous chargerez le fichier de donnes (.pbn ou .lin) et partagerez un code avec le(s) autre(s) joueur(s).</p>
-                <div class="form-group">
-                    <label>Mode de jeu</label>
-                    <select id="gameModeSelect" class="mode-select">
-                        <option value="pair">Binôme — Nord-Sud ensemble, Est-Ouest passe (2 joueurs)</option>
-                        <option value="diagonal">Diagonale — Sud+Ouest / Nord+Est (2 joueurs)</option>
-                        <option value="master">Maître du jeu — vous = Est-Ouest, 2 invités en Nord/Sud (3 joueurs)</option>
-                        <option value="four">4 joueurs — chacun une seule main (4 joueurs)</option>
-                    </select>
-                </div>
+                <p>Vous choisirez qui joue où une fois dans le salon, puis vous chargerez le fichier de donnes (.pbn ou .lin).</p>
                 <button class="btn btn-primary" onclick="uiCreateRoom()">Créer une partie</button>
             </div>
             <div class="landing-card">
@@ -61,16 +53,34 @@
         <div id="landingError" class="error-banner" style="display:none;"></div>
     </section>
 
-    <!-- Écran d'attente : hôte -->
-    <section id="screen-host-waiting" class="screen" style="display:none;">
-        <h2>Partie créée</h2>
-        <p>Partagez ce code avec votre partenaire d'enchères :</p>
-        <div class="room-code-display" id="roomCodeDisplay"></div>
-        <div class="share-link-row">
-            <input type="text" id="shareLinkInput" class="share-link-input" readonly>
-            <button class="btn btn-secondary" onclick="uiCopyShareLink()">Copier le lien</button>
+    <!-- Salon d'attente (commun à l'hôte et aux invités) -->
+    <section id="screen-lobby" class="screen" style="display:none;">
+        <h2>Salon d'attente</h2>
+
+        <div id="lobbyRoomCodeBlock" style="display:none;">
+            <p>Partagez ce code ou ce lien avec les autres joueurs :</p>
+            <div class="room-code-display" id="roomCodeDisplay"></div>
+            <div class="share-link-row">
+                <input type="text" id="shareLinkInput" class="share-link-input" readonly>
+                <button class="btn btn-secondary" onclick="uiCopyShareLink()">Copier le lien</button>
+            </div>
         </div>
-        <div id="hostWaitingStatus" class="waiting-status">⏳ En attente de connexion...</div>
+
+        <div class="form-group">
+            <label>Votre pseudo</label>
+            <input type="text" id="myNameInput" class="name-input" maxlength="20" oninput="uiUpdateMyName()">
+        </div>
+
+        <div class="lobby-body">
+            <div class="lobby-participants">
+                <h3>Participants</h3>
+                <ul id="participantsList" class="participants-list"></ul>
+            </div>
+            <div class="lobby-table">
+                <h3>Qui joue où</h3>
+                <div id="seatAssignmentGrid" class="seat-assignment-grid"></div>
+            </div>
+        </div>
 
         <div id="hostSetupPanel" class="host-setup-panel" style="display:none;">
             <h3>Charger les donnes</h3>
@@ -78,27 +88,28 @@
                 <label>Fichier .pbn ou .lin exporté depuis le générateur</label>
                 <input type="file" id="dealFileInput" accept=".pbn,.lin,text/plain">
             </div>
-            <div id="hostSeatChoiceContainer"></div>
             <div id="hostSetupError" class="error-banner" style="display:none;"></div>
             <button class="btn btn-success" onclick="uiStartGameAsHost()">Commencer la partie</button>
         </div>
-    </section>
 
-    <!-- Écran d'attente : invité -->
-    <section id="screen-guest-waiting" class="screen" style="display:none;">
-        <h2 id="guestWaitingTitle">Connexion en cours...</h2>
-        <p id="guestWaitingText">Établissement de la connexion avec l'hôte.</p>
+        <div id="guestWaitingNote" class="waiting-status" style="display:none;">⏳ En attente que l'hôte lance la partie...</div>
     </section>
 
     <!-- Écran de jeu -->
     <section id="screen-game" class="screen" style="display:none;">
         <div class="game-header">
             <div class="board-info">
-                <span id="boardNumberLabel" class="board-number-label"></span>
+                <div class="board-nav-row">
+                    <button id="prevBoardBtn" class="btn btn-secondary btn-small board-nav-btn" onclick="uiHostSkipPrevBoard()" title="Donne précédente">◀</button>
+                    <span id="boardNumberLabel" class="board-number-label"></span>
+                    <button id="skipNextBoardBtn" class="btn btn-secondary btn-small board-nav-btn" onclick="uiHostSkipNextBoard()" title="Donne suivante">▶</button>
+                </div>
                 <span id="dealerVulnLabel" class="dealer-vuln-label"></span>
             </div>
             <div class="game-actions">
+                <button id="requestUndoBtn" class="btn btn-secondary btn-small" onclick="uiRequestUndo()">↩️ Demander un undo</button>
                 <button id="resetAuctionBtn" class="btn btn-secondary btn-small" onclick="uiResetAuction()">↺ Recommencer l'enchère</button>
+                <span id="undoStatusText" class="undo-status-text"></span>
             </div>
         </div>
 
@@ -115,7 +126,11 @@
                     <tbody id="auctionLedgerBody"></tbody>
                 </table>
 
+                <div id="undoAskBanner" class="undo-ask-banner" style="display:none;"></div>
+
                 <div id="contractResult" class="contract-result" style="display:none;"></div>
+
+                <div id="allHandsDiagram" class="all-hands-diagram" style="display:none;"></div>
 
                 <div id="biddingBox" class="bidding-box"></div>
 
@@ -131,9 +146,9 @@
 </div>
 
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
-<script src="bidding-rules.js?v=7"></script>
-<script src="deal-parser.js?v=7"></script>
-<script src="peer-connection.js?v=7"></script>
-<script src="app.js?v=7"></script>
+<script src="bidding-rules.js?v=23"></script>
+<script src="deal-parser.js?v=23"></script>
+<script src="peer-connection.js?v=23"></script>
+<script src="app.js?v=23"></script>
 </body>
 </html>
