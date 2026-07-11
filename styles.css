@@ -11,16 +11,17 @@
     --card-red-bright: #d94f43;
     --diamond-orange: #c96a1f;
     --diamond-orange-bright: #f0a04b;
-    --club-green: #2f7d4f;
-    --club-green-bright: #5bd88a;
+    --club-blue: #1d4ed8;
+    --club-blue-bright: #4f8de0;
     --line: rgba(201, 162, 39, 0.35);
 
     --font-display: 'Fraunces', 'Georgia', serif;
     --font-body: 'Work Sans', 'Segoe UI', sans-serif;
     --font-mono: 'IBM Plex Mono', 'Consolas', monospace;
+    --font-suits: 'Noto Sans Symbols 2', 'Segoe UI Symbol', 'Segoe UI', sans-serif;
 }
 
-@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Work+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Work+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&family=Noto+Sans+Symbols+2&display=swap');
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -578,9 +579,9 @@ body {
     margin-bottom: 3px;
 }
 
-.suit-symbol { font-size: 1rem; text-align: center; }
+.suit-symbol { font-family: var(--font-suits); font-size: 1rem; text-align: center; }
 .suit-symbol.spades { color: var(--ink); }
-.suit-symbol.clubs { color: var(--club-green); }
+.suit-symbol.clubs { color: var(--club-blue); }
 .suit-symbol.hearts { color: var(--card-red); }
 .suit-symbol.diamonds { color: var(--diamond-orange); }
 
@@ -596,31 +597,71 @@ body {
 
 .auction-ledger {
     width: 100%;
+    table-layout: fixed;
     border-collapse: collapse;
-    font-family: var(--font-mono);
+    font-family: var(--font-suits);
     margin-bottom: 16px;
+    background: #ffffff;
+    border: 1px solid #1a1a1a;
+    border-radius: 4px;
+    overflow: hidden;
 }
 
 .auction-ledger th {
-    font-size: 0.8rem;
-    padding: 8px 4px;
-    color: var(--brass-bright);
-    border-bottom: 1.5px solid var(--line);
+    width: 25%;
+    font-size: 0.95rem;
+    font-weight: 700;
+    padding: 8px 6px 0 6px;
+    color: #1a1a1a;
+    background: #ffffff;
+    border: 1px solid #1a1a1a;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
-.auction-ledger th.dealer-col {
-    color: var(--ink);
-    background: var(--brass);
-    border-radius: 4px 4px 0 0;
+.auction-ledger th.turn-col {
+    background: #1a1a1a;
+    color: #ffffff;
+}
+
+.ledger-seat-label {
+    display: block;
+    padding-bottom: 6px;
+}
+
+.vuln-bar {
+    display: block;
+    height: 5px;
+    margin: 0 -6px;
+    width: calc(100% + 12px);
+}
+
+.vuln-bar-safe {
+    background: #22c55e;
+}
+
+.vuln-bar-danger {
+    background: #ef4444;
 }
 
 .auction-ledger td {
+    height: 36px;
+    line-height: 1;
     text-align: center;
     padding: 7px 4px;
-    font-size: 0.92rem;
-    font-weight: 600;
-    border-bottom: 1px solid rgba(255,255,255,0.06);
+    font-size: 1rem;
+    font-weight: 700;
+    color: #1a1a1a;
+    background: #ffffff;
+    border: 1px solid #1a1a1a;
 }
+
+.auction-ledger .call-suit.spades { color: #1a1a1a; }
+.auction-ledger .call-suit.hearts { color: #c0272d; }
+.auction-ledger .call-suit.diamonds { color: var(--diamond-orange); }
+.auction-ledger .call-suit.clubs { color: var(--club-blue); }
+.auction-ledger .call-suit.notrump { color: #1a1a1a; }
 
 .contract-result {
     background: rgba(201, 162, 39, 0.15);
@@ -668,14 +709,16 @@ table.dd-table thead th {
 }
 
 table.dd-table tbody th {
+    font-family: var(--font-suits);
     font-weight: 600;
     color: var(--cream);
 }
 
+table.dd-table tbody th.spades { color: var(--ink); }
 table.dd-table tbody th.hearts { color: var(--card-red-bright); }
 table.dd-table tbody th.diamonds { color: var(--diamond-orange-bright); }
-table.dd-table tbody th.clubs { color: var(--club-green-bright); }
-table.dd-table tbody th.notrump { color: var(--brass-bright); }
+table.dd-table tbody th.clubs { color: var(--club-blue-bright); }
+table.dd-table tbody th.notrump { color: var(--cream); }
 
 table.dd-table td {
     color: rgba(246, 241, 227, 0.9);
@@ -726,7 +769,7 @@ table.dd-table td {
 .bid-row { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
 
 .call-btn {
-    font-family: var(--font-mono);
+    font-family: var(--font-suits);
     font-weight: 600;
     font-size: 0.85rem;
     padding: 9px 4px;
@@ -748,17 +791,20 @@ table.dd-table td {
     cursor: not-allowed;
 }
 
+.call-btn.spades { color: var(--ink); }
 .call-btn.hearts { color: var(--card-red-bright); }
 .call-btn.diamonds { color: var(--diamond-orange-bright); }
-.call-btn.clubs { color: var(--club-green-bright); }
-.call-btn.notrump { color: var(--brass-bright); }
+.call-btn.clubs { color: var(--club-blue-bright); }
+.call-btn.notrump { color: var(--cream); }
 
 /* Couleur des annonces affichées ailleurs que dans les boutons (relevé d'enchères,
    contrat final) : mêmes teintes vives que la boîte d'enchères. */
+.call-suit { font-family: var(--font-suits); }
+.call-suit.spades { color: var(--ink); }
 .call-suit.hearts { color: var(--card-red-bright); }
 .call-suit.diamonds { color: var(--diamond-orange-bright); }
-.call-suit.clubs { color: var(--club-green-bright); }
-.call-suit.notrump { color: var(--brass-bright); }
+.call-suit.clubs { color: var(--club-blue-bright); }
+.call-suit.notrump { color: var(--cream); }
 
 .call-btn-special {
     flex: 1;

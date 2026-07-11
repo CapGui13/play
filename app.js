@@ -746,9 +746,17 @@ function formatCallCellHtml(call) {
 function renderAuctionLedger() {
     const deal = currentDeal();
     const header = document.getElementById('auctionLedgerHeader');
-    header.innerHTML = SEATS.map(s =>
-        `<th class="${s === deal.dealer ? 'dealer-col' : ''}">${SEAT_ABBR_FR[s]}${s === deal.dealer ? ' (D)' : ''}</th>`
-    ).join('');
+    const turnSeat = isAuctionOver(auctionHistory) ? null : currentTurnSeat(deal.dealer, auctionHistory);
+    header.innerHTML = SEATS.map(s => {
+        const pair = partnershipOf(s);
+        const isVulnerable = deal.vulnerable === 'Both' || deal.vulnerable === pair;
+        const vulnClass = isVulnerable ? 'vuln-bar-danger' : 'vuln-bar-safe';
+        const classes = [s === turnSeat ? 'turn-col' : ''].filter(Boolean).join(' ');
+        return `<th class="${classes}">
+            <span class="ledger-seat-label">${SEAT_ABBR_FR[s]}${s === deal.dealer ? ' (D)' : ''}</span>
+            <span class="vuln-bar ${vulnClass}"></span>
+        </th>`;
+    }).join('');
 
     const dealerIdx = SEATS.indexOf(deal.dealer);
     const slots = new Array(dealerIdx).fill('');
