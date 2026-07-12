@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Table d'enchères — Bridge à distance</title>
-<link rel="stylesheet" href="styles.css?v=27">
+<link rel="stylesheet" href="styles.css?v=29">
 </head>
 <body>
 
@@ -89,7 +89,7 @@
                 <input type="file" id="dealFileInput" accept=".pbn,.lin,text/plain">
             </div>
             <div id="hostSetupError" class="error-banner" style="display:none;"></div>
-            <button class="btn btn-success" onclick="uiStartGameAsHost()">Commencer la partie</button>
+            <button id="startGameBtn" class="btn btn-success" onclick="uiStartGameAsHost()">Commencer la partie</button>
         </div>
 
         <div id="guestWaitingNote" class="waiting-status" style="display:none;">⏳ En attente que l'hôte lance la partie...</div>
@@ -115,6 +115,10 @@
 
         <div class="game-body">
             <div class="hands-panel">
+                <div class="hand-display-options">
+                    <button id="frenchRanksToggleBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" onclick="uiToggleFrenchRanks()">Notation FR (R D V X)</button>
+                    <button id="hcpToggleBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" onclick="uiToggleShowHcp()">Afficher HCP</button>
+                </div>
                 <div id="myHandsContainer" class="my-hands-container"></div>
             </div>
 
@@ -146,9 +150,9 @@
 </div>
 
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
-<script src="bidding-rules.js?v=27"></script>
-<script src="deal-parser.js?v=27"></script>
-<script src="peer-connection.js?v=27"></script>
-<script src="app.js?v=27"></script>
+<script src="bidding-rules.js?v=29"></script>
+<script src="deal-parser.js?v=29"></script>
+<script src="peer-connection.js?v=29"></script>
+<script src="app.js?v=29"></script>
 </body>
 </html>

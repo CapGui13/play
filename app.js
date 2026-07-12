@@ -70,9 +70,87 @@ function getReconnectToken() {
 
 let mySeats = null;         // sièges contrôlés par ce joueur pendant la partie
 let autoPassSeats = [];     // sièges non assignés (robot "passe") — décidé par l'hôte au lancement
+
+// ===== Préférences d'affichage des mains (locales, persistées, indépendantes du réseau) =====
+//
+// Purement cosmétique et propre à chaque appareil (comme le jeton de reconnexion) : pas
+// besoin de les synchroniser entre joueurs, chacun choisit sa propre présentation.
+
+function loadBoolPref(key, fallback) {
+    try {
+        const v = localStorage.getItem(key);
+        return v === null ? fallback : v === 'true';
+    } catch (e) {
+        return fallback;
+    }
+}
+
+function saveBoolPref(key, value) {
+    try { localStorage.setItem(key, value ? 'true' : 'false'); } catch (e) { /* navigation privée stricte, tant pis */ }
+}
+
+let useFrenchRanks = loadBoolPref('bridgeBidFrenchRanks', false); // R/D/V/X au lieu de K/Q/J/T
+let showHcp = loadBoolPref('bridgeBidShowHcp', false);            // affiche le compte de points d'honneur par main
+
+const FRENCH_RANK_LETTER = { K: 'R', Q: 'D', J: 'V', T: 'X' };
+
+// Convertit une chaîne de rangs (ex: "AKQT98") selon la préférence de notation en cours.
+function formatRanksForDisplay(ranks) {
+    if (!ranks) return '';
+    if (!useFrenchRanks) return ranks;
+    return ranks.split('').map(c => FRENCH_RANK_LETTER[c] || c).join('');
+}
+
+const HCP_VALUE = { A: 4, K: 3, Q: 2, J: 1 };
+
+// Compte de points d'honneur (High Card Points) d'une main : As=4, Roi=3, Dame=2, Valet=1.
+function computeHandHcp(hand) {
+    let total = 0;
+    ['S', 'H', 'D', 'C'].forEach(suit => {
+        const ranks = hand[suit] || '';
+        for (const c of ranks) total += HCP_VALUE[c] || 0;
+    });
+    return total;
+}
+
+function uiToggleFrenchRanks() {
+    useFrenchRanks = !useFrenchRanks;
+    saveBoolPref('bridgeBidFrenchRanks', useFrenchRanks);
+    renderHandDisplayOptionButtons();
+    if (deals) {
+        renderMyHands();
+        if (isAuctionOver(auctionHistory)) renderAllHandsDiagram();
+    }
+}
+
+function uiToggleShowHcp() {
+    showHcp = !showHcp;
+    saveBoolPref('bridgeBidShowHcp', showHcp);
+    renderHandDisplayOptionButtons();
+    if (deals) {
+        renderMyHands();
+        if (isAuctionOver(auctionHistory)) renderAllHandsDiagram();
+    }
+}
+
+function renderHandDisplayOptionButtons() {
+    const frBtn = document.getElementById('frenchRanksToggleBtn');
+    if (frBtn) frBtn.classList.toggle('is-active', useFrenchRanks);
+
+    const hcpBtn = document.getElementById('hcpToggleBtn');
+    if (hcpBtn) hcpBtn.classList.toggle('is-active', showHcp);
+}
 let deals = null;           // tableau de donnes parsées
 let boardIndex = 0;
 let auctionHistory = [];    // historique de la donne en cours : [{seat, call}, ...]
+
+// (Hôte) Résultat du fichier de donnes déjà lu et parsé au moment où il a été choisi (voir
+// uiHandleDealFileChosen), pour afficher tout de suite une éventuelle erreur ou
+// l'avertissement "PARs non disponibles" — pendant que l'hôte compose encore la table,
+// PAS au moment de cliquer sur "Commencer la partie", puisqu'à cet instant l'écran du
+// salon (et donc le message) disparaît immédiatement avec le passage à l'écran de jeu.
+let pendingParsedDeals = null;
+let pendingParsedFile = null; // le File dont pendingParsedDeals est le résultat, pour savoir si le cache est encore valable
 
 // --- Demande d'annulation (undo) ---
 let undoRequestPending = false; // je suis le demandeur, en attente d'une réponse
@@ -178,6 +256,8 @@ function uiCreateRoom() {
     participants = [{ id: 'host', name: 'Hôte' }];
     seatAssignment = { N: null, E: null, S: null, W: null };
     guestIndexByToken = {};
+    pendingParsedDeals = null;
+    pendingParsedFile = null;
 
     peerConn = new BridgePeerConnection({
         onOpen: (role, roomCode) => {
@@ -519,18 +599,13 @@ function broadcastLobbyState() {
 
 // ===== Démarrage de la partie (hôte) =====
 
-function uiStartGameAsHost() {
-    const fileInput = document.getElementById('dealFileInput');
+// Lit et parse un fichier de donnes, affichant tout de suite l'erreur ou l'avertissement
+// "PARs non disponibles" s'il y a lieu. `onDone` reçoit le tableau de donnes parsées, ou
+// `null` si la lecture/le parsing a échoué (l'erreur est alors déjà affichée).
+function readAndValidateDealFile(file, onDone) {
     const errorEl = document.getElementById('hostSetupError');
     errorEl.style.display = 'none';
 
-    if (!fileInput.files || fileInput.files.length === 0) {
-        errorEl.textContent = 'Choisissez un fichier .pbn ou .lin.';
-        errorEl.style.display = 'block';
-        return;
-    }
-
-    const file = fileInput.files[0];
     const reader = new FileReader();
 
     reader.onload = () => {
@@ -540,15 +615,65 @@ function uiStartGameAsHost() {
         } catch (err) {
             errorEl.textContent = '⚠️ ' + err.message;
             errorEl.style.display = 'block';
+            onDone(null);
             return;
         }
 
         // Le calcul du PAR est optionnel dans le fichier : on prévient l'hôte s'il est
         // absent, mais ça ne doit pas empêcher de lancer la partie.
         if (!parsedDeals.some(d => d.par)) {
-            errorEl.textContent = '⚠️ PARs non disponibles dans ce fichier';
+            errorEl.textContent = '⚠️ PARs non disponibles dans ce fichier — les contrats optimaux ne seront pas affichés.';
             errorEl.style.display = 'block';
         }
+
+        onDone(parsedDeals);
+    };
+
+    reader.onerror = () => {
+        errorEl.textContent = 'Impossible de lire ce fichier.';
+        errorEl.style.display = 'block';
+        onDone(null);
+    };
+
+    reader.readAsText(file);
+}
+
+// Appelé dès que l'hôte choisit (ou change) le fichier de donnes, pour parser et valider
+// tout de suite — voir readAndValidateDealFile. L'hôte voit ainsi l'éventuel message
+// pendant qu'il compose encore la table, et uiStartGameAsHost n'a plus qu'à réutiliser ce
+// résultat (pendingParsedDeals) sans relire le fichier une seconde fois.
+function uiHandleDealFileChosen() {
+    const fileInput = document.getElementById('dealFileInput');
+    pendingParsedDeals = null;
+    pendingParsedFile = null;
+
+    if (!fileInput.files || fileInput.files.length === 0) {
+        document.getElementById('hostSetupError').style.display = 'none';
+        return;
+    }
+
+    const file = fileInput.files[0];
+    readAndValidateDealFile(file, (parsedDeals) => {
+        pendingParsedFile = file;
+        pendingParsedDeals = parsedDeals;
+    });
+}
+
+function uiStartGameAsHost() {
+    const fileInput = document.getElementById('dealFileInput');
+    const errorEl = document.getElementById('hostSetupError');
+
+    if (!fileInput.files || fileInput.files.length === 0) {
+        errorEl.style.display = 'none';
+        errorEl.textContent = 'Choisissez un fichier .pbn ou .lin.';
+        errorEl.style.display = 'block';
+        return;
+    }
+
+    const file = fileInput.files[0];
+
+    const proceedWithDeals = (parsedDeals) => {
+        if (!parsedDeals) return; // l'erreur est déjà affichée par readAndValidateDealFile
 
         deals = parsedDeals;
         boardIndex = 0;
@@ -570,12 +695,17 @@ function uiStartGameAsHost() {
         enterGameScreen();
     };
 
-    reader.onerror = () => {
-        errorEl.textContent = 'Impossible de lire ce fichier.';
-        errorEl.style.display = 'block';
-    };
+    // Cas normal : le fichier a déjà été lu et parsé au moment où il a été choisi (voir
+    // uiHandleDealFileChosen) — pas besoin de le relire, et le message éventuel
+    // (erreur ou avertissement PAR) est déjà affiché depuis ce moment-là.
+    if (pendingParsedFile === file) {
+        proceedWithDeals(pendingParsedDeals);
+        return;
+    }
 
-    reader.readAsText(file);
+    // Filet de sécurité si, pour une raison quelconque, le cache ne correspond pas au
+    // fichier actuellement sélectionné (ex. écouteur 'change' non déclenché) : on relit.
+    readAndValidateDealFile(file, proceedWithDeals);
 }
 
 // ===== Réception des messages des autres joueurs =====
@@ -698,7 +828,11 @@ function handlePeerData(msg, guestIndex) {
 
         case 'undo-apply': {
             if (!deals || msg.boardIndex !== boardIndex) return;
-            if (auctionHistory.length > 0) auctionHistory.pop();
+            if (typeof msg.newLength === 'number') {
+                auctionHistory.length = Math.max(0, Math.min(msg.newLength, auctionHistory.length));
+            } else if (auctionHistory.length > 0) {
+                auctionHistory.pop(); // compat, ne devrait plus arriver
+            }
             renderAuctionLedger();
             renderBiddingBox();
             renderMyHands();
@@ -765,6 +899,7 @@ function seatFullName(seat) {
 
 function renderBoard() {
     renderGameHeader();
+    renderHandDisplayOptionButtons();
     renderMyHands();
     renderAuctionLedger();
     renderBiddingBox();
@@ -808,15 +943,19 @@ function renderMyHands() {
         const lines = ['S', 'H', 'D', 'C'].map(suit => `
             <div class="card-line">
                 <span class="suit-symbol">${suitIconHtml(suit)}</span>
-                <span class="cards">${hand[suit] || '—'}</span>
+                <span class="cards">${formatRanksForDisplay(hand[suit]) || '—'}</span>
             </div>
         `).join('');
 
+        const hcpBadge = showHcp ? `<span class="hand-hcp-badge">${computeHandHcp(hand)} HCP</span>` : '';
         const stateClass = showActiveState ? (seat === turnSeat ? 'hand-card-active' : 'hand-card-inactive') : '';
 
         return `
             <div class="hand-card ${stateClass}">
-                <div class="hand-card-title">${seatFullName(seat)}</div>
+                <div class="hand-card-title">
+                    <span class="hand-card-title-name">${seatFullName(seat)}</span>
+                    ${hcpBadge}
+                </div>
                 <div class="hand-cards">${lines}</div>
             </div>
         `;
@@ -946,13 +1085,18 @@ function renderAllHandsDiagram() {
         const lines = ['S', 'H', 'D', 'C'].map(suit => `
             <div class="card-line">
                 <span class="suit-symbol">${suitIconHtml(suit)}</span>
-                <span class="cards">${hand[suit] || '—'}</span>
+                <span class="cards">${formatRanksForDisplay(hand[suit]) || '—'}</span>
             </div>
         `).join('');
 
+        const hcpBadge = showHcp ? `<span class="hand-hcp-badge">${computeHandHcp(hand)} HCP</span>` : '';
+
         return `
             <div class="hand-card hand-${seat}">
-                <div class="hand-card-title">${seatFullName(seat)}</div>
+                <div class="hand-card-title">
+                    <span class="hand-card-title-name">${seatFullName(seat)}</span>
+                    ${hcpBadge}
+                </div>
                 <div class="hand-cards">${lines}</div>
             </div>
         `;
@@ -1115,17 +1259,46 @@ function partnershipSeats(partnership) {
     return SEATS.filter(s => partnershipOf(s) === partnership);
 }
 
+function seatsOfParticipant(pid) {
+    return SEATS.filter(seat => seatAssignment[seat] === pid);
+}
+
+// Détermine quelle entrée de l'historique une demande d'undo doit effectivement annuler.
+// Pour un invité : la dernière annonce parmi celles produites par UN des sièges qu'il
+// contrôle — pas forcément la toute dernière case du tableau, puisqu'un ou plusieurs
+// robots ont pu passer automatiquement juste après (voir maybeAutoPass) si le joueur a
+// mis un peu de temps à cliquer sur "undo". On renvoie alors l'index de SA dernière
+// annonce ; applyUndoAsHost retirera cette annonce et tout ce qui a suivi (uniquement des
+// passes robot, puisqu'aucun autre humain n'a pu jouer avant que ce ne soit à nouveau le
+// tour de ce joueur).
+// Renvoie -1 si ce participant n'a fait aucune annonce sur cette donne (rien à annuler).
+//
+// Exception : quand c'est L'HÔTE qui demande, on garde l'ancien comportement (annuler la
+// toute dernière annonce du tableau, quel qu'en soit l'auteur) — l'hôte arbitre déjà toute
+// la table (navigation libre entre donnes, etc.), et son bouton undo reste un simple
+// "reculer d'un cran", sans distinction de siège.
+function findUndoTargetIndex(requesterId, history) {
+    if (requesterId === 'host') {
+        return history.length - 1;
+    }
+    const seats = seatsOfParticipant(requesterId);
+    for (let i = history.length - 1; i >= 0; i--) {
+        if (seats.includes(history[i].seat)) return i;
+    }
+    return -1;
+}
+
 function guestIndexForParticipant(pid) {
     if (!pid || pid === 'host') return null;
     return Object.prototype.hasOwnProperty.call(guestIndexByToken, pid) ? guestIndexByToken[pid] : null;
 }
 
-// Participants humains "en face" du camp qui a fait la dernière annonce, hors le
-// demandeur — ce sont eux dont l'accord est requis pour annuler.
-function humanOpponentsFor(requesterId) {
-    if (auctionHistory.length === 0) return [];
-    const lastSeat = auctionHistory[auctionHistory.length - 1].seat;
-    const opposing = partnershipOf(lastSeat) === 'NS' ? partnershipSeats('EW') : partnershipSeats('NS');
+// Participants humains "en face" du camp qui a fait l'annonce ciblée par l'undo, hors le
+// demandeur — ce sont eux dont l'accord est requis pour annuler. `targetSeat` est le siège
+// dont l'annonce va effectivement être retirée (voir findUndoTargetIndex), pas forcément
+// le dernier siège de l'historique.
+function humanOpponentsFor(requesterId, targetSeat) {
+    const opposing = partnershipOf(targetSeat) === 'NS' ? partnershipSeats('EW') : partnershipSeats('NS');
     const ids = new Set();
     opposing.forEach(seat => {
         const pid = seatAssignment[seat];
@@ -1140,6 +1313,7 @@ function undoRejectReasonText(reason) {
         case 'timeout': return "Personne n'a répondu à temps.";
         case 'busy': return 'Une autre demande est déjà en cours, réessayez.';
         case 'stale': return 'La situation a changé entre-temps, réessayez.';
+        case 'nothing': return "Vous n'avez fait aucune annonce à annuler sur cette donne.";
         default: return "Impossible d'annuler pour le moment.";
     }
 }
@@ -1205,13 +1379,20 @@ function hostHandleUndoRequest(msg) {
         return;
     }
 
-    const opponents = humanOpponentsFor(msg.requesterId);
+    const targetIndex = findUndoTargetIndex(msg.requesterId, auctionHistory);
+    if (targetIndex < 0) {
+        deliverToParticipant(msg.requesterId, { type: 'undo-rejected', boardIndex: msg.boardIndex, requesterId: msg.requesterId, reason: 'nothing' });
+        return;
+    }
+    const targetSeat = auctionHistory[targetIndex].seat;
+
+    const opponents = humanOpponentsFor(msg.requesterId, targetSeat);
     if (opponents.length === 0) {
-        applyUndoAsHost({ boardIndex: msg.boardIndex, requesterId: msg.requesterId, historyLengthAtRequest: msg.historyLengthAtRequest });
+        applyUndoAsHost({ boardIndex: msg.boardIndex, requesterId: msg.requesterId, historyLengthAtRequest: msg.historyLengthAtRequest, targetIndex });
         return;
     }
 
-    hostPendingUndo = { requesterId: msg.requesterId, boardIndex: msg.boardIndex, historyLengthAtRequest: msg.historyLengthAtRequest };
+    hostPendingUndo = { requesterId: msg.requesterId, boardIndex: msg.boardIndex, historyLengthAtRequest: msg.historyLengthAtRequest, targetIndex };
 
     const askMsg = {
         type: 'undo-ask',
@@ -1254,13 +1435,16 @@ function applyUndoAsHost(pending) {
         deliverToParticipant(pending.requesterId, { type: 'undo-rejected', boardIndex: pending.boardIndex, requesterId: pending.requesterId, reason: 'stale' });
         return;
     }
-    auctionHistory.pop();
+    // On retire l'annonce ciblée (la dernière de CE joueur — voir findUndoTargetIndex) et
+    // tout ce qui l'a suivie (uniquement des passes robot dans ce cas, voir plus haut),
+    // plutôt qu'un simple pop() de la toute dernière case du tableau.
+    auctionHistory.length = pending.targetIndex;
     renderAuctionLedger();
     renderBiddingBox();
     renderMyHands();
     checkAuctionEnd();
     clearUndoUiState();
-    peerConn.send({ type: 'undo-apply', boardIndex: pending.boardIndex });
+    peerConn.send({ type: 'undo-apply', boardIndex: pending.boardIndex, newLength: pending.targetIndex });
 }
 
 // Réponse de l'utilisateur au bandeau "on me demande d'annuler".
@@ -1352,5 +1536,10 @@ window.addEventListener('DOMContentLoaded', () => {
     if (room) {
         document.getElementById('joinCodeInput').value = room.toUpperCase();
         uiJoinRoom();
+    }
+
+    const dealFileInput = document.getElementById('dealFileInput');
+    if (dealFileInput) {
+        dealFileInput.addEventListener('change', uiHandleDealFileChosen);
     }
 });

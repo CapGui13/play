@@ -579,11 +579,53 @@ body {
 }
 
 .hand-card-title {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 8px;
     font-family: var(--font-display);
     font-weight: 600;
     font-size: 0.95rem;
     margin-bottom: 8px;
     color: var(--felt-deep);
+}
+
+.hand-card-title-name { flex-shrink: 0; }
+
+/* Compte de points d'honneur (HCP), affichable/masquable par joueur — voir
+   uiToggleShowHcp(). Volontairement discret (petit badge) pour ne pas prendre le pas sur
+   le nom du siège. */
+.hand-hcp-badge {
+    font-family: var(--font-body);
+    font-weight: 600;
+    font-size: 0.72rem;
+    color: var(--felt-mid);
+    background: rgba(20, 92, 67, 0.12);
+    border-radius: 999px;
+    padding: 2px 8px;
+    white-space: nowrap;
+}
+
+/* Barre d'options d'affichage des mains (notation FR, HCP) : deux bascules discrètes
+   au-dessus des mains du joueur, dont l'état (actif/inactif) est mémorisé d'une session à
+   l'autre (voir loadBoolPref/saveBoolPref) — c'est une préférence propre à cet appareil,
+   pas une information partagée avec les autres joueurs. */
+.hand-display-options {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.hand-option-btn {
+    opacity: 0.75;
+}
+
+.hand-option-btn.is-active {
+    opacity: 1;
+    background: rgba(201, 162, 39, 0.25);
+    border-color: var(--brass);
+    color: var(--brass-bright);
 }
 
 .hand-cards { font-family: var(--font-mono); font-size: 0.95rem; }
@@ -886,4 +928,71 @@ table.dd-table td {
 .info-text {
     font-size: 0.85rem;
     color: rgba(246, 241, 227, 0.6);
+}
+
+/* ===== Optimisations téléphone =====
+   Regroupées ici plutôt qu'éclatées dans chaque section, pour qu'on voie d'un coup d'œil
+   tout ce qui change sur petit écran. */
+@media (max-width: 700px) {
+    /* Marges extérieures resserrées : sur un écran de ~360-390px de large, les paddings
+       pensés pour desktop (20px de partout + 36px dans le salon, etc.) empilés les uns
+       sur les autres finissaient par manger presque un tiers de la largeur utile. */
+    body { padding: 56px 12px 12px; }
+    #screen-lobby { padding: 22px 16px; margin-top: 16px; }
+    .landing-card { padding: 20px; }
+    .auction-panel { padding: 14px; }
+
+    /* iOS Safari zoome automatiquement la page dès qu'on touche un champ dont le
+       font-size est < 16px, et ne redézoome pas tout seul ensuite — cassant la mise en
+       page jusqu'à ce qu'on pince pour revenir en arrière. On force donc 16px sur tous
+       les champs de saisie/select, quitte à perdre un peu de la finesse visuelle voulue
+       sur desktop. */
+    .code-input,
+    .name-input,
+    .participant-rename-input,
+    .seat-assign-select,
+    .share-link-input,
+    .form-group input[type="file"] {
+        font-size: 16px;
+    }
+
+    /* Le lien de partage (souvent long : domaine + ?room=XXXX) forçait sinon la ligne à
+       déborder horizontalement, un piège classique de flexbox (un input ne veut pas
+       descendre sous la largeur de son contenu par défaut). On l'empile verticalement et
+       on autorise explicitement le rétrécissement. */
+    .share-link-row { flex-direction: column; align-items: stretch; }
+    .share-link-input { min-width: 0; }
+
+    /* La barre de connexion (statut + code de salon + bouton reconnexion + bouton debug)
+       peut dépasser en largeur sur un petit écran, surtout une fois déconnecté (le
+       bouton "Se reconnecter" apparaît en plus) : on autorise le retour à la ligne plutôt
+       que de laisser déborder la page horizontalement. */
+    .connection-bar { flex-wrap: wrap; row-gap: 6px; padding: 6px 12px; }
+
+    /* Cibles tactiles un peu agrandies (les flèches de navigation entre donnes et le
+       bouton debug étaient pensés pour un clic souris précis, pas un doigt). */
+    .board-nav-btn { padding: 7px 13px; }
+    .debug-toggle-btn { padding: 6px 10px; }
+}
+
+@media (max-width: 480px) {
+    /* Sur les écrans les plus étroits, la barre du haut passe plus souvent sur 2 lignes
+       (voir flex-wrap ci-dessus) : on réserve la place en conséquence pour ne pas que le
+       contenu de la page passe dessous. */
+    body { padding-top: 84px; }
+    .debug-panel { top: 68px; }
+
+    .felt-hero { padding: 34px 12px 28px; }
+    .felt-hero h1 { font-size: 1.9rem; }
+    .hero-suits { font-size: 18px; letter-spacing: 8px; }
+    .tagline { font-size: 0.95rem; }
+
+    /* Le code à 4 lettres à 2.6rem + 10px d'espacement entre lettres dépassait la largeur
+       utile restante sur un iPhone SE une fois les paddings ci-dessus retirés. */
+    .room-code-display { font-size: 1.9rem; letter-spacing: 5px; padding: 12px; }
+
+    /* Boutons d'enchères un peu plus hauts : sur une grille de 5 colonnes bien remplie
+       (7 lignes + la ligne Passe/X/XX), le doigt a moins de marge d'erreur qu'un curseur. */
+    .call-btn { padding: 11px 4px; }
+    .special-calls-row { gap: 6px; }
 }
