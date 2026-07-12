@@ -15,6 +15,15 @@
 
 const SUIT_SYMBOLS = { S: '♠', H: '♥', D: '♦', C: '♣' };
 const SUIT_CLASSES = { S: 'spades', H: 'hearts', D: 'diamonds', C: 'clubs' };
+
+// Icônes SVG dessinées à la main (dossier suits/), en remplacement des caractères Unicode
+// ♠♥♦♣ dont le rendu varie trop selon la police/plateforme (notamment ♣ et ♠ qui
+// deviennent des émojis colorés sur certains systèmes). Couleurs déjà "cuites" dans
+// chaque SVG (palette quatre couleurs : pique noir, cœur rouge, carreau orange, trèfle
+// bleu) — pas besoin de les recolorer en CSS.
+function suitIconHtml(suit, extraClass) {
+    return `<img class="suit-icon ${SUIT_CLASSES[suit]}${extraClass ? ' ' + extraClass : ''}" src="suits/${suit}.svg" alt="${SUIT_SYMBOLS[suit]}">`;
+}
 const SEAT_FULL_NAME = { N: 'Nord', E: 'Est', S: 'Sud', W: 'Ouest' };
 // Abréviation d'un seul caractère à afficher (convention française : O, pas W) — les
 // clés internes restent N/E/S/W partout ailleurs (PBN, protocole réseau, etc.).
@@ -350,7 +359,10 @@ function enterLobbyScreen() {
     document.getElementById('guestWaitingNote').style.display = myRole === 'host' ? 'none' : 'block';
 
     const nameInput = document.getElementById('myNameInput');
-    if (!nameInput.value) {
+    // On ne touche jamais au champ pendant que l'utilisateur est en train d'y taper
+    // (sinon un lobby-state reçu pile pendant l'effacement du nom réécrase ce qu'il
+    // est en train de saisir).
+    if (!nameInput.value && document.activeElement !== nameInput) {
         const me = participants.find(p => p.id === myParticipantId);
         nameInput.value = me ? me.name : '';
     }
@@ -365,14 +377,60 @@ function renderLobby() {
 
 function renderParticipantsList() {
     const list = document.getElementById('participantsList');
-    list.innerHTML = participants.map(p => `
+    // Si l'hôte est en train de renommer quelqu'un, on ne reconstruit pas la liste
+    // (un reflow ici lui ferait perdre le focus et le curseur en pleine frappe).
+    if (document.activeElement && document.activeElement.classList.contains('participant-rename-input')) {
+        return;
+    }
+    const isHost = myRole === 'host';
+    list.innerHTML = participants.map(p => {
+        const canRename = isHost && p.id !== myParticipantId;
+        const nameHtml = canRename
+            ? `<input type="text" class="participant-rename-input" maxlength="20" value="${escapeHtml(p.name)}"
+                   oninput="uiRenameParticipant('${p.id}', this.value)"
+                   onblur="uiRenameParticipantBlur('${p.id}', this)">`
+            : escapeHtml(p.name);
+        return `
         <li class="participant-item ${p.id === myParticipantId ? 'is-me' : ''}">
-            ${escapeHtml(p.name)}
+            ${nameHtml}
             ${p.id === 'host' ? ' <span class="host-tag">(hôte)</span>' : ''}
             ${p.id === myParticipantId ? ' <span class="me-tag">(vous)</span>' : ''}
             ${p.disconnected ? ' <span class="disconnected-tag">🔌 déconnecté — place réservée</span>' : ''}
         </li>
-    `).join('');
+    `;
+    }).join('');
+}
+
+let participantRenameDebounceTimers = {};
+// Renommage d'un participant par l'hôte. On met à jour et on diffuse, mais sans
+// reconstruire la liste des participants pendant la frappe (voir garde ci-dessus) —
+// la grille des sièges, elle, peut se rafraîchir sans risque puisqu'elle ne contient
+// pas le champ en cours d'édition.
+function uiRenameParticipant(participantId, value) {
+    if (myRole !== 'host') return;
+    clearTimeout(participantRenameDebounceTimers[participantId]);
+    participantRenameDebounceTimers[participantId] = setTimeout(() => {
+        const trimmed = value.trim();
+        if (!trimmed) return; // idem que pour son propre nom : on attend le blur si le champ est vide
+        const p = participants.find(x => x.id === participantId);
+        if (!p) return;
+        p.name = trimmed;
+        broadcastLobbyState();
+        renderSeatAssignmentGrid();
+    }, 300);
+}
+
+// Si l'hôte quitte le champ en le laissant vide, on retombe sur le nom par défaut
+// de ce participant plutôt que de laisser un pseudo vide.
+function uiRenameParticipantBlur(participantId, inputEl) {
+    if (myRole !== 'host') return;
+    clearTimeout(participantRenameDebounceTimers[participantId]);
+    const p = participants.find(x => x.id === participantId);
+    if (!p) return;
+    const trimmed = inputEl.value.trim();
+    p.name = trimmed || defaultParticipantName(participantId);
+    broadcastLobbyState();
+    renderLobby();
 }
 
 function renderSeatAssignmentGrid() {
@@ -409,18 +467,43 @@ function uiUpdateMyName() {
     clearTimeout(nameUpdateDebounceTimer);
     nameUpdateDebounceTimer = setTimeout(() => {
         const input = document.getElementById('myNameInput');
-        const name = input.value.trim() || defaultParticipantName(myParticipantId);
+        const trimmed = input.value.trim();
+        // Champ momentanément vide (l'utilisateur efface pour retaper autre chose) :
+        // on n'impose pas le nom par défaut ici, seulement au blur (voir uiMyNameBlur).
+        // Sinon on écrase ce que la personne est en train de saisir.
+        if (!trimmed) return;
+
         const me = participants.find(p => p.id === myParticipantId);
-        if (me) me.name = name;
+        if (me) me.name = trimmed;
 
         if (myRole === 'host') {
             broadcastLobbyState();
             renderLobby();
         } else if (peerConn) {
-            peerConn.send({ type: 'set-name', name });
+            peerConn.send({ type: 'set-name', name: trimmed });
             renderLobby();
         }
     }, 300);
+}
+
+// Si l'utilisateur quitte le champ en le laissant vide, on retombe sur le nom par
+// défaut (au lieu de laisser un pseudo vide affiché aux autres).
+function uiMyNameBlur() {
+    const input = document.getElementById('myNameInput');
+    if (input.value.trim()) return;
+    clearTimeout(nameUpdateDebounceTimer);
+    const name = defaultParticipantName(myParticipantId);
+    input.value = name;
+    const me = participants.find(p => p.id === myParticipantId);
+    if (me) me.name = name;
+
+    if (myRole === 'host') {
+        broadcastLobbyState();
+        renderLobby();
+    } else if (peerConn) {
+        peerConn.send({ type: 'set-name', name });
+        renderLobby();
+    }
 }
 
 function uiAssignSeat(seat, participantId) {
@@ -458,6 +541,13 @@ function uiStartGameAsHost() {
             errorEl.textContent = '⚠️ ' + err.message;
             errorEl.style.display = 'block';
             return;
+        }
+
+        // Le calcul du PAR est optionnel dans le fichier : on prévient l'hôte s'il est
+        // absent, mais ça ne doit pas empêcher de lancer la partie.
+        if (!parsedDeals.some(d => d.par)) {
+            errorEl.textContent = '⚠️ PARs non disponibles dans ce fichier';
+            errorEl.style.display = 'block';
         }
 
         deals = parsedDeals;
@@ -717,7 +807,7 @@ function renderMyHands() {
         const hand = deal.hands[seat];
         const lines = ['S', 'H', 'D', 'C'].map(suit => `
             <div class="card-line">
-                <span class="suit-symbol ${SUIT_CLASSES[suit]}">${SUIT_SYMBOLS[suit]}</span>
+                <span class="suit-symbol">${suitIconHtml(suit)}</span>
                 <span class="cards">${hand[suit] || '—'}</span>
             </div>
         `).join('');
@@ -734,13 +824,14 @@ function renderMyHands() {
 }
 
 // Rendu coloré d'une annonce en dehors de la boîte d'enchères (relevé, contrat final) :
-// même logique de classe de couleur que les boutons (SUIT_CLASSES), sur du texte simple.
+// même logique de classe de couleur que les boutons (SUIT_CLASSES), avec l'icône SVG de
+// la couleur à la place du caractère Unicode.
 function formatCallCellHtml(call) {
-    const text = formatCallForDisplay(call);
     const b = parseBid(call);
-    if (!b) return escapeHtml(text); // Passe / X / XX : pas de couleur de suite
+    if (!b) return escapeHtml(formatCallForDisplay(call)); // Passe / X / XX : pas de couleur de suite
     const cls = SUIT_CLASSES[b.strain] || 'notrump';
-    return `<span class="call-suit ${cls}">${escapeHtml(text)}</span>`;
+    const label = b.strain === 'NT' ? 'SA' : suitIconHtml(b.strain);
+    return `<span class="call-suit ${cls}">${b.level}${label}</span>`;
 }
 
 function renderAuctionLedger() {
@@ -813,7 +904,7 @@ function renderBiddingBox() {
         const cells = STRAINS.map(strain => {
             const call = `${level}${strain}`;
             const legal = myTurn && isCallLegal(auctionHistory, call, turnSeat);
-            const label = strain === 'NT' ? 'SA' : SUIT_SYMBOLS[strain];
+            const label = strain === 'NT' ? 'SA' : suitIconHtml(strain);
             const suitClass = SUIT_CLASSES[strain] || 'notrump';
             return `<button class="call-btn ${suitClass}" ${legal ? '' : 'disabled'} onclick="uiMakeCall('${call}')">${level}${label}</button>`;
         }).join('');
@@ -854,7 +945,7 @@ function renderAllHandsDiagram() {
         const hand = deal.hands[seat];
         const lines = ['S', 'H', 'D', 'C'].map(suit => `
             <div class="card-line">
-                <span class="suit-symbol ${SUIT_CLASSES[suit]}">${SUIT_SYMBOLS[suit]}</span>
+                <span class="suit-symbol">${suitIconHtml(suit)}</span>
                 <span class="cards">${hand[suit] || '—'}</span>
             </div>
         `).join('');
@@ -899,8 +990,9 @@ function renderDDTable(ddTable) {
     if (!ddTable) return '';
     const rows = STRAIN_ORDER.map(strain => {
         const info = STRAIN_DISPLAY[strain];
+        const labelHtml = strain === 'N' ? info.label : suitIconHtml(strain);
         const cells = DD_TABLE_SEAT_ORDER.map(pos => `<td>${tricksToContractLevel(ddTable[strain][pos])}</td>`).join('');
-        return `<tr><th class="${info.class}">${info.label}</th>${cells}</tr>`;
+        return `<tr><th class="${info.class}">${labelHtml}</th>${cells}</tr>`;
     }).join('');
     return `
         <div class="dd-table-title">Table du double mort (fournie dans le fichier)</div>
@@ -929,7 +1021,8 @@ function checkAuctionEnd() {
         resultEl.innerHTML = "↩️ Donne passée — personne n'a annoncé.";
     } else {
         const strainCls = SUIT_CLASSES[contract.strain] || 'notrump';
-        const contractHtml = `<span class="call-suit ${strainCls}">${escapeHtml(contract.contractString)}</span>`;
+        const strainLabel = contract.strain === 'NT' ? 'SA' : suitIconHtml(contract.strain);
+        const contractHtml = `<span class="call-suit ${strainCls}">${contract.level}${strainLabel}${escapeHtml(contract.doubled)}</span>`;
         resultEl.innerHTML = `Contrat final : <strong>${contractHtml}</strong> par <strong>${seatFullName(contract.declarer)}</strong>`;
     }
 

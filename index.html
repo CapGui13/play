@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Table d'enchères — Bridge à distance</title>
-<link rel="stylesheet" href="styles.css?v=23">
+<link rel="stylesheet" href="styles.css?v=27">
 </head>
 <body>
 
@@ -68,7 +68,7 @@
 
         <div class="form-group">
             <label>Votre pseudo</label>
-            <input type="text" id="myNameInput" class="name-input" maxlength="20" oninput="uiUpdateMyName()">
+            <input type="text" id="myNameInput" class="name-input" maxlength="20" oninput="uiUpdateMyName()" onblur="uiMyNameBlur()">
         </div>
 
         <div class="lobby-body">
@@ -146,9 +146,9 @@
 </div>
 
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
-<script src="bidding-rules.js?v=23"></script>
-<script src="deal-parser.js?v=23"></script>
-<script src="peer-connection.js?v=23"></script>
-<script src="app.js?v=23"></script>
+<script src="bidding-rules.js?v=27"></script>
+<script src="deal-parser.js?v=27"></script>
+<script src="peer-connection.js?v=27"></script>
+<script src="app.js?v=27"></script>
 </body>
 </html>

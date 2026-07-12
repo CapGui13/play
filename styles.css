@@ -410,6 +410,23 @@ body {
     margin-left: 6px;
 }
 
+.participant-rename-input {
+    width: auto;
+    max-width: 160px;
+    font-family: var(--font-body);
+    font-size: 0.9rem;
+    padding: 3px 8px;
+    border-radius: 5px;
+    border: 1.5px solid var(--line);
+    background: rgba(0, 0, 0, 0.25);
+    color: var(--cream);
+}
+
+.participant-rename-input:focus {
+    outline: none;
+    border-color: var(--brass);
+}
+
 .seat-assignment-grid {
     display: flex;
     flex-direction: column;
@@ -579,11 +596,19 @@ body {
     margin-bottom: 3px;
 }
 
-.suit-symbol { font-family: var(--font-suits); font-size: 1rem; text-align: center; }
-.suit-symbol.spades { color: var(--ink); }
-.suit-symbol.clubs { color: var(--club-blue); }
-.suit-symbol.hearts { color: var(--card-red); }
-.suit-symbol.diamonds { color: var(--diamond-orange); }
+.suit-symbol { display: flex; align-items: center; justify-content: center; }
+
+/* Icônes SVG des couleurs (dossier suits/) : les couleurs sont déjà "cuites" dans le
+   fichier SVG (palette quatre couleurs), pas besoin de les recolorer ici. On se contente
+   de contrôler la taille via la hauteur ; la largeur suit le ratio propre à chaque dessin
+   (les 4 icônes n'ont pas exactement les mêmes proportions). */
+.suit-icon {
+    height: 1em;
+    width: auto;
+    vertical-align: -0.12em;
+    display: inline-block;
+}
+.suit-symbol .suit-icon { height: 1.1rem; }
 
 .cards { letter-spacing: 1px; font-weight: 600; }
 
