@@ -960,17 +960,19 @@ body {
 
 .suit-symbol { display: flex; align-items: center; justify-content: center; }
 
-/* Icônes SVG des couleurs (dossier suits/) : les couleurs sont déjà "cuites" dans le
-   fichier SVG (palette quatre couleurs), pas besoin de les recolorer ici. On se contente
-   de contrôler la taille via la hauteur ; la largeur suit le ratio propre à chaque dessin
-   (les 4 icônes n'ont pas exactement les mêmes proportions). */
+/* Symboles Unicode ♠♥♦♣ forcés en Arial (rendu en glyphes texte plutôt qu'en émojis
+   colorés selon la plateforme). Couleur appliquée ici par famille (palette quatre
+   couleurs), pas cuite dans le caractère. */
 .suit-icon {
-    height: 1em;
-    width: auto;
-    vertical-align: -0.12em;
+    font-family: Arial, "Helvetica Neue", Helvetica, sans-serif;
+    font-style: normal;
     display: inline-block;
 }
-.suit-symbol .suit-icon { height: 1.1rem; }
+.suit-icon.spades { color: var(--ink); }
+.suit-icon.hearts { color: var(--card-red-bright); }
+.suit-icon.diamonds { color: var(--diamond-orange-bright); }
+.suit-icon.clubs { color: var(--club-blue-bright); }
+.suit-symbol .suit-icon { font-size: 1.1rem; }
 
 .cards { letter-spacing: 1px; font-weight: 600; }
 

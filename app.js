@@ -16,13 +16,12 @@
 const SUIT_SYMBOLS = { S: '♠', H: '♥', D: '♦', C: '♣' };
 const SUIT_CLASSES = { S: 'spades', H: 'hearts', D: 'diamonds', C: 'clubs' };
 
-// Icônes SVG dessinées à la main (dossier suits/), en remplacement des caractères Unicode
-// ♠♥♦♣ dont le rendu varie trop selon la police/plateforme (notamment ♣ et ♠ qui
-// deviennent des émojis colorés sur certains systèmes). Couleurs déjà "cuites" dans
-// chaque SVG (palette quatre couleurs : pique noir, cœur rouge, carreau orange, trèfle
-// bleu) — pas besoin de les recolorer en CSS.
+// Caractères Unicode ♠♥♦♣, forcés en police Arial (voir règle .suit-icon dans
+// styles.css) pour un rendu stable en glyphes texte plutôt qu'en émojis colorés selon
+// la plateforme. La couleur (palette quatre couleurs) est appliquée en CSS via la classe
+// de couleur (SUIT_CLASSES), pas cuite dans le caractère.
 function suitIconHtml(suit, extraClass) {
-    return `<img class="suit-icon ${SUIT_CLASSES[suit]}${extraClass ? ' ' + extraClass : ''}" src="suits/${suit}.svg" alt="${SUIT_SYMBOLS[suit]}">`;
+    return `<span class="suit-icon ${SUIT_CLASSES[suit]}${extraClass ? ' ' + extraClass : ''}">${SUIT_SYMBOLS[suit]}</span>`;
 }
 const SEAT_FULL_NAME = { N: 'Nord', E: 'Est', S: 'Sud', W: 'Ouest' };
 // Abréviation d'un seul caractère à afficher (convention française : O, pas W) — les
