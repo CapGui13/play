@@ -447,7 +447,6 @@ function uiCreateRoom() {
 
     peerConn = new BridgePeerConnection({
         onOpen: (role, roomCode) => {
-            document.getElementById('roomCodeDisplay').textContent = roomCode;
             const url = new URL(window.location.href);
             url.searchParams.set('room', roomCode);
             document.getElementById('shareLinkInput').value = url.toString();
@@ -744,9 +743,7 @@ function renderSeatAssignmentGrid() {
         `;
     }).join('');
 
-    // Petit centre décoratif, purement cosmétique, pour évoquer le tapis vert d'une vraie
-    // table plutôt qu'une simple liste.
-    container.innerHTML = seatBoxes + '<div class="seat-table-center">♠ ♥<br>♦ ♣</div>';
+    container.innerHTML = seatBoxes;
 }
 
 // Module "Kibbitz" : 3 emplacements de spectateur voyant les 4 mains, assignables
@@ -765,7 +762,6 @@ function renderKibitzerAssignmentGrid() {
                 ));
             return `
                 <div class="seat-box kibitzer-box">
-                    <span class="seat-box-label">👁 Kibbitz ${i + 1}</span>
                     <select class="seat-assign-select" onchange="uiAssignKibitzer(${i}, this.value)">${options.join('')}</select>
                 </div>
             `;
@@ -774,7 +770,6 @@ function renderKibitzerAssignmentGrid() {
         const name = p ? escapeHtml(p.name) : '— (personne)';
         return `
             <div class="seat-box kibitzer-box">
-                <span class="seat-box-label">👁 Kibbitz ${i + 1}</span>
                 <span class="seat-box-name">${name}</span>
             </div>
         `;

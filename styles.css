@@ -247,6 +247,7 @@ body {
 
 .name-input {
     width: 100%;
+    max-width: 260px;
     font-family: var(--font-body);
     font-size: 1rem;
     padding: 10px 12px;
@@ -255,6 +256,9 @@ body {
     background: rgba(0, 0, 0, 0.25);
     color: var(--cream);
 }
+
+.form-group-name { text-align: center; }
+.form-group-name .name-input { margin: 0 auto; }
 
 .name-input:focus {
     outline: none;
@@ -386,32 +390,20 @@ body {
     color: var(--brass-bright);
 }
 
-.room-code-display {
-    font-family: var(--font-mono);
-    font-size: 2.6rem;
-    letter-spacing: 10px;
-    color: var(--brass-bright);
-    background: rgba(0, 0, 0, 0.3);
-    border-radius: 10px;
-    padding: 16px;
-    margin: 18px 0;
-}
-
-.share-link-row {
-    display: flex;
-    gap: 8px;
+#lobbyRoomCodeBlock {
     margin-bottom: 20px;
 }
 
-.share-link-input {
-    flex-grow: 1;
-    font-family: var(--font-mono);
-    font-size: 0.8rem;
-    padding: 10px;
-    border-radius: 6px;
-    border: 1px solid var(--line);
-    background: rgba(0, 0, 0, 0.25);
-    color: var(--cream);
+.visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
 }
 
 .waiting-status {
@@ -456,20 +448,14 @@ body {
 
 .lobby-body {
     display: grid;
-    grid-template-columns: minmax(150px, 0.65fr) minmax(360px, 1.5fr) minmax(220px, 0.85fr);
+    grid-template-columns: minmax(150px, 0.8fr) minmax(360px, 1.6fr);
     gap: 24px;
     margin: 22px 0;
     text-align: left;
 }
 
-@media (max-width: 900px) {
-    .lobby-body { grid-template-columns: minmax(150px, 1fr) minmax(300px, 1.4fr); }
-    .lobby-kibitzers { grid-column: 1 / -1; }
-}
-
 @media (max-width: 700px) {
     .lobby-body { grid-template-columns: 1fr; }
-    .lobby-kibitzers { grid-column: auto; }
 }
 
 .lobby-body h3 {
@@ -484,6 +470,7 @@ body {
     list-style: none;
     display: flex;
     flex-direction: column;
+    align-items: stretch;
     gap: 6px;
 }
 
@@ -491,6 +478,7 @@ body {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
+    align-self: stretch;
     gap: 6px;
     background: rgba(0, 0, 0, 0.15);
     border: 1px solid transparent;
@@ -553,37 +541,19 @@ body {
 }
 
 /* Disposition en croix façon vraie table : Nord en haut, Sud en bas, Ouest/Est sur les
-   côtés, un petit centre décoratif au milieu — plutôt qu'une simple liste verticale. */
+   côtés. Ouest et Est chevauchent les colonnes centrales (occupées par Nord/Sud) pour
+   se rapprocher l'un de l'autre, plutôt que de rester plaqués tout à gauche/droite. */
 .seat-assignment-grid {
     display: grid;
-    grid-template-columns: 1.2fr 1fr 1.2fr;
-    grid-template-areas:
-        ".    north  ."
-        "west center east"
-        ".    south  .";
-    gap: 14px;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 14px 10px;
     align-items: stretch;
 }
 
-.seat-pos-N { grid-area: north; }
-.seat-pos-E { grid-area: east; }
-.seat-pos-S { grid-area: south; }
-.seat-pos-W { grid-area: west; }
-
-.seat-table-center {
-    grid-area: center;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    text-align: center;
-    font-size: 1.05rem;
-    line-height: 1.35;
-    color: rgba(246, 241, 227, 0.28);
-    background: rgba(0, 0, 0, 0.12);
-    border: 1px dashed var(--line);
-    border-radius: 8px;
-    user-select: none;
-}
+.seat-pos-N { grid-column: 2 / 4; grid-row: 1; }
+.seat-pos-W { grid-column: 1 / 3; grid-row: 2; }
+.seat-pos-E { grid-column: 3 / 5; grid-row: 2; }
+.seat-pos-S { grid-column: 2 / 4; grid-row: 3; }
 
 .seat-box {
     display: flex;
@@ -627,24 +597,30 @@ body {
     color: var(--cream);
 }
 
-/* Module "Kibbitz" : simple liste verticale de 3 cases, même style que les cases de la
-   table (voir .seat-box) mais sans disposition géométrique en croix. */
-.kibitzer-assignment-grid {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
+.lobby-kibitzers {
+    margin-top: 18px;
 }
 
-/* Sur un écran étroit, une croix à 3 colonnes laisse trop peu de place aux menus
+/* Module "Kibbitz" : rangée compacte de 3 cases sous la table, sans label individuel
+   (le titre "Kibbitz" au-dessus suffit) — même style que les cases de sièges. */
+.kibitzer-assignment-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.kibitzer-assignment-grid .seat-box {
+    flex: 1 1 140px;
+}
+
+/* Sur un écran étroit, une croix à 4 colonnes laisse trop peu de place aux menus
    déroulants Ouest/Est : on repasse à une simple liste empilée, plus lisible qu'une
    fidélité géométrique à une vraie table. */
 @media (max-width: 560px) {
     .seat-assignment-grid {
         display: flex;
         flex-direction: column;
-        grid-template-areas: none;
     }
-    .seat-table-center { display: none; }
     .seat-box {
         flex-direction: row;
         justify-content: space-between;
@@ -653,6 +629,7 @@ body {
     .seat-box-label { text-align: left; }
     .seat-box-name { text-align: right; }
     .seat-assign-select { width: auto; max-width: 55%; }
+    .kibitzer-assignment-grid { flex-direction: column; }
 }
 
 /* ===== Écran de jeu ===== */
@@ -1146,17 +1123,9 @@ table.dd-table td {
     .name-input,
     .participant-rename-input,
     .seat-assign-select,
-    .share-link-input,
     .form-group input[type="file"] {
         font-size: 16px;
     }
-
-    /* Le lien de partage (souvent long : domaine + ?room=XXXX) forçait sinon la ligne à
-       déborder horizontalement, un piège classique de flexbox (un input ne veut pas
-       descendre sous la largeur de son contenu par défaut). On l'empile verticalement et
-       on autorise explicitement le rétrécissement. */
-    .share-link-row { flex-direction: column; align-items: stretch; }
-    .share-link-input { min-width: 0; }
 
     /* La barre de connexion (statut + code de salon + bouton reconnexion + bouton debug)
        peut dépasser en largeur sur un petit écran, surtout une fois déconnecté (le
@@ -1181,10 +1150,6 @@ table.dd-table td {
     .felt-hero h1 { font-size: 1.9rem; }
     .hero-suits { font-size: 18px; letter-spacing: 8px; }
     .tagline { font-size: 0.95rem; }
-
-    /* Le code à 4 lettres à 2.6rem + 10px d'espacement entre lettres dépassait la largeur
-       utile restante sur un iPhone SE une fois les paddings ci-dessus retirés. */
-    .room-code-display { font-size: 1.9rem; letter-spacing: 5px; padding: 12px; }
 
     /* Boutons d'enchères un peu plus hauts : sur une grille de 5 colonnes bien remplie
        (7 lignes + la ligne Passe/X/XX), le doigt a moins de marge d'erreur qu'un curseur. */
