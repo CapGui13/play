@@ -1,4 +1,7 @@
 /* ===== Tokens ===== */
+/* Couleurs de marque, volontairement fixes dans les deux thèmes (identité visuelle et
+   code couleur sémantique — ex. cœur toujours rouge, trèfle toujours bleu — qui doit
+   rester reconnaissable indépendamment du thème). */
 :root {
     --felt-deep: #0b3d2e;
     --felt-mid: #145c43;
@@ -6,31 +9,90 @@
     --brass-bright: #e0bc4a;
     --cream: #f6f1e3;
     --ink: #17231d;
-    --ink-soft: #4a5750;
-    --card-red: #b5382f;
-    --card-red-bright: #d94f43;
-    --diamond-orange: #c96a1f;
-    --diamond-orange-bright: #f0a04b;
-    --club-blue: #1d4ed8;
-    --club-blue-bright: #4f8de0;
     --line: rgba(201, 162, 39, 0.35);
+    --warn-amber: #d99a2b;
+
+    /* Encoche/île dynamique iPhone : ne vaut quelque chose que si le meta viewport a
+       viewport-fit=cover (voir index.html) et que la page tourne en plein écran (PWA
+       installée, ou Safari en affichage étendu) — sinon toujours 0px, sans risque. Utilisé
+       partout où la hauteur réelle de .connection-bar (fixe, tout en haut) doit être prise
+       en compte : padding-top de body, position de .debug-panel, hauteur de #screen-game. */
+    --safe-top: env(safe-area-inset-top, 0px);
 
     --font-display: 'Fraunces', 'Georgia', serif;
     --font-body: 'Work Sans', 'Segoe UI', sans-serif;
     --font-mono: 'IBM Plex Mono', 'Consolas', monospace;
-    --font-suits: 'Noto Sans Symbols 2', 'Segoe UI Symbol', 'Segoe UI', sans-serif;
+
+    /* ----- Thème clair (par défaut) -----
+       Variables de surface/texte qui, elles, changent selon le thème (voir
+       [data-theme="dark"] plus bas). --bg-table/--surface-2 sont des voiles translucides
+       posés sur --bg (plutôt que des couleurs opaques) : cette approche reste cohérente
+       quel que soit --bg choisi, dans les deux thèmes, sans devoir la recalculer à la
+       main à chaque fois. */
+    --bg: #efe7d6;
+    --bg-table: rgba(23, 35, 29, 0.06);
+    --surface-2: rgba(23, 35, 29, 0.07);
+    --card: #ffffff;
+    --text: #17231d;
+    --text-muted: color-mix(in srgb, var(--text) 62%, transparent);
+    --bid-button: #f2e2ba;
+    --border: rgba(23, 35, 29, 0.16);
+    --input-bg: rgba(23, 35, 29, 0.05);
+
+    /* Couleurs de couleur (♥/♦/♣) : les teintes "vives" utilisées jusqu'ici (d94f43,
+       f0a04b, 4f8de0) n'étaient calibrées que pour un fond sombre — sur un fond clair
+       elles perdent tout contraste. On permute donc vers les teintes plus soutenues
+       ci-dessous en thème clair, et vers les teintes vives en thème sombre (voir
+       [data-theme="dark"]) — même nom de variable partout dans le fichier, valeur
+       différente selon le thème, aucun site d'appel à modifier. Pique reste #17231d
+       (= --text) : voir suit-icon.spades / call-btn.spades / etc., qui référencent
+       directement var(--text) plutôt qu'une variable --suit-black dédiée. */
+    --suit-red: #b5382f;
+    --suit-orange: #c96a1f;
+    --suit-blue: #1d4ed8;
 }
 
-@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Work+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&family=Noto+Sans+Symbols+2&display=swap');
+/* ----- Thème sombre -----
+   Reprend telles quelles les valeurs déjà utilisées partout dans ce fichier avant
+   l'introduction du thème clair (tapis vert foncé, panneaux translucides sur fond
+   sombre) : aucune régression visuelle pour qui utilisait déjà l'appli, et c'est le
+   thème appliqué par défaut si le système est en dark mode (voir uiToggleTheme/
+   initThemeToggle dans app.js). Seul --card est réellement nouveau : les mains et le
+   relevé d'enchères, jusqu'ici toujours blancs quel que soit le thème, adoptent
+   désormais un panneau sombre en mode sombre plutôt que de rester une feuille blanche
+   éclatante au milieu d'une interface sombre. */
+[data-theme="dark"] {
+    --bg: #0b3d2e;
+    --bg-table: rgba(0, 0, 0, 0.18);
+    --surface-2: rgba(0, 0, 0, 0.15);
+    --card: #1c2420;
+    --text: #f6f1e3;
+    --text-muted: color-mix(in srgb, var(--text) 68%, transparent);
+    --bid-button: rgba(246, 241, 227, 0.06);
+    --border: rgba(201, 162, 39, 0.35);
+    --input-bg: rgba(0, 0, 0, 0.25);
+    --suit-red: #d94f43;
+    --suit-orange: #f0a04b;
+    --suit-blue: #4f8de0;
+}
+
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Work+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap');
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
 body {
     font-family: var(--font-body);
-    background: radial-gradient(ellipse at top, var(--felt-mid) 0%, var(--felt-deep) 70%);
-    color: var(--cream);
+    background: var(--bg);
+    color: var(--text);
     min-height: 100vh;
-    padding: 56px 20px 20px;
+    padding: calc(56px + var(--safe-top)) 20px 20px;
+    transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+/* Le dégradé "tapis" n'a de sens qu'en mode sombre (--bg y vaut le vert profond utilisé
+   comme base du dégradé) ; en mode clair, --bg est une couleur plate. */
+[data-theme="dark"] body {
+    background: radial-gradient(ellipse at top, var(--felt-mid) 0%, var(--felt-deep) 70%);
 }
 
 .app-container {
@@ -46,13 +108,14 @@ body {
     justify-content: center;
     gap: 16px;
     align-items: center;
-    background: rgba(11, 61, 46, 0.92);
+    background: color-mix(in srgb, var(--card) 92%, transparent);
     backdrop-filter: blur(4px);
-    padding: 8px 16px;
+    padding: calc(8px + var(--safe-top)) 16px 8px;
     font-family: var(--font-mono);
     font-size: 13px;
     z-index: 100;
-    border-bottom: 1px solid var(--line);
+    border-bottom: 1px solid var(--border);
+    color: var(--text);
 }
 
 .connection-status.connected { color: #7fd99a; }
@@ -65,9 +128,9 @@ body {
 
 .debug-toggle-btn {
     background: transparent;
-    border: 1px solid var(--line);
+    border: 1px solid var(--border);
     border-radius: 6px;
-    color: var(--cream);
+    color: var(--text);
     font-size: 13px;
     padding: 2px 8px;
     cursor: pointer;
@@ -80,10 +143,13 @@ body {
 
 .debug-panel {
     position: fixed;
-    top: 40px;
+    top: calc(40px + var(--safe-top));
     left: 0;
     right: 0;
     max-height: 50vh;
+    /* Volontairement toujours sombre (comme une console/terminal), indépendamment du
+       thème choisi pour le reste de l'appli — un panneau de diagnostic technique, pas une
+       surface de lecture normale. */
     background: rgba(5, 20, 15, 0.97);
     border-bottom: 2px solid var(--brass);
     z-index: 200;
@@ -123,6 +189,49 @@ body {
     word-break: break-word;
 }
 
+/* ===== Bannières PWA (mise à jour, installation iOS, hors-ligne) =====
+   Placées en flux normal juste après .connection-bar (fixed) dans le HTML : comme body a
+   déjà un padding-top réservé pour elle (voir plus haut), ces bannières apparaissent
+   naturellement juste en dessous, sans avoir besoin d'être elles-mêmes en position fixed. */
+.pwa-banner {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    text-align: center;
+    max-width: 980px;
+    margin: 0 auto 12px;
+    padding: 8px 16px;
+    border-radius: 8px;
+    font-size: 0.85rem;
+    background: color-mix(in srgb, var(--brass) 20%, var(--card));
+    border: 1px solid color-mix(in srgb, var(--brass) 45%, var(--card));
+    color: var(--text);
+}
+
+.pwa-banner-warning {
+    background: color-mix(in srgb, var(--warn-amber) 20%, var(--card));
+    border-color: color-mix(in srgb, var(--warn-amber) 45%, var(--card));
+}
+
+/* Avertissement iOS/verrouillage écran (voir #iosLockScreenWarning) : posé dans le flux de
+   l'écran d'accueil, pas une bannière globale — on ne le montre qu'une fois, avant que la
+   partie ne commence, pas pendant qu'elle est en cours. */
+.pwa-inline-note {
+    max-width: 480px;
+    margin: 0 auto 20px;
+    padding: 10px 16px;
+    border-radius: 8px;
+    font-size: 0.85rem;
+    text-align: center;
+    background: color-mix(in srgb, var(--warn-amber) 16%, var(--card));
+    border: 1px solid color-mix(in srgb, var(--warn-amber) 40%, var(--card));
+    color: var(--text);
+}
+
+.pwa-inline-note .btn { margin-top: 8px; }
+
 /* ===== Écran d'accueil ===== */
 .screen { padding-top: 20px; }
 
@@ -147,7 +256,7 @@ body {
 }
 
 .tagline {
-    color: rgba(246, 241, 227, 0.75);
+    color: var(--text-muted);
     font-size: 1.05rem;
     max-width: 480px;
     margin: 0 auto;
@@ -167,7 +276,7 @@ body {
 }
 
 .landing-card {
-    background: rgba(0, 0, 0, 0.18);
+    background: var(--bg-table);
     border: 1px solid var(--line);
     border-radius: 14px;
     padding: 28px;
@@ -184,7 +293,7 @@ body {
 }
 
 .landing-card p {
-    color: rgba(246, 241, 227, 0.7);
+    color: var(--text-muted);
     font-size: 0.92rem;
     line-height: 1.5;
     flex-grow: 1;
@@ -213,7 +322,7 @@ body {
 
 .btn-secondary {
     background: transparent;
-    color: var(--cream);
+    color: var(--text);
     border: 1.5px solid var(--line);
 }
 
@@ -236,8 +345,8 @@ body {
     padding: 12px;
     border-radius: 8px;
     border: 1.5px solid var(--line);
-    background: rgba(0, 0, 0, 0.25);
-    color: var(--cream);
+    background: var(--input-bg);
+    color: var(--text);
 }
 
 .code-input:focus {
@@ -253,8 +362,8 @@ body {
     padding: 10px 12px;
     border-radius: 8px;
     border: 1.5px solid var(--line);
-    background: rgba(0, 0, 0, 0.25);
-    color: var(--cream);
+    background: var(--input-bg);
+    color: var(--text);
 }
 
 .form-group-name { text-align: center; }
@@ -265,14 +374,29 @@ body {
     border-color: var(--brass);
 }
 
+/* Bannières de statut (erreur, avertissement, succès) : la teinte semble "coller" une
+   couleur fixe, mais background/border/texte sont chacun mélangés avec --card et --text
+   du thème courant (color-mix) plutôt que codés en dur — donc un rouge/ambre/vert qui
+   reste lisible aussi bien sur fond clair que sombre, sans bloc [data-theme] séparé à
+   maintenir pour chacune. */
 .error-banner {
     margin-top: 18px;
-    background: rgba(180, 60, 50, 0.2);
-    border: 1px solid rgba(217, 79, 67, 0.5);
-    color: #f3c9c4;
+    background: color-mix(in srgb, #c0392b 20%, var(--card));
+    border: 1px solid color-mix(in srgb, #c0392b 45%, var(--card));
+    color: color-mix(in srgb, #c0392b 70%, var(--text));
     padding: 12px 16px;
     border-radius: 8px;
     font-size: 0.9rem;
+    white-space: pre-line; /* pour empiler plusieurs avertissements (voir readAndValidateDealFile) */
+}
+
+/* Variante non bloquante (ex : PARs absents, format de fichier ambigu) : la partie peut
+   démarrer quand même, donc une teinte ambre plutôt que le rouge réservé aux erreurs qui
+   empêchent réellement de continuer (fichier illisible, aucun fichier choisi). */
+.error-banner.is-warning {
+    background: color-mix(in srgb, var(--warn-amber) 22%, var(--card));
+    border-color: color-mix(in srgb, var(--warn-amber) 50%, var(--card));
+    color: color-mix(in srgb, var(--warn-amber) 75%, var(--text));
 }
 
 .deal-file-info {
@@ -281,9 +405,9 @@ body {
     align-items: center;
     justify-content: space-between;
     gap: 12px;
-    background: rgba(60, 160, 90, 0.16);
-    border: 1px solid rgba(90, 200, 130, 0.4);
-    color: #cdf0d8;
+    background: color-mix(in srgb, #3ca05a 18%, var(--card));
+    border: 1px solid color-mix(in srgb, #3ca05a 45%, var(--card));
+    color: color-mix(in srgb, #3ca05a 70%, var(--text));
     padding: 10px 14px;
     border-radius: 8px;
     font-size: 0.9rem;
@@ -302,7 +426,7 @@ body {
 }
 
 .modal-panel {
-    background: var(--felt-deep);
+    background: var(--bg);
     border: 1px solid var(--line);
     border-radius: 14px;
     width: min(720px, 100%);
@@ -345,7 +469,7 @@ body {
 
 .deal-preview-board-header {
     font-size: 0.88rem;
-    color: rgba(246, 241, 227, 0.9);
+    color: var(--text);
     margin-bottom: 10px;
 }
 
@@ -376,7 +500,7 @@ body {
     text-align: center;
     max-width: 640px;
     margin: 26px auto 0;
-    background: rgba(0, 0, 0, 0.18);
+    background: var(--bg-table);
     border: 1px solid var(--line);
     border-radius: 14px;
     padding: 26px 30px;
@@ -408,13 +532,16 @@ body {
 
 .waiting-status {
     font-size: 0.95rem;
-    color: rgba(246, 241, 227, 0.8);
+    color: var(--text-muted);
     margin-bottom: 10px;
 }
 
 /* Teinte sarcelle discrète (au lieu de l'or des sièges ou du violet du kibitz) : signale
    que cette section est fonctionnellement à part — la configuration du fichier de donnes —
-   plutôt qu'une histoire de "qui joue où" comme le reste du salon. */
+   plutôt qu'une histoire de "qui joue où" comme le reste du salon. Le fond/la bordure
+   restent une teinte sarcelle fixe (translucide, donc lisible sur les deux thèmes) ; seul
+   le texte du titre est mélangé avec --text via color-mix pour rester contrasté sur les
+   deux fonds. */
 .host-setup-panel {
     margin-top: 16px;
     padding: 16px;
@@ -429,7 +556,7 @@ body {
     font-size: 1.1rem;
     margin-bottom: 12px;
     text-align: center;
-    color: rgba(140, 224, 218, 0.95);
+    color: color-mix(in srgb, #28b3ab 75%, var(--text));
 }
 
 .form-group { margin-bottom: 12px; }
@@ -439,16 +566,16 @@ body {
     font-size: 0.85rem;
     font-weight: 600;
     margin-bottom: 6px;
-    color: rgba(246, 241, 227, 0.85);
+    color: var(--text);
 }
 
 .form-group input[type="file"] {
     width: 100%;
     padding: 8px;
     border-radius: 6px;
-    background: rgba(0, 0, 0, 0.25);
+    background: var(--input-bg);
     border: 1px solid rgba(64, 190, 184, 0.35);
-    color: var(--cream);
+    color: var(--text);
     font-size: 0.85rem;
 }
 
@@ -461,7 +588,7 @@ body {
     cursor: pointer;
     font-weight: 600;
     font-size: 0.85rem;
-    color: rgba(246, 241, 227, 0.85);
+    color: var(--text);
 }
 
 .checkbox-label input[type="checkbox"] {
@@ -505,7 +632,7 @@ body {
     align-items: center;
     align-self: stretch;
     gap: 6px;
-    background: rgba(0, 0, 0, 0.15);
+    background: var(--surface-2);
     border: 1px solid transparent;
     border-radius: 6px;
     padding: 6px 10px;
@@ -519,11 +646,11 @@ body {
 /* Bleu si déjà placé quelque part (table ou kibitzer — voir participantHasAPlace), rouge
    sinon : un coup d'œil dans la liste suffit à repérer qui reste à placer. */
 .participant-item.is-assigned {
-    color: var(--club-blue-bright);
+    color: var(--suit-blue);
 }
 
 .participant-item.is-unassigned {
-    color: var(--card-red-bright);
+    color: var(--suit-red);
 }
 
 .participant-item.is-assigned .participant-rename-input,
@@ -539,7 +666,7 @@ body {
 
 .disconnected-tag {
     font-size: 0.75rem;
-    color: var(--card-red-bright);
+    color: var(--suit-red);
     font-style: italic;
     margin-left: 6px;
 }
@@ -556,8 +683,8 @@ body {
     padding: 3px 8px;
     border-radius: 5px;
     border: 1.5px solid var(--line);
-    background: rgba(0, 0, 0, 0.25);
-    color: var(--cream);
+    background: var(--input-bg);
+    color: var(--text);
 }
 
 .participant-rename-input:focus {
@@ -603,7 +730,10 @@ body {
 .seat-assignment-grid .seat-box {
     position: relative;
     z-index: 1;
-    background: rgba(11, 20, 16, 0.55);
+    /* Panneau volontairement proche de l'opacité totale (dérivé de --card) : il doit
+       masquer le halo doré de .seat-assignment-grid::before qui passe juste derrière,
+       pas simplement le teinter comme les autres panneaux translucides du salon. */
+    background: color-mix(in srgb, var(--card) 85%, transparent);
 }
 
 .seat-box {
@@ -611,7 +741,7 @@ body {
     flex-direction: column;
     align-items: stretch;
     gap: 6px;
-    background: rgba(0, 0, 0, 0.15);
+    background: var(--surface-2);
     border: 1px solid var(--line);
     border-radius: 8px;
     padding: 9px 12px;
@@ -654,12 +784,15 @@ body {
 
 .seat-box-name {
     font-size: 0.85rem;
-    color: rgba(246, 241, 227, 0.85);
+    color: var(--text);
     text-align: center;
 }
 
 /* Avatar rond (initiale + couleur dérivée de l'id — voir avatarHtml dans app.js) affiché
-   devant un participant : liste des participants, et cases de sièges assignées. */
+   devant un participant : liste des participants, et cases de sièges assignées. Fond
+   propre à chaque participant (couleur saturée générée par avatarColorForId, indépendante
+   du thème), donc le texte blanc + son ombre portée restent lisibles dans les deux
+   thèmes sans changement. */
 .mini-avatar {
     flex-shrink: 0;
     width: 22px;
@@ -675,7 +808,7 @@ body {
 }
 
 .mini-avatar-robot {
-    background: rgba(255, 255, 255, 0.08) !important;
+    background: color-mix(in srgb, var(--text) 10%, transparent) !important;
     font-size: 0.75rem;
 }
 
@@ -700,16 +833,16 @@ body {
     padding: 6px 26px 6px 9px;
     border-radius: 6px;
     border: 1px solid var(--line);
-    background: rgba(0, 0, 0, 0.3);
-    color: var(--cream);
+    background: var(--input-bg);
+    color: var(--text);
     width: 100%;
     min-width: 0;
     text-overflow: ellipsis;
 }
 
 .seat-assign-select option {
-    background: var(--felt-deep);
-    color: var(--cream);
+    background: var(--card);
+    color: var(--text);
 }
 
 .lobby-kibitzers {
@@ -746,7 +879,7 @@ body {
     width: 18px;
     text-align: center;
     font-size: 0.95rem;
-    color: rgba(196, 181, 253, 0.9);
+    color: color-mix(in srgb, #8a6fe0 80%, var(--text));
 }
 
 .kibitzer-box .seat-box-name {
@@ -824,7 +957,7 @@ body {
 
 .dealer-vuln-label {
     font-size: 0.85rem;
-    color: rgba(246, 241, 227, 0.7);
+    color: var(--text-muted);
 }
 
 .game-body {
@@ -839,15 +972,17 @@ body {
 
 .hands-panel { display: flex; flex-direction: column; gap: 14px; }
 
+#myHandsContainer { display: flex; flex-direction: column; gap: 14px; }
+
 .hand-card {
-    background: var(--cream);
-    color: var(--ink);
+    background: var(--card);
+    color: var(--text);
     border-radius: 10px;
     padding: 14px 16px;
     box-shadow: 0 3px 10px rgba(0,0,0,0.25);
     position: relative;
     overflow: hidden;
-    transition: opacity 0.3s ease, filter 0.3s ease, box-shadow 0.3s ease;
+    transition: opacity 0.3s ease, filter 0.3s ease, box-shadow 0.3s ease, background-color 0.2s ease, color 0.2s ease;
 }
 
 /* Quand un joueur contrôle plusieurs mains, celle dont c'est le tour est mise en valeur
@@ -894,7 +1029,7 @@ body {
     font-weight: 600;
     font-size: 0.95rem;
     margin-bottom: 8px;
-    color: var(--felt-deep);
+    color: color-mix(in srgb, var(--felt-mid) 55%, var(--text));
 }
 
 .hand-card-title-name { flex-shrink: 0; }
@@ -908,13 +1043,14 @@ body {
 
 /* Compte de points d'honneur (HCP), affichable/masquable par joueur — voir
    uiToggleShowHcp(). Volontairement discret (petit badge) pour ne pas prendre le pas sur
-   le nom du siège. */
+   le nom du siège. Couleur et fond mélangés via color-mix (plutôt que fixes) pour rester
+   nettement plus foncés/clairs que le fond de la carte, quel que soit le thème. */
 .hand-hcp-badge {
     font-family: var(--font-body);
     font-weight: 600;
     font-size: 0.72rem;
-    color: var(--felt-mid);
-    background: rgba(20, 92, 67, 0.12);
+    color: color-mix(in srgb, var(--felt-mid) 60%, var(--text));
+    background: color-mix(in srgb, var(--felt-mid) 16%, var(--card));
     border-radius: 999px;
     padding: 2px 8px;
     white-space: nowrap;
@@ -967,18 +1103,24 @@ body {
     font-family: Arial, "Helvetica Neue", Helvetica, sans-serif;
     font-style: normal;
     display: inline-block;
+    /* Force le rendu "texte" plutôt que "émoji" des caractères ♠♥♦♣ sur les systèmes qui
+       proposent les deux présentations pour ces glyphes (notamment mobile) — complément
+       à font-family, qui seul ne suffit pas toujours à empêcher la substitution par une
+       police d'émojis. Support navigateur encore jeune (Safari en particulier) : agit
+       comme un filet supplémentaire, pas une garantie à 100 %. */
+    font-variant-emoji: text;
 }
-.suit-icon.spades { color: var(--ink); }
-.suit-icon.hearts { color: var(--card-red-bright); }
-.suit-icon.diamonds { color: var(--diamond-orange-bright); }
-.suit-icon.clubs { color: var(--club-blue-bright); }
+.suit-icon.spades { color: var(--text); }
+.suit-icon.hearts { color: var(--suit-red); }
+.suit-icon.diamonds { color: var(--suit-orange); }
+.suit-icon.clubs { color: var(--suit-blue); }
 .suit-symbol .suit-icon { font-size: 1.1rem; }
 
 .cards { letter-spacing: 1px; font-weight: 600; }
 
 /* Ledger d'enchères */
 .auction-panel {
-    background: rgba(0, 0, 0, 0.18);
+    background: var(--bg-table);
     border: 1px solid var(--line);
     border-radius: 12px;
     padding: 18px;
@@ -988,10 +1130,10 @@ body {
     width: 100%;
     table-layout: fixed;
     border-collapse: collapse;
-    font-family: var(--font-suits);
+    font-family: var(--font-body);
     margin-bottom: 16px;
-    background: #ffffff;
-    border: 1px solid #1a1a1a;
+    background: var(--card);
+    border: 1px solid var(--border);
     border-radius: 4px;
     overflow: hidden;
 }
@@ -1001,17 +1143,20 @@ body {
     font-size: 0.95rem;
     font-weight: 700;
     padding: 8px 6px 0 6px;
-    color: #1a1a1a;
-    background: #ffffff;
-    border: 1px solid #1a1a1a;
+    color: var(--text);
+    background: var(--card);
+    border: 1px solid var(--border);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
 
+/* Colonne "au tour de" mise en évidence par inversion fond/texte (plutôt que par une
+   couleur fixe) : lisible aussi bien sur ledger clair (fond sombre, texte clair) que
+   sombre (fond clair, texte sombre). */
 .auction-ledger th.turn-col {
-    background: #1a1a1a;
-    color: #ffffff;
+    background: var(--text);
+    color: var(--card);
 }
 
 .ledger-seat-label {
@@ -1041,16 +1186,16 @@ body {
     padding: 7px 4px;
     font-size: 1rem;
     font-weight: 700;
-    color: #1a1a1a;
-    background: #ffffff;
-    border: 1px solid #1a1a1a;
+    color: var(--text);
+    background: var(--card);
+    border: 1px solid var(--border);
 }
 
-.auction-ledger .call-suit.spades { color: #1a1a1a; }
-.auction-ledger .call-suit.hearts { color: #c0272d; }
-.auction-ledger .call-suit.diamonds { color: var(--diamond-orange); }
-.auction-ledger .call-suit.clubs { color: var(--club-blue); }
-.auction-ledger .call-suit.notrump { color: #1a1a1a; }
+.auction-ledger .call-suit.spades { color: var(--text); }
+.auction-ledger .call-suit.hearts { color: color-mix(in srgb, #c0272d 70%, var(--text)); }
+.auction-ledger .call-suit.diamonds { color: color-mix(in srgb, var(--suit-orange) 70%, var(--text)); }
+.auction-ledger .call-suit.clubs { color: color-mix(in srgb, var(--suit-blue) 70%, var(--text)); }
+.auction-ledger .call-suit.notrump { color: var(--text); }
 
 .contract-result {
     background: rgba(201, 162, 39, 0.15);
@@ -1064,14 +1209,14 @@ body {
 
 .contract-result .info-text {
     font-size: 0.8rem;
-    color: rgba(246, 241, 227, 0.6);
+    color: var(--text-muted);
     margin-top: 6px;
     font-style: italic;
 }
 
 .dd-table-title {
     font-size: 0.8rem;
-    color: rgba(246, 241, 227, 0.65);
+    color: var(--text-muted);
     margin-top: 14px;
     margin-bottom: 6px;
     font-style: italic;
@@ -1098,19 +1243,19 @@ table.dd-table thead th {
 }
 
 table.dd-table tbody th {
-    font-family: var(--font-suits);
+    font-family: var(--font-body);
     font-weight: 600;
-    color: var(--cream);
+    color: var(--text);
 }
 
-table.dd-table tbody th.spades { color: var(--ink); }
-table.dd-table tbody th.hearts { color: var(--card-red-bright); }
-table.dd-table tbody th.diamonds { color: var(--diamond-orange-bright); }
-table.dd-table tbody th.clubs { color: var(--club-blue-bright); }
-table.dd-table tbody th.notrump { color: var(--cream); }
+table.dd-table tbody th.spades { color: var(--text); }
+table.dd-table tbody th.hearts { color: var(--suit-red); }
+table.dd-table tbody th.diamonds { color: var(--suit-orange); }
+table.dd-table tbody th.clubs { color: var(--suit-blue); }
+table.dd-table tbody th.notrump { color: var(--text); }
 
 table.dd-table td {
-    color: rgba(246, 241, 227, 0.9);
+    color: var(--text);
 }
 
 .all-hands-diagram {
@@ -1158,14 +1303,14 @@ table.dd-table td {
 .bid-row { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
 
 .call-btn {
-    font-family: var(--font-suits);
+    font-family: var(--font-body);
     font-weight: 600;
     font-size: 0.85rem;
     padding: 9px 4px;
     border-radius: 6px;
     border: 1px solid var(--line);
-    background: rgba(246, 241, 227, 0.06);
-    color: var(--cream);
+    background: var(--bid-button);
+    color: var(--text);
     cursor: pointer;
     transition: background 0.15s, transform 0.1s;
 }
@@ -1180,24 +1325,24 @@ table.dd-table td {
     cursor: not-allowed;
 }
 
-.call-btn.spades { color: var(--ink); }
-.call-btn.hearts { color: var(--card-red-bright); }
-.call-btn.diamonds { color: var(--diamond-orange-bright); }
-.call-btn.clubs { color: var(--club-blue-bright); }
-.call-btn.notrump { color: var(--cream); }
+.call-btn.spades { color: var(--text); }
+.call-btn.hearts { color: var(--suit-red); }
+.call-btn.diamonds { color: var(--suit-orange); }
+.call-btn.clubs { color: var(--suit-blue); }
+.call-btn.notrump { color: var(--text); }
 
 /* Couleur des annonces affichées ailleurs que dans les boutons (relevé d'enchères,
    contrat final) : mêmes teintes vives que la boîte d'enchères. */
-.call-suit { font-family: var(--font-suits); }
-.call-suit.spades { color: var(--ink); }
-.call-suit.hearts { color: var(--card-red-bright); }
-.call-suit.diamonds { color: var(--diamond-orange-bright); }
-.call-suit.clubs { color: var(--club-blue-bright); }
-.call-suit.notrump { color: var(--cream); }
+.call-suit { font-family: var(--font-body); }
+.call-suit.spades { color: var(--text); }
+.call-suit.hearts { color: var(--suit-red); }
+.call-suit.diamonds { color: var(--suit-orange); }
+.call-suit.clubs { color: var(--suit-blue); }
+.call-suit.notrump { color: var(--text); }
 
 .call-btn-special {
     flex: 1;
-    background: rgba(0,0,0,0.2);
+    background: color-mix(in srgb, var(--text) 12%, transparent);
 }
 
 .turn-indicator {
@@ -1209,22 +1354,22 @@ table.dd-table td {
 }
 
 .turn-indicator.my-turn {
-    background: rgba(47, 143, 91, 0.25);
-    color: #8fe3ac;
+    background: color-mix(in srgb, #2f8f5b 22%, var(--card));
+    color: color-mix(in srgb, #2f8f5b 75%, var(--text));
 }
 
 .turn-indicator.their-turn {
-    color: rgba(246, 241, 227, 0.5);
+    color: var(--text-muted);
 }
 
 .turn-indicator.disconnected-turn {
     background: rgba(217, 79, 67, 0.18);
-    color: var(--card-red-bright);
+    color: var(--suit-red);
 }
 
 .undo-status-text {
     font-size: 0.8rem;
-    color: rgba(246, 241, 227, 0.65);
+    color: var(--text-muted);
     font-style: italic;
     align-self: center;
 }
@@ -1242,6 +1387,34 @@ table.dd-table td {
     font-size: 0.88rem;
 }
 
+/* Bannière de reconnexion (voir renderReconnectionBanner dans app.js) : signale tout
+   joueur assis à la table actuellement déconnecté, avec un décompte, pendant toute la
+   partie — pas seulement quand c'est son tour (voir aussi .disconnected-turn, qui ne
+   couvre que ce cas précis). .is-back remplace brièvement ce message par une confirmation
+   de retour. Couleurs mélangées via color-mix (même technique que .error-banner etc.),
+   lisibles quel que soit le thème. */
+.reconnection-banner {
+    text-align: center;
+    border-radius: 8px;
+    padding: 8px 14px;
+    margin-bottom: 14px;
+    font-size: 0.88rem;
+    font-weight: 600;
+    white-space: pre-line; /* un joueur déconnecté par ligne, s'il y en a plusieurs */
+}
+
+.reconnection-banner.is-waiting {
+    background: color-mix(in srgb, var(--warn-amber) 20%, var(--card));
+    border: 1px solid color-mix(in srgb, var(--warn-amber) 45%, var(--card));
+    color: color-mix(in srgb, var(--warn-amber) 75%, var(--text));
+}
+
+.reconnection-banner.is-back {
+    background: color-mix(in srgb, #3ca05a 20%, var(--card));
+    border: 1px solid color-mix(in srgb, #3ca05a 45%, var(--card));
+    color: color-mix(in srgb, #3ca05a 70%, var(--text));
+}
+
 .next-board-panel {
     text-align: center;
     margin-top: 20px;
@@ -1249,7 +1422,7 @@ table.dd-table td {
 
 .info-text {
     font-size: 0.85rem;
-    color: rgba(246, 241, 227, 0.6);
+    color: var(--text-muted);
 }
 
 /* ===== Optimisations téléphone =====
@@ -1259,7 +1432,7 @@ table.dd-table td {
     /* Marges extérieures resserrées : sur un écran de ~360-390px de large, les paddings
        pensés pour desktop (20px de partout + 36px dans le salon, etc.) empilés les uns
        sur les autres finissaient par manger presque un tiers de la largeur utile. */
-    body { padding: 56px 12px 12px; }
+    body { padding: calc(56px + var(--safe-top)) 12px 12px; }
     #screen-lobby { padding: 22px 16px; margin-top: 16px; }
     .landing-card { padding: 20px; }
     .auction-panel { padding: 14px; }
@@ -1293,8 +1466,15 @@ table.dd-table td {
     /* Sur les écrans les plus étroits, la barre du haut passe plus souvent sur 2 lignes
        (voir flex-wrap ci-dessus) : on réserve la place en conséquence pour ne pas que le
        contenu de la page passe dessous. */
-    body { padding-top: 84px; }
-    .debug-panel { top: 68px; }
+    body { padding-top: calc(84px + var(--safe-top)); }
+    .debug-panel { top: calc(68px + var(--safe-top)); }
+
+    /* Même raison : #screen-game (voir le bloc 768px ci-dessous) doit lui aussi tenir
+       compte des 84px de barre de connexion sur 2 lignes plutôt que les 56px habituels. */
+    #screen-game {
+        height: calc(100vh - 84px - var(--safe-top)); /* repli pour les navigateurs sans support de dvh */
+        height: calc(100dvh - 84px - var(--safe-top));
+    }
 
     .felt-hero { padding: 34px 12px 28px; }
     .felt-hero h1 { font-size: 1.9rem; }
@@ -1306,3 +1486,132 @@ table.dd-table td {
     .call-btn { padding: 11px 4px; }
     .special-calls-row { gap: 6px; }
 }
+
+/* ===== Écran de jeu — layout plein écran mobile =====
+   Objectif : tenir l'écran de jeu dans la hauteur de viewport disponible, sans scroll de
+   PAGE. Ceci ne veut pas dire "aucun scroll nulle part" : le relevé d'enchères grandit à
+   chaque annonce et la grille d'enchères (8 lignes de boutons) ne peut pas tenir dans
+   ~15% de hauteur d'écran tout en gardant des boutons de 44px (contrainte tactile
+   demandée) — ces deux zones défilent donc chacune dans leur propre espace borné, ce qui
+   est la technique standard pour ce genre d'app (l'équivalent d'une liste qui scrolle
+   dans une appli mobile "single-screen"), plutôt qu'une promesse intenable de tout faire
+   tenir sans le moindre scroll interne. Les autres écrans (accueil, salon) ne sont pas
+   concernés : ils gardent un défilement de page normal, plus adapté à leur contenu
+   variable (liste de participants, etc.).
+
+   56px / 84px reprennent les mêmes hauteurs de barre de connexion que celles déjà
+   utilisées par body { padding-top } ci-dessus (38px de contenu + marge), pour que
+   #screen-game occupe exactement le reste de l'écran sans se chevaucher avec elle.
+   var(--safe-top) s'y ajoute pour la même raison que sur body : sur un iPhone à encoche,
+   la barre de connexion pousse son propre contenu de --safe-top en plus (voir
+   .connection-bar), donc sa hauteur réelle grandit d'autant. */
+@media (max-width: 768px) {
+    #screen-game {
+        display: flex;
+        flex-direction: column;
+        height: calc(100vh - 56px - var(--safe-top)); /* repli pour les navigateurs sans support de dvh */
+        height: calc(100dvh - 56px - var(--safe-top));
+        overflow: hidden;
+        padding-top: 8px;
+    }
+
+    .game-header {
+        flex: 0 0 auto;
+        margin-bottom: 8px;
+        padding-bottom: 8px;
+    }
+
+    #reconnectionBanner {
+        flex: 0 0 auto;
+        margin-bottom: 8px;
+    }
+
+    .game-body {
+        flex: 1 1 auto;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        overflow: hidden;
+        /* Réserve la place occupée par #biddingBox une fois qu'il passe en position
+           fixed ci-dessous (sinon le relevé grandirait pour combler cet espace et son
+           bas se retrouverait masqué derrière la boîte d'enchères). */
+        padding-bottom: 32vh; /* repli pour les navigateurs sans support de dvh */
+        padding-bottom: 32dvh;
+    }
+
+    /* Mains du joueur : budget d'environ 25% de la hauteur d'écran (consigne "main
+       joueur 25vh"). Défile verticalement en interne si plusieurs mains y tiennent mal
+       (mode diagonale / "maître du jeu"). */
+    .hands-panel {
+        flex: 0 0 25vh; /* repli pour les navigateurs sans support de dvh */
+        flex: 0 0 25dvh;
+        min-height: 0;
+        overflow-y: auto;
+    }
+
+    .hand-display-options { flex: 0 0 auto; }
+
+    /* Panneau d'enchères : absorbe le reste de la hauteur disponible (~60% une fois les
+       mains et l'entête déduits, conformément à la consigne "table 60vh"). */
+    .auction-panel {
+        flex: 1 1 auto;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        padding: 10px;
+    }
+
+    /* Seule cette zone (relevé + bandeaux + contrat + double mort) défile : la boîte
+       d'enchères, elle, est sortie du flux normal juste en dessous (position: fixed). */
+    .auction-scroll-area {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow-y: auto;
+    }
+
+    #turnIndicator {
+        flex: 0 0 auto;
+        margin-top: 6px;
+    }
+
+    /* Boîte d'enchères : fixée en bas de l'écran (consigne "position: fixed bottom"),
+       grille à 5 colonnes déjà en place (voir .bid-row, inchangé) — on ajoute juste un
+       plafond de hauteur avec défilement interne pour les 7 lignes de paliers (1 à 7),
+       et un fond opaque + une ombre portée pour bien la détacher du contenu qui défile
+       derrière elle. env(safe-area-inset-bottom) évite qu'elle passe sous la barre
+       gestuelle des iPhone récents. */
+    #biddingBox {
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        z-index: 50;
+        margin: 0;
+        max-height: 32vh; /* repli pour les navigateurs sans support de dvh */
+        max-height: 32dvh;
+        overflow-y: auto;
+        background: var(--bg);
+        border-top: 1px solid var(--border);
+        box-shadow: 0 -6px 18px rgba(0, 0, 0, 0.3);
+        padding: 8px 8px calc(8px + env(safe-area-inset-bottom, 0px));
+    }
+
+    /* Cibles tactiles conformes (44px min, texte 16px pour éviter le zoom auto iOS déjà
+       expliqué plus haut) + touch-action: manipulation pour supprimer le délai de 300ms
+       avant déclenchement du clic sur les navigateurs mobiles qui l'appliquent encore. */
+    .call-btn, .call-btn-special {
+        min-height: 44px;
+        font-size: 16px;
+        touch-action: manipulation;
+    }
+}
+
+/* ===== Main du joueur — taille de police adaptative =====
+   Les mains sont affichées en texte (rangs par couleur), pas en cartes graphiques : pas
+   de largeur de carte à faire varier ici, mais la lisibilité du texte doit rester bonne
+   du petit téléphone au grand écran. clamp() évite à la fois un texte trop petit sur
+   mobile et une police disproportionnée sur desktop. */
+.hand-cards { font-size: clamp(0.85rem, 3.2vw, 0.95rem); }
+.suit-symbol .suit-icon { font-size: clamp(1rem, 3.6vw, 1.1rem); }

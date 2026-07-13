@@ -34,7 +34,8 @@ participant reçoit alors uniquement la ou les mains qu'on lui a assignées.
 
 1. Crée un nouveau dépôt GitHub (ou utilise un dépôt existant).
 2. Place-y les fichiers de ce dossier (`index.html`, `styles.css`, `app.js`,
-   `bidding-rules.js`, `deal-parser.js`, `peer-connection.js`) à la racine.
+   `bidding-rules.js`, `deal-parser.js`, `peer-connection.js`, `manifest.json`, `sw.js`,
+   le dossier `icons/`) à la racine.
 3. Pousse-les :
    ```
    git init
@@ -141,3 +142,24 @@ Limites connues :
 | `deal-parser.js` | Lecture des fichiers `.pbn` et `.lin` |
 | `peer-connection.js` | Connexion WebRTC entre les joueurs (via PeerJS), topologie en étoile pour 3+ joueurs |
 | `app.js` | État de l'application, salon (pseudos, assignation des sièges), et rendu de l'interface |
+| `manifest.json` | Manifeste PWA (nom, icônes, couleurs, mode plein écran) |
+| `sw.js` | Service worker : cache hors-ligne des fichiers ci-dessus, gère les mises à jour |
+| `icons/` | Icônes PWA (180/192/512px) référencées par `manifest.json` et `index.html` |
+
+## PWA — installation sur mobile
+
+Le site est installable ("Ajouter à l'écran d'accueil") sur iOS et Android, et fonctionne
+hors-ligne pour tout ce qui ne dépend pas du réseau (interface, règles d'enchères).
+Aucune configuration : le navigateur détecte `manifest.json` et propose l'installation
+automatiquement (Android), ou l'utilisateur passe par Partager → Sur l'écran d'accueil
+(iOS — l'appli affiche une invite dédiée la première fois).
+
+**Mettre à jour le cache après une modification** : `sw.js` gère lui-même l'invalidation
+du cache via la constante `CACHE_NAME` en tête de fichier — il n'y a plus de paramètre
+`?v=NN` à incrémenter à la main sur chaque `<script>`/`<link>` de `index.html` comme
+avant. **À chaque déploiement qui touche un fichier listé dans `CORE_ASSETS`
+(`index.html`, `styles.css`, `*.js`, les icônes), incrémenter le numéro dans
+`CACHE_NAME`** (ex. `bridge-encheres-v1` → `v2`), sans quoi les joueurs ayant déjà
+installé l'appli continueront de voir l'ancienne version tant que le service worker ne
+détecte pas de changement. Une bannière "Nouvelle version disponible" s'affiche
+automatiquement une fois la mise à jour détectée ; il suffit de cliquer "Recharger".

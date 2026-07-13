@@ -222,14 +222,30 @@ function parseLIN(text) {
 }
 
 // Détecte le format à partir du contenu et du nom de fichier, puis parse.
+//
+// Cas ambigu : si le texte contient à la fois un motif PBN ([Deal "...") et un motif LIN
+// (qx|...) — par ex. un fichier renommé par erreur, ou un export malformé — on ne tranche
+// pas silencieusement. On parse quand même en PBN (le format le plus structuré des deux,
+// donc le choix le moins susceptible de produire des donnes fausses sans erreur), mais on
+// attache un avertissement au tableau renvoyé (propriété non énumérable _formatWarning)
+// pour que l'appelant puisse prévenir l'utilisateur. Un tableau normal n'ayant pas cette
+// propriété, elle n'a aucun effet sur le code existant qui ignore ce cas.
 function parseDealFile(text, filename) {
     const name = (filename || '').toLowerCase();
     const looksLikePBN = /\[Deal\s+"/.test(text) || name.endsWith('.pbn');
     const looksLikeLIN = /qx\|/.test(text) || name.endsWith('.lin');
 
-    if (looksLikePBN && !looksLikeLIN) return parsePBN(text);
-    if (looksLikeLIN && !looksLikePBN) return parseLIN(text);
-    if (looksLikePBN) return parsePBN(text); // les deux motifs présents : PBN prioritaire
+    if (looksLikePBN && looksLikeLIN) {
+        const deals = parsePBN(text);
+        Object.defineProperty(deals, '_formatWarning', {
+            value: 'Ce fichier contient à la fois des motifs PBN et LIN : il a été lu comme un fichier PBN. ' +
+                   'Si le résultat ne semble pas correct, vérifiez le fichier ou renommez-le avec l\'extension attendue (.pbn ou .lin).',
+            enumerable: false
+        });
+        return deals;
+    }
+    if (looksLikePBN) return parsePBN(text);
+    if (looksLikeLIN) return parseLIN(text);
     throw new Error('Format de fichier non reconnu : ce n\'est ni un .pbn ni un .lin valide.');
 }
 

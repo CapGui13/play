@@ -23,6 +23,17 @@ const SUIT_CLASSES = { S: 'spades', H: 'hearts', D: 'diamonds', C: 'clubs' };
 function suitIconHtml(suit, extraClass) {
     return `<span class="suit-icon ${SUIT_CLASSES[suit]}${extraClass ? ' ' + extraClass : ''}">${SUIT_SYMBOLS[suit]}</span>`;
 }
+
+// Libellé HTML d'une couleur d'enchère : "SA" en texte pour sans-atout, sinon l'icône de
+// couleur (suitIconHtml). Centralise un motif répété à plusieurs endroits (boîte
+// d'enchères, relevé, contrat final, table du double mort). Accepte les deux conventions
+// utilisées dans ce fichier pour désigner le sans-atout : 'NT' (calls d'enchères, voir
+// bidding-rules.js/STRAINS) et 'N' (clés de la table du double mort, voir STRAIN_ORDER —
+// où N signifie sans-atout et non Nord). Aucune des deux ne désigne autre chose ailleurs,
+// donc pas d'ambiguïté à les traiter ensemble ici.
+function formatStrainLabel(strain) {
+    return (strain === 'NT' || strain === 'N') ? 'SA' : suitIconHtml(strain);
+}
 const SEAT_FULL_NAME = { N: 'Nord', E: 'Est', S: 'Sud', W: 'Ouest' };
 // Abréviation d'un seul caractère à afficher (convention française : O, pas W) — les
 // clés internes restent N/E/S/W partout ailleurs (PBN, protocole réseau, etc.).
@@ -47,6 +58,18 @@ let kibitzerAssignment = [null, null, null];
 // les places déjà occupées quand on rejoint un salon en cours de remplissage.
 let prevSeatAssignmentSnapshot = null;
 let prevKibitzerAssignmentSnapshot = null;
+
+// Même principe, pour détecter côté invité les transitions déconnecté -> reconnecté d'un
+// AUTRE participant (voir le cas 'lobby-state' dans handlePeerData) et déclencher un
+// message de bienvenue transitoire. Côté hôte, cette détection se fait directement dans
+// onGuestConnected (l'événement est déjà connu avec certitude, pas besoin de comparer),
+// donc ce snapshot n'y est pas utilisé pour cette partie-là.
+let prevParticipantsDisconnectedSnapshot = null;
+
+// Nom affiché dans la bannière "de retour" (voir flashWelcomeBack/renderReconnectionBanner)
+// pendant les quelques secondes où elle est visible ; null sinon.
+let welcomeBackName = null;
+let welcomeBackTimeoutId = null;
 
 let currentRoomCode = null; // pour uiReconnect() : on doit se souvenir du code utilisé pour rejoindre
 
@@ -84,6 +107,59 @@ function getReconnectToken() {
 let mySeats = null;         // sièges contrôlés par ce joueur pendant la partie
 let autoPassSeats = [];     // sièges non assignés (robot "passe") — décidé par l'hôte au lancement
 let myIsKibitzer = false;   // spectateur actif (voir renderKibitzerAssignmentGrid) : voit les 4 mains même sans siège
+
+// ===== Thème clair / sombre =====
+//
+// Le thème est déjà posé de façon synchrone sur <html> avant même le chargement de ce
+// fichier (voir le petit script inline en tête de index.html), pour éviter un flash du
+// mauvais thème. Ce qui suit gère le bouton toggle, la persistance du choix, et la
+// resynchronisation si le système change de préférence en cours de session.
+const THEME_STORAGE_KEY = 'bridgeBidTheme';
+
+function currentTheme() {
+    return document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+}
+
+function applyTheme(theme) {
+    document.documentElement.setAttribute('data-theme', theme);
+    const btn = document.getElementById('themeToggleBtn');
+    if (!btn) return;
+    // L'icône représente l'action (le thème vers lequel on bascule si on clique), pas le
+    // thème actuellement affiché.
+    btn.textContent = theme === 'dark' ? '☀️' : '🌙';
+    btn.title = theme === 'dark' ? 'Passer en thème clair' : 'Passer en thème sombre';
+}
+
+function uiToggleTheme() {
+    const next = currentTheme() === 'dark' ? 'light' : 'dark';
+    try {
+        localStorage.setItem(THEME_STORAGE_KEY, next);
+    } catch (e) {
+        // localStorage indisponible (navigation privée stricte, etc.) : le choix ne
+        // survivra pas à un rechargement, mais le bouton reste fonctionnel pour la
+        // session en cours.
+    }
+    applyTheme(next);
+}
+
+// Synchronise l'icône du bouton avec le thème déjà posé sur <html>, et réagit si
+// l'utilisateur change la préférence de son système EN COURS DE SESSION — mais
+// seulement s'il n'a jamais fait de choix explicite via le bouton : une préférence
+// système est une valeur par défaut, pas une décision de l'utilisateur, donc on ne doit
+// pas écraser un choix déjà fait.
+function initThemeToggle() {
+    applyTheme(currentTheme());
+    if (!window.matchMedia) return;
+    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
+        let hasManualChoice;
+        try {
+            hasManualChoice = localStorage.getItem(THEME_STORAGE_KEY) !== null;
+        } catch (err) {
+            hasManualChoice = false;
+        }
+        if (!hasManualChoice) applyTheme(e.matches ? 'dark' : 'light');
+    });
+}
 
 // ===== Préférences d'affichage des mains (locales, persistées, indépendantes du réseau) =====
 //
@@ -517,6 +593,7 @@ function uiCreateRoom() {
     guestIndexByToken = {};
     prevSeatAssignmentSnapshot = null;
     prevKibitzerAssignmentSnapshot = null;
+    prevParticipantsDisconnectedSnapshot = null;
     pendingParsedDeals = null;
     pendingParsedFile = null;
     pendingOrderedDeals = null;
@@ -540,13 +617,16 @@ function uiCreateRoom() {
 
             let p = participants.find(x => x.id === token);
             const isReturning = !!p;
+            const wasDisconnected = isReturning && p.disconnected;
             if (!p) {
-                p = { id: token, name: defaultParticipantName(token), disconnected: false };
+                p = { id: token, name: defaultParticipantName(token), disconnected: false, disconnectedAt: null };
                 participants.push(p);
             } else {
                 p.disconnected = false;
+                p.disconnectedAt = null;
             }
             pushDebugLog(`Connexion #${guestIndex} : jeton ${token.slice(0, 10)}… → ${isReturning ? 'reconnexion reconnue (' + p.name + ')' : 'nouveau participant'}`);
+            if (wasDisconnected) flashWelcomeBack(p.name);
 
             peerConn.send({ type: 'welcome', yourId: token }, guestIndex);
 
@@ -580,9 +660,10 @@ function uiCreateRoom() {
                 delete guestIndexByToken[token];
                 // On NE supprime pas le participant ni son siège : ils restent réservés, en
                 // attente qu'il se reconnecte. Son siège n'est PAS remplacé par un robot —
-                // l'enchère patiente simplement (le tour-indicateur le signale clairement).
+                // l'enchère patiente simplement (le tour-indicateur et la bannière de
+                // reconnexion le signalent tous les deux, cf. renderReconnectionBanner).
                 const p = participants.find(x => x.id === token);
-                if (p) p.disconnected = true;
+                if (p) { p.disconnected = true; p.disconnectedAt = Date.now(); }
             }
             hostPendingUndo = null; // un invité qui part au milieu d'un arbitrage : on ne reste pas bloqué
             broadcastLobbyState();
@@ -661,6 +742,7 @@ function uiJoinRoom() {
     everConnectedAsGuest = false;
     prevSeatAssignmentSnapshot = null;
     prevKibitzerAssignmentSnapshot = null;
+    prevParticipantsDisconnectedSnapshot = null;
 
     peerConn = new BridgePeerConnection(buildGuestHandlers());
     const token = getReconnectToken();
@@ -949,12 +1031,27 @@ function broadcastLobbyState() {
 
 // ===== Démarrage de la partie (hôte) =====
 
+// Affiche un message dans la bannière du panneau de chargement des donnes.
+// `isWarning` distingue visuellement (voir .error-banner.is-warning dans styles.css) un
+// avertissement non bloquant — la partie peut démarrer quand même (PARs absents, format
+// de fichier ambigu) — d'une vraie erreur qui empêche de continuer (fichier illisible,
+// aucun fichier choisi).
+function setHostSetupMessage(text, isWarning) {
+    const errorEl = document.getElementById('hostSetupError');
+    errorEl.textContent = (isWarning ? '⚠️ ' : '') + text;
+    errorEl.classList.toggle('is-warning', !!isWarning);
+    errorEl.style.display = 'block';
+}
+
+function clearHostSetupMessage() {
+    document.getElementById('hostSetupError').style.display = 'none';
+}
+
 // Lit et parse un fichier de donnes, affichant tout de suite l'erreur ou l'avertissement
 // "PARs non disponibles" s'il y a lieu. `onDone` reçoit le tableau de donnes parsées, ou
 // `null` si la lecture/le parsing a échoué (l'erreur est alors déjà affichée).
 function readAndValidateDealFile(file, onDone) {
-    const errorEl = document.getElementById('hostSetupError');
-    errorEl.style.display = 'none';
+    clearHostSetupMessage();
     const infoEl = document.getElementById('dealFileInfo');
     infoEl.style.display = 'none';
 
@@ -965,8 +1062,7 @@ function readAndValidateDealFile(file, onDone) {
         try {
             parsedDeals = parseDealFile(reader.result, file.name);
         } catch (err) {
-            errorEl.textContent = '⚠️ ' + err.message;
-            errorEl.style.display = 'block';
+            setHostSetupMessage(err.message, false);
             onDone(null);
             return;
         }
@@ -976,19 +1072,22 @@ function readAndValidateDealFile(file, onDone) {
             `✅ ${n} donne${n > 1 ? 's' : ''} chargée${n > 1 ? 's' : ''}`;
         infoEl.style.display = 'flex';
 
-        // Le calcul du PAR est optionnel dans le fichier : on prévient l'hôte s'il est
-        // absent, mais ça ne doit pas empêcher de lancer la partie.
+        // Avertissements non bloquants (la partie peut démarrer quand même) : format de
+        // fichier ambigu (voir parseDealFile) et/ou absence de PAR dans le fichier.
+        const warnings = [];
+        if (parsedDeals._formatWarning) warnings.push(parsedDeals._formatWarning);
         if (!parsedDeals.some(d => d.par)) {
-            errorEl.textContent = '⚠️ PARs non disponibles dans ce fichier — les contrats optimaux ne seront pas affichés.';
-            errorEl.style.display = 'block';
+            warnings.push('PARs non disponibles dans ce fichier — les contrats optimaux ne seront pas affichés.');
+        }
+        if (warnings.length > 0) {
+            setHostSetupMessage(warnings.join('\n⚠️ '), true);
         }
 
         onDone(parsedDeals);
     };
 
     reader.onerror = () => {
-        errorEl.textContent = 'Impossible de lire ce fichier.';
-        errorEl.style.display = 'block';
+        setHostSetupMessage('Impossible de lire ce fichier.', false);
         onDone(null);
     };
 
@@ -1006,7 +1105,7 @@ function uiHandleDealFileChosen() {
     pendingOrderedDeals = null;
 
     if (!fileInput.files || fileInput.files.length === 0) {
-        document.getElementById('hostSetupError').style.display = 'none';
+        clearHostSetupMessage();
         document.getElementById('dealFileInfo').style.display = 'none';
         return;
     }
@@ -1083,12 +1182,9 @@ function renderDealPreview(dealsToPreview) {
 
 function uiStartGameAsHost() {
     const fileInput = document.getElementById('dealFileInput');
-    const errorEl = document.getElementById('hostSetupError');
 
     if (!fileInput.files || fileInput.files.length === 0) {
-        errorEl.style.display = 'none';
-        errorEl.textContent = 'Choisissez un fichier .pbn ou .lin.';
-        errorEl.style.display = 'block';
+        setHostSetupMessage('Choisissez un fichier .pbn ou .lin.', false);
         return;
     }
 
@@ -1165,13 +1261,33 @@ function handlePeerData(msg, guestIndex) {
         }
 
         case 'lobby-state': {
-            participants = msg.participants;
+            const newParticipants = msg.participants;
+            // Détecte les reconnexions (disconnected true -> false) pour la bannière de
+            // bienvenue transitoire (voir flashWelcomeBack). Un diff est nécessaire ici,
+            // contrairement au côté hôte qui connaît déjà l'événement précis au moment où
+            // il se produit (voir onGuestConnected) : ce message ne porte qu'un instantané,
+            // pas la nature du changement.
+            if (deals && prevParticipantsDisconnectedSnapshot) {
+                newParticipants.forEach(p => {
+                    if (prevParticipantsDisconnectedSnapshot[p.id] && !p.disconnected) {
+                        flashWelcomeBack(p.name);
+                    }
+                });
+            }
+            prevParticipantsDisconnectedSnapshot = {};
+            newParticipants.forEach(p => { prevParticipantsDisconnectedSnapshot[p.id] = !!p.disconnected; });
+
+            participants = newParticipants;
             seatAssignment = msg.seatAssignment;
             kibitzerAssignment = msg.kibitzerAssignment || [null, null, null];
             // Ce message est aussi renvoyé quand la connectivité change en pleine partie
             // (quelqu'un se (re)connecte) : on ne bascule à l'écran du salon que si la
             // partie n'a pas encore commencé, sinon ça arracherait un invité de sa table.
+            // Dans le cas contraire (partie en cours), on doit quand même rafraîchir
+            // l'écran de jeu — sans ça, la bannière de reconnexion et le tour-indicateur
+            // resteraient figés jusqu'à la prochaine annonce.
             if (myRole === 'guest' && !deals) enterLobbyScreen();
+            else if (deals) renderBoard();
             break;
         }
 
@@ -1337,6 +1453,63 @@ function seatFullName(seat) {
     return SEAT_FULL_NAME[seat];
 }
 
+// ===== Bannière de reconnexion =====
+//
+// Signale, pendant toute la partie (pas seulement quand c'est son tour — voir aussi
+// #turnIndicator/.disconnected-turn dans renderGameHeader pour ce cas précis), tout
+// joueur assis à la table actuellement déconnecté, avec un décompte du temps écoulé. Un
+// joueur déconnecté n'est PAS remplacé par un robot (voir onPeerDisconnected) : son siège
+// attend simplement qu'il revienne, cette bannière rend cette attente visible même quand
+// ce n'est pas encore à lui de parler.
+
+// Affiche brièvement "X est de retour" à la place de la bannière d'attente, puis revient
+// automatiquement à l'affichage normal après quelques secondes.
+function flashWelcomeBack(name) {
+    welcomeBackName = name;
+    renderReconnectionBanner();
+    clearTimeout(welcomeBackTimeoutId);
+    welcomeBackTimeoutId = setTimeout(() => {
+        welcomeBackName = null;
+        renderReconnectionBanner();
+    }, 4000);
+}
+
+function renderReconnectionBanner() {
+    const banner = document.getElementById('reconnectionBanner');
+    if (!banner) return;
+
+    if (!deals) {
+        banner.style.display = 'none';
+        return;
+    }
+
+    if (welcomeBackName) {
+        banner.className = 'reconnection-banner is-back';
+        banner.textContent = `✅ ${welcomeBackName} est de retour !`;
+        banner.style.display = 'block';
+        return;
+    }
+
+    // Seuls les joueurs assis à la table intéressent cette bannière : un kibitzer
+    // déconnecté ne bloque rien pour personne.
+    const waiting = participants.filter(p =>
+        p.disconnected && Object.values(seatAssignment).includes(p.id)
+    );
+    if (waiting.length === 0) {
+        banner.style.display = 'none';
+        return;
+    }
+
+    banner.textContent = waiting.map(p => {
+        const seat = SEATS.find(s => seatAssignment[s] === p.id);
+        const seatLabel = seat ? ` (${seatFullName(seat)})` : '';
+        const elapsedS = p.disconnectedAt ? Math.max(0, Math.floor((Date.now() - p.disconnectedAt) / 1000)) : 0;
+        return `🔌 ${p.name}${seatLabel} déconnecté depuis ${elapsedS}s — sa place est réservée`;
+    }).join('\n');
+    banner.className = 'reconnection-banner is-waiting';
+    banner.style.display = 'block';
+}
+
 function renderBoard() {
     renderGameHeader();
     renderHandDisplayOptionButtons();
@@ -1348,6 +1521,7 @@ function renderBoard() {
     renderUndoControls();
     renderUndoAskBanner();
     renderBoardSkipControls();
+    renderReconnectionBanner();
     maybeAutoPass();
 }
 
@@ -1410,13 +1584,13 @@ function renderMyHands() {
 }
 
 // Rendu coloré d'une annonce en dehors de la boîte d'enchères (relevé, contrat final) :
-// même logique de classe de couleur que les boutons (SUIT_CLASSES), avec l'icône SVG de
-// la couleur à la place du caractère Unicode.
+// même logique de classe de couleur que les boutons (SUIT_CLASSES), avec l'icône de
+// couleur à la place du caractère Unicode brut (voir formatStrainLabel/suitIconHtml).
 function formatCallCellHtml(call) {
     const b = parseBid(call);
     if (!b) return escapeHtml(formatCallForDisplay(call)); // Passe / X / XX : pas de couleur de suite
     const cls = SUIT_CLASSES[b.strain] || 'notrump';
-    const label = b.strain === 'NT' ? 'SA' : suitIconHtml(b.strain);
+    const label = formatStrainLabel(b.strain);
     return `<span class="call-suit ${cls}">${b.level}${label}</span>`;
 }
 
@@ -1504,7 +1678,7 @@ function renderBiddingBox() {
         const cells = STRAINS.map(strain => {
             const call = `${level}${strain}`;
             const legal = myTurn && isCallLegal(auctionHistory, call, turnSeat);
-            const label = strain === 'NT' ? 'SA' : suitIconHtml(strain);
+            const label = formatStrainLabel(strain);
             const suitClass = SUIT_CLASSES[strain] || 'notrump';
             return `<button class="call-btn ${suitClass}" ${legal ? '' : 'disabled'} onclick="uiMakeCall('${call}')">${level}${label}</button>`;
         }).join('');
@@ -1571,13 +1745,9 @@ function renderAllHandsDiagram() {
 }
 
 const STRAIN_ORDER = ['N', 'S', 'H', 'D', 'C']; // N = sans-atout (SA), pas Nord
-const STRAIN_DISPLAY = {
-    N: { label: 'SA', class: 'notrump' },
-    S: { label: '♠', class: 'spades' },
-    H: { label: '♥', class: 'hearts' },
-    D: { label: '♦', class: 'diamonds' },
-    C: { label: '♣', class: 'clubs' }
-};
+// Classe de couleur CSS par couleur d'enchère, pour la table du double mort — mêmes
+// classes que SUIT_CLASSES, complétées de 'notrump' pour la ligne SA.
+const STRAIN_CLASS = { N: 'notrump', S: 'spades', H: 'hearts', D: 'diamonds', C: 'clubs' };
 
 // Convertit un nombre de levées (sur 13) en palier de contrat réalisable : il faut
 // 6 levées de base + le palier, donc palier = levées - 6. En dessous de 7 levées, aucun
@@ -1600,10 +1770,9 @@ const DD_TABLE_SEAT_ORDER = ['N', 'S', 'E', 'W'];
 function renderDDTable(ddTable) {
     if (!ddTable) return '';
     const rows = STRAIN_ORDER.map(strain => {
-        const info = STRAIN_DISPLAY[strain];
-        const labelHtml = strain === 'N' ? info.label : suitIconHtml(strain);
+        const labelHtml = formatStrainLabel(strain);
         const cells = DD_TABLE_SEAT_ORDER.map(pos => `<td>${tricksToContractLevel(ddTable[strain][pos])}</td>`).join('');
-        return `<tr><th class="${info.class}">${labelHtml}</th>${cells}</tr>`;
+        return `<tr><th class="${STRAIN_CLASS[strain]}">${labelHtml}</th>${cells}</tr>`;
     }).join('');
     return `
         <div class="dd-table-title">Table du double mort (fournie dans le fichier)</div>
@@ -1643,7 +1812,7 @@ function checkAuctionEnd() {
         resultEl.innerHTML = "↩️ Donne passée — personne n'a annoncé.";
     } else {
         const strainCls = SUIT_CLASSES[contract.strain] || 'notrump';
-        const strainLabel = contract.strain === 'NT' ? 'SA' : suitIconHtml(contract.strain);
+        const strainLabel = formatStrainLabel(contract.strain);
         const contractHtml = `<span class="call-suit ${strainCls}">${contract.level}${strainLabel}${escapeHtml(contract.doubled)}</span>`;
         resultEl.innerHTML = `Contrat final : <strong>${contractHtml}</strong> par <strong>${seatFullName(contract.declarer)}</strong>`;
     }
@@ -2009,14 +2178,162 @@ function renderBoardSkipControls() {
     nextBtn.disabled = boardIndex >= deals.length - 1;
 }
 
+// ===== PWA : service worker, installation iOS, hors-ligne =====
+//
+// Voir manifest.json + sw.js pour le reste. Le versioning des fichiers mis en cache
+// (anciennement un paramètre `?v=NN` sur chaque <script>/<link> de index.html) est
+// désormais géré par CACHE_NAME dans sw.js — à incrémenter là-bas à chaque déploiement
+// qui touche un fichier mis en cache.
+
+let pendingSwRegistration = null;
+
+function initServiceWorker() {
+    if (!('serviceWorker' in navigator)) return;
+
+    navigator.serviceWorker.register('sw.js').then((registration) => {
+        // Un service worker déjà en attente (installé lors d'une visite précédente,
+        // jamais activé faute de rechargement) : la bannière doit s'afficher tout de
+        // suite, pas seulement lors d'une future mise à jour détectée dans cette session.
+        if (registration.waiting) showUpdateBanner(registration);
+
+        registration.addEventListener('updatefound', () => {
+            const newWorker = registration.installing;
+            if (!newWorker) return;
+            newWorker.addEventListener('statechange', () => {
+                // 'installed' + un controller déjà actif = une mise à jour est prête et
+                // attend (voir l'appel différé à skipWaiting dans uiReloadForUpdate) ;
+                // sans controller actif, ce serait la toute première installation du site,
+                // pas une mise à jour à annoncer.
+                if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                    showUpdateBanner(registration);
+                }
+            });
+        });
+    }).catch((err) => {
+        pushDebugLog('Service worker : échec d\'enregistrement — ' + (err && err.message));
+    });
+
+    // Une fois que le nouveau service worker prend effectivement le contrôle de la page
+    // (après skipWaiting), recharger pour utiliser les nouveaux fichiers plutôt que ceux
+    // encore en mémoire depuis avant la mise à jour. Protégé par un drapeau : cet
+    // événement peut en théorie se déclencher plusieurs fois.
+    let reloadedForUpdate = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (reloadedForUpdate) return;
+        reloadedForUpdate = true;
+        window.location.reload();
+    });
+}
+
+function showUpdateBanner(registration) {
+    pendingSwRegistration = registration;
+    const banner = document.getElementById('updateBanner');
+    if (banner) banner.style.display = 'flex';
+}
+
+function uiReloadForUpdate() {
+    if (pendingSwRegistration && pendingSwRegistration.waiting) {
+        pendingSwRegistration.waiting.postMessage('skipWaiting');
+    } else {
+        window.location.reload();
+    }
+}
+
+// iPadOS se fait passer pour un Mac (navigator.platform "MacIntel") depuis la version 13 :
+// le distinguer d'un vrai Mac se fait via le support tactile, qu'aucun Mac n'a.
+function isIosDevice() {
+    return (/iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream)
+        || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+}
+
+function isStandaloneDisplay() {
+    return window.navigator.standalone === true
+        || (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches);
+}
+
+const IOS_INSTALL_HINT_DISMISSED_KEY = 'bridgeBidIosInstallHintDismissed';
+
+// Safari iOS ne propose aucune invite d'installation automatique (contrairement à Chrome
+// Android) : sans ce message, un joueur sur iPhone n'a aucun moyen de découvrir que
+// l'appli peut être ajoutée à l'écran d'accueil.
+function initIosInstallHint() {
+    if (!isIosDevice() || isStandaloneDisplay()) return;
+    let dismissed = false;
+    try { dismissed = localStorage.getItem(IOS_INSTALL_HINT_DISMISSED_KEY) === 'true'; } catch (e) { /* tant pis */ }
+    if (dismissed) return;
+    const banner = document.getElementById('iosInstallBanner');
+    if (banner) banner.style.display = 'flex';
+}
+
+function uiDismissIosInstallHint() {
+    document.getElementById('iosInstallBanner').style.display = 'none';
+    try { localStorage.setItem(IOS_INSTALL_HINT_DISMISSED_KEY, 'true'); } catch (e) { /* tant pis */ }
+}
+
+const IOS_LOCK_WARNING_DISMISSED_KEY = 'bridgeBidIosLockWarningDismissed';
+
+// iOS suspend les connexions WebRTC quand Safari passe en arrière-plan ou que l'écran se
+// verrouille — une vraie limitation de la plateforme, pas un bug de l'appli. Affiché une
+// fois sur l'écran d'accueil, mémorisé pour ne pas le réafficher à chaque visite.
+function initIosLockScreenWarning() {
+    if (!isIosDevice()) return;
+    let dismissed = false;
+    try { dismissed = localStorage.getItem(IOS_LOCK_WARNING_DISMISSED_KEY) === 'true'; } catch (e) { /* tant pis */ }
+    if (dismissed) return;
+    const note = document.getElementById('iosLockScreenWarning');
+    if (note) note.style.display = 'block';
+}
+
+function uiDismissIosLockScreenWarning() {
+    document.getElementById('iosLockScreenWarning').style.display = 'none';
+    try { localStorage.setItem(IOS_LOCK_WARNING_DISMISSED_KEY, 'true'); } catch (e) { /* tant pis */ }
+}
+
+// Hors-ligne : la partie de l'appli qui a un sens sans réseau est proche de zéro (tout
+// repose sur la connexion pair-à-pair), donc on se contente de désactiver clairement les
+// deux points d'entrée plutôt que de laisser l'utilisateur découvrir l'échec au clic.
+function updateOfflineUI() {
+    const offline = !navigator.onLine;
+    const banner = document.getElementById('offlineBanner');
+    if (banner) banner.style.display = offline ? 'block' : 'none';
+    const createBtn = document.getElementById('createRoomBtn');
+    const joinBtn = document.getElementById('joinRoomBtn');
+    if (createBtn) createBtn.disabled = offline;
+    if (joinBtn) joinBtn.disabled = offline;
+}
+
+function initOfflineHandling() {
+    updateOfflineUI();
+    window.addEventListener('online', updateOfflineUI);
+    window.addEventListener('offline', updateOfflineUI);
+}
+
 // ===== Initialisation =====
 
 window.addEventListener('DOMContentLoaded', () => {
+    initThemeToggle();
+    initServiceWorker();
+    initIosInstallHint();
+    initIosLockScreenWarning();
+    initOfflineHandling();
+
+    // Rafraîchit uniquement le texte du décompte ("déconnecté depuis Xs") de la bannière
+    // de reconnexion — pas besoin d'un message réseau pour ça, chaque client calcule son
+    // propre écoulé à partir de disconnectedAt. Sans effet (sortie immédiate) hors partie
+    // ou si la bannière n'est pas affichée, voir renderReconnectionBanner.
+    setInterval(renderReconnectionBanner, 1000);
+
     const params = new URLSearchParams(window.location.search);
     const room = params.get('room');
-    if (room) {
+    if (room && navigator.onLine) {
         document.getElementById('joinCodeInput').value = room.toUpperCase();
         uiJoinRoom();
+    } else if (room) {
+        // Lien de partage ouvert hors-ligne : on préremplit le code, mais on ne tente pas
+        // la connexion (updateOfflineUI, appelé juste au-dessus par initOfflineHandling,
+        // a déjà désactivé le bouton "Rejoindre" — la personne devra réessayer une fois
+        // reconnectée).
+        document.getElementById('joinCodeInput').value = room.toUpperCase();
     }
 
     const dealFileInput = document.getElementById('dealFileInput');

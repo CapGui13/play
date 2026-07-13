@@ -2,9 +2,40 @@
 <html lang="fr">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>Table d'enchères — Bridge à distance</title>
-<link rel="stylesheet" href="styles.css?v=34">
+
+<!-- PWA : voir manifest.json + sw.js. theme_color/background_color y reprennent le vert
+     --felt-deep de l'appli (#0b3d2e), pas une couleur arbitraire, pour rester cohérent
+     avec l'identité visuelle existante. -->
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0b3d2e">
+
+<!-- Safari/iOS ne lit pas le manifest pour l'icône ni le mode plein écran : il faut ses
+     propres balises dédiées, en plus (pas à la place) du manifest standard ci-dessus. -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Enchères">
+<link rel="apple-touch-icon" href="icons/apple-icon-180.png">
+
+<!-- Applique le thème AVANT le rendu de la page (avant même le CSS) : app.js n'est chargé
+     qu'en fin de <body>, donc attendre son exécution pour poser data-theme laisserait
+     voir un flash du mauvais thème (thème clair par défaut, puis bascule visible vers
+     sombre) le temps qu'il se charge. La logique complète du bouton toggle (localStorage,
+     resynchronisation si le système change de préférence) est dans app.js — voir
+     initThemeToggle/uiToggleTheme — ce script ne fait que ce strict minimum. -->
+<script>
+(function() {
+    try {
+        var saved = localStorage.getItem('bridgeBidTheme');
+        var theme = saved || (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+        document.documentElement.setAttribute('data-theme', theme);
+    } catch (e) {
+        document.documentElement.setAttribute('data-theme', 'dark');
+    }
+})();
+</script>
+<link rel="stylesheet" href="styles.css">
 </head>
 <body>
 
@@ -12,7 +43,26 @@
     <span id="connectionStatus" class="connection-status">⚪ Pas encore connecté</span>
     <span id="roomCodeBadge" class="room-code-badge" style="display:none;"></span>
     <button type="button" id="reconnectBtn" class="btn btn-primary btn-small" style="display:none;" onclick="uiReconnect()">🔌 Se reconnecter</button>
+    <button type="button" id="themeToggleBtn" class="debug-toggle-btn" onclick="uiToggleTheme()" aria-label="Changer de thème" title="Changer de thème">🌙</button>
     <button type="button" class="debug-toggle-btn" onclick="uiToggleDebugPanel()">🐞</button>
+</div>
+
+<!-- Bannières PWA : nouvelle version dispo, invite à l'installation iOS, hors-ligne.
+     Un seul gestionnaire par bannière dans app.js (updateBanner / iosInstallBanner /
+     offlineBanner) ; toutes masquées par défaut, affichées/masquées en JS selon le
+     contexte (voir initServiceWorker, initIosInstallHint, initOfflineHandling). -->
+<div id="updateBanner" class="pwa-banner" style="display:none;">
+    <span>🔄 Nouvelle version disponible.</span>
+    <button type="button" class="btn btn-primary btn-small" onclick="uiReloadForUpdate()">Recharger</button>
+</div>
+
+<div id="iosInstallBanner" class="pwa-banner" style="display:none;">
+    <span>📲 Sur iPhone : appuyez sur <strong>Partager</strong> puis <strong>Sur l'écran d'accueil</strong> pour installer l'appli.</span>
+    <button type="button" class="btn btn-secondary btn-small" onclick="uiDismissIosInstallHint()">Fermer</button>
+</div>
+
+<div id="offlineBanner" class="pwa-banner pwa-banner-warning" style="display:none;">
+    ⚠️ Hors-ligne : impossible de créer ou rejoindre une partie tant que la connexion n'est pas revenue.
 </div>
 
 <div id="debugPanel" class="debug-panel" style="display:none;">
@@ -41,16 +91,25 @@
             <div class="landing-card">
                 <h2>Créer une partie</h2>
                 <p>Vous choisirez qui joue où une fois dans le salon, puis vous chargerez le fichier de donnes (.pbn ou .lin).</p>
-                <button class="btn btn-primary" onclick="uiCreateRoom()">Créer une partie</button>
+                <button id="createRoomBtn" class="btn btn-primary" onclick="uiCreateRoom()">Créer une partie</button>
             </div>
             <div class="landing-card">
                 <h2>Rejoindre une partie</h2>
                 <p>Entrez le code à 4 lettres partagé par l'autre joueur.</p>
                 <input type="text" id="joinCodeInput" class="code-input" placeholder="EX: BQXK" maxlength="4" autocapitalize="characters">
-                <button class="btn btn-secondary" onclick="uiJoinRoom()">Rejoindre</button>
+                <button id="joinRoomBtn" class="btn btn-secondary" onclick="uiJoinRoom()">Rejoindre</button>
             </div>
         </div>
         <div id="landingError" class="error-banner" style="display:none;"></div>
+
+        <!-- Affiché uniquement sur iOS (voir initIosLockScreenWarning dans app.js) : Safari
+             suspend WebRTC quand l'app passe en arrière-plan ou que l'écran se verrouille —
+             une vraie limitation d'iOS, pas un bug de l'appli. -->
+        <div id="iosLockScreenWarning" class="pwa-inline-note" style="display:none;">
+            ⚠️ Sur iPhone/iPad, gardez l'écran allumé et l'appli au premier plan pendant la
+            partie : iOS coupe la connexion si vous verrouillez l'écran ou changez d'appli.
+            <button type="button" class="btn btn-secondary btn-small" onclick="uiDismissIosLockScreenWarning()">Compris</button>
+        </div>
     </section>
 
     <!-- Salon d'attente (commun à l'hôte et aux invités) -->
@@ -122,6 +181,8 @@
             </div>
         </div>
 
+        <div id="reconnectionBanner" class="reconnection-banner" style="display:none;"></div>
+
         <div class="game-body">
             <div class="hands-panel">
                 <div class="hand-display-options">
@@ -134,21 +195,23 @@
             </div>
 
             <div class="auction-panel">
-                <div class="ledger-display-options">
-                    <button id="ledgerNamesToggleBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" onclick="uiToggleLedgerNames()">Noms des joueurs</button>
+                <div class="auction-scroll-area">
+                    <div class="ledger-display-options">
+                        <button id="ledgerNamesToggleBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" onclick="uiToggleLedgerNames()">Noms des joueurs</button>
+                    </div>
+                    <table class="auction-ledger">
+                        <thead>
+                            <tr id="auctionLedgerHeader"></tr>
+                        </thead>
+                        <tbody id="auctionLedgerBody"></tbody>
+                    </table>
+
+                    <div id="undoAskBanner" class="undo-ask-banner" style="display:none;"></div>
+
+                    <div id="contractResult" class="contract-result" style="display:none;"></div>
+
+                    <div id="allHandsDiagram" class="all-hands-diagram" style="display:none;"></div>
                 </div>
-                <table class="auction-ledger">
-                    <thead>
-                        <tr id="auctionLedgerHeader"></tr>
-                    </thead>
-                    <tbody id="auctionLedgerBody"></tbody>
-                </table>
-
-                <div id="undoAskBanner" class="undo-ask-banner" style="display:none;"></div>
-
-                <div id="contractResult" class="contract-result" style="display:none;"></div>
-
-                <div id="allHandsDiagram" class="all-hands-diagram" style="display:none;"></div>
 
                 <div id="biddingBox" class="bidding-box"></div>
 
@@ -174,9 +237,9 @@
 </div>
 
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
-<script src="bidding-rules.js?v=34"></script>
-<script src="deal-parser.js?v=34"></script>
-<script src="peer-connection.js?v=34"></script>
-<script src="app.js?v=34"></script>
+<script src="bidding-rules.js"></script>
+<script src="deal-parser.js"></script>
+<script src="peer-connection.js"></script>
+<script src="app.js"></script>
 </body>
 </html>
