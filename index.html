@@ -87,6 +87,12 @@
                 <label>Fichier .pbn ou .lin exporté depuis le générateur</label>
                 <input type="file" id="dealFileInput" accept=".pbn,.lin,text/plain">
             </div>
+            <div class="form-group form-group-checkbox">
+                <label class="checkbox-label">
+                    <input type="checkbox" id="randomizeDealsToggle" onchange="uiToggleRandomizeDeals()">
+                    🔀 Ordre aléatoire des donnes
+                </label>
+            </div>
             <div id="hostSetupError" class="error-banner" style="display:none;"></div>
             <div id="dealFileInfo" class="deal-file-info" style="display:none;">
                 <span id="dealFileInfoText"></span>

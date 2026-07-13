@@ -39,6 +39,16 @@ let seatAssignment = { N: null, E: null, S: null, W: null }; // id de participan
 // l'hôte comme les sièges — voir renderKibitzerAssignmentGrid/uiAssignKibitzer. Un siège
 // assigné prime toujours sur une place de kibitzer (voir uiStartGameAsHost).
 let kibitzerAssignment = [null, null, null];
+
+// Dernier instantané de seatAssignment/kibitzerAssignment vu au rendu précédent, pour
+// détecter les affectations qui viennent tout juste d'arriver et leur appliquer un flash
+// (voir renderSeatAssignmentGrid/renderKibitzerAssignmentGrid). `null` signifie "pas
+// encore de repère" (première mesure après un (re)chargement du salon) : dans ce cas on
+// se contente de capturer l'état sans rien flasher, pour ne pas allumer d'un coup toutes
+// les places déjà occupées quand on rejoint un salon en cours de remplissage.
+let prevSeatAssignmentSnapshot = null;
+let prevKibitzerAssignmentSnapshot = null;
+
 let currentRoomCode = null; // pour uiReconnect() : on doit se souvenir du code utilisé pour rejoindre
 
 // (Hôte uniquement) jeton de reconnexion -> numéro de connexion PeerJS actif. Un invité
@@ -337,6 +347,43 @@ let auctionHistory = [];    // historique de la donne en cours : [{seat, call}, 
 let pendingParsedDeals = null;
 let pendingParsedFile = null; // le File dont pendingParsedDeals est le résultat, pour savoir si le cache est encore valable
 
+// Ordre effectivement utilisé pour la partie : soit pendingParsedDeals tel quel (ordre du
+// fichier), soit une copie mélangée, selon la case "Ordre aléatoire des donnes" (voir
+// uiToggleRandomizeDeals). Calculé une seule fois par chargement de fichier / bascule de
+// la case, et réutilisé à la fois par l'aperçu et par le lancement de la partie, pour que
+// l'un corresponde toujours exactement à l'autre. Les numéros de donne d'origine (deal.board)
+// sont conservés tels quels dans le fichier — seul l'ordre de passage est mélangé.
+let pendingOrderedDeals = null;
+
+// Mélange de Fisher-Yates (Math.random() suffit ici : besoin d'aléatoire simple pour
+// varier l'ordre d'entraînement, pas de garanties cryptographiques).
+function shuffleDealsArray(arr) {
+    const shuffled = arr.slice();
+    for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+    return shuffled;
+}
+
+// Recalcule pendingOrderedDeals à partir de pendingParsedDeals et de l'état actuel de la
+// case à cocher. Appelé au chargement du fichier et à chaque bascule de la case.
+function refreshPendingOrderedDeals() {
+    if (!pendingParsedDeals) {
+        pendingOrderedDeals = null;
+        return;
+    }
+    const checkbox = document.getElementById('randomizeDealsToggle');
+    pendingOrderedDeals = (checkbox && checkbox.checked)
+        ? shuffleDealsArray(pendingParsedDeals)
+        : pendingParsedDeals;
+}
+
+// Appelé par la case "Ordre aléatoire des donnes" du salon d'attente.
+function uiToggleRandomizeDeals() {
+    refreshPendingOrderedDeals();
+}
+
 // --- Demande d'annulation (undo) ---
 let undoRequestPending = false; // je suis le demandeur, en attente d'une réponse
 let pendingUndoAsk = null;      // on me demande d'accepter/refuser une annulation
@@ -357,6 +404,33 @@ function escapeHtml(str) {
     const div = document.createElement('div');
     div.textContent = str == null ? '' : String(str);
     return div.innerHTML;
+}
+
+// Avatar rond (couleur + initiale) affiché devant un participant, dans la liste et dans
+// les cases de sièges assignées — juste un repère visuel rapide pour distinguer les
+// joueurs d'un coup d'œil, pas une vraie identité. La couleur est dérivée de l'id du
+// participant (stable même s'il se renomme, change du coup si un autre participant
+// prend sa place au même id ne se produit jamais — les id sont uniques par connexion).
+function avatarColorForId(id) {
+    let hash = 0;
+    const str = String(id || '');
+    for (let i = 0; i < str.length; i++) {
+        hash = (hash * 31 + str.charCodeAt(i)) >>> 0;
+    }
+    const hue = hash % 360;
+    return `hsl(${hue}, 46%, 45%)`;
+}
+
+function avatarInitial(name) {
+    const trimmed = (name || '').trim();
+    return trimmed ? trimmed[0].toUpperCase() : '?';
+}
+
+// HTML de l'avatar pour un participant donné (par son id) ; chaîne vide si personne.
+function avatarHtml(participantId) {
+    const p = participants.find(x => x.id === participantId);
+    if (!p) return '';
+    return `<span class="mini-avatar" style="background:${avatarColorForId(p.id)}">${escapeHtml(avatarInitial(p.name))}</span>`;
 }
 
 function defaultParticipantName(pid) {
@@ -442,8 +516,11 @@ function uiCreateRoom() {
     seatAssignment = { N: null, E: null, S: null, W: null };
     kibitzerAssignment = [null, null, null];
     guestIndexByToken = {};
+    prevSeatAssignmentSnapshot = null;
+    prevKibitzerAssignmentSnapshot = null;
     pendingParsedDeals = null;
     pendingParsedFile = null;
+    pendingOrderedDeals = null;
 
     peerConn = new BridgePeerConnection({
         onOpen: (role, roomCode) => {
@@ -583,6 +660,8 @@ function uiJoinRoom() {
     kibitzerAssignment = [null, null, null];
     currentRoomCode = code;
     everConnectedAsGuest = false;
+    prevSeatAssignmentSnapshot = null;
+    prevKibitzerAssignmentSnapshot = null;
 
     peerConn = new BridgePeerConnection(buildGuestHandlers());
     const token = getReconnectToken();
@@ -673,6 +752,7 @@ function renderParticipantsList() {
         const placementClass = participantHasAPlace(p.id) ? 'is-assigned' : 'is-unassigned';
         return `
         <li class="participant-item ${placementClass} ${p.id === myParticipantId ? 'is-me' : ''}">
+            ${avatarHtml(p.id)}
             ${nameHtml}
             ${p.id === 'host' ? ' <span class="host-tag">(hôte)</span>' : ''}
             ${p.id === myParticipantId ? ' <span class="me-tag">(vous)</span>' : ''}
@@ -719,31 +799,49 @@ function renderSeatAssignmentGrid() {
     const container = document.getElementById('seatAssignmentGrid');
     const isHost = myRole === 'host';
 
+    // Un siège "vient d'être assigné" si son occupant est non vide ET différent de ce
+    // qu'il était au rendu précédent (couvre à la fois une case vide qui se remplit et un
+    // changement d'occupant) — voir prevSeatAssignmentSnapshot pour le cas particulier du
+    // tout premier rendu.
+    const justAssigned = seat => {
+        if (prevSeatAssignmentSnapshot === null) return false;
+        const assignedId = seatAssignment[seat];
+        return !!assignedId && assignedId !== prevSeatAssignmentSnapshot[seat];
+    };
+
     const seatBoxes = SEATS.map(seat => {
         const assignedId = seatAssignment[seat];
+        const flashClass = justAssigned(seat) ? ' just-assigned' : '';
         if (isHost) {
             const options = ['<option value="">— (robot : passe)</option>']
                 .concat(participants.map(p =>
                     `<option value="${p.id}" ${p.id === assignedId ? 'selected' : ''}>${escapeHtml(p.name)}</option>`
                 ));
             return `
-                <div class="seat-box seat-pos-${seat}">
+                <div class="seat-box seat-pos-${seat}${flashClass}">
                     <span class="seat-box-label">${SEAT_FULL_NAME[seat]}</span>
-                    <select class="seat-assign-select" onchange="uiAssignSeat('${seat}', this.value)">${options.join('')}</select>
+                    <div class="seat-select-row">
+                        ${assignedId ? avatarHtml(assignedId) : '<span class="mini-avatar mini-avatar-robot">🤖</span>'}
+                        <select class="seat-assign-select" onchange="uiAssignSeat('${seat}', this.value)">${options.join('')}</select>
+                    </div>
                 </div>
             `;
         }
         const p = participants.find(x => x.id === assignedId);
         const name = p ? escapeHtml(p.name) : '— (robot)';
         return `
-            <div class="seat-box seat-pos-${seat}">
+            <div class="seat-box seat-pos-${seat}${flashClass}">
                 <span class="seat-box-label">${SEAT_FULL_NAME[seat]}</span>
-                <span class="seat-box-name">${name}</span>
+                <span class="seat-box-name-row">
+                    ${assignedId ? avatarHtml(assignedId) : '<span class="mini-avatar mini-avatar-robot">🤖</span>'}
+                    <span class="seat-box-name">${name}</span>
+                </span>
             </div>
         `;
     }).join('');
 
     container.innerHTML = seatBoxes;
+    prevSeatAssignmentSnapshot = { ...seatAssignment };
 }
 
 // Module "Kibbitz" : 3 emplacements de spectateur voyant les 4 mains, assignables
@@ -754,14 +852,22 @@ function renderKibitzerAssignmentGrid() {
     if (!container) return;
     const isHost = myRole === 'host';
 
+    const justAssigned = i => {
+        if (prevKibitzerAssignmentSnapshot === null) return false;
+        const assignedId = kibitzerAssignment[i];
+        return !!assignedId && assignedId !== prevKibitzerAssignmentSnapshot[i];
+    };
+
     container.innerHTML = kibitzerAssignment.map((assignedId, i) => {
+        const flashClass = justAssigned(i) ? ' just-assigned' : '';
         if (isHost) {
             const options = ['<option value="">— (personne)</option>']
                 .concat(participants.map(p =>
                     `<option value="${p.id}" ${p.id === assignedId ? 'selected' : ''}>${escapeHtml(p.name)}</option>`
                 ));
             return `
-                <div class="seat-box kibitzer-box">
+                <div class="seat-box kibitzer-box${flashClass}">
+                    <span class="kibitzer-icon">👁</span>
                     <select class="seat-assign-select" onchange="uiAssignKibitzer(${i}, this.value)">${options.join('')}</select>
                 </div>
             `;
@@ -769,11 +875,13 @@ function renderKibitzerAssignmentGrid() {
         const p = participants.find(x => x.id === assignedId);
         const name = p ? escapeHtml(p.name) : '— (personne)';
         return `
-            <div class="seat-box kibitzer-box">
+            <div class="seat-box kibitzer-box${flashClass}">
+                <span class="kibitzer-icon">👁</span>
                 <span class="seat-box-name">${name}</span>
             </div>
         `;
     }).join('');
+    prevKibitzerAssignmentSnapshot = kibitzerAssignment.slice();
 }
 
 let nameUpdateDebounceTimer = null;
@@ -896,6 +1004,7 @@ function uiHandleDealFileChosen() {
     const fileInput = document.getElementById('dealFileInput');
     pendingParsedDeals = null;
     pendingParsedFile = null;
+    pendingOrderedDeals = null;
 
     if (!fileInput.files || fileInput.files.length === 0) {
         document.getElementById('hostSetupError').style.display = 'none';
@@ -907,14 +1016,15 @@ function uiHandleDealFileChosen() {
     readAndValidateDealFile(file, (parsedDeals) => {
         pendingParsedFile = file;
         pendingParsedDeals = parsedDeals;
+        refreshPendingOrderedDeals();
     });
 }
 
 // ===== Aperçu des donnes chargées (avant de lancer la partie) =====
 
 function uiPreviewDeals() {
-    if (!pendingParsedDeals || pendingParsedDeals.length === 0) return;
-    renderDealPreview(pendingParsedDeals);
+    if (!pendingOrderedDeals || pendingOrderedDeals.length === 0) return;
+    renderDealPreview(pendingOrderedDeals);
     document.getElementById('dealPreviewModal').style.display = 'flex';
 }
 
@@ -985,10 +1095,12 @@ function uiStartGameAsHost() {
 
     const file = fileInput.files[0];
 
-    const proceedWithDeals = (parsedDeals) => {
-        if (!parsedDeals) return; // l'erreur est déjà affichée par readAndValidateDealFile
+    // Reçoit les donnes déjà dans l'ordre à utiliser pour jouer (mélangé ou non, voir
+    // pendingOrderedDeals / refreshPendingOrderedDeals) — jamais l'ordre brut du fichier.
+    const proceedWithDeals = (orderedDeals) => {
+        if (!orderedDeals) return; // l'erreur est déjà affichée par readAndValidateDealFile
 
-        deals = parsedDeals;
+        deals = orderedDeals;
         boardIndex = 0;
         auctionHistory = [];
         hostPendingUndo = null;
@@ -1017,13 +1129,19 @@ function uiStartGameAsHost() {
     // uiHandleDealFileChosen) — pas besoin de le relire, et le message éventuel
     // (erreur ou avertissement PAR) est déjà affiché depuis ce moment-là.
     if (pendingParsedFile === file) {
-        proceedWithDeals(pendingParsedDeals);
+        proceedWithDeals(pendingOrderedDeals);
         return;
     }
 
     // Filet de sécurité si, pour une raison quelconque, le cache ne correspond pas au
-    // fichier actuellement sélectionné (ex. écouteur 'change' non déclenché) : on relit.
-    readAndValidateDealFile(file, proceedWithDeals);
+    // fichier actuellement sélectionné (ex. écouteur 'change' non déclenché) : on relit,
+    // puis on applique l'ordre aléatoire éventuel avant de démarrer.
+    readAndValidateDealFile(file, (parsedDeals) => {
+        pendingParsedFile = file;
+        pendingParsedDeals = parsedDeals;
+        refreshPendingOrderedDeals();
+        proceedWithDeals(pendingOrderedDeals);
+    });
 }
 
 // ===== Réception des messages des autres joueurs =====
@@ -1110,6 +1228,8 @@ function handlePeerData(msg, guestIndex) {
             renderMyHands();
             checkAuctionEnd();
             relayIfHost(msg, guestIndex);
+            maybeAutoPass(); // sans effet si on n'est pas l'hôte ; couvre le cas où c'est
+                              // un invité qui a demandé le reset (l'hôte doit prendre le relais)
             break;
         }
 
@@ -1804,6 +1924,7 @@ function applyUndoAsHost(pending) {
     checkAuctionEnd();
     clearUndoUiState();
     peerConn.send({ type: 'undo-apply', boardIndex: pending.boardIndex, newLength: pending.targetIndex });
+    maybeAutoPass(); // si l'annulation redonne la main à un siège robot, il doit rejouer
 }
 
 // Réponse de l'utilisateur au bandeau "on me demande d'annuler".
@@ -1839,6 +1960,8 @@ function uiResetAuction() {
     renderMyHands();
     checkAuctionEnd();
     peerConn.send({ type: 'reset-auction', boardIndex });
+    maybeAutoPass(); // sans effet si on n'est pas l'hôte (voir maybeAutoPass) ; utile si le
+                      // dealer (ou tout siège en tête d'enchère après reset) est un robot
 }
 
 // Change de donne : remet l'enchère à zéro, annule toute demande d'undo en cours, et

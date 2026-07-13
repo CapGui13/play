@@ -375,23 +375,23 @@ body {
 #screen-lobby {
     text-align: center;
     max-width: 640px;
-    margin: 40px auto 0;
+    margin: 26px auto 0;
     background: rgba(0, 0, 0, 0.18);
     border: 1px solid var(--line);
     border-radius: 14px;
-    padding: 36px;
+    padding: 26px 30px;
 }
 
 #screen-lobby h2 {
     font-family: var(--font-display);
     font-weight: 600;
-    font-size: 1.6rem;
-    margin-bottom: 10px;
+    font-size: 1.5rem;
+    margin-bottom: 8px;
     color: var(--brass-bright);
 }
 
 #lobbyRoomCodeBlock {
-    margin-bottom: 20px;
+    margin-bottom: 16px;
 }
 
 .visually-hidden {
@@ -412,21 +412,27 @@ body {
     margin-bottom: 10px;
 }
 
+/* Teinte sarcelle discrète (au lieu de l'or des sièges ou du violet du kibitz) : signale
+   que cette section est fonctionnellement à part — la configuration du fichier de donnes —
+   plutôt qu'une histoire de "qui joue où" comme le reste du salon. */
 .host-setup-panel {
-    margin-top: 20px;
-    padding-top: 20px;
-    border-top: 1px solid var(--line);
+    margin-top: 16px;
+    padding: 16px;
+    border: 1px solid rgba(64, 190, 184, 0.35);
+    border-radius: 10px;
+    background: rgba(64, 190, 184, 0.06);
     text-align: left;
 }
 
 .host-setup-panel h3 {
     font-family: var(--font-display);
-    font-size: 1.15rem;
-    margin-bottom: 14px;
+    font-size: 1.1rem;
+    margin-bottom: 12px;
     text-align: center;
+    color: rgba(140, 224, 218, 0.95);
 }
 
-.form-group { margin-bottom: 16px; }
+.form-group { margin-bottom: 12px; }
 
 .form-group label {
     display: block;
@@ -441,16 +447,35 @@ body {
     padding: 8px;
     border-radius: 6px;
     background: rgba(0, 0, 0, 0.25);
-    border: 1px solid var(--line);
+    border: 1px solid rgba(64, 190, 184, 0.35);
     color: var(--cream);
     font-size: 0.85rem;
+}
+
+.form-group-checkbox { margin-bottom: 10px; }
+
+.checkbox-label {
+    display: flex !important;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 0.85rem;
+    color: rgba(246, 241, 227, 0.85);
+}
+
+.checkbox-label input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    accent-color: rgb(64, 190, 184);
+    cursor: pointer;
 }
 
 .lobby-body {
     display: grid;
     grid-template-columns: minmax(150px, 0.8fr) minmax(360px, 1.6fr);
-    gap: 24px;
-    margin: 22px 0;
+    gap: 18px;
+    margin: 16px 0;
     text-align: left;
 }
 
@@ -460,10 +485,10 @@ body {
 
 .lobby-body h3 {
     font-family: var(--font-display);
-    font-size: 1rem;
+    font-size: 0.95rem;
     font-weight: 600;
     color: var(--brass-bright);
-    margin-bottom: 10px;
+    margin-bottom: 8px;
 }
 
 .participants-list {
@@ -483,8 +508,8 @@ body {
     background: rgba(0, 0, 0, 0.15);
     border: 1px solid transparent;
     border-radius: 6px;
-    padding: 8px 12px;
-    font-size: 0.9rem;
+    padding: 6px 10px;
+    font-size: 0.88rem;
 }
 
 .participant-item.is-me {
@@ -544,10 +569,30 @@ body {
    côtés. Ouest et Est chevauchent les colonnes centrales (occupées par Nord/Sud) pour
    se rapprocher l'un de l'autre, plutôt que de rester plaqués tout à gauche/droite. */
 .seat-assignment-grid {
+    position: relative;
     display: grid;
     grid-template-columns: repeat(4, 1fr);
-    gap: 14px 10px;
+    gap: 10px 8px;
     align-items: stretch;
+}
+
+/* Halo doré évoquant le plateau de la table, posé derrière les 4 cases (voir z-index sur
+   .seat-box ci-dessous) : il ne se voit que dans les interstices entre elles — un fin
+   liseré au centre entre Ouest et Est, et un dégradé discret entre Nord/Sud et les côtés —
+   ce qui donne l'impression que les 4 cases sont posées sur une même table plutôt que
+   d'être 4 formulaires indépendants. */
+.seat-assignment-grid::before {
+    content: '';
+    position: absolute;
+    inset: 6% 4%;
+    border-radius: 50%;
+    background: radial-gradient(ellipse at center,
+        rgba(201, 162, 39, 0.24) 0%,
+        rgba(201, 162, 39, 0.10) 50%,
+        transparent 72%);
+    box-shadow: 0 0 0 1px rgba(201, 162, 39, 0.22);
+    pointer-events: none;
+    z-index: 0;
 }
 
 .seat-pos-N { grid-column: 2 / 4; grid-row: 1; }
@@ -555,34 +600,104 @@ body {
 .seat-pos-E { grid-column: 3 / 5; grid-row: 2; }
 .seat-pos-S { grid-column: 2 / 4; grid-row: 3; }
 
+.seat-assignment-grid .seat-box {
+    position: relative;
+    z-index: 1;
+    background: rgba(11, 20, 16, 0.55);
+}
+
 .seat-box {
     display: flex;
     flex-direction: column;
     align-items: stretch;
-    gap: 7px;
+    gap: 6px;
     background: rgba(0, 0, 0, 0.15);
     border: 1px solid var(--line);
     border-radius: 8px;
-    padding: 12px 14px;
+    padding: 9px 12px;
+    transition: border-color 0.15s ease;
+}
+
+.seat-box:has(select):hover {
+    border-color: rgba(201, 162, 39, 0.65);
+}
+
+/* Flash doré bref quand un participant vient d'être posé sur une case (siège ou
+   kibitzer) — feedback immédiat pour que le changement saute aux yeux, en particulier
+   pour les autres joueurs qui le voient arriver via la synchronisation réseau plutôt que
+   de l'avoir cliqué eux-mêmes. Se rejoue à chaque fois que la classe est réappliquée
+   (voir prevSeatAssignmentSnapshot / prevKibitzerAssignmentSnapshot dans app.js), car le
+   nœud DOM est recréé à chaque rendu. */
+@keyframes seatJustAssigned {
+    0% {
+        border-color: var(--brass-bright);
+        box-shadow: 0 0 0 3px rgba(224, 188, 74, 0.4), 0 0 20px rgba(224, 188, 74, 0.3);
+        background-color: rgba(224, 188, 74, 0.22);
+    }
+    100% {
+        border-color: var(--line);
+        box-shadow: 0 0 0 0 rgba(224, 188, 74, 0);
+        background-color: transparent;
+    }
+}
+
+.seat-box.just-assigned {
+    animation: seatJustAssigned 1s ease-out;
 }
 
 .seat-box-label {
     font-family: var(--font-display);
     font-weight: 600;
-    font-size: 0.92rem;
+    font-size: 0.88rem;
     text-align: center;
 }
 
 .seat-box-name {
-    font-size: 0.88rem;
+    font-size: 0.85rem;
     color: rgba(246, 241, 227, 0.85);
     text-align: center;
 }
 
+/* Avatar rond (initiale + couleur dérivée de l'id — voir avatarHtml dans app.js) affiché
+   devant un participant : liste des participants, et cases de sièges assignées. */
+.mini-avatar {
+    flex-shrink: 0;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.7rem;
+    font-weight: 700;
+    color: rgba(255, 255, 255, 0.92);
+    text-shadow: 0 1px 1px rgba(0, 0, 0, 0.35);
+}
+
+.mini-avatar-robot {
+    background: rgba(255, 255, 255, 0.08) !important;
+    font-size: 0.75rem;
+}
+
+.seat-select-row, .seat-box-name-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.seat-box-name-row .seat-box-name {
+    flex: 1;
+    text-align: left;
+}
+
+.seat-select-row .seat-assign-select {
+    flex: 1;
+}
+
 .seat-assign-select {
     font-family: var(--font-body);
-    font-size: 0.88rem;
-    padding: 8px 30px 8px 10px;
+    font-size: 0.85rem;
+    padding: 6px 26px 6px 9px;
     border-radius: 6px;
     border: 1px solid var(--line);
     background: rgba(0, 0, 0, 0.3);
@@ -598,19 +713,50 @@ body {
 }
 
 .lobby-kibitzers {
-    margin-top: 18px;
+    margin-top: 14px;
 }
 
-/* Module "Kibbitz" : rangée compacte de 3 cases sous la table, sans label individuel
-   (le titre "Kibbitz" au-dessus suffit) — même style que les cases de sièges. */
+/* Module "Kibbitz" : rangée compacte de 3 cases sous la table, chacune réduite à une
+   simple ligne (icône + case) plutôt qu'au format vertical des cases de sièges — pas
+   besoin d'autant de hauteur puisqu'il n'y a ni label ni signification géométrique.
+   Bordure en tirets + légère teinte violette (au lieu du vert/or des sièges) : distingue
+   d'un coup d'œil "spectateur" de "joueur à la table". */
 .kibitzer-assignment-grid {
     display: flex;
-    flex-wrap: wrap;
-    gap: 10px;
+    flex-direction: column;
+    gap: 7px;
 }
 
-.kibitzer-assignment-grid .seat-box {
-    flex: 1 1 140px;
+.kibitzer-assignment-grid .seat-box.kibitzer-box {
+    flex-direction: row;
+    align-items: center;
+    gap: 9px;
+    padding: 6px 10px;
+    border-style: dashed;
+    border-color: rgba(148, 132, 224, 0.4);
+    background: rgba(148, 132, 224, 0.08);
+}
+
+.kibitzer-box:has(select):hover {
+    border-color: rgba(148, 132, 224, 0.75);
+}
+
+.kibitzer-icon {
+    flex-shrink: 0;
+    width: 18px;
+    text-align: center;
+    font-size: 0.95rem;
+    color: rgba(196, 181, 253, 0.9);
+}
+
+.kibitzer-box .seat-box-name {
+    flex: 1;
+    text-align: left;
+}
+
+.kibitzer-box .seat-assign-select {
+    flex: 1;
+    border-color: rgba(148, 132, 224, 0.35);
 }
 
 /* Sur un écran étroit, une croix à 4 colonnes laisse trop peu de place aux menus
@@ -621,15 +767,17 @@ body {
         display: flex;
         flex-direction: column;
     }
-    .seat-box {
+    .seat-assignment-grid::before {
+        display: none;
+    }
+    .seat-assignment-grid .seat-box {
         flex-direction: row;
         justify-content: space-between;
         align-items: center;
     }
-    .seat-box-label { text-align: left; }
-    .seat-box-name { text-align: right; }
-    .seat-assign-select { width: auto; max-width: 55%; }
-    .kibitzer-assignment-grid { flex-direction: column; }
+    .seat-assignment-grid .seat-box-label { text-align: left; }
+    .seat-assignment-grid .seat-box-name { text-align: right; }
+    .seat-assignment-grid .seat-assign-select { width: auto; max-width: 55%; }
 }
 
 /* ===== Écran de jeu ===== */
