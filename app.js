@@ -35,6 +35,10 @@ let myRole = null;          // 'host' | 'guest'
 let myParticipantId = null; // 'host', ou le jeton de reconnexion de l'invité (stable entre reconnexions)
 let participants = [];      // [{ id, name, disconnected }, ...] — état du salon, maintenu par l'hôte
 let seatAssignment = { N: null, E: null, S: null, W: null }; // id de participant, ou null (robot)
+// 3 emplacements de kibitzer (spectateur voyant les 4 mains), assignés librement par
+// l'hôte comme les sièges — voir renderKibitzerAssignmentGrid/uiAssignKibitzer. Un siège
+// assigné prime toujours sur une place de kibitzer (voir uiStartGameAsHost).
+let kibitzerAssignment = [null, null, null];
 let currentRoomCode = null; // pour uiReconnect() : on doit se souvenir du code utilisé pour rejoindre
 
 // (Hôte uniquement) jeton de reconnexion -> numéro de connexion PeerJS actif. Un invité
@@ -70,6 +74,7 @@ function getReconnectToken() {
 
 let mySeats = null;         // sièges contrôlés par ce joueur pendant la partie
 let autoPassSeats = [];     // sièges non assignés (robot "passe") — décidé par l'hôte au lancement
+let myIsKibitzer = false;   // spectateur actif (voir renderKibitzerAssignmentGrid) : voit les 4 mains même sans siège
 
 // ===== Préférences d'affichage des mains (locales, persistées, indépendantes du réseau) =====
 //
@@ -91,6 +96,11 @@ function saveBoolPref(key, value) {
 
 let useFrenchRanks = loadBoolPref('bridgeBidFrenchRanks', false); // R/D/V/X au lieu de K/Q/J/T
 let showHcp = loadBoolPref('bridgeBidShowHcp', false);            // affiche le compte de points d'honneur par main
+let showKr = loadBoolPref('bridgeBidShowKr', false);              // affiche l'évaluation Kaplan-Rubens par main
+let showLedgerNames = loadBoolPref('bridgeBidShowLedgerNames', false); // noms des joueurs au lieu de N/E/S/O dans le tableau d'enchères
+// (Hôte uniquement) Voir les 4 mains à tout moment pendant la partie, même en pleine
+// enchère — voir uiToggleHostSeeAllHands. Jamais envoyé aux autres joueurs.
+let hostSeeAllHands = loadBoolPref('bridgeBidHostSeeAllHands', false);
 
 const FRENCH_RANK_LETTER = { K: 'R', Q: 'D', J: 'V', T: 'X' };
 
@@ -113,6 +123,141 @@ function computeHandHcp(hand) {
     return total;
 }
 
+// ===== Évaluateur Kaplan-Rubens (CCCC — "Complex Computer Count") =====
+//
+// Port fidèle de la fonction cccc() du code de référence de Jeff Goldsmith
+// (https://www.jeff-goldsmith.com/knrsource.c), qui implémente l'algorithme d'Edgar
+// Kaplan et Jeff Rubens tel que publié dans Bridge World, octobre 1982, pp. 21-23.
+// N'implémente QUE le calcul Kaplan-Rubens d'origine ("cccc"), pas la variante de Danny
+// Kleinman ("dkcccc") qui figure dans les mêmes fichiers.
+//
+// Une seule divergence connue entre les sources de référence elles-mêmes (voir plus bas,
+// couleurs de 7 cartes) : on suit alors knrsource.c, la source d'origine désignée.
+
+const KR_SUITS = ['S', 'H', 'D', 'C'];
+
+function krHas(hand, suit, rank) {
+    return hand[suit].includes(rank);
+}
+
+function krCountHeld(hand, suit, ranks) {
+    let n = 0;
+    for (const r of ranks) if (krHas(hand, suit, r)) n++;
+    return n;
+}
+
+function computeKaplanRubens(hand) {
+    const len = {};
+    KR_SUITS.forEach(s => { len[s] = hand[s].length; });
+
+    // 321 count pour les As, Rois, Dames (honneurs "protégés" au sens large)
+    let pakq = 0;
+    KR_SUITS.forEach(s => {
+        if (krHas(hand, s, 'A')) pakq += 3;
+        if (krHas(hand, s, 'K')) pakq += 2;
+        if (krHas(hand, s, 'Q')) pakq += 1;
+    });
+
+    // Points de longueur : 4321 count pondéré par la longueur de la couleur
+    let p2 = 0;
+    KR_SUITS.forEach(s => {
+        if (krHas(hand, s, 'A')) p2 += len[s] * 4;
+        if (krHas(hand, s, 'K')) p2 += len[s] * 3;
+        if (krHas(hand, s, 'Q')) p2 += len[s] * 2;
+        if (krHas(hand, s, 'J')) p2 += len[s] * 1;
+    });
+
+    // Bonus pour longues couleurs sans les honneurs bas (Dame/Valet) qui y seraient
+    // de toute façon peu utiles.
+    KR_SUITS.forEach(s => {
+        const l = len[s];
+        const hasQ = krHas(hand, s, 'Q');
+        const hasJ = krHas(hand, s, 'J');
+        if (l === 7) {
+            // Le texte original ("1 point si Dame ou Valet manquant") est ambigu, et les
+            // DEUX sources de référence de Jeff Goldsmith (C et Perl) le traitent
+            // différemment l'une de l'autre pour ce cas précis : knrsource.c déclenche le
+            // bonus dès qu'IL MANQUE AU MOINS L'UN des deux honneurs, alors que sa version
+            // Perl exige qu'ils manquent TOUS LES DEUX (avec une note de l'auteur disant
+            // lui-même ne pas être sûr de l'intention d'origine). On suit ici knrsource.c,
+            // la source désignée comme référence.
+            if (!hasQ || !hasJ) p2 += 7;
+        }
+        if (l === 8) {
+            if (!hasQ) p2 += 16;
+            else if (!hasJ) p2 += 8;
+        }
+        if (l > 8) {
+            if (!hasQ) p2 += 2 * l;
+            if (!hasJ) p2 += l;
+        }
+    });
+
+    // Honneurs bas selon la longueur de la couleur (Dix, Neuf)
+    KR_SUITS.forEach(s => {
+        const l = len[s];
+        if (krHas(hand, s, 'T')) {
+            if (l > 6) {
+                p2 += 0.5 * l;
+            } else {
+                const higher = krCountHeld(hand, s, ['A', 'K', 'Q']);
+                if (higher >= 2 || krHas(hand, s, 'J')) p2 += l;
+                else p2 += 0.5 * l;
+            }
+        }
+        if (krHas(hand, s, '9') && l <= 6) {
+            const higher = krCountHeld(hand, s, ['A', 'K', 'Q']);
+            if (higher >= 2 || krHas(hand, s, 'T') || krHas(hand, s, '8')) p2 += 0.5 * l;
+        }
+    });
+
+    // Points de brièveté (chicane/singleton/doubleton) — on ne compte pas le 1er doubleton
+    let pdist = 0;
+    KR_SUITS.forEach(s => {
+        const l = len[s];
+        if (l === 0) pdist += 3;
+        else if (l === 1) pdist += 2;
+        else if (l === 2) pdist += 1;
+    });
+    if (pdist !== 0) pdist -= 1;
+
+    // Rois secs, Dames courtes ou longues sans As/Roi d'appui
+    let p = pakq;
+    KR_SUITS.forEach(s => {
+        const l = len[s];
+        if (krHas(hand, s, 'K') && l === 1) p -= 1.5;
+        if (krHas(hand, s, 'Q') && l < 3) {
+            p -= 1;
+            if (krHas(hand, s, 'A') || krHas(hand, s, 'K')) p += 0.5;
+            else if (l === 2) p += 0.25;
+        }
+        if (krHas(hand, s, 'Q') && l >= 3) {
+            if (!krHas(hand, s, 'A') && !krHas(hand, s, 'K')) p -= 0.25;
+        }
+    });
+
+    // Honneurs bas (Valet, Dix) soutenus par des honneurs supérieurs
+    let p3 = 0;
+    KR_SUITS.forEach(s => {
+        if (krHas(hand, s, 'J')) {
+            const higher = krCountHeld(hand, s, ['A', 'K', 'Q']);
+            if (higher === 2) p3 += 0.5;
+            if (higher === 1) p3 += 0.25;
+        }
+        if (krHas(hand, s, 'T')) {
+            const higher = krCountHeld(hand, s, ['A', 'K', 'Q', 'J']);
+            if (higher === 2) p3 += 0.25;
+            if (higher === 1 && krHas(hand, s, '9')) p3 += 0.25;
+        }
+    });
+
+    // Pénalité pour la répartition 4-3-3-3
+    const sortedLens = KR_SUITS.map(s => len[s]).sort((a, b) => b - a);
+    const d = sortedLens[3] === 3 ? 0.5 : 0;
+
+    return p + p2 / 10 + p3 + pdist - d;
+}
+
 function uiToggleFrenchRanks() {
     useFrenchRanks = !useFrenchRanks;
     saveBoolPref('bridgeBidFrenchRanks', useFrenchRanks);
@@ -133,12 +278,52 @@ function uiToggleShowHcp() {
     }
 }
 
+function uiToggleShowKr() {
+    showKr = !showKr;
+    saveBoolPref('bridgeBidShowKr', showKr);
+    renderHandDisplayOptionButtons();
+    if (deals) {
+        renderMyHands();
+        if (isAuctionOver(auctionHistory)) renderAllHandsDiagram();
+    }
+}
+
+function uiToggleLedgerNames() {
+    showLedgerNames = !showLedgerNames;
+    saveBoolPref('bridgeBidShowLedgerNames', showLedgerNames);
+    const btn = document.getElementById('ledgerNamesToggleBtn');
+    if (btn) btn.classList.toggle('is-active', showLedgerNames);
+    if (deals) renderAuctionLedger();
+}
+
+// Réservé à l'hôte : révèle les 4 mains à tout moment pendant la partie, même en pleine
+// enchère (utile pour vérifier une donne, aider un débutant en direct, etc.). Purement
+// local — jamais envoyé aux autres joueurs, qui ne voient toujours que ce qu'ils sont
+// censés voir. Voir checkAuctionEnd, qui force l'affichage du diagramme des 4 mains tant
+// que ce réglage est actif, indépendamment de l'état de l'enchère.
+function uiToggleHostSeeAllHands() {
+    if (myRole !== 'host') return;
+    hostSeeAllHands = !hostSeeAllHands;
+    saveBoolPref('bridgeBidHostSeeAllHands', hostSeeAllHands);
+    renderHandDisplayOptionButtons();
+    if (deals) checkAuctionEnd();
+}
+
 function renderHandDisplayOptionButtons() {
     const frBtn = document.getElementById('frenchRanksToggleBtn');
     if (frBtn) frBtn.classList.toggle('is-active', useFrenchRanks);
 
     const hcpBtn = document.getElementById('hcpToggleBtn');
     if (hcpBtn) hcpBtn.classList.toggle('is-active', showHcp);
+
+    const krBtn = document.getElementById('krToggleBtn');
+    if (krBtn) krBtn.classList.toggle('is-active', showKr);
+
+    const hostSeeAllBtn = document.getElementById('hostSeeAllHandsBtn');
+    if (hostSeeAllBtn) {
+        hostSeeAllBtn.style.display = myRole === 'host' ? '' : 'none';
+        hostSeeAllBtn.classList.toggle('is-active', hostSeeAllHands);
+    }
 }
 let deals = null;           // tableau de donnes parsées
 let boardIndex = 0;
@@ -255,6 +440,7 @@ function uiCreateRoom() {
     myParticipantId = 'host';
     participants = [{ id: 'host', name: 'Hôte' }];
     seatAssignment = { N: null, E: null, S: null, W: null };
+    kibitzerAssignment = [null, null, null];
     guestIndexByToken = {};
     pendingParsedDeals = null;
     pendingParsedFile = null;
@@ -296,11 +482,15 @@ function uiCreateRoom() {
                 // un joueur déconnecté n'est PAS remplacé automatiquement, son siège attend
                 // simplement qu'il revienne (voir le tour-indicateur pendant la partie).
                 const seatsForThisGuest = SEATS.filter(seat => seatAssignment[seat] === token);
+                // Une place de kibitzer (voir renderKibitzerAssignmentGrid) ne compte que pour
+                // quelqu'un qui n'occupe aucun siège : un siège assigné prime toujours.
+                const kibitzerForThisGuest = kibitzerAssignment.includes(token) && seatsForThisGuest.length === 0;
                 peerConn.send({
                     type: 'resync',
                     deals, boardIndex, auctionHistory,
                     yourSeats: seatsForThisGuest,
-                    botSeats: autoPassSeats
+                    botSeats: autoPassSeats,
+                    kibitzer: kibitzerForThisGuest
                 }, guestIndex);
             }
 
@@ -391,6 +581,7 @@ function uiJoinRoom() {
     myParticipantId = null; // fixé à réception du message 'welcome'
     participants = [];
     seatAssignment = { N: null, E: null, S: null, W: null };
+    kibitzerAssignment = [null, null, null];
     currentRoomCode = code;
     everConnectedAsGuest = false;
 
@@ -453,6 +644,14 @@ function enterLobbyScreen() {
 function renderLobby() {
     renderParticipantsList();
     renderSeatAssignmentGrid();
+    renderKibitzerAssignmentGrid();
+}
+
+// Vrai si ce participant a déjà une place quelque part : un siège à la table, ou un des 3
+// emplacements de kibitzer (voir renderKibitzerAssignmentGrid) — utilisé pour la coloration
+// de son nom dans la liste des participants (bleu si placé, rouge sinon).
+function participantHasAPlace(participantId) {
+    return SEATS.some(seat => seatAssignment[seat] === participantId) || kibitzerAssignment.includes(participantId);
 }
 
 function renderParticipantsList() {
@@ -470,8 +669,11 @@ function renderParticipantsList() {
                    oninput="uiRenameParticipant('${p.id}', this.value)"
                    onblur="uiRenameParticipantBlur('${p.id}', this)">`
             : escapeHtml(p.name);
+        // Bleu si déjà placé quelque part (siège ou kibitzer — voir le module "Table" et
+        // "Kibbitz"), rouge sinon : un coup d'œil suffit à repérer qui reste à placer.
+        const placementClass = participantHasAPlace(p.id) ? 'is-assigned' : 'is-unassigned';
         return `
-        <li class="participant-item ${p.id === myParticipantId ? 'is-me' : ''}">
+        <li class="participant-item ${placementClass} ${p.id === myParticipantId ? 'is-me' : ''}">
             ${nameHtml}
             ${p.id === 'host' ? ' <span class="host-tag">(hôte)</span>' : ''}
             ${p.id === myParticipantId ? ' <span class="me-tag">(vous)</span>' : ''}
@@ -484,8 +686,8 @@ function renderParticipantsList() {
 let participantRenameDebounceTimers = {};
 // Renommage d'un participant par l'hôte. On met à jour et on diffuse, mais sans
 // reconstruire la liste des participants pendant la frappe (voir garde ci-dessus) —
-// la grille des sièges, elle, peut se rafraîchir sans risque puisqu'elle ne contient
-// pas le champ en cours d'édition.
+// la grille des sièges et celle des kibitzers, elles, peuvent se rafraîchir sans risque
+// puisqu'elles ne contiennent pas le champ en cours d'édition.
 function uiRenameParticipant(participantId, value) {
     if (myRole !== 'host') return;
     clearTimeout(participantRenameDebounceTimers[participantId]);
@@ -497,6 +699,7 @@ function uiRenameParticipant(participantId, value) {
         p.name = trimmed;
         broadcastLobbyState();
         renderSeatAssignmentGrid();
+        renderKibitzerAssignmentGrid();
     }, 300);
 }
 
@@ -517,7 +720,7 @@ function renderSeatAssignmentGrid() {
     const container = document.getElementById('seatAssignmentGrid');
     const isHost = myRole === 'host';
 
-    container.innerHTML = SEATS.map(seat => {
+    const seatBoxes = SEATS.map(seat => {
         const assignedId = seatAssignment[seat];
         if (isHost) {
             const options = ['<option value="">— (robot : passe)</option>']
@@ -525,7 +728,7 @@ function renderSeatAssignmentGrid() {
                     `<option value="${p.id}" ${p.id === assignedId ? 'selected' : ''}>${escapeHtml(p.name)}</option>`
                 ));
             return `
-                <div class="seat-box">
+                <div class="seat-box seat-pos-${seat}">
                     <span class="seat-box-label">${SEAT_FULL_NAME[seat]}</span>
                     <select class="seat-assign-select" onchange="uiAssignSeat('${seat}', this.value)">${options.join('')}</select>
                 </div>
@@ -534,8 +737,44 @@ function renderSeatAssignmentGrid() {
         const p = participants.find(x => x.id === assignedId);
         const name = p ? escapeHtml(p.name) : '— (robot)';
         return `
-            <div class="seat-box">
+            <div class="seat-box seat-pos-${seat}">
                 <span class="seat-box-label">${SEAT_FULL_NAME[seat]}</span>
+                <span class="seat-box-name">${name}</span>
+            </div>
+        `;
+    }).join('');
+
+    // Petit centre décoratif, purement cosmétique, pour évoquer le tapis vert d'une vraie
+    // table plutôt qu'une simple liste.
+    container.innerHTML = seatBoxes + '<div class="seat-table-center">♠ ♥<br>♦ ♣</div>';
+}
+
+// Module "Kibbitz" : 3 emplacements de spectateur voyant les 4 mains, assignables
+// librement par l'hôte — même mécanique que renderSeatAssignmentGrid, mais sans
+// signification géométrique (pas de disposition en croix, juste 3 cases).
+function renderKibitzerAssignmentGrid() {
+    const container = document.getElementById('kibitzerAssignmentGrid');
+    if (!container) return;
+    const isHost = myRole === 'host';
+
+    container.innerHTML = kibitzerAssignment.map((assignedId, i) => {
+        if (isHost) {
+            const options = ['<option value="">— (personne)</option>']
+                .concat(participants.map(p =>
+                    `<option value="${p.id}" ${p.id === assignedId ? 'selected' : ''}>${escapeHtml(p.name)}</option>`
+                ));
+            return `
+                <div class="seat-box kibitzer-box">
+                    <span class="seat-box-label">👁 Kibbitz ${i + 1}</span>
+                    <select class="seat-assign-select" onchange="uiAssignKibitzer(${i}, this.value)">${options.join('')}</select>
+                </div>
+            `;
+        }
+        const p = participants.find(x => x.id === assignedId);
+        const name = p ? escapeHtml(p.name) : '— (personne)';
+        return `
+            <div class="seat-box kibitzer-box">
+                <span class="seat-box-label">👁 Kibbitz ${i + 1}</span>
                 <span class="seat-box-name">${name}</span>
             </div>
         `;
@@ -593,8 +832,17 @@ function uiAssignSeat(seat, participantId) {
     renderLobby();
 }
 
+// Assigne (ou libère) l'un des 3 emplacements de kibitzer. Réservé à l'hôte, même
+// mécanique que uiAssignSeat.
+function uiAssignKibitzer(slotIndex, participantId) {
+    if (myRole !== 'host') return;
+    kibitzerAssignment[slotIndex] = participantId || null;
+    broadcastLobbyState();
+    renderLobby();
+}
+
 function broadcastLobbyState() {
-    peerConn.send({ type: 'lobby-state', participants, seatAssignment });
+    peerConn.send({ type: 'lobby-state', participants, seatAssignment, kibitzerAssignment });
 }
 
 // ===== Démarrage de la partie (hôte) =====
@@ -605,6 +853,8 @@ function broadcastLobbyState() {
 function readAndValidateDealFile(file, onDone) {
     const errorEl = document.getElementById('hostSetupError');
     errorEl.style.display = 'none';
+    const infoEl = document.getElementById('dealFileInfo');
+    infoEl.style.display = 'none';
 
     const reader = new FileReader();
 
@@ -618,6 +868,11 @@ function readAndValidateDealFile(file, onDone) {
             onDone(null);
             return;
         }
+
+        const n = parsedDeals.length;
+        document.getElementById('dealFileInfoText').textContent =
+            `✅ ${n} donne${n > 1 ? 's' : ''} chargée${n > 1 ? 's' : ''}`;
+        infoEl.style.display = 'flex';
 
         // Le calcul du PAR est optionnel dans le fichier : on prévient l'hôte s'il est
         // absent, mais ça ne doit pas empêcher de lancer la partie.
@@ -649,6 +904,7 @@ function uiHandleDealFileChosen() {
 
     if (!fileInput.files || fileInput.files.length === 0) {
         document.getElementById('hostSetupError').style.display = 'none';
+        document.getElementById('dealFileInfo').style.display = 'none';
         return;
     }
 
@@ -657,6 +913,68 @@ function uiHandleDealFileChosen() {
         pendingParsedFile = file;
         pendingParsedDeals = parsedDeals;
     });
+}
+
+// ===== Aperçu des donnes chargées (avant de lancer la partie) =====
+
+function uiPreviewDeals() {
+    if (!pendingParsedDeals || pendingParsedDeals.length === 0) return;
+    renderDealPreview(pendingParsedDeals);
+    document.getElementById('dealPreviewModal').style.display = 'flex';
+}
+
+function uiCloseDealPreview() {
+    document.getElementById('dealPreviewModal').style.display = 'none';
+}
+
+function uiCloseDealPreviewOnBackdrop(evt) {
+    if (evt.target.id === 'dealPreviewModal') uiCloseDealPreview();
+}
+
+// Petite carte de main compacte pour l'aperçu (même principe que renderMyHands /
+// renderAllHandsDiagram, mais toujours avec le HCP affiché, indépendamment de la
+// préférence showHcp qui ne concerne que l'écran de jeu).
+function dealPreviewHandCardHtml(seat, hand) {
+    const lines = ['S', 'H', 'D', 'C'].map(suit => `
+        <div class="card-line">
+            <span class="suit-symbol">${suitIconHtml(suit)}</span>
+            <span class="cards">${formatRanksForDisplay(hand[suit]) || '—'}</span>
+        </div>
+    `).join('');
+
+    return `
+        <div class="hand-card deal-preview-hand-card">
+            <div class="hand-card-title">
+                <span class="hand-card-title-name">${SEAT_FULL_NAME[seat]}</span>
+                <span class="hand-card-badges"><span class="hand-hcp-badge">${computeHandHcp(hand)} HCP</span></span>
+            </div>
+            <div class="hand-cards">${lines}</div>
+        </div>
+    `;
+}
+
+function dealPreviewParText(par) {
+    if (!par) return '';
+    const contract = par.contract ? `${par.contract}${par.declarer ? ' ' + par.declarer : ''}` : '?';
+    const scoreSign = par.score > 0 ? '+' : '';
+    return ` · Par : ${contract} (${par.side} ${scoreSign}${par.score})`;
+}
+
+function renderDealPreview(dealsToPreview) {
+    const n = dealsToPreview.length;
+    document.getElementById('dealPreviewTitle').textContent = `Aperçu — ${n} donne${n > 1 ? 's' : ''}`;
+
+    const content = document.getElementById('dealPreviewContent');
+    content.innerHTML = dealsToPreview.map(deal => `
+        <div class="deal-preview-board">
+            <div class="deal-preview-board-header">
+                <strong>Donne #${deal.board}</strong> — Donneur : ${SEAT_FULL_NAME[deal.dealer]} · ${VULN_LABEL[deal.vulnerable]}${dealPreviewParText(deal.par)}
+            </div>
+            <div class="deal-preview-hands">
+                ${SEATS.map(seat => dealPreviewHandCardHtml(seat, deal.hands[seat])).join('')}
+            </div>
+        </div>
+    `).join('');
 }
 
 function uiStartGameAsHost() {
@@ -685,11 +1003,16 @@ function uiStartGameAsHost() {
         mySeats = SEATS.filter(seat => seatAssignment[seat] === 'host');
         autoPassSeats = botSeats;
 
+        myIsKibitzer = kibitzerAssignment.includes('host') && mySeats.length === 0;
+
         participants.filter(p => p.id !== 'host' && !p.disconnected).forEach(p => {
             const guestIndex = guestIndexForParticipant(p.id);
             if (guestIndex == null) return;
             const seatsForThisGuest = SEATS.filter(seat => seatAssignment[seat] === p.id);
-            peerConn.send({ type: 'start-game', deals, yourSeats: seatsForThisGuest, botSeats }, guestIndex);
+            // Une place de kibitzer (voir renderKibitzerAssignmentGrid) ne compte que pour
+            // quelqu'un qui n'occupe aucun siège : un siège assigné prime toujours.
+            const kibitzerForThisGuest = kibitzerAssignment.includes(p.id) && seatsForThisGuest.length === 0;
+            peerConn.send({ type: 'start-game', deals, yourSeats: seatsForThisGuest, botSeats, kibitzer: kibitzerForThisGuest }, guestIndex);
         });
 
         enterGameScreen();
@@ -732,6 +1055,7 @@ function handlePeerData(msg, guestIndex) {
         case 'lobby-state': {
             participants = msg.participants;
             seatAssignment = msg.seatAssignment;
+            kibitzerAssignment = msg.kibitzerAssignment || [null, null, null];
             // Ce message est aussi renvoyé quand la connectivité change en pleine partie
             // (quelqu'un se (re)connecte) : on ne bascule à l'écran du salon que si la
             // partie n'a pas encore commencé, sinon ça arracherait un invité de sa table.
@@ -743,6 +1067,7 @@ function handlePeerData(msg, guestIndex) {
             deals = msg.deals;
             mySeats = msg.yourSeats;
             autoPassSeats = msg.botSeats || [];
+            myIsKibitzer = !!msg.kibitzer;
             boardIndex = 0;
             auctionHistory = [];
             hostPendingUndo = null;
@@ -758,6 +1083,7 @@ function handlePeerData(msg, guestIndex) {
             deals = msg.deals;
             mySeats = msg.yourSeats;
             autoPassSeats = msg.botSeats || [];
+            myIsKibitzer = !!msg.kibitzer;
             boardIndex = msg.boardIndex;
             auctionHistory = msg.auctionHistory || [];
             hostPendingUndo = null;
@@ -883,7 +1209,7 @@ function maybeAutoPass() {
 
         applyCall(turnSeat, 'PASS');
         peerConn.send({ type: 'call', boardIndex, seat: turnSeat, call: 'PASS' });
-    }, 700);
+    }, 300);
 }
 
 // ===== Écran de jeu =====
@@ -929,7 +1255,13 @@ function renderMyHands() {
     const container = document.getElementById('myHandsContainer');
 
     if (!mySeats || mySeats.length === 0) {
-        container.innerHTML = '<div class="info-text">Vous êtes spectateur sur cette table.</div>';
+        if (myIsKibitzer) {
+            container.innerHTML =
+                '<div class="info-text kibitzer-note">👁 Vous suivez la partie en kibitzer : vous voyez les 4 mains.</div>' +
+                `<div class="all-hands-diagram">${buildAllHandsHtml(deal)}</div>`;
+        } else {
+            container.innerHTML = '<div class="info-text">Vous êtes spectateur sur cette table.</div>';
+        }
         return;
     }
 
@@ -948,13 +1280,14 @@ function renderMyHands() {
         `).join('');
 
         const hcpBadge = showHcp ? `<span class="hand-hcp-badge">${computeHandHcp(hand)} HCP</span>` : '';
+        const krBadge = showKr ? `<span class="hand-hcp-badge">K&R ${computeKaplanRubens(hand).toFixed(2)}</span>` : '';
         const stateClass = showActiveState ? (seat === turnSeat ? 'hand-card-active' : 'hand-card-inactive') : '';
 
         return `
             <div class="hand-card ${stateClass}">
                 <div class="hand-card-title">
                     <span class="hand-card-title-name">${seatFullName(seat)}</span>
-                    ${hcpBadge}
+                    <span class="hand-card-badges">${hcpBadge}${krBadge}</span>
                 </div>
                 <div class="hand-cards">${lines}</div>
             </div>
@@ -973,9 +1306,23 @@ function formatCallCellHtml(call) {
     return `<span class="call-suit ${cls}">${b.level}${label}</span>`;
 }
 
+// Libellé affiché dans l'en-tête du tableau d'enchères pour un siège donné : soit
+// l'abréviation N/E/S/O, soit le nom du joueur qui l'occupe (préférence showLedgerNames).
+// Un siège robot (non assigné) ou sans nom exploitable retombe sur l'abréviation.
+function ledgerSeatLabel(seat) {
+    if (!showLedgerNames) return SEAT_ABBR_FR[seat];
+    const pid = typeof seatAssignment !== 'undefined' ? seatAssignment[seat] : null;
+    if (!pid) return SEAT_ABBR_FR[seat];
+    const p = participants.find(x => x.id === pid);
+    const name = p && p.name ? p.name.trim() : '';
+    return name || SEAT_ABBR_FR[seat];
+}
+
 function renderAuctionLedger() {
     const deal = currentDeal();
     const header = document.getElementById('auctionLedgerHeader');
+    const toggleBtn = document.getElementById('ledgerNamesToggleBtn');
+    if (toggleBtn) toggleBtn.classList.toggle('is-active', showLedgerNames);
     const turnSeat = isAuctionOver(auctionHistory) ? null : currentTurnSeat(deal.dealer, auctionHistory);
     header.innerHTML = SEATS.map(s => {
         const pair = partnershipOf(s);
@@ -983,7 +1330,7 @@ function renderAuctionLedger() {
         const vulnClass = isVulnerable ? 'vuln-bar-danger' : 'vuln-bar-safe';
         const classes = [s === turnSeat ? 'turn-col' : ''].filter(Boolean).join(' ');
         return `<th class="${classes}">
-            <span class="ledger-seat-label">${SEAT_ABBR_FR[s]}${s === deal.dealer ? ' (D)' : ''}</span>
+            <span class="ledger-seat-label">${escapeHtml(ledgerSeatLabel(s))}</span>
             <span class="vuln-bar ${vulnClass}"></span>
         </th>`;
     }).join('');
@@ -1076,11 +1423,11 @@ function applyCall(seat, call) {
     maybeAutoPass();
 }
 
-function renderAllHandsDiagram() {
-    const container = document.getElementById('allHandsDiagram');
-    const deal = currentDeal();
-
-    container.innerHTML = SEATS.map(seat => {
+// Construit le HTML des 4 mains (utilisé à la fois par renderAllHandsDiagram — révélé à
+// tout le monde une fois l'enchère terminée — et par le mode kibitzer dans renderMyHands,
+// qui les affiche dès le début pour un spectateur actif).
+function buildAllHandsHtml(deal) {
+    return SEATS.map(seat => {
         const hand = deal.hands[seat];
         const lines = ['S', 'H', 'D', 'C'].map(suit => `
             <div class="card-line">
@@ -1090,17 +1437,23 @@ function renderAllHandsDiagram() {
         `).join('');
 
         const hcpBadge = showHcp ? `<span class="hand-hcp-badge">${computeHandHcp(hand)} HCP</span>` : '';
+        const krBadge = showKr ? `<span class="hand-hcp-badge">K&R ${computeKaplanRubens(hand).toFixed(2)}</span>` : '';
 
         return `
             <div class="hand-card hand-${seat}">
                 <div class="hand-card-title">
                     <span class="hand-card-title-name">${seatFullName(seat)}</span>
-                    ${hcpBadge}
+                    <span class="hand-card-badges">${hcpBadge}${krBadge}</span>
                 </div>
                 <div class="hand-cards">${lines}</div>
             </div>
         `;
     }).join('');
+}
+
+function renderAllHandsDiagram() {
+    const container = document.getElementById('allHandsDiagram');
+    container.innerHTML = buildAllHandsHtml(currentDeal());
 }
 
 const STRAIN_ORDER = ['N', 'S', 'H', 'D', 'C']; // N = sans-atout (SA), pas Nord
@@ -1152,10 +1505,21 @@ function checkAuctionEnd() {
     const nextPanel = document.getElementById('nextBoardPanel');
     const diagramEl = document.getElementById('allHandsDiagram');
 
-    if (!isAuctionOver(auctionHistory)) {
+    const auctionOver = isAuctionOver(auctionHistory);
+    // L'hôte peut choisir de voir les 4 mains à tout moment (voir uiToggleHostSeeAllHands),
+    // même pendant l'enchère — un outil réservé à lui seul (vérifier une donne, aider un
+    // débutant en direct...), jamais envoyé ni visible pour les autres joueurs.
+    const hostForcedReveal = myRole === 'host' && hostSeeAllHands;
+
+    if (!auctionOver) {
         resultEl.style.display = 'none';
         nextPanel.style.display = 'none';
-        diagramEl.style.display = 'none';
+        if (hostForcedReveal) {
+            renderAllHandsDiagram();
+            diagramEl.style.display = 'grid';
+        } else {
+            diagramEl.style.display = 'none';
+        }
         return;
     }
 

@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Table d'enchères — Bridge à distance</title>
-<link rel="stylesheet" href="styles.css?v=29">
+<link rel="stylesheet" href="styles.css?v=34">
 </head>
 <body>
 
@@ -68,7 +68,7 @@
 
         <div class="form-group">
             <label>Votre pseudo</label>
-            <input type="text" id="myNameInput" class="name-input" maxlength="20" oninput="uiUpdateMyName()" onblur="uiMyNameBlur()">
+            <input type="text" id="myNameInput" class="name-input" maxlength="20" oninput="uiUpdateMyName()" onblur="uiMyNameBlur()" onfocus="this.select()">
         </div>
 
         <div class="lobby-body">
@@ -80,6 +80,10 @@
                 <h3>Qui joue où</h3>
                 <div id="seatAssignmentGrid" class="seat-assignment-grid"></div>
             </div>
+            <div class="lobby-kibitzers">
+                <h3>Kibbitz</h3>
+                <div id="kibitzerAssignmentGrid" class="kibitzer-assignment-grid"></div>
+            </div>
         </div>
 
         <div id="hostSetupPanel" class="host-setup-panel" style="display:none;">
@@ -89,6 +93,10 @@
                 <input type="file" id="dealFileInput" accept=".pbn,.lin,text/plain">
             </div>
             <div id="hostSetupError" class="error-banner" style="display:none;"></div>
+            <div id="dealFileInfo" class="deal-file-info" style="display:none;">
+                <span id="dealFileInfoText"></span>
+                <button type="button" class="btn btn-secondary btn-small" onclick="uiPreviewDeals()">👁 Prévisualiser</button>
+            </div>
             <button id="startGameBtn" class="btn btn-success" onclick="uiStartGameAsHost()">Commencer la partie</button>
         </div>
 
@@ -118,11 +126,16 @@
                 <div class="hand-display-options">
                     <button id="frenchRanksToggleBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" onclick="uiToggleFrenchRanks()">Notation FR (R D V X)</button>
                     <button id="hcpToggleBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" onclick="uiToggleShowHcp()">Afficher HCP</button>
+                    <button id="krToggleBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" onclick="uiToggleShowKr()">Afficher Kaplan-Rubens</button>
+                    <button id="hostSeeAllHandsBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" style="display:none;" onclick="uiToggleHostSeeAllHands()" title="Réservé à vous : ne change rien pour les autres joueurs">👁 Voir les 4 mains</button>
                 </div>
                 <div id="myHandsContainer" class="my-hands-container"></div>
             </div>
 
             <div class="auction-panel">
+                <div class="ledger-display-options">
+                    <button id="ledgerNamesToggleBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" onclick="uiToggleLedgerNames()">Noms des joueurs</button>
+                </div>
                 <table class="auction-ledger">
                     <thead>
                         <tr id="auctionLedgerHeader"></tr>
@@ -149,10 +162,20 @@
 
 </div>
 
+<div id="dealPreviewModal" class="modal-overlay" style="display:none;" onclick="uiCloseDealPreviewOnBackdrop(event)">
+    <div class="modal-panel">
+        <div class="modal-header">
+            <h3 id="dealPreviewTitle">Aperçu des donnes</h3>
+            <button type="button" class="btn btn-secondary btn-small" onclick="uiCloseDealPreview()">Fermer ✕</button>
+        </div>
+        <div id="dealPreviewContent" class="deal-preview-content"></div>
+    </div>
+</div>
+
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
-<script src="bidding-rules.js?v=29"></script>
-<script src="deal-parser.js?v=29"></script>
-<script src="peer-connection.js?v=29"></script>
-<script src="app.js?v=29"></script>
+<script src="bidding-rules.js?v=34"></script>
+<script src="deal-parser.js?v=34"></script>
+<script src="peer-connection.js?v=34"></script>
+<script src="app.js?v=34"></script>
 </body>
 </html>

@@ -271,6 +271,102 @@ body {
     font-size: 0.9rem;
 }
 
+.deal-file-info {
+    margin-top: 18px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    background: rgba(60, 160, 90, 0.16);
+    border: 1px solid rgba(90, 200, 130, 0.4);
+    color: #cdf0d8;
+    padding: 10px 14px;
+    border-radius: 8px;
+    font-size: 0.9rem;
+}
+
+/* ===== Modale d'aperçu des donnes ===== */
+.modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    z-index: 100;
+}
+
+.modal-panel {
+    background: var(--felt-deep);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    width: min(720px, 100%);
+    max-height: min(80vh, 800px);
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+
+.modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--line);
+    flex-shrink: 0;
+}
+
+.modal-header h3 {
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: 1.1rem;
+    color: var(--brass-bright);
+}
+
+.deal-preview-content {
+    overflow-y: auto;
+    padding: 16px 20px 20px;
+}
+
+.deal-preview-board {
+    padding: 14px 0;
+    border-bottom: 1px solid var(--line);
+}
+
+.deal-preview-board:last-child {
+    border-bottom: none;
+}
+
+.deal-preview-board-header {
+    font-size: 0.88rem;
+    color: rgba(246, 241, 227, 0.9);
+    margin-bottom: 10px;
+}
+
+.deal-preview-hands {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+}
+
+.deal-preview-hand-card {
+    padding: 8px 10px;
+}
+
+.deal-preview-hand-card .hand-cards {
+    font-size: 0.8rem;
+}
+
+.deal-preview-hand-card .hand-card-title-name {
+    font-size: 0.85rem;
+}
+
+@media (max-width: 700px) {
+    .deal-preview-hands { grid-template-columns: repeat(2, 1fr); }
+}
+
 /* ===== Salon d'attente ===== */
 #screen-lobby {
     text-align: center;
@@ -360,14 +456,20 @@ body {
 
 .lobby-body {
     display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 20px;
+    grid-template-columns: minmax(150px, 0.65fr) minmax(360px, 1.5fr) minmax(220px, 0.85fr);
+    gap: 24px;
     margin: 22px 0;
     text-align: left;
 }
 
+@media (max-width: 900px) {
+    .lobby-body { grid-template-columns: minmax(150px, 1fr) minmax(300px, 1.4fr); }
+    .lobby-kibitzers { grid-column: 1 / -1; }
+}
+
 @media (max-width: 700px) {
     .lobby-body { grid-template-columns: 1fr; }
+    .lobby-kibitzers { grid-column: auto; }
 }
 
 .lobby-body h3 {
@@ -386,6 +488,10 @@ body {
 }
 
 .participant-item {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
     background: rgba(0, 0, 0, 0.15);
     border: 1px solid transparent;
     border-radius: 6px;
@@ -395,6 +501,21 @@ body {
 
 .participant-item.is-me {
     border-color: var(--brass);
+}
+
+/* Bleu si déjà placé quelque part (table ou kibitzer — voir participantHasAPlace), rouge
+   sinon : un coup d'œil dans la liste suffit à repérer qui reste à placer. */
+.participant-item.is-assigned {
+    color: var(--club-blue-bright);
+}
+
+.participant-item.is-unassigned {
+    color: var(--card-red-bright);
+}
+
+.participant-item.is-assigned .participant-rename-input,
+.participant-item.is-unassigned .participant-rename-input {
+    color: inherit;
 }
 
 .host-tag, .me-tag {
@@ -408,6 +529,10 @@ body {
     color: var(--card-red-bright);
     font-style: italic;
     margin-left: 6px;
+}
+
+.kibitzer-note {
+    margin-bottom: 10px;
 }
 
 .participant-rename-input {
@@ -427,50 +552,107 @@ body {
     border-color: var(--brass);
 }
 
+/* Disposition en croix façon vraie table : Nord en haut, Sud en bas, Ouest/Est sur les
+   côtés, un petit centre décoratif au milieu — plutôt qu'une simple liste verticale. */
 .seat-assignment-grid {
+    display: grid;
+    grid-template-columns: 1.2fr 1fr 1.2fr;
+    grid-template-areas:
+        ".    north  ."
+        "west center east"
+        ".    south  .";
+    gap: 14px;
+    align-items: stretch;
+}
+
+.seat-pos-N { grid-area: north; }
+.seat-pos-E { grid-area: east; }
+.seat-pos-S { grid-area: south; }
+.seat-pos-W { grid-area: west; }
+
+.seat-table-center {
+    grid-area: center;
     display: flex;
-    flex-direction: column;
-    gap: 8px;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    font-size: 1.05rem;
+    line-height: 1.35;
+    color: rgba(246, 241, 227, 0.28);
+    background: rgba(0, 0, 0, 0.12);
+    border: 1px dashed var(--line);
+    border-radius: 8px;
+    user-select: none;
 }
 
 .seat-box {
     display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 10px;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 7px;
     background: rgba(0, 0, 0, 0.15);
     border: 1px solid var(--line);
     border-radius: 8px;
-    padding: 8px 12px;
+    padding: 12px 14px;
 }
 
 .seat-box-label {
     font-family: var(--font-display);
     font-weight: 600;
-    font-size: 0.9rem;
-    flex-shrink: 0;
+    font-size: 0.92rem;
+    text-align: center;
 }
 
 .seat-box-name {
-    font-size: 0.85rem;
+    font-size: 0.88rem;
     color: rgba(246, 241, 227, 0.85);
-    text-align: right;
+    text-align: center;
 }
 
 .seat-assign-select {
     font-family: var(--font-body);
-    font-size: 0.82rem;
-    padding: 6px 8px;
+    font-size: 0.88rem;
+    padding: 8px 30px 8px 10px;
     border-radius: 6px;
     border: 1px solid var(--line);
     background: rgba(0, 0, 0, 0.3);
     color: var(--cream);
-    max-width: 55%;
+    width: 100%;
+    min-width: 0;
+    text-overflow: ellipsis;
 }
 
 .seat-assign-select option {
     background: var(--felt-deep);
     color: var(--cream);
+}
+
+/* Module "Kibbitz" : simple liste verticale de 3 cases, même style que les cases de la
+   table (voir .seat-box) mais sans disposition géométrique en croix. */
+.kibitzer-assignment-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+/* Sur un écran étroit, une croix à 3 colonnes laisse trop peu de place aux menus
+   déroulants Ouest/Est : on repasse à une simple liste empilée, plus lisible qu'une
+   fidélité géométrique à une vraie table. */
+@media (max-width: 560px) {
+    .seat-assignment-grid {
+        display: flex;
+        flex-direction: column;
+        grid-template-areas: none;
+    }
+    .seat-table-center { display: none; }
+    .seat-box {
+        flex-direction: row;
+        justify-content: space-between;
+        align-items: center;
+    }
+    .seat-box-label { text-align: left; }
+    .seat-box-name { text-align: right; }
+    .seat-assign-select { width: auto; max-width: 55%; }
 }
 
 /* ===== Écran de jeu ===== */
@@ -592,6 +774,13 @@ body {
 
 .hand-card-title-name { flex-shrink: 0; }
 
+.hand-card-badges {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
 /* Compte de points d'honneur (HCP), affichable/masquable par joueur — voir
    uiToggleShowHcp(). Volontairement discret (petit badge) pour ne pas prendre le pas sur
    le nom du siège. */
@@ -615,6 +804,12 @@ body {
     flex-wrap: wrap;
     gap: 8px;
     margin-bottom: 12px;
+}
+
+.ledger-display-options {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 8px;
 }
 
 .hand-option-btn {
