@@ -1,0 +1,56 @@
+name: Déployer sur GitHub Pages
+
+# Se déclenche à chaque push sur main (le mode "GitHub Actions" des réglages Pages ne fait
+# que dire à GitHub "il y aura un workflow qui gère le déploiement" — c'est ce fichier qui
+# fait le travail). "workflow_dispatch" permet aussi de le relancer à la main depuis
+# l'onglet Actions du dépôt, si besoin.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Empêche deux déploiements de se chevaucher si plusieurs push arrivent coup sur coup —
+# le plus récent annule celui d'avant plutôt que de les laisser se marcher dessus.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Récupérer le dépôt
+        uses: actions/checkout@v4
+
+      - name: Bump automatique de CACHE_NAME dans sw.js
+        # Remplace CACHE_NAME par un identifiant unique dérivé du commit (8 premiers
+        # caractères de son SHA) : plus besoin d'y penser à la main (voir README.md) —
+        # chaque push produit forcément une valeur différente de la précédente, donc le
+        # service worker détecte toujours la mise à jour et la bannière "Nouvelle version
+        # disponible" (voir app.js) continue de fonctionner comme avant.
+        run: |
+          NEW_CACHE_NAME="bridge-encheres-${GITHUB_SHA::8}"
+          sed -i "s/const CACHE_NAME = '[^']*';/const CACHE_NAME = '${NEW_CACHE_NAME}';/" sw.js
+          echo "CACHE_NAME -> ${NEW_CACHE_NAME}"
+          grep CACHE_NAME sw.js
+
+      - name: Préparer les fichiers pour Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Déployer sur GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
