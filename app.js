@@ -1662,8 +1662,10 @@ function renderChat() {
     if (!el) return;
     el.innerHTML = chatMessages.map(m => {
         const mine = m.senderId === myParticipantId;
-        const senderHtml = mine ? '' : `<span class="chat-message-sender">${escapeHtml(m.senderName)}</span>`;
-        return `<div class="chat-message ${mine ? 'is-mine' : ''}">${senderHtml}<span class="chat-message-text">${escapeHtml(m.text)}</span></div>`;
+        // Le nom précède toujours le message, y compris pour les siens (voir échange avec
+        // Guillaume) — "Pseudo : message" sur une seule ligne, pas le nom au-dessus comme
+        // dans une bulle de messagerie classique.
+        return `<div class="chat-message ${mine ? 'is-mine' : ''}"><span class="chat-message-sender">${escapeHtml(m.senderName)} :</span> <span class="chat-message-text">${escapeHtml(m.text)}</span></div>`;
     }).join('');
     el.scrollTop = el.scrollHeight; // toujours faire défiler vers le message le plus récent
 }
