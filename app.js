@@ -185,6 +185,30 @@ function saveBoolPref(key, value) {
     try { localStorage.setItem(key, value ? 'true' : 'false'); } catch (e) { /* navigation privée stricte, tant pis */ }
 }
 
+// Même principe que loadBoolPref/saveBoolPref, pour une valeur texte (le pseudo — voir
+// savedNickname plus bas) plutôt qu'un booléen.
+function loadStringPref(key, fallback) {
+    try {
+        const v = localStorage.getItem(key);
+        return v === null || v === '' ? fallback : v;
+    } catch (e) {
+        return fallback;
+    }
+}
+
+function saveStringPref(key, value) {
+    try {
+        if (value) localStorage.setItem(key, value);
+        else localStorage.removeItem(key);
+    } catch (e) { /* navigation privée stricte, tant pis */ }
+}
+
+// Pseudo choisi par l'utilisateur, mémorisé sur cet appareil comme les autres préférences
+// d'affichage — propre à l'appareil, pas au jeton de reconnexion (qui identifie la place
+// dans UNE partie précise, alors que le pseudo doit survivre d'une partie à l'autre).
+// null si jamais personnalisé : on retombe alors sur defaultParticipantName comme avant.
+let savedNickname = loadStringPref('bridgeBidNickname', null);
+
 let useFrenchRanks = loadBoolPref('bridgeBidFrenchRanks', false); // R/D/V/X au lieu de K/Q/J/T
 let showHcp = loadBoolPref('bridgeBidShowHcp', false);            // affiche le compte de points d'honneur par main
 let showKr = loadBoolPref('bridgeBidShowKr', false);              // affiche l'évaluation Kaplan-Rubens par main
@@ -643,7 +667,7 @@ function uiCreateRoom() {
 
     myRole = 'host';
     myParticipantId = 'host';
-    participants = [{ id: 'host', name: 'Hôte' }];
+    participants = [{ id: 'host', name: savedNickname || 'Hôte' }];
     seatAssignment = { N: null, E: null, S: null, W: null };
     guestIndexByToken = {};
     prevSeatAssignmentSnapshot = null;
@@ -673,7 +697,11 @@ function uiCreateRoom() {
             const isReturning = !!p;
             const wasDisconnected = isReturning && p.disconnected;
             if (!p) {
-                p = { id: token, name: defaultParticipantName(token), disconnected: false, disconnectedAt: null };
+                // Un pseudo sauvegardé côté invité (voir savedNickname) prime sur le nom
+                // générique "Guest #N" — transmis via les métadonnées de connexion, comme
+                // le jeton de reconnexion.
+                const nickname = metadata && metadata.nickname;
+                p = { id: token, name: nickname || defaultParticipantName(token), disconnected: false, disconnectedAt: null };
                 participants.push(p);
             } else {
                 p.disconnected = false;
@@ -795,7 +823,7 @@ function uiJoinRoom() {
     peerConn = new BridgePeerConnection(buildGuestHandlers());
     const token = getReconnectToken();
     pushDebugLog(`Connexion au salon ${code} avec le jeton ${token.slice(0, 10)}…`);
-    peerConn.joinRoom(code, { reconnectToken: token });
+    peerConn.joinRoom(code, { reconnectToken: token, nickname: savedNickname });
 }
 
 // Reconnexion après coupure : même code de salon, même jeton (localStorage) — l'hôte
@@ -807,7 +835,7 @@ function uiReconnect() {
     peerConn = new BridgePeerConnection(buildGuestHandlers());
     const token = getReconnectToken();
     pushDebugLog(`Reconnexion au salon ${currentRoomCode} avec le jeton ${token.slice(0, 10)}…`);
-    peerConn.joinRoom(currentRoomCode, { reconnectToken: token });
+    peerConn.joinRoom(currentRoomCode, { reconnectToken: token, nickname: savedNickname });
 }
 
 let everConnectedAsGuest = false;
@@ -986,6 +1014,8 @@ function uiUpdateMyName() {
 
         const me = participants.find(p => p.id === myParticipantId);
         if (me) me.name = trimmed;
+        saveStringPref('bridgeBidNickname', trimmed);
+        savedNickname = trimmed;
 
         if (myRole === 'host') {
             broadcastLobbyState();
@@ -998,7 +1028,9 @@ function uiUpdateMyName() {
 }
 
 // Si l'utilisateur quitte le champ en le laissant vide, on retombe sur le nom par
-// défaut (au lieu de laisser un pseudo vide affiché aux autres).
+// défaut (au lieu de laisser un pseudo vide affiché aux autres) — et on efface le pseudo
+// sauvegardé : revenir explicitement au nom générique doit aussi valoir pour la
+// prochaine fois, pas seulement pour la session en cours.
 function uiMyNameBlur() {
     const input = document.getElementById('myNameInput');
     if (input.value.trim()) return;
@@ -1007,6 +1039,8 @@ function uiMyNameBlur() {
     input.value = name;
     const me = participants.find(p => p.id === myParticipantId);
     if (me) me.name = name;
+    saveStringPref('bridgeBidNickname', null);
+    savedNickname = null;
 
     if (myRole === 'host') {
         broadcastLobbyState();
