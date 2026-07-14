@@ -25,7 +25,10 @@
 <div id="connectionBar" class="connection-bar">
     <span id="connectionStatus" class="connection-status">⚪ Pas encore connecté</span>
     <button type="button" id="reconnectBtn" class="btn btn-primary btn-small" style="display:none;" onclick="uiReconnect()">🔌 Se reconnecter</button>
-    <button type="button" id="chatToggleBtn" class="debug-toggle-btn" onclick="uiToggleChat()">💬<span id="chatUnreadBadge" class="chat-unread-badge" style="display:none;"></span></button>
+    <!-- Masqué par défaut : inutile (et non fonctionnel, personne à qui parler) tant qu'on
+         est sur l'écran d'accueil, pas encore dans un salon/une partie. Affiché/masqué
+         ensuite depuis showScreen() dans app.js selon l'écran courant. -->
+    <button type="button" id="chatToggleBtn" class="debug-toggle-btn" style="display:none;" onclick="uiToggleChat()">💬<span id="chatUnreadBadge" class="chat-unread-badge" style="display:none;"></span></button>
     <!-- Masqué pour l'instant (voir échange avec Guillaume) : le panneau et toute sa
          logique (pushDebugLog, uiToggleDebugPanel, testTurnConnectivity...) restent
          intacts, il suffit de retirer ce commentaire et le style pour le réactiver. -->

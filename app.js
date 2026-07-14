@@ -591,6 +591,21 @@ function showScreen(id) {
     // classique. Laisser vide restaure le display défini par la feuille de style (block
     // par défaut pour un <section>, flex pour #screen-game sous 768px).
     document.getElementById(id).style.display = '';
+
+    // Le chat n'a de sens qu'une fois dans un salon ou en partie (il faut des participants
+    // à qui parler) : masqué sur l'écran d'accueil, affiché partout ailleurs. Point de
+    // contrôle unique ici plutôt que dispersé à chaque appel de showScreen (voir échange
+    // avec Guillaume — le bouton était visible dès le chargement, avant toute connexion,
+    // alors que non fonctionnel).
+    const chatBtn = document.getElementById('chatToggleBtn');
+    if (chatBtn) {
+        chatBtn.style.display = (id === 'screen-landing') ? 'none' : '';
+        // Si on retombe sur l'écran d'accueil (ex. erreur de connexion) alors que le
+        // panneau de chat était resté ouvert, on le referme avec : un panneau de chat
+        // ouvert sur l'écran d'accueil serait tout aussi orphelin que le bouton qui
+        // l'ouvre.
+        if (id === 'screen-landing' && chatPanelOpen) uiToggleChat();
+    }
 }
 
 function setConnectionStatus(connected) {
