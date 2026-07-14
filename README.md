@@ -74,17 +74,18 @@ Aucune clé, aucun compte externe à configurer : tout fonctionne dès la mise e
    le(s) siège(s) qui leur a/ont été attribué(s).
 
 **Pendant la partie** :
-- Chaque joueur ne voit que les mains qu'il contrôle (une, deux, ou aucune s'il est
-  simple spectateur). Quand on en contrôle plusieurs (mode "maître du jeu" ou diagonale),
-  celle dont c'est le tour est mise en valeur (halo doré, léger balayage lumineux) et
-  les autres grisées, pour repérer d'un coup d'œil laquelle demande une action.
+- Chaque joueur ne voit que les mains qu'il contrôle (une ou deux). Sans siège assigné, on
+  suit la partie en **kibbitzer** : les 4 mains sont visibles dès le début de la donne.
+  Quand on contrôle plusieurs sièges (mode "maître du jeu" ou diagonale), celle dont c'est
+  le tour est mise en valeur (halo doré, léger balayage lumineux) et les autres grisées,
+  pour repérer d'un coup d'œil laquelle demande une action.
 - La boîte d'enchères n'autorise que les annonces légales, et seulement quand c'est
   votre tour.
 - Une fois l'enchère terminée (3 passes après une annonce, ou 4 passes d'entrée), le
   contrat final s'affiche, avec un bouton pour passer à la donne suivante.
 - Le bouton **"Recommencer l'enchère"** relance l'enchère de la donne en cours. Seuls les
   joueurs actifs (assignés à au moins un siège) peuvent recommencer l'enchère ou changer
-  de donne ; un simple spectateur ne peut que regarder.
+  de donne ; un kibbitzer ne peut que regarder.
 - Le bouton **"Demander un undo"** propose d'annuler la dernière annonce (utile en cas de
   mauvais clic). Si l'équipe adverse compte un humain, elle doit accepter ou refuser ; si
   elle n'est faite que de robots (ou si vous jouez les deux camps), l'annulation est

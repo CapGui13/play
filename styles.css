@@ -551,12 +551,11 @@ body {
     margin-bottom: 10px;
 }
 
-/* Teinte sarcelle discrète (au lieu de l'or des sièges ou du violet du kibitz) : signale
-   que cette section est fonctionnellement à part — la configuration du fichier de donnes —
-   plutôt qu'une histoire de "qui joue où" comme le reste du salon. Le fond/la bordure
-   restent une teinte sarcelle fixe (translucide, donc lisible sur les deux thèmes) ; seul
-   le texte du titre est mélangé avec --text via color-mix pour rester contrasté sur les
-   deux fonds. */
+/* Teinte sarcelle discrète : signale que cette section est fonctionnellement à part — la
+   configuration du fichier de donnes — plutôt qu'une histoire de "qui joue où" comme le
+   reste du salon. Le fond/la bordure restent une teinte sarcelle fixe (translucide, donc
+   lisible sur les deux thèmes) ; seul le texte du titre est mélangé avec --text via
+   color-mix pour rester contrasté sur les deux fonds. */
 .host-setup-panel {
     margin-top: 16px;
     padding: 16px;
@@ -686,8 +685,9 @@ body {
     border-color: var(--brass);
 }
 
-/* Bleu si déjà placé quelque part (table ou kibitzer — voir participantHasAPlace), rouge
-   sinon : un coup d'œil dans la liste suffit à repérer qui reste à placer. */
+/* Bleu si assis à un siège (voir participantHasAPlace), rouge sinon — pas un problème en
+   soi (voir la note dans le salon : sans siège, on devient kibbitzer automatiquement),
+   juste un repère visuel pour l'hôte sur qui reste à placer à la table. */
 .participant-item.is-assigned {
     color: var(--suit-blue);
 }
@@ -714,7 +714,7 @@ body {
     margin-left: 6px;
 }
 
-.kibitzer-note {
+.kibbitzer-note {
     margin-bottom: 10px;
 }
 
@@ -795,12 +795,11 @@ body {
     border-color: rgba(201, 162, 39, 0.65);
 }
 
-/* Flash doré bref quand un participant vient d'être posé sur une case (siège ou
-   kibitzer) — feedback immédiat pour que le changement saute aux yeux, en particulier
-   pour les autres joueurs qui le voient arriver via la synchronisation réseau plutôt que
-   de l'avoir cliqué eux-mêmes. Se rejoue à chaque fois que la classe est réappliquée
-   (voir prevSeatAssignmentSnapshot / prevKibitzerAssignmentSnapshot dans app.js), car le
-   nœud DOM est recréé à chaque rendu. */
+/* Flash doré bref quand un participant vient d'être posé sur un siège — feedback
+   immédiat pour que le changement saute aux yeux, en particulier pour les autres joueurs
+   qui le voient arriver via la synchronisation réseau plutôt que de l'avoir cliqué
+   eux-mêmes. Se rejoue à chaque fois que la classe est réappliquée (voir
+   prevSeatAssignmentSnapshot dans app.js), car le nœud DOM est recréé à chaque rendu. */
 @keyframes seatJustAssigned {
     0% {
         border-color: var(--brass-bright);
@@ -888,51 +887,14 @@ body {
     color: var(--text);
 }
 
-.lobby-kibitzers {
+/* Remplace l'ancienne grille d'assignation Kibbitz (3 cases à choisir manuellement) :
+   depuis que tout participant sans siège devient automatiquement kibbitzer, il n'y a
+   plus rien à assigner ici, juste à l'expliquer une fois. */
+.lobby-kibbitz-note {
     margin-top: 14px;
-}
-
-/* Module "Kibbitz" : rangée compacte de 3 cases sous la table, chacune réduite à une
-   simple ligne (icône + case) plutôt qu'au format vertical des cases de sièges — pas
-   besoin d'autant de hauteur puisqu'il n'y a ni label ni signification géométrique.
-   Bordure en tirets + légère teinte violette (au lieu du vert/or des sièges) : distingue
-   d'un coup d'œil "spectateur" de "joueur à la table". */
-.kibitzer-assignment-grid {
-    display: flex;
-    flex-direction: column;
-    gap: 7px;
-}
-
-.kibitzer-assignment-grid .seat-box.kibitzer-box {
-    flex-direction: row;
-    align-items: center;
-    gap: 9px;
-    padding: 6px 10px;
-    border-style: dashed;
-    border-color: rgba(148, 132, 224, 0.4);
-    background: rgba(148, 132, 224, 0.08);
-}
-
-.kibitzer-box:has(select):hover {
-    border-color: rgba(148, 132, 224, 0.75);
-}
-
-.kibitzer-icon {
-    flex-shrink: 0;
-    width: 18px;
+    font-size: 0.85rem;
+    color: var(--text-muted);
     text-align: center;
-    font-size: 0.95rem;
-    color: color-mix(in srgb, #8a6fe0 80%, var(--text));
-}
-
-.kibitzer-box .seat-box-name {
-    flex: 1;
-    text-align: left;
-}
-
-.kibitzer-box .seat-assign-select {
-    flex: 1;
-    border-color: rgba(148, 132, 224, 0.35);
 }
 
 /* Sur un écran étroit, une croix à 4 colonnes laisse trop peu de place aux menus
@@ -1536,7 +1498,7 @@ table.dd-table td {
     white-space: nowrap;
 }
 
-.room-board-kibitzers {
+.room-board-kibbitzers {
     display: flex;
     align-items: center;
     flex-wrap: wrap;

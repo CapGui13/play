@@ -45,19 +45,18 @@ let myRole = null;          // 'host' | 'guest'
 let myParticipantId = null; // 'host', ou le jeton de reconnexion de l'invité (stable entre reconnexions)
 let participants = [];      // [{ id, name, disconnected }, ...] — état du salon, maintenu par l'hôte
 let seatAssignment = { N: null, E: null, S: null, W: null }; // id de participant, ou null (robot)
-// 3 emplacements de kibitzer (spectateur voyant les 4 mains), assignés librement par
-// l'hôte comme les sièges — voir renderKibitzerAssignmentGrid/uiAssignKibitzer. Un siège
-// assigné prime toujours sur une place de kibitzer (voir uiStartGameAsHost).
-let kibitzerAssignment = [null, null, null];
+// Pas de statut "spectateur" séparé : quiconque n'occupe aucun siège est kibbitzer (voir
+// SEATS.every / mySeats.length === 0 un peu partout dans ce fichier) et voit donc les 4
+// mains dès le début de la donne — inutile de l'assigner manuellement, ça découle
+// directement de seatAssignment.
 
-// Dernier instantané de seatAssignment/kibitzerAssignment vu au rendu précédent, pour
-// détecter les affectations qui viennent tout juste d'arriver et leur appliquer un flash
-// (voir renderSeatAssignmentGrid/renderKibitzerAssignmentGrid). `null` signifie "pas
-// encore de repère" (première mesure après un (re)chargement du salon) : dans ce cas on
-// se contente de capturer l'état sans rien flasher, pour ne pas allumer d'un coup toutes
-// les places déjà occupées quand on rejoint un salon en cours de remplissage.
+// Dernier instantané de seatAssignment vu au rendu précédent, pour détecter les
+// affectations qui viennent tout juste d'arriver et leur appliquer un flash (voir
+// renderSeatAssignmentGrid). `null` signifie "pas encore de repère" (première mesure
+// après un (re)chargement du salon) : dans ce cas on se contente de capturer l'état sans
+// rien flasher, pour ne pas allumer d'un coup toutes les places déjà occupées quand on
+// rejoint un salon en cours de remplissage.
 let prevSeatAssignmentSnapshot = null;
-let prevKibitzerAssignmentSnapshot = null;
 
 // Même principe, pour détecter côté invité les transitions déconnecté -> reconnecté d'un
 // AUTRE participant (voir le cas 'lobby-state' dans handlePeerData) et déclencher un
@@ -106,7 +105,14 @@ function getReconnectToken() {
 
 let mySeats = null;         // sièges contrôlés par ce joueur pendant la partie
 let autoPassSeats = [];     // sièges non assignés (robot "passe") — décidé par l'hôte au lancement
-let myIsKibitzer = false;   // spectateur actif (voir renderKibitzerAssignmentGrid) : voit les 4 mains même sans siège
+
+// Plus de statut kibbitzer suivi séparément (source de bug : oublié pour un joueur qui
+// rejoint après le lancement de la partie, resté "spectateur" sans les mains) — un
+// kibbitzer, c'est simplement quiconque n'occupe aucun siège, dérivé à la demande plutôt
+// que traqué en parallèle de mySeats.
+function isKibbitzer() {
+    return !mySeats || mySeats.length === 0;
+}
 
 // ===== Thème clair / sombre =====
 //
@@ -512,8 +518,8 @@ function currentDeal() {
     return deals[boardIndex];
 }
 
-// Un simple spectateur (non assigné à un siège) ne peut pas naviguer entre les donnes ;
-// tout joueur actif (hôte ou invité) le peut.
+// Un kibbitzer (non assigné à un siège) ne peut pas naviguer entre les donnes ; tout
+// joueur actif (hôte ou invité) le peut.
 function canControlBoard() {
     return myRole === 'host' || (mySeats && mySeats.length > 0);
 }
@@ -639,10 +645,8 @@ function uiCreateRoom() {
     myParticipantId = 'host';
     participants = [{ id: 'host', name: 'Hôte' }];
     seatAssignment = { N: null, E: null, S: null, W: null };
-    kibitzerAssignment = [null, null, null];
     guestIndexByToken = {};
     prevSeatAssignmentSnapshot = null;
-    prevKibitzerAssignmentSnapshot = null;
     prevParticipantsDisconnectedSnapshot = null;
     pendingParsedDeals = null;
     pendingParsedSource = null;
@@ -687,15 +691,11 @@ function uiCreateRoom() {
                 // un joueur déconnecté n'est PAS remplacé automatiquement, son siège attend
                 // simplement qu'il revienne (voir le tour-indicateur pendant la partie).
                 const seatsForThisGuest = SEATS.filter(seat => seatAssignment[seat] === token);
-                // Une place de kibitzer (voir renderKibitzerAssignmentGrid) ne compte que pour
-                // quelqu'un qui n'occupe aucun siège : un siège assigné prime toujours.
-                const kibitzerForThisGuest = kibitzerAssignment.includes(token) && seatsForThisGuest.length === 0;
                 peerConn.send({
                     type: 'resync',
                     deals, boardIndex, auctionHistory,
                     yourSeats: seatsForThisGuest,
-                    botSeats: autoPassSeats,
-                    kibitzer: kibitzerForThisGuest
+                    botSeats: autoPassSeats
                 }, guestIndex);
             }
 
@@ -787,11 +787,9 @@ function uiJoinRoom() {
     myParticipantId = null; // fixé à réception du message 'welcome'
     participants = [];
     seatAssignment = { N: null, E: null, S: null, W: null };
-    kibitzerAssignment = [null, null, null];
     currentRoomCode = code;
     everConnectedAsGuest = false;
     prevSeatAssignmentSnapshot = null;
-    prevKibitzerAssignmentSnapshot = null;
     prevParticipantsDisconnectedSnapshot = null;
 
     peerConn = new BridgePeerConnection(buildGuestHandlers());
@@ -853,14 +851,15 @@ function enterLobbyScreen() {
 function renderLobby() {
     renderParticipantsList();
     renderSeatAssignmentGrid();
-    renderKibitzerAssignmentGrid();
 }
 
-// Vrai si ce participant a déjà une place quelque part : un siège à la table, ou un des 3
-// emplacements de kibitzer (voir renderKibitzerAssignmentGrid) — utilisé pour la coloration
-// de son nom dans la liste des participants (bleu si placé, rouge sinon).
+// Vrai si ce participant occupe un siège à la table — utilisé pour la coloration de son
+// nom dans la liste des participants (bleu si placé, rouge sinon). Il n'y a plus de
+// "place de kibbitzer" à assigner à part : quiconque n'a pas de siège devient
+// automatiquement kibbitzer une fois la partie lancée (voir isKibbitzer), donc rien
+// d'autre à cocher ici.
 function participantHasAPlace(participantId) {
-    return SEATS.some(seat => seatAssignment[seat] === participantId) || kibitzerAssignment.includes(participantId);
+    return SEATS.some(seat => seatAssignment[seat] === participantId);
 }
 
 function renderParticipantsList() {
@@ -878,8 +877,8 @@ function renderParticipantsList() {
                    oninput="uiRenameParticipant('${p.id}', this.value)"
                    onblur="uiRenameParticipantBlur('${p.id}', this)">`
             : escapeHtml(p.name);
-        // Bleu si déjà placé quelque part (siège ou kibitzer — voir le module "Table" et
-        // "Kibbitz"), rouge sinon : un coup d'œil suffit à repérer qui reste à placer.
+        // Bleu si assis à un siège (voir participantHasAPlace), rouge sinon — sans siège,
+        // devient kibbitzer automatiquement, ce n'est pas un problème à corriger.
         const placementClass = participantHasAPlace(p.id) ? 'is-assigned' : 'is-unassigned';
         return `
         <li class="participant-item ${placementClass} ${p.id === myParticipantId ? 'is-me' : ''}">
@@ -895,9 +894,9 @@ function renderParticipantsList() {
 
 let participantRenameDebounceTimers = {};
 // Renommage d'un participant par l'hôte. On met à jour et on diffuse, mais sans
-// reconstruire la liste des participants pendant la frappe (voir garde ci-dessus) —
-// la grille des sièges et celle des kibitzers, elles, peuvent se rafraîchir sans risque
-// puisqu'elles ne contiennent pas le champ en cours d'édition.
+// reconstruire la liste des participants pendant la frappe (voir garde ci-dessus) — la
+// grille des sièges, elle, peut se rafraîchir sans risque puisqu'elle ne contient pas le
+// champ en cours d'édition.
 function uiRenameParticipant(participantId, value) {
     if (myRole !== 'host') return;
     clearTimeout(participantRenameDebounceTimers[participantId]);
@@ -909,7 +908,6 @@ function uiRenameParticipant(participantId, value) {
         p.name = trimmed;
         broadcastLobbyState();
         renderSeatAssignmentGrid();
-        renderKibitzerAssignmentGrid();
     }, 300);
 }
 
@@ -975,46 +973,6 @@ function renderSeatAssignmentGrid() {
     prevSeatAssignmentSnapshot = { ...seatAssignment };
 }
 
-// Module "Kibbitz" : 3 emplacements de spectateur voyant les 4 mains, assignables
-// librement par l'hôte — même mécanique que renderSeatAssignmentGrid, mais sans
-// signification géométrique (pas de disposition en croix, juste 3 cases).
-function renderKibitzerAssignmentGrid() {
-    const container = document.getElementById('kibitzerAssignmentGrid');
-    if (!container) return;
-    const isHost = myRole === 'host';
-
-    const justAssigned = i => {
-        if (prevKibitzerAssignmentSnapshot === null) return false;
-        const assignedId = kibitzerAssignment[i];
-        return !!assignedId && assignedId !== prevKibitzerAssignmentSnapshot[i];
-    };
-
-    container.innerHTML = kibitzerAssignment.map((assignedId, i) => {
-        const flashClass = justAssigned(i) ? ' just-assigned' : '';
-        if (isHost) {
-            const options = ['<option value="">— (personne)</option>']
-                .concat(participants.map(p =>
-                    `<option value="${p.id}" ${p.id === assignedId ? 'selected' : ''}>${escapeHtml(p.name)}</option>`
-                ));
-            return `
-                <div class="seat-box kibitzer-box${flashClass}">
-                    <span class="kibitzer-icon">👁</span>
-                    <select class="seat-assign-select" onchange="uiAssignKibitzer(${i}, this.value)">${options.join('')}</select>
-                </div>
-            `;
-        }
-        const p = participants.find(x => x.id === assignedId);
-        const name = p ? escapeHtml(p.name) : '— (personne)';
-        return `
-            <div class="seat-box kibitzer-box${flashClass}">
-                <span class="kibitzer-icon">👁</span>
-                <span class="seat-box-name">${name}</span>
-            </div>
-        `;
-    }).join('');
-    prevKibitzerAssignmentSnapshot = kibitzerAssignment.slice();
-}
-
 let nameUpdateDebounceTimer = null;
 function uiUpdateMyName() {
     clearTimeout(nameUpdateDebounceTimer);
@@ -1066,17 +1024,8 @@ function uiAssignSeat(seat, participantId) {
     renderLobby();
 }
 
-// Assigne (ou libère) l'un des 3 emplacements de kibitzer. Réservé à l'hôte, même
-// mécanique que uiAssignSeat.
-function uiAssignKibitzer(slotIndex, participantId) {
-    if (myRole !== 'host') return;
-    kibitzerAssignment[slotIndex] = participantId || null;
-    broadcastLobbyState();
-    renderLobby();
-}
-
 function broadcastLobbyState() {
-    peerConn.send({ type: 'lobby-state', participants, seatAssignment, kibitzerAssignment });
+    peerConn.send({ type: 'lobby-state', participants, seatAssignment });
 }
 
 // ===== Démarrage de la partie (hôte) =====
@@ -1309,16 +1258,11 @@ function uiStartGameAsHost() {
         mySeats = SEATS.filter(seat => seatAssignment[seat] === 'host');
         autoPassSeats = botSeats;
 
-        myIsKibitzer = kibitzerAssignment.includes('host') && mySeats.length === 0;
-
         participants.filter(p => p.id !== 'host' && !p.disconnected).forEach(p => {
             const guestIndex = guestIndexForParticipant(p.id);
             if (guestIndex == null) return;
             const seatsForThisGuest = SEATS.filter(seat => seatAssignment[seat] === p.id);
-            // Une place de kibitzer (voir renderKibitzerAssignmentGrid) ne compte que pour
-            // quelqu'un qui n'occupe aucun siège : un siège assigné prime toujours.
-            const kibitzerForThisGuest = kibitzerAssignment.includes(p.id) && seatsForThisGuest.length === 0;
-            peerConn.send({ type: 'start-game', deals, yourSeats: seatsForThisGuest, botSeats, kibitzer: kibitzerForThisGuest }, guestIndex);
+            peerConn.send({ type: 'start-game', deals, yourSeats: seatsForThisGuest, botSeats }, guestIndex);
         });
 
         enterGameScreen();
@@ -1395,7 +1339,6 @@ function handlePeerData(msg, guestIndex) {
 
             participants = newParticipants;
             seatAssignment = msg.seatAssignment;
-            kibitzerAssignment = msg.kibitzerAssignment || [null, null, null];
             // Ce message est aussi renvoyé quand la connectivité change en pleine partie
             // (quelqu'un se (re)connecte) : on ne bascule à l'écran du salon que si la
             // partie n'a pas encore commencé, sinon ça arracherait un invité de sa table.
@@ -1411,7 +1354,6 @@ function handlePeerData(msg, guestIndex) {
             deals = msg.deals;
             mySeats = msg.yourSeats;
             autoPassSeats = msg.botSeats || [];
-            myIsKibitzer = !!msg.kibitzer;
             boardIndex = 0;
             auctionHistory = [];
             hostPendingUndo = null;
@@ -1427,7 +1369,6 @@ function handlePeerData(msg, guestIndex) {
             deals = msg.deals;
             mySeats = msg.yourSeats;
             autoPassSeats = msg.botSeats || [];
-            myIsKibitzer = !!msg.kibitzer;
             boardIndex = msg.boardIndex;
             auctionHistory = msg.auctionHistory || [];
             hostPendingUndo = null;
@@ -1606,7 +1547,7 @@ function renderReconnectionBanner() {
         return;
     }
 
-    // Seuls les joueurs assis à la table intéressent cette bannière : un kibitzer
+    // Seuls les joueurs assis à la table intéressent cette bannière : un kibbitzer
     // déconnecté ne bloque rien pour personne.
     const waiting = participants.filter(p =>
         p.disconnected && Object.values(seatAssignment).includes(p.id)
@@ -1653,19 +1594,18 @@ function updateBoardControlVisibility() {
 function renderGameHeader() {
     const deal = currentDeal();
     document.getElementById('boardNumberLabel').textContent = `Donne #${deal.board} (${boardIndex + 1}/${deals.length})`;
-    const mySeatsLabel = mySeats && mySeats.length > 0 ? mySeats.map(seatFullName).join(' + ') : 'spectateur';
+    const mySeatsLabel = mySeats && mySeats.length > 0 ? mySeats.map(seatFullName).join(' + ') : 'kibbitzer';
     document.getElementById('dealerVulnLabel').textContent =
         `Donneur : ${seatFullName(deal.dealer)} · ${VULN_LABEL[deal.vulnerable]} · Vous jouez : ${mySeatsLabel}`;
 }
 
 // ===== Panneau "Salle" (qui est présent pendant la partie) =====
 //
-// Le salon d'attente montre déjà qui est là et où (renderSeatAssignmentGrid /
-// renderKibitzerAssignmentGrid), mais cet écran disparaît une fois la partie lancée — il
-// n'y avait alors plus aucun moyen de voir qui est présent, seulement (voir
-// renderReconnectionBanner) une alerte quand quelqu'un se déconnecte. Masqué par défaut
-// (comme le panneau de diagnostic) pour ne pas prendre de place en continu ; l'utilisateur
-// l'ouvre s'il en a besoin.
+// Le salon d'attente montre déjà qui est là et où (renderSeatAssignmentGrid), mais cet
+// écran disparaît une fois la partie lancée — il n'y avait alors plus aucun moyen de voir
+// qui est présent, seulement (voir renderReconnectionBanner) une alerte quand quelqu'un se
+// déconnecte. Masqué par défaut (comme le panneau de diagnostic) pour ne pas prendre de
+// place en continu ; l'utilisateur l'ouvre s'il en a besoin.
 function uiToggleRoomBoard() {
     const el = document.getElementById('roomBoard');
     if (!el) return;
@@ -1678,31 +1618,37 @@ function renderRoomBoard() {
     const el = document.getElementById('roomBoard');
     if (!el) return;
 
+    // Seuls les sièges réellement occupés par un participant apparaissent ici : les
+    // robots ne sont pas des "personnes dans la salle", ça n'a pas sa place dans ce
+    // panneau (contrairement au relevé d'enchères, où "Bot" reste utile pour savoir qui
+    // a annoncé quoi — voir ledgerSeatLabel).
     const seatRows = SEATS.map(seat => {
         const pid = seatAssignment[seat];
         const p = pid ? participants.find(x => x.id === pid) : null;
-        let occupant;
-        if (!p) {
-            occupant = '<span class="mini-avatar mini-avatar-robot">🤖</span><span class="room-board-name">Robot (passe)</span>';
-        } else {
-            const disconnectedTag = p.disconnected ? ' <span class="disconnected-tag">🔌</span>' : '';
-            occupant = `${avatarHtml(p.id)}<span class="room-board-name">${escapeHtml(p.name)}</span>${disconnectedTag}`;
-        }
+        if (!p) return '';
+        const disconnectedTag = p.disconnected ? ' <span class="disconnected-tag">🔌</span>' : '';
+        const occupant = `${avatarHtml(p.id)}<span class="room-board-name">${escapeHtml(p.name)}</span>${disconnectedTag}`;
         return `<div class="room-board-seat"><span class="room-board-seat-label">${seatFullName(seat)}</span>${occupant}</div>`;
-    }).join('');
+    }).filter(Boolean).join('');
 
-    const kibitzerNames = kibitzerAssignment
-        .filter(Boolean)
-        .map(pid => participants.find(x => x.id === pid))
-        .filter(Boolean);
-    const kibitzersHtml = kibitzerNames.length > 0
-        ? `<div class="room-board-kibitzers">
-               <span class="room-board-section-label">👁 Kibitz :</span>
-               ${kibitzerNames.map(p => `${avatarHtml(p.id)}<span class="room-board-name">${escapeHtml(p.name)}</span>`).join('')}
+    // Quiconque n'occupe aucun siège est kibbitzer (voir isKibbitzer) : plus de liste à
+    // part à maintenir, on liste simplement tous les participants absents de
+    // seatAssignment.
+    const seatedIds = new Set(SEATS.map(seat => seatAssignment[seat]).filter(Boolean));
+    const kibbitzerNames = participants.filter(p => !seatedIds.has(p.id));
+    const kibbitzersHtml = kibbitzerNames.length > 0
+        ? `<div class="room-board-kibbitzers">
+               <span class="room-board-section-label">👁 Kibbitz :</span>
+               ${kibbitzerNames.map(p => `${avatarHtml(p.id)}<span class="room-board-name">${escapeHtml(p.name)}</span>`).join('')}
            </div>`
         : '';
 
-    el.innerHTML = `<div class="room-board-seats">${seatRows}</div>${kibitzersHtml}`;
+    if (!seatRows && !kibbitzersHtml) {
+        el.innerHTML = '<div class="info-text">Personne d\'autre pour l\'instant — les sièges vides sont joués par des robots.</div>';
+        return;
+    }
+
+    el.innerHTML = `<div class="room-board-seats">${seatRows}</div>${kibbitzersHtml}`;
 }
 
 function renderMyHands() {
@@ -1710,17 +1656,14 @@ function renderMyHands() {
     const container = document.getElementById('myHandsContainer');
 
     if (!mySeats || mySeats.length === 0) {
-        if (myIsKibitzer) {
-            // Les 4 mains elles-mêmes s'affichent dans #allHandsDiagram (voir
-            // checkAuctionEnd/renderAllHandsDiagram) — le même emplacement central, en
-            // grille N/E/S/O, que celui utilisé quand l'hôte active "Voir les 4 mains".
-            // Les construire ici, dans le panneau latéral étroit des mains, les aurait
-            // affichées à l'étroit et mal calibrées plutôt qu'au centre.
-            container.innerHTML =
-                '<div class="info-text kibitzer-note">👁 Vous suivez la partie en kibitzer : vous voyez les 4 mains ci-dessous.</div>';
-        } else {
-            container.innerHTML = '<div class="info-text">Vous êtes spectateur sur cette table.</div>';
-        }
+        // Plus de statut "spectateur" séparé : quiconque n'a pas de siège est kibbitzer et
+        // voit les 4 mains dès le début (voir isKibbitzer). Les mains elles-mêmes
+        // s'affichent dans #allHandsDiagram (voir checkAuctionEnd/renderAllHandsDiagram) —
+        // le même emplacement central, en grille N/E/S/O, que celui utilisé quand l'hôte
+        // active "Voir les 4 mains". Les construire ici, dans le panneau latéral étroit
+        // des mains, les aurait affichées à l'étroit et mal calibrées plutôt qu'au centre.
+        container.innerHTML =
+            '<div class="info-text kibbitzer-note">👁 Vous suivez la partie en kibbitzer : vous voyez les 4 mains ci-dessous.</div>';
         return;
     }
 
@@ -1771,10 +1714,10 @@ function formatCallCellHtml(call) {
 function ledgerSeatLabel(seat) {
     if (!showLedgerNames) return SEAT_ABBR_FR[seat];
     const pid = typeof seatAssignment !== 'undefined' ? seatAssignment[seat] : null;
-    if (!pid) return SEAT_ABBR_FR[seat];
+    if (!pid) return 'Bot'; // siège non assigné : joué par le robot "passe" (voir maybeAutoPass)
     const p = participants.find(x => x.id === pid);
     const name = p && p.name ? p.name.trim() : '';
-    return name || SEAT_ABBR_FR[seat];
+    return name || SEAT_ABBR_FR[seat]; // quelqu'un est bien assigné ici, pas un bot : jamais "Bot" dans ce cas
 }
 
 function renderAuctionLedger() {
@@ -1895,7 +1838,7 @@ function applyCall(seat, call) {
 
 // Construit le HTML des 4 mains, affiché dans #allHandsDiagram (voir
 // renderAllHandsDiagram) — révélé à tout le monde une fois l'enchère terminée, à l'hôte
-// seul s'il active "Voir les 4 mains" en cours d'enchère, et en continu à un kibitzer
+// seul s'il active "Voir les 4 mains" en cours d'enchère, et en continu à un kibbitzer
 // (voir checkAuctionEnd).
 function buildAllHandsHtml(deal) {
     return SEATS.map(seat => {
@@ -1975,11 +1918,11 @@ function checkAuctionEnd() {
     // L'hôte peut choisir de voir les 4 mains à tout moment (voir uiToggleHostSeeAllHands),
     // même pendant l'enchère — un outil réservé à lui seul (vérifier une donne, aider un
     // débutant en direct...), jamais envoyé ni visible pour les autres joueurs. Un
-    // kibitzer, lui, voit toujours les 4 mains dès le début (voir renderMyHands) — pas
+    // kibbitzer, lui, voit toujours les 4 mains dès le début (voir renderMyHands) — pas
     // besoin d'attendre la fin de l'enchère ni une action de l'hôte, puisqu'il n'est
     // assis à aucun siège et ne peut donc rien "tricher" en les voyant.
     const hostForcedReveal = myRole === 'host' && hostSeeAllHands;
-    const showAllHandsEarly = hostForcedReveal || myIsKibitzer;
+    const showAllHandsEarly = hostForcedReveal || isKibbitzer();
 
     if (!auctionOver) {
         resultEl.style.display = 'none';
