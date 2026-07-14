@@ -1660,9 +1660,13 @@ function renderMyHands() {
 
     if (!mySeats || mySeats.length === 0) {
         if (myIsKibitzer) {
+            // Les 4 mains elles-mêmes s'affichent dans #allHandsDiagram (voir
+            // checkAuctionEnd/renderAllHandsDiagram) — le même emplacement central, en
+            // grille N/E/S/O, que celui utilisé quand l'hôte active "Voir les 4 mains".
+            // Les construire ici, dans le panneau latéral étroit des mains, les aurait
+            // affichées à l'étroit et mal calibrées plutôt qu'au centre.
             container.innerHTML =
-                '<div class="info-text kibitzer-note">👁 Vous suivez la partie en kibitzer : vous voyez les 4 mains.</div>' +
-                `<div class="all-hands-diagram">${buildAllHandsHtml(deal)}</div>`;
+                '<div class="info-text kibitzer-note">👁 Vous suivez la partie en kibitzer : vous voyez les 4 mains ci-dessous.</div>';
         } else {
             container.innerHTML = '<div class="info-text">Vous êtes spectateur sur cette table.</div>';
         }
@@ -1838,9 +1842,10 @@ function applyCall(seat, call) {
     maybeAutoPass();
 }
 
-// Construit le HTML des 4 mains (utilisé à la fois par renderAllHandsDiagram — révélé à
-// tout le monde une fois l'enchère terminée — et par le mode kibitzer dans renderMyHands,
-// qui les affiche dès le début pour un spectateur actif).
+// Construit le HTML des 4 mains, affiché dans #allHandsDiagram (voir
+// renderAllHandsDiagram) — révélé à tout le monde une fois l'enchère terminée, à l'hôte
+// seul s'il active "Voir les 4 mains" en cours d'enchère, et en continu à un kibitzer
+// (voir checkAuctionEnd).
 function buildAllHandsHtml(deal) {
     return SEATS.map(seat => {
         const hand = deal.hands[seat];
@@ -1918,13 +1923,17 @@ function checkAuctionEnd() {
     const auctionOver = isAuctionOver(auctionHistory);
     // L'hôte peut choisir de voir les 4 mains à tout moment (voir uiToggleHostSeeAllHands),
     // même pendant l'enchère — un outil réservé à lui seul (vérifier une donne, aider un
-    // débutant en direct...), jamais envoyé ni visible pour les autres joueurs.
+    // débutant en direct...), jamais envoyé ni visible pour les autres joueurs. Un
+    // kibitzer, lui, voit toujours les 4 mains dès le début (voir renderMyHands) — pas
+    // besoin d'attendre la fin de l'enchère ni une action de l'hôte, puisqu'il n'est
+    // assis à aucun siège et ne peut donc rien "tricher" en les voyant.
     const hostForcedReveal = myRole === 'host' && hostSeeAllHands;
+    const showAllHandsEarly = hostForcedReveal || myIsKibitzer;
 
     if (!auctionOver) {
         resultEl.style.display = 'none';
         nextPanel.style.display = 'none';
-        if (hostForcedReveal) {
+        if (showAllHandsEarly) {
             renderAllHandsDiagram();
             diagramEl.style.display = 'grid';
         } else {
