@@ -1,0 +1,560 @@
+[Event "Generated Deal"]
+[Site "Bridge Generator"]
+[Board "1"]
+[Dealer "N"]
+[Vulnerable "None"]
+[Deal "N:862.AKT963.K85.9 AT7.Q74.764.QJ52 QJ43.2.AQJ93.AKT K95.J85.T2.87643"]
+[OptimumResultTable "Declarer;Denomination\2R;Result\2R"]
+N NT 10
+N S 10
+N H 10
+N D 11
+N C 8
+E NT 3
+E S 2
+E H 3
+E D 1
+E C 5
+S NT 10
+S S 10
+S H 10
+S D 11
+S C 8
+W NT 2
+W S 2
+W H 3
+W D 1
+W C 5
+
+[Event "Generated Deal"]
+[Site "Bridge Generator"]
+[Board "2"]
+[Dealer "W"]
+[Vulnerable "NS"]
+[Deal "N:AQ.AT8.AQ984.KJ6 KJ8762..KT6.AT74 T94.KQ9632.J.532 53.J754.7532.Q98"]
+[OptimumResultTable "Declarer;Denomination\2R;Result\2R"]
+N NT 9
+N S 6
+N H 11
+N D 10
+N C 7
+E NT 2
+E S 6
+E H 2
+E D 3
+E C 4
+S NT 7
+S S 5
+S H 10
+S D 9
+S C 6
+W NT 3
+W S 6
+W H 2
+W D 3
+W C 4
+
+[Event "Generated Deal"]
+[Site "Bridge Generator"]
+[Board "3"]
+[Dealer "N"]
+[Vulnerable "EW"]
+[Deal "N:AK7.984.QJ.K9642 T42.AJT2.73.J875 QJ985.7.A8654.AQ 63.KQ653.KT92.T3"]
+[OptimumResultTable "Declarer;Denomination\2R;Result\2R"]
+N NT 8
+N S 11
+N H 5
+N D 10
+N C 9
+E NT 4
+E S 2
+E H 7
+E D 2
+E C 3
+S NT 8
+S S 11
+S H 5
+S D 10
+S C 9
+W NT 4
+W S 2
+W H 7
+W D 2
+W C 3
+
+[Event "Generated Deal"]
+[Site "Bridge Generator"]
+[Board "4"]
+[Dealer "E"]
+[Vulnerable "Both"]
+[Deal "N:QJ62.J42.A762.KQ K87.9876.83.JT97 AT43.Q.KJ4.A6543 95.AKT53.QT95.82"]
+[OptimumResultTable "Declarer;Denomination\2R;Result\2R"]
+N NT 10
+N S 12
+N H 7
+N D 10
+N C 11
+E NT 3
+E S 1
+E H 6
+E D 3
+E C 2
+S NT 10
+S S 12
+S H 7
+S D 10
+S C 11
+W NT 3
+W S 1
+W H 6
+W D 3
+W C 2
+
+[Event "Generated Deal"]
+[Site "Bridge Generator"]
+[Board "5"]
+[Dealer "S"]
+[Vulnerable "NS"]
+[Deal "N:AK764.KT.KJ32.97 95.J762.87654.J2 QJ8.A9543.Q.QT84 T32.Q8.AT9.AK653"]
+[OptimumResultTable "Declarer;Denomination\2R;Result\2R"]
+N NT 10
+N S 10
+N H 8
+N D 8
+N C 9
+E NT 3
+E S 3
+E H 4
+E D 5
+E C 4
+S NT 10
+S S 10
+S H 8
+S D 8
+S C 9
+W NT 3
+W S 3
+W H 4
+W D 5
+W C 4
+
+[Event "Generated Deal"]
+[Site "Bridge Generator"]
+[Board "6"]
+[Dealer "W"]
+[Vulnerable "EW"]
+[Deal "N:AJ963.AT83.JT9.4 K874.J.8743.KQ65 Q.KQ962.AK62.J93 T52.754.Q5.AT872"]
+[OptimumResultTable "Declarer;Denomination\2R;Result\2R"]
+N NT 8
+N S 9
+N H 12
+N D 9
+N C 5
+E NT 4
+E S 3
+E H 1
+E D 3
+E C 7
+S NT 8
+S S 9
+S H 12
+S D 9
+S C 5
+W NT 4
+W S 3
+W H 1
+W D 3
+W C 7
+
+[Event "Generated Deal"]
+[Site "Bridge Generator"]
+[Board "7"]
+[Dealer "S"]
+[Vulnerable "Both"]
+[Deal "N:AQ5.KQJ65.AT7.Q3 JT94.T4.Q852.T74 K863.3.964.AKJ85 72.A9872.KJ3.962"]
+[OptimumResultTable "Declarer;Denomination\2R;Result\2R"]
+N NT 10
+N S 10
+N H 9
+N D 9
+N C 10
+E NT 2
+E S 2
+E H 3
+E D 3
+E C 2
+S NT 10
+S S 10
+S H 9
+S D 9
+S C 10
+W NT 2
+W S 2
+W H 3
+W D 3
+W C 2
+
+[Event "Generated Deal"]
+[Site "Bridge Generator"]
+[Board "8"]
+[Dealer "W"]
+[Vulnerable "None"]
+[Deal "N:AQJ97653..T5.JT8 T42.J753.A832.65 K.AT984.KQ964.KQ 8.KQ62.J7.A97432"]
+[OptimumResultTable "Declarer;Denomination\2R;Result\2R"]
+N NT 9
+N S 11
+N H 7
+N D 8
+N C 6
+E NT 2
+E S 2
+E H 6
+E D 4
+E C 7
+S NT 9
+S S 11
+S H 7
+S D 8
+S C 6
+W NT 2
+W S 2
+W H 6
+W D 4
+W C 7
+
+[Event "Generated Deal"]
+[Site "Bridge Generator"]
+[Board "9"]
+[Dealer "S"]
+[Vulnerable "EW"]
+[Deal "N:Q2.AQJ865.KT65.K T9875.2.QJ2.QT83 AJ64.KT4.84.AJ97 K3.973.A973.6542"]
+[OptimumResultTable "Declarer;Denomination\2R;Result\2R"]
+N NT 10
+N S 8
+N H 11
+N D 9
+N C 8
+E NT 2
+E S 4
+E H 1
+E D 4
+E C 5
+S NT 10
+S S 8
+S H 12
+S D 9
+S C 7
+W NT 2
+W S 4
+W H 1
+W D 4
+W C 5
+
+[Event "Generated Deal"]
+[Site "Bridge Generator"]
+[Board "10"]
+[Dealer "W"]
+[Vulnerable "Both"]
+[Deal "N:KQ73.Q4.AQ74.AQ6 JT942.KT5.T92.93 A.A862.KJ853.K42 865.J973.6.JT875"]
+[OptimumResultTable "Declarer;Denomination\2R;Result\2R"]
+N NT 12
+N S 11
+N H 10
+N D 12
+N C 9
+E NT 1
+E S 2
+E H 3
+E D 1
+E C 3
+S NT 12
+S S 10
+S H 10
+S D 12
+S C 9
+W NT 1
+W S 2
+W H 3
+W D 1
+W C 3
+
+[Event "Generated Deal"]
+[Site "Bridge Generator"]
+[Board "11"]
+[Dealer "S"]
+[Vulnerable "None"]
+[Deal "N:AKQ76.KQ62.KQ6.8 J4.A843.T93.J942 9.J7.AJ8752.AKQ5 T8532.T95.4.T763"]
+[OptimumResultTable "Declarer;Denomination\2R;Result\2R"]
+N NT 12
+N S 11
+N H 10
+N D 12
+N C 11
+E NT 0
+E S 2
+E H 2
+E D 0
+E C 2
+S NT 12
+S S 10
+S H 10
+S D 12
+S C 11
+W NT 0
+W S 2
+W H 2
+W D 0
+W C 2
+
+[Event "Generated Deal"]
+[Site "Bridge Generator"]
+[Board "12"]
+[Dealer "E"]
+[Vulnerable "NS"]
+[Deal "N:AK82.6.AK4.J8763 Q3.9874.QT75.KQ9 T7654.KQJ3.92.A2 J9.AT52.J863.T54"]
+[OptimumResultTable "Declarer;Denomination\2R;Result\2R"]
+N NT 10
+N S 11
+N H 8
+N D 8
+N C 10
+E NT 3
+E S 2
+E H 4
+E D 5
+E C 3
+S NT 10
+S S 11
+S H 8
+S D 8
+S C 10
+W NT 3
+W S 2
+W H 4
+W D 5
+W C 3
+
+[Event "Generated Deal"]
+[Site "Bridge Generator"]
+[Board "13"]
+[Dealer "N"]
+[Vulnerable "Both"]
+[Deal "N:J73.982.AQJ754.A 9642.AKQ76..T542 AKQ5.T5.8632.KJ7 T8.J43.KT9.Q9863"]
+[OptimumResultTable "Declarer;Denomination\2R;Result\2R"]
+N NT 8
+N S 9
+N H 5
+N D 11
+N C 4
+E NT 1
+E S 4
+E H 7
+E D 1
+E C 8
+S NT 8
+S S 9
+S H 5
+S D 11
+S C 4
+W NT 1
+W S 4
+W H 7
+W D 1
+W C 8
+
+[Event "Generated Deal"]
+[Site "Bridge Generator"]
+[Board "14"]
+[Dealer "E"]
+[Vulnerable "None"]
+[Deal "N:J53.9752.A.A8762 AT72.8643.8643.J K4.AQJT.KJT97.Q9 Q986.K.Q52.KT543"]
+[OptimumResultTable "Declarer;Denomination\2R;Result\2R"]
+N NT 9
+N S 7
+N H 11
+N D 10
+N C 9
+E NT 3
+E S 6
+E H 2
+E D 3
+E C 4
+S NT 9
+S S 7
+S H 11
+S D 10
+S C 9
+W NT 3
+W S 6
+W H 2
+W D 3
+W C 3
+
+[Event "Generated Deal"]
+[Site "Bridge Generator"]
+[Board "15"]
+[Dealer "N"]
+[Vulnerable "NS"]
+[Deal "N:AKT75.Q963.K74.A 984.2.Q63.KQ9753 QJ3.AJT.AT82.J82 62.K8754.J95.T64"]
+[OptimumResultTable "Declarer;Denomination\2R;Result\2R"]
+N NT 9
+N S 11
+N H 10
+N D 11
+N C 7
+E NT 2
+E S 2
+E H 3
+E D 2
+E C 6
+S NT 9
+S S 11
+S H 10
+S D 11
+S C 7
+W NT 2
+W S 2
+W H 3
+W D 2
+W C 6
+
+[Event "Generated Deal"]
+[Site "Bridge Generator"]
+[Board "16"]
+[Dealer "W"]
+[Vulnerable "EW"]
+[Deal "N:AT732.K6.KT3.KJ4 KJ98.432.QJ875.T 5.QJ87.A62.A8763 Q64.AT95.94.Q952"]
+[OptimumResultTable "Declarer;Denomination\2R;Result\2R"]
+N NT 8
+N S 8
+N H 9
+N D 8
+N C 11
+E NT 4
+E S 4
+E H 4
+E D 5
+E C 2
+S NT 8
+S S 8
+S H 9
+S D 8
+S C 11
+W NT 4
+W S 4
+W H 4
+W D 5
+W C 2
+
+[Event "Generated Deal"]
+[Site "Bridge Generator"]
+[Board "17"]
+[Dealer "N"]
+[Vulnerable "None"]
+[Deal "N:.KJ9754.Q2.KT954 QJ63.T63.74.Q732 KT95.Q.AKT985.AJ A8742.A82.J63.86"]
+[OptimumResultTable "Declarer;Denomination\2R;Result\2R"]
+N NT 10
+N S 8
+N H 12
+N D 11
+N C 11
+E NT 2
+E S 5
+E H 1
+E D 1
+E C 2
+S NT 10
+S S 8
+S H 12
+S D 11
+S C 11
+W NT 2
+W S 5
+W H 1
+W D 1
+W C 2
+
+[Event "Generated Deal"]
+[Site "Bridge Generator"]
+[Board "18"]
+[Dealer "E"]
+[Vulnerable "NS"]
+[Deal "N:J.4.AQJ98.AKQ942 Q73.T873.T7.JT63 KT8542.AK6.65.75 A96.QJ952.K432.8"]
+[OptimumResultTable "Declarer;Denomination\2R;Result\2R"]
+N NT 10
+N S 10
+N H 6
+N D 10
+N C 11
+E NT 2
+E S 2
+E H 6
+E D 2
+E C 1
+S NT 10
+S S 10
+S H 6
+S D 10
+S C 11
+W NT 3
+W S 2
+W H 6
+W D 2
+W C 2
+
+[Event "Generated Deal"]
+[Site "Bridge Generator"]
+[Board "19"]
+[Dealer "N"]
+[Vulnerable "EW"]
+[Deal "N:QJ842.763.AKJ6.2 75.J8.Q9532.A986 T96.AKQ.T74.KQJ7 AK3.T9542.8.T543"]
+[OptimumResultTable "Declarer;Denomination\2R;Result\2R"]
+N NT 10
+N S 9
+N H 7
+N D 8
+N C 7
+E NT 3
+E S 3
+E H 5
+E D 5
+E C 5
+S NT 10
+S S 9
+S H 7
+S D 8
+S C 7
+W NT 3
+W S 3
+W H 5
+W D 5
+W C 5
+
+[Event "Generated Deal"]
+[Site "Bridge Generator"]
+[Board "20"]
+[Dealer "E"]
+[Vulnerable "Both"]
+[Deal "N:Q74.A872.QJ43.74 AT8532.5.T9.J932 J.KQT3.A8765.AKT K96.J964.K2.Q865"]
+[OptimumResultTable "Declarer;Denomination\2R;Result\2R"]
+N NT 6
+N S 4
+N H 10
+N D 10
+N C 5
+E NT 7
+E S 8
+E H 3
+E D 2
+E C 8
+S NT 6
+S S 4
+S H 10
+S D 11
+S C 5
+W NT 7
+W S 8
+W H 3
+W D 2
+W C 8
+

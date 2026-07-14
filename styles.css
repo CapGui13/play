@@ -585,6 +585,34 @@ body {
     font-size: 0.85rem;
 }
 
+.form-group select {
+    width: 100%;
+    padding: 8px;
+    border-radius: 6px;
+    background: var(--input-bg);
+    border: 1px solid rgba(64, 190, 184, 0.35);
+    color: var(--text);
+    font-size: 0.85rem;
+    font-family: var(--font-body);
+}
+
+.form-group select option {
+    background: var(--card);
+    color: var(--text);
+}
+
+/* Séparateur "ou" entre les deux sources de donnes possibles (upload / bibliothèque du
+   club) — juste un repère visuel, pas un vrai bouton bascule : les deux champs restent
+   utilisables l'un comme l'autre, ils se désélectionnent mutuellement au choix (voir
+   uiHandleDealFileChosen/uiHandleDealLibraryChosen). */
+.form-group-divider {
+    text-align: center;
+    font-size: 0.78rem;
+    font-style: italic;
+    color: var(--text-muted);
+    margin: 4px 0;
+}
+
 .form-group-checkbox { margin-bottom: 10px; }
 
 .checkbox-label {

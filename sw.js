@@ -2,11 +2,12 @@
 //
 // VERSIONING : ce fichier remplace le paramètre `?v=NN` qui existait auparavant sur
 // chaque <script>/<link> de index.html (pratique manuelle de cache-busting, redondante
-// une fois qu'un service worker gère lui-même l'invalidation). C'est désormais CACHE_NAME
-// qui fait foi : à chaque déploiement qui touche un fichier mis en cache ci-dessous,
-// incrémenter le numéro de version pour forcer la mise à jour chez tout le monde (voir
-// l'événement 'activate', qui purge automatiquement les anciens caches).
-const CACHE_NAME = 'bridge-encheres-v3';
+// une fois qu'un service worker gère lui-même l'invalidation). C'est CACHE_NAME qui fait
+// foi (voir l'événement 'activate', qui purge automatiquement les anciens caches) — et sa
+// valeur ci-dessous est réécrite AUTOMATIQUEMENT à chaque déploiement par
+// .github/workflows/deploy.yml (dérivée du SHA du commit) : ne pas l'éditer à la main, ça
+// n'aurait d'effet que le temps d'un test local avant le prochain push.
+const CACHE_NAME = 'bridge-encheres-dev';
 
 // Ressources de la même origine : mises en cache de façon fiable via cache.addAll (un seul
 // échec fait échouer toute l'installation, ce qui est le comportement voulu ici — ce sont
