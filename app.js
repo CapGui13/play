@@ -506,14 +506,40 @@ function escapeHtml(str) {
 // joueurs d'un coup d'œil, pas une vraie identité. La couleur est dérivée de l'id du
 // participant (stable même s'il se renomme, change du coup si un autre participant
 // prend sa place au même id ne se produit jamais — les id sont uniques par connexion).
+// Palette de couleurs d'avatar pré-choisies à la main, plutôt qu'une teinte HSL calculée
+// en continu sur toute la roue chromatique (le hash pouvait tomber sur une teinte trop
+// proche du vert du tapis ou de l'or de l'interface, ou simplement peu lisible/terne).
+// Même principe que Twitch pour ses pseudos en chat : le hash choisit un INDEX dans une
+// liste de couleurs fixes plutôt qu'une valeur libre — garantit un rendu correct dans
+// tous les cas. Verts et ors volontairement absents (déjà utilisés ailleurs dans l'appli —
+// tapis, boutons — les réutiliser ici prêterait à confusion avec ces éléments d'interface).
+// Saturation/luminosité choisies pour rester lisibles à la fois comme fond d'avatar (avec
+// le texte blanc de l'initiale, voir .mini-avatar) et comme texte de nom dans le chat (sur
+// le fond sombre de .chat-messages, voir renderChat).
+const AVATAR_COLOR_PALETTE = [
+    'hsl(0, 55%, 50%)',    // rouge
+    'hsl(15, 55%, 50%)',   // rouge-orangé
+    'hsl(190, 55%, 42%)',  // cyan
+    'hsl(205, 60%, 48%)',  // bleu clair
+    'hsl(220, 60%, 55%)',  // bleu
+    'hsl(235, 55%, 58%)',  // bleu-violet
+    'hsl(255, 50%, 58%)',  // indigo
+    'hsl(270, 45%, 55%)',  // violet
+    'hsl(285, 45%, 52%)',  // violet-magenta
+    'hsl(305, 50%, 50%)',  // magenta
+    'hsl(325, 55%, 52%)',  // rose vif
+    'hsl(340, 60%, 52%)',  // rose-rouge
+    'hsl(355, 50%, 48%)',  // bordeaux
+    'hsl(15, 40%, 40%)',   // brique
+];
+
 function avatarColorForId(id) {
     let hash = 0;
     const str = String(id || '');
     for (let i = 0; i < str.length; i++) {
         hash = (hash * 31 + str.charCodeAt(i)) >>> 0;
     }
-    const hue = hash % 360;
-    return `hsl(${hue}, 46%, 45%)`;
+    return AVATAR_COLOR_PALETTE[hash % AVATAR_COLOR_PALETTE.length];
 }
 
 function avatarInitial(name) {
