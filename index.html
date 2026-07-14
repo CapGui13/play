@@ -41,6 +41,7 @@
         <span>💬 Chat</span>
         <button type="button" class="btn btn-secondary btn-small" onclick="uiToggleChat()">Fermer ✕</button>
     </div>
+    <div id="roomBoard" class="room-board"></div>
     <div id="chatMessages" class="chat-messages"></div>
     <div class="chat-input-row">
         <input type="text" id="chatInput" class="chat-input" maxlength="500" placeholder="Écrire un message…" onkeydown="uiChatInputKeydown(event)">
@@ -182,12 +183,9 @@
             <div class="game-actions">
                 <button id="requestUndoBtn" class="btn btn-secondary btn-small" onclick="uiRequestUndo()"><span class="btn-label-full">↩️ Demander un undo</span><span class="btn-label-short">↩️ Undo</span></button>
                 <button id="resetAuctionBtn" class="btn btn-secondary btn-small" onclick="uiResetAuction()"><span class="btn-label-full">↺ Recommencer l'enchère</span><span class="btn-label-short">↺ Recommencer</span></button>
-                <button type="button" id="roomBoardToggleBtn" class="btn btn-secondary btn-small" onclick="uiToggleRoomBoard()">👥 Salle</button>
                 <span id="undoStatusText" class="undo-status-text"></span>
             </div>
         </div>
-
-        <div id="roomBoard" class="room-board" style="display:none;"></div>
 
         <div id="reconnectionBanner" class="reconnection-banner" style="display:none;"></div>
 

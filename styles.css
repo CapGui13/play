@@ -1576,39 +1576,44 @@ table.dd-table td.dd-secondary-contract {
     color: color-mix(in srgb, #3ca05a 70%, var(--text));
 }
 
-/* Panneau "Salle" (voir renderRoomBoard/uiToggleRoomBoard dans app.js) : qui est présent
-   pendant la partie, masqué par défaut — le salon d'attente montre déjà cette information
-   avant le lancement, mais disparaît ensuite ; ce panneau comble ce trou sans occuper de
-   place en continu (contrairement à la bannière de reconnexion, qui elle doit rester
-   visible sans action de l'utilisateur puisqu'elle signale un problème). */
+/* Bandeau "qui est présent", fusionné en haut du panneau de chat (voir
+   renderRoomBoard/uiToggleChat dans app.js) plutôt qu'un panneau à part — consultable
+   d'un coup d'œil pendant qu'on discute, sans clic supplémentaire pour y accéder.
+   Défilement interne propre (max-height) si beaucoup de participants, pour ne jamais
+   pousser la zone de messages hors champ. :empty le masque avant le tout premier rendu
+   (avant l'ouverture initiale du chat, voir index.html — évite un vide disgracieux). */
 .room-board {
-    background: var(--bg-table);
-    border: 1px solid var(--line);
-    border-radius: 8px;
-    padding: 10px 14px;
-    margin-bottom: 14px;
-    font-size: 0.85rem;
+    flex-shrink: 0;
+    max-height: 90px;
+    overflow-y: auto;
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--border);
+    font-size: 0.78rem;
+}
+
+.room-board:empty {
+    display: none;
 }
 
 .room-board-seats {
     display: flex;
     flex-wrap: wrap;
-    gap: 10px;
+    gap: 6px;
 }
 
 .room-board-seat {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 5px;
     background: var(--surface-2);
     border-radius: 6px;
-    padding: 5px 10px;
+    padding: 3px 8px;
 }
 
 .room-board-seat-label {
     font-weight: 700;
     color: var(--brass-bright);
-    font-size: 0.78rem;
+    font-size: 0.72rem;
 }
 
 .room-board-name {
@@ -1619,16 +1624,16 @@ table.dd-table td.dd-secondary-contract {
     display: flex;
     align-items: center;
     flex-wrap: wrap;
-    gap: 8px;
-    margin-top: 8px;
-    padding-top: 8px;
+    gap: 6px;
+    margin-top: 6px;
+    padding-top: 6px;
     border-top: 1px solid var(--line);
 }
 
 .room-board-section-label {
     font-weight: 600;
     color: var(--text-muted);
-    font-size: 0.78rem;
+    font-size: 0.72rem;
 }
 
 .next-board-panel {

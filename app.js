@@ -1632,10 +1632,10 @@ function renderBoard() {
     renderUndoAskBanner();
     renderBoardSkipControls();
     renderReconnectionBanner();
-    // Seulement si le panneau est actuellement ouvert (voir uiToggleRoomBoard) : pas
-    // besoin de reconstruire son contenu tant que personne ne le regarde.
-    const roomBoardEl = document.getElementById('roomBoard');
-    if (roomBoardEl && roomBoardEl.style.display !== 'none') renderRoomBoard();
+    // Seulement si le panneau de chat est actuellement ouvert (il contient le bandeau
+    // "qui est présent", voir uiToggleChat) : pas besoin de reconstruire son contenu tant
+    // que personne ne le regarde.
+    if (chatPanelOpen) renderRoomBoard();
     maybeAutoPass();
 }
 
@@ -1673,6 +1673,7 @@ function uiToggleChat() {
         chatUnreadCount = 0;
         updateChatUnreadBadge();
         renderChat();
+        renderRoomBoard(); // "qui est présent" fusionné dans le même panneau, voir échange avec Guillaume
         const input = document.getElementById('chatInput');
         if (input) input.focus();
     }
@@ -1745,14 +1746,9 @@ function uiSendChatMessage() {
 // qui est présent, seulement (voir renderReconnectionBanner) une alerte quand quelqu'un se
 // déconnecte. Masqué par défaut (comme le panneau de diagnostic) pour ne pas prendre de
 // place en continu ; l'utilisateur l'ouvre s'il en a besoin.
-function uiToggleRoomBoard() {
-    const el = document.getElementById('roomBoard');
-    if (!el) return;
-    const show = el.style.display === 'none';
-    if (show) renderRoomBoard();
-    el.style.display = show ? 'block' : 'none';
-}
-
+// Fusionné dans le panneau de chat (voir uiToggleChat) plutôt qu'un panneau séparé à
+// part : un bandeau "qui est présent", toujours visible en haut du chat, complète
+// naturellement les messages plutôt que de demander un clic de plus pour y accéder.
 function renderRoomBoard() {
     const el = document.getElementById('roomBoard');
     if (!el) return;
