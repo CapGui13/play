@@ -1895,6 +1895,82 @@ function tricksToContractLevel(tricks) {
     return level >= 1 ? String(level) : '―';
 }
 
+// ===== Mise en évidence du meilleur contrat (table du double mort) =====
+//
+// Portée depuis le générateur de donnes (dds-controller.js) — même algorithme exact, pour
+// que les deux applis restent cohérentes visuellement. Principe : pour chaque case
+// (couleur x déclarant), on suppose que le camp du déclarant enchérit tout juste au
+// palier permis par le double mort (ni plus, ni moins), et on calcule le score de
+// duplicate correspondant (barème SEF/FFB standard, non contré, selon la vulnérabilité
+// réelle de la donne). Calcul INDÉPENDANT par camp (NS et EW n'enchérissent pas le même
+// contrat) : chelem prime sur manche, qui prime sur partielle ; seules les cases du
+// palier le plus haut atteint par ce camp sont mises en évidence — la ou les meilleures
+// en vert vif, les autres du même palier en vert plus doux (sauf en partielle, qui n'a
+// pas de prime notable : seule la meilleure y est marquée, pas de dégradé secondaire).
+
+function trickPoints(strain, level) {
+    if (strain === 'N') return 40 + (level - 1) * 30;
+    if (strain === 'H' || strain === 'S') return level * 30;
+    return level * 20; // C ou D
+}
+
+function contractScoreFromTrickPoints(trickPts, level, vulnerable) {
+    let total = trickPts;
+    total += trickPts >= 100 ? (vulnerable ? 500 : 300) : 50; // prime de manche ou de partielle
+    if (level === 6) total += vulnerable ? 750 : 500;         // petit chelem
+    else if (level === 7) total += vulnerable ? 1500 : 1000;  // grand chelem
+    return total;
+}
+
+// `dealVulnerable` : la valeur normalisée habituelle ('None'/'NS'/'EW'/'Both', voir
+// deal-parser.js) — contrairement au générateur, pas besoin de la recalculer depuis le
+// numéro de donne, currentDeal().vulnerable la donne déjà directement.
+function computeDDScores(ddTable, dealVulnerable) {
+    const nsVuln = (dealVulnerable === 'NS' || dealVulnerable === 'Both');
+    const ewVuln = (dealVulnerable === 'EW' || dealVulnerable === 'Both');
+
+    const info = {};
+    const bySide = { NS: [], EW: [] };
+
+    for (const strain of STRAIN_ORDER) {
+        info[strain] = {};
+        for (const pos of DD_TABLE_SEAT_ORDER) {
+            const side = (pos === 'N' || pos === 'S') ? 'NS' : 'EW';
+            const tricks = ddTable[strain][pos];
+            const level = tricks - 6;
+
+            let score = null;
+            let tier = null;
+            if (level >= 1) {
+                const trickPts = trickPoints(strain, level);
+                score = contractScoreFromTrickPoints(trickPts, level, side === 'NS' ? nsVuln : ewVuln);
+                tier = level >= 6 ? 'slam' : (trickPts >= 100 ? 'game' : 'partial');
+            }
+
+            info[strain][pos] = { score, tier, side };
+            if (tier) bySide[side].push({ score, tier });
+        }
+    }
+
+    const sideSummary = {};
+    for (const side of ['NS', 'EW']) {
+        const cells = bySide[side];
+        let activeTier = null;
+        if (cells.some(c => c.tier === 'slam')) activeTier = 'slam';
+        else if (cells.some(c => c.tier === 'game')) activeTier = 'game';
+        else if (cells.some(c => c.tier === 'partial')) activeTier = 'partial';
+
+        let bestScore = null;
+        if (activeTier) {
+            bestScore = Math.max(...cells.filter(c => c.tier === activeTier).map(c => c.score));
+        }
+
+        sideSummary[side] = { activeTier, bestScore };
+    }
+
+    return { info, sideSummary };
+}
+
 // Ordre d'affichage des colonnes de la table du double mort : N S E O (les deux camps
 // groupés côte à côte), plus pratique à lire que l'ordre de rotation des enchères N E S O
 // utilisé partout ailleurs (SEATS, dans bidding-rules.js) — surtout ne pas réutiliser
@@ -1903,12 +1979,26 @@ const DD_TABLE_SEAT_ORDER = ['N', 'S', 'E', 'W'];
 
 // Construit le tableau HTML du double mort (5 lignes SA/♠/♥/♦/♣ x 4 colonnes N/S/E/O),
 // tel qu'éventuellement fourni dans le fichier PBN chargé (tag [OptimumResultTable]).
-// Affiche le palier de contrat réalisable (et non le nombre brut de levées).
-function renderDDTable(ddTable) {
+// Affiche le palier de contrat réalisable (et non le nombre brut de levées), avec le
+// meilleur contrat de chaque camp mis en évidence (voir computeDDScores ci-dessus).
+function renderDDTable(ddTable, dealVulnerable) {
     if (!ddTable) return '';
+    const { info, sideSummary } = computeDDScores(ddTable, dealVulnerable);
     const rows = STRAIN_ORDER.map(strain => {
         const labelHtml = formatStrainLabel(strain);
-        const cells = DD_TABLE_SEAT_ORDER.map(pos => `<td>${tricksToContractLevel(ddTable[strain][pos])}</td>`).join('');
+        const cells = DD_TABLE_SEAT_ORDER.map(pos => {
+            const cellInfo = info[strain][pos];
+            const summary = sideSummary[cellInfo.side];
+            let cls = '';
+            if (summary.activeTier && cellInfo.tier === summary.activeTier) {
+                if (cellInfo.score === summary.bestScore) {
+                    cls = ' class="dd-best-contract"';
+                } else if (summary.activeTier !== 'partial') {
+                    cls = ' class="dd-secondary-contract"';
+                }
+            }
+            return `<td${cls}>${tricksToContractLevel(ddTable[strain][pos])}</td>`;
+        }).join('');
         return `<tr><th class="${STRAIN_CLASS[strain]}">${labelHtml}</th>${cells}</tr>`;
     }).join('');
     return `
@@ -1972,7 +2062,7 @@ function checkAuctionEnd() {
         resultEl.classList.add('contract-reveal');
     }
 
-    const ddTableHtml = renderDDTable(currentDeal().ddTable);
+    const ddTableHtml = renderDDTable(currentDeal().ddTable, currentDeal().vulnerable);
     if (ddTableHtml) {
         resultEl.innerHTML += ddTableHtml;
     }

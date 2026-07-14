@@ -1273,6 +1273,11 @@ body {
     font-style: italic;
 }
 
+/* Même traitement "carte" que .auction-ledger (fond --card, bord arrondi) plutôt que de
+   se fondre dans le fond du panneau d'enchères — visuellement plus proche de la table du
+   double mort du générateur de donnes (fond distinct, cellules bien délimitées), dont
+   cette table reprend aussi la logique de mise en évidence (voir computeDDScores/
+   renderDDTable dans app.js). */
 table.dd-table {
     width: 100%;
     max-width: 320px;
@@ -1280,23 +1285,29 @@ table.dd-table {
     border-collapse: collapse;
     font-family: var(--font-mono);
     font-size: 0.85rem;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    overflow: hidden;
 }
 
 table.dd-table th, table.dd-table td {
     padding: 5px 8px;
     text-align: center;
-    border: 1px solid var(--line);
+    border: 1px solid var(--border);
 }
 
 table.dd-table thead th {
     color: var(--brass-bright);
     font-weight: 600;
+    background: color-mix(in srgb, var(--text) 8%, var(--card));
 }
 
 table.dd-table tbody th {
     font-family: var(--font-body);
     font-weight: 600;
     color: var(--text);
+    background: color-mix(in srgb, var(--text) 8%, var(--card));
 }
 
 table.dd-table tbody th.spades { color: var(--text); }
@@ -1307,6 +1318,28 @@ table.dd-table tbody th.notrump { color: var(--text); }
 
 table.dd-table td {
     color: var(--text);
+}
+
+/* Meilleur contrat de chaque camp (voir computeDDScores) : vert vif fixe, volontairement
+   PAS mélangé avec --card comme le reste de l'appli — un texte blanc doit y rester
+   lisible dans les deux thèmes, or --card est blanc en thème clair (mélanger vers lui
+   aurait donné un vert pâle avec du texte presque blanc dessus, illisible). Le générateur
+   de donnes fait le même choix (vert fixe, ajusté légèrement selon son propre thème). */
+table.dd-table td.dd-best-contract {
+    background: #2f8f5b;
+    color: #ffffff;
+    font-weight: 700;
+}
+
+/* Autres cases gagnantes du même palier (manche/chelem uniquement, voir renderDDTable) :
+   vert plus doux, pour rester secondaire par rapport à la meilleure case. Ici en
+   revanche, fond ET texte sont mélangés via color-mix (vers --card et --text
+   respectivement) : cette variante n'a pas besoin d'un texte blanc, donc autant
+   s'adapter proprement au thème comme le reste de l'appli. */
+table.dd-table td.dd-secondary-contract {
+    background: color-mix(in srgb, #2f8f5b 25%, var(--card));
+    color: color-mix(in srgb, #2f8f5b 70%, var(--text));
+    font-weight: 600;
 }
 
 .all-hands-diagram {
