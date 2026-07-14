@@ -111,11 +111,6 @@ body {
    qu'il existe. Un seul display:none à retirer ici pour tout réactiver. */
 #connectionStatus { display: none; }
 
-.room-code-badge {
-    color: var(--brass-bright);
-    letter-spacing: 1px;
-}
-
 .debug-toggle-btn {
     background: transparent;
     border: 1px solid var(--border);
@@ -507,6 +502,17 @@ body {
     font-size: 1.5rem;
     margin-bottom: 8px;
     color: var(--brass-bright);
+}
+
+/* Code de salon, affiché juste après le titre plutôt qu'en évidence tout en haut de page
+   (voir échange avec Guillaume) — même info, présentée en repère secondaire plutôt qu'en
+   élément à part entière. */
+.lobby-room-code-inline {
+    font-family: var(--font-mono);
+    font-size: 0.95rem;
+    font-weight: 400;
+    color: var(--text-muted);
+    letter-spacing: 0.5px;
 }
 
 #lobbyRoomCodeBlock {

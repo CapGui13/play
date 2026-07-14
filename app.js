@@ -628,8 +628,7 @@ function uiCreateRoom() {
             const url = new URL(window.location.href);
             url.searchParams.set('room', roomCode);
             document.getElementById('shareLinkInput').value = url.toString();
-            document.getElementById('roomCodeBadge').textContent = 'Code : ' + roomCode;
-            document.getElementById('roomCodeBadge').style.display = 'inline';
+            document.getElementById('lobbyRoomCodeInline').textContent = `(code ${roomCode})`;
             enterLobbyScreen();
         },
         onGuestConnected: (guestIndex, metadata) => {
@@ -710,8 +709,7 @@ function uiCreateRoom() {
 function buildGuestHandlers() {
     return {
         onOpen: (role, roomCode) => {
-            document.getElementById('roomCodeBadge').textContent = 'Code : ' + roomCode;
-            document.getElementById('roomCodeBadge').style.display = 'inline';
+            document.getElementById('lobbyRoomCodeInline').textContent = `(code ${roomCode})`;
         },
         onGuestConnected: () => {
             everConnectedAsGuest = true;
@@ -794,13 +792,24 @@ function renderReconnectButton() {
     btn.style.display = shouldShow ? '' : 'none';
 }
 
+let copyShareLinkTimeoutId = null;
 function uiCopyShareLink() {
     const input = document.getElementById('shareLinkInput');
     input.select();
     input.setSelectionRange(0, 99999);
-    if (navigator.clipboard) {
-        navigator.clipboard.writeText(input.value).catch(() => {});
-    }
+    if (!navigator.clipboard) return;
+
+    navigator.clipboard.writeText(input.value).then(() => {
+        // Confirmation temporaire directement sur le bouton (pas de toast à part à
+        // gérer) : le libellé change le temps d'un instant, puis revient à la normale.
+        const btn = document.getElementById('copyShareLinkBtn');
+        if (!btn) return;
+        clearTimeout(copyShareLinkTimeoutId);
+        btn.textContent = '✅ Lien copié !';
+        copyShareLinkTimeoutId = setTimeout(() => {
+            btn.textContent = '🔗 Copier lien de connexion';
+        }, 1800);
+    }).catch(() => { /* échec silencieux (permission navigateur, etc.) : pas de fausse confirmation */ });
 }
 
 // ===== Salon d'attente =====
