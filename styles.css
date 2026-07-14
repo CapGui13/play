@@ -336,6 +336,12 @@ body {
     font-size: 0.82rem;
 }
 
+/* Libellé court/long (voir requestUndoBtn, resetAuctionBtn, hand-option-btn dans
+   index.html) : le bouton complet par défaut, la version abrégée prend le relais sous
+   768px (voir le bloc mobile plus bas) — la place manque pour "Notation FR (R D V X)"
+   à côté de 3 autres boutons similaires sur un écran de téléphone. */
+.btn-label-short { display: none; }
+
 .code-input {
     font-family: var(--font-mono);
     font-size: 1.3rem;
@@ -1506,6 +1512,12 @@ table.dd-table td {
    la barre de connexion pousse son propre contenu de --safe-top en plus (voir
    .connection-bar), donc sa hauteur réelle grandit d'autant. */
 @media (max-width: 768px) {
+    /* Sous ce seuil, la place manque pour les libellés complets des boutons d'en-tête et
+       d'options des mains (voir .btn-label-full/.btn-label-short dans index.html) : on
+       bascule sur leur version abrégée. */
+    .btn-label-full { display: none; }
+    .btn-label-short { display: inline; }
+
     #screen-game {
         display: flex;
         flex-direction: column;
@@ -1515,10 +1527,30 @@ table.dd-table td {
         padding-top: 8px;
     }
 
+    /* En-tête resserré : le titre/numéro de donne reste lisible, mais dealer/vulnérabilité
+       et les boutons undo/reset passent en petit et sur une seule ligne chacun — avant ce
+       correctif, "Demander un undo" et "Recommencer l'enchère" en toutes lettres
+       s'empilaient sur 2 lignes pleine largeur et mangeaient à eux seuls près de la moitié
+       de la hauteur d'écran disponible, au détriment de la main affichée juste en dessous. */
     .game-header {
         flex: 0 0 auto;
-        margin-bottom: 8px;
-        padding-bottom: 8px;
+        margin-bottom: 6px;
+        padding-bottom: 6px;
+        gap: 6px;
+    }
+
+    .board-number-label { font-size: 1.05rem; }
+    .dealer-vuln-label { font-size: 0.75rem; }
+
+    .game-actions {
+        gap: 6px;
+        flex-wrap: nowrap;
+    }
+
+    .game-actions .btn {
+        padding: 5px 8px;
+        font-size: 0.72rem;
+        white-space: nowrap;
     }
 
     #reconnectionBanner {
@@ -1536,24 +1568,39 @@ table.dd-table td {
         /* Réserve la place occupée par #biddingBox une fois qu'il passe en position
            fixed ci-dessous (sinon le relevé grandirait pour combler cet espace et son
            bas se retrouverait masqué derrière la boîte d'enchères). */
-        padding-bottom: 32vh; /* repli pour les navigateurs sans support de dvh */
-        padding-bottom: 32dvh;
+        padding-bottom: 26vh; /* repli pour les navigateurs sans support de dvh */
+        padding-bottom: 26dvh;
     }
 
-    /* Mains du joueur : budget d'environ 25% de la hauteur d'écran (consigne "main
-       joueur 25vh"). Défile verticalement en interne si plusieurs mains y tiennent mal
-       (mode diagonale / "maître du jeu"). */
+    /* Mains du joueur : ~30% de la hauteur d'écran (un peu plus que les 25% d'origine —
+       voir le budget repris à la boîte d'enchères ci-dessous, moins prioritaire puisqu'on
+       ne la consulte que ponctuellement à son tour, contrairement à la main qu'on regarde
+       en continu). Défile verticalement en interne si plusieurs mains y tiennent mal (mode
+       diagonale / "maître du jeu"). */
     .hands-panel {
-        flex: 0 0 25vh; /* repli pour les navigateurs sans support de dvh */
-        flex: 0 0 25dvh;
+        flex: 0 0 30vh; /* repli pour les navigateurs sans support de dvh */
+        flex: 0 0 30dvh;
         min-height: 0;
         overflow-y: auto;
     }
 
-    .hand-display-options { flex: 0 0 auto; }
+    /* Barre d'options (FR/HCP/K&R/4 mains) resserrée et sur une seule ligne — les
+       libellés abrégés (voir plus haut) suffisent largement une fois qu'on sait ce que
+       chaque bouton fait, et cette barre ne doit pas rogner sur la place de la main
+       elle-même juste en dessous, qu'on regarde en permanence. */
+    .hand-display-options {
+        flex: 0 0 auto;
+        flex-wrap: nowrap;
+        gap: 5px;
+        margin-bottom: 6px;
+    }
 
-    /* Panneau d'enchères : absorbe le reste de la hauteur disponible (~60% une fois les
-       mains et l'entête déduits, conformément à la consigne "table 60vh"). */
+    .hand-display-options .btn {
+        padding: 4px 7px;
+        font-size: 0.7rem;
+    }
+
+    /* Panneau d'enchères : absorbe le reste de la hauteur disponible. */
     .auction-panel {
         flex: 1 1 auto;
         min-height: 0;
@@ -1581,7 +1628,9 @@ table.dd-table td {
        plafond de hauteur avec défilement interne pour les 7 lignes de paliers (1 à 7),
        et un fond opaque + une ombre portée pour bien la détacher du contenu qui défile
        derrière elle. env(safe-area-inset-bottom) évite qu'elle passe sous la barre
-       gestuelle des iPhone récents. */
+       gestuelle des iPhone récents. Plafond réduit à 26% (contre 32% initialement) au
+       profit de la main du joueur — voir .hands-panel ci-dessus — le défilement interne
+       de la grille de paliers reste disponible pour les enchères hautes, moins fréquentes. */
     #biddingBox {
         position: fixed;
         left: 0;
@@ -1589,8 +1638,8 @@ table.dd-table td {
         bottom: 0;
         z-index: 50;
         margin: 0;
-        max-height: 32vh; /* repli pour les navigateurs sans support de dvh */
-        max-height: 32dvh;
+        max-height: 26vh; /* repli pour les navigateurs sans support de dvh */
+        max-height: 26dvh;
         overflow-y: auto;
         background: var(--bg);
         border-top: 1px solid var(--border);

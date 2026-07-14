@@ -6,7 +6,7 @@
 // qui fait foi : à chaque déploiement qui touche un fichier mis en cache ci-dessous,
 // incrémenter le numéro de version pour forcer la mise à jour chez tout le monde (voir
 // l'événement 'activate', qui purge automatiquement les anciens caches).
-const CACHE_NAME = 'bridge-encheres-v2';
+const CACHE_NAME = 'bridge-encheres-v3';
 
 // Ressources de la même origine : mises en cache de façon fiable via cache.addAll (un seul
 // échec fait échouer toute l'installation, ce qui est le comportement voulu ici — ce sont

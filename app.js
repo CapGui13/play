@@ -1876,7 +1876,13 @@ function renderUndoControls() {
     const visible = canControlBoard();
     btn.style.display = visible ? '' : 'none';
     btn.disabled = !visible || !deals || auctionHistory.length === 0 || undoRequestPending || !!pendingUndoAsk;
-    btn.textContent = undoRequestPending ? '⏳ Demande envoyée...' : "↩️ Demander un undo";
+    // Deux <span> (voir index.html) plutôt qu'un textContent direct : .btn-label-full/
+    // .btn-label-short sont affichés en alternance en CSS selon la largeur d'écran
+    // (bouton complet sur desktop, abrégé sur mobile où la place manque).
+    const fullEl = btn.querySelector('.btn-label-full');
+    const shortEl = btn.querySelector('.btn-label-short');
+    if (fullEl) fullEl.textContent = undoRequestPending ? '⏳ Demande envoyée...' : '↩️ Demander un undo';
+    if (shortEl) shortEl.textContent = undoRequestPending ? '⏳ Envoyée...' : '↩️ Undo';
 }
 
 function renderUndoAskBanner() {
