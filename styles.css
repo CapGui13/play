@@ -1503,13 +1503,6 @@ table.dd-table td {
     body { padding-top: calc(84px + var(--safe-top)); }
     .debug-panel { top: calc(68px + var(--safe-top)); }
 
-    /* Même raison : #screen-game (voir le bloc 768px ci-dessous) doit lui aussi tenir
-       compte des 84px de barre de connexion sur 2 lignes plutôt que les 56px habituels. */
-    #screen-game {
-        height: calc(100vh - 84px - var(--safe-top)); /* repli pour les navigateurs sans support de dvh */
-        height: calc(100dvh - 84px - var(--safe-top));
-    }
-
     .felt-hero { padding: 34px 12px 28px; }
     .felt-hero h1 { font-size: 1.9rem; }
     .hero-suits { font-size: 18px; letter-spacing: 8px; }
@@ -1521,24 +1514,14 @@ table.dd-table td {
     .special-calls-row { gap: 6px; }
 }
 
-/* ===== Écran de jeu — layout plein écran mobile =====
-   Objectif : tenir l'écran de jeu dans la hauteur de viewport disponible, sans scroll de
-   PAGE. Ceci ne veut pas dire "aucun scroll nulle part" : le relevé d'enchères grandit à
-   chaque annonce et la grille d'enchères (8 lignes de boutons) ne peut pas tenir dans
-   ~15% de hauteur d'écran tout en gardant des boutons de 44px (contrainte tactile
-   demandée) — ces deux zones défilent donc chacune dans leur propre espace borné, ce qui
-   est la technique standard pour ce genre d'app (l'équivalent d'une liste qui scrolle
-   dans une appli mobile "single-screen"), plutôt qu'une promesse intenable de tout faire
-   tenir sans le moindre scroll interne. Les autres écrans (accueil, salon) ne sont pas
-   concernés : ils gardent un défilement de page normal, plus adapté à leur contenu
-   variable (liste de participants, etc.).
-
-   56px / 84px reprennent les mêmes hauteurs de barre de connexion que celles déjà
-   utilisées par body { padding-top } ci-dessus (38px de contenu + marge), pour que
-   #screen-game occupe exactement le reste de l'écran sans se chevaucher avec elle.
-   var(--safe-top) s'y ajoute pour la même raison que sur body : sur un iPhone à encoche,
-   la barre de connexion pousse son propre contenu de --safe-top en plus (voir
-   .connection-bar), donc sa hauteur réelle grandit d'autant. */
+/* ===== Écran de jeu — ajustements mobile =====
+   Après plusieurs essais infructueux d'un layout "zéro scroll" à zones de hauteur figées
+   (mains/relevé/boîte d'enchères en pourcentages fixes de la hauteur d'écran, boîte
+   d'enchères en position: fixed) : la page défile normalement sur mobile, exactement
+   comme sur desktop et comme les autres écrans (accueil, salon). Ce qui reste ici, ce
+   sont uniquement des ajustements indépendants de ce choix — libellés de boutons
+   raccourcis, en-tête resserré, cibles tactiles conformes — qui restent utiles quelle que
+   soit la façon dont le contenu est agencé verticalement. */
 @media (max-width: 768px) {
     /* Sous ce seuil, la place manque pour les libellés complets des boutons d'en-tête et
        d'options des mains (voir .btn-label-full/.btn-label-short dans index.html) : on
@@ -1546,22 +1529,11 @@ table.dd-table td {
     .btn-label-full { display: none; }
     .btn-label-short { display: inline; }
 
-    #screen-game {
-        display: flex;
-        flex-direction: column;
-        height: calc(100vh - 56px - var(--safe-top)); /* repli pour les navigateurs sans support de dvh */
-        height: calc(100dvh - 56px - var(--safe-top));
-        overflow: hidden;
-        padding-top: 8px;
-    }
-
     /* En-tête resserré : le titre/numéro de donne reste lisible, mais dealer/vulnérabilité
        et les boutons undo/reset passent en petit et sur une seule ligne chacun — avant ce
        correctif, "Demander un undo" et "Recommencer l'enchère" en toutes lettres
-       s'empilaient sur 2 lignes pleine largeur et mangeaient à eux seuls près de la moitié
-       de la hauteur d'écran disponible, au détriment de la main affichée juste en dessous. */
+       s'empilaient sur 2 lignes pleine largeur. */
     .game-header {
-        flex: 0 0 auto;
         margin-bottom: 6px;
         padding-bottom: 6px;
         gap: 6px;
@@ -1581,54 +1553,10 @@ table.dd-table td {
         white-space: nowrap;
     }
 
-    #reconnectionBanner {
-        flex: 0 0 auto;
-        margin-bottom: 8px;
-    }
-
-    .game-body {
-        flex: 1 1 auto;
-        min-height: 0;
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
-        /* Filet de sécurité : en théorie, les budgets ci-dessous (mains + relevé + boîte
-           d'enchères) sont censés tenir exactement dans la hauteur disponible sans le
-           moindre scroll de page. En pratique, la hauteur réelle de l'en-tête varie
-           légèrement selon l'appareil (taille de police système, etc.) et un calcul
-           serré peut déborder de quelques dizaines de pixels. Plutôt qu'un overflow:
-           hidden strict qui rendrait alors le bas de l'écran (le relevé !) invisible et
-           inatteignable, un débordement propose ici un scroll de secours — imperceptible
-           si le calcul tombe juste, mais qui garantit qu'on peut TOUJOURS atteindre le
-           relevé en dernier recours plutôt que de le voir disparaître purement et
-           simplement. */
-        overflow-y: auto;
-        /* Réserve la place occupée par #biddingBox une fois qu'il passe en position
-           fixed ci-dessous (sinon le relevé grandirait pour combler cet espace et son
-           bas se retrouverait masqué derrière la boîte d'enchères). */
-        padding-bottom: 22vh; /* repli pour les navigateurs sans support de dvh */
-        padding-bottom: 22dvh;
-    }
-
-    /* Mains du joueur : budget resserré à ~22% de la hauteur d'écran (moins que les
-       tentatives précédentes) pour laisser la priorité au relevé d'enchères juste en
-       dessous, qui est l'information qu'on doit pouvoir suivre en continu pendant
-       l'enchère — la main, elle, une fois mémorisée en début de donne, n'a besoin d'être
-       reconsultée que ponctuellement. Défile verticalement en interne si plusieurs mains
-       y tiennent mal (mode diagonale / "maître du jeu"). */
-    .hands-panel {
-        flex: 0 0 22vh; /* repli pour les navigateurs sans support de dvh */
-        flex: 0 0 22dvh;
-        min-height: 0;
-        overflow-y: auto;
-    }
-
     /* Barre d'options (FR/HCP/K&R/4 mains) resserrée et sur une seule ligne — les
        libellés abrégés (voir plus haut) suffisent largement une fois qu'on sait ce que
-       chaque bouton fait, et cette barre ne doit pas rogner sur la place de la main
-       elle-même juste en dessous, qu'on regarde en permanence. */
+       chaque bouton fait. */
     .hand-display-options {
-        flex: 0 0 auto;
         flex-wrap: nowrap;
         gap: 5px;
         margin-bottom: 6px;
@@ -1639,61 +1567,11 @@ table.dd-table td {
         font-size: 0.7rem;
     }
 
-    /* Panneau d'enchères : absorbe le reste de la hauteur disponible. */
-    .auction-panel {
-        flex: 1 1 auto;
-        min-height: 0;
-        display: flex;
-        flex-direction: column;
-        overflow: hidden;
-        padding: 10px;
-    }
-
-    /* Seule cette zone (relevé + bandeaux + contrat + double mort) défile : la boîte
-       d'enchères, elle, est sortie du flux normal juste en dessous (position: fixed).
-       min-height : c'est le contenu le plus important à garder visible en continu
-       pendant l'enchère — un plancher explicite l'empêche d'être purement et simplement
-       écrasé à zéro si le reste du calcul de hauteur est légèrement optimiste sur un
-       appareil donné (voir le scroll de secours sur .game-body ci-dessus, qui prend le
-       relais si même ce plancher ne suffit pas à tout faire tenir). */
-    .auction-scroll-area {
-        flex: 1 1 auto;
-        min-height: 140px;
-        overflow-y: auto;
-    }
-
-    /* Indicateur de tour resserré (padding/police réduits) : sur les captures de test, il
-       prenait une place disproportionnée par rapport à l'information qu'il porte. */
+    /* Indicateur de tour resserré (padding/police réduits). */
     #turnIndicator {
-        flex: 0 0 auto;
         margin-top: 4px;
         padding: 5px;
         font-size: 0.8rem;
-    }
-
-    /* Boîte d'enchères : fixée en bas de l'écran (consigne "position: fixed bottom"),
-       grille à 5 colonnes déjà en place (voir .bid-row, inchangé) — on ajoute juste un
-       plafond de hauteur avec défilement interne pour les 7 lignes de paliers (1 à 7),
-       et un fond opaque + une ombre portée pour bien la détacher du contenu qui défile
-       derrière elle. env(safe-area-inset-bottom) évite qu'elle passe sous la barre
-       gestuelle des iPhone récents. Plafond réduit à 22% (voir .hands-panel et le
-       padding-bottom de .game-body, tous deux alignés sur ce même chiffre) au profit du
-       relevé d'enchères — le défilement interne de la grille de paliers reste disponible
-       pour les enchères hautes, moins fréquentes. */
-    #biddingBox {
-        position: fixed;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        z-index: 50;
-        margin: 0;
-        max-height: 22vh; /* repli pour les navigateurs sans support de dvh */
-        max-height: 22dvh;
-        overflow-y: auto;
-        background: var(--bg);
-        border-top: 1px solid var(--border);
-        box-shadow: 0 -6px 18px rgba(0, 0, 0, 0.3);
-        padding: 8px 8px calc(8px + env(safe-area-inset-bottom, 0px));
     }
 
     /* Cibles tactiles conformes (44px min, texte 16px pour éviter le zoom auto iOS déjà
