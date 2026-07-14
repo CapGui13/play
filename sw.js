@@ -79,13 +79,33 @@ self.addEventListener('activate', (event) => {
 // Stratégie "cache d'abord, réseau en secours" : sert instantanément depuis le cache si
 // disponible (y compris hors-ligne), sinon va chercher sur le réseau et met en cache le
 // résultat pour la prochaine fois. Ne s'applique qu'aux requêtes GET http(s) — les autres
-// méthodes (POST...) ne sont jamais interceptées, et ni WebSocket ni WebRTC ne passent de
-// toute façon par l'événement 'fetch' (ce sont des canaux navigateur entièrement séparés,
-// il n'y a donc rien de spécifique à faire ici pour "ne jamais les mettre en cache").
+// méthodes (POST...) ne sont jamais interceptées, et ni le canal de données WebRTC ni la
+// connexion WebSocket de signalisation elle-même ne passent par l'événement 'fetch' (ce
+// sont des canaux navigateur entièrement séparés).
+//
+// EXCEPTION IMPORTANTE : la poignée de main HTTP initiale avec le serveur cloud PeerJS
+// (avant même l'ouverture du WebSocket, pour obtenir un identifiant de connexion unique)
+// PASSE, elle, par une requête GET classique — donc par ce gestionnaire. La mettre en
+// cache serait un vrai bug : au prochain chargement, le navigateur resservirait le MÊME
+// identifiant déjà utilisé (et donc déjà pris côté serveur) au lieu d'en demander un
+// nouveau, provoquant une erreur "ID is taken" empêchant toute connexion. On laisse donc
+// ce domaine passer sans jamais l'intercepter ni le mettre en cache.
+const NEVER_CACHE_HOSTS = ['peerjs.com'];
+
+function shouldNeverCache(url) {
+    try {
+        const hostname = new URL(url).hostname;
+        return NEVER_CACHE_HOSTS.some((h) => hostname === h || hostname.endsWith('.' + h));
+    } catch (e) {
+        return false;
+    }
+}
+
 self.addEventListener('fetch', (event) => {
     const { request } = event;
     if (request.method !== 'GET') return;
     if (!request.url.startsWith('http')) return;
+    if (shouldNeverCache(request.url)) return; // laisse passer sans intercepter (voir ci-dessus)
 
     event.respondWith(
         (async () => {
