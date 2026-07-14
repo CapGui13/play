@@ -506,31 +506,25 @@ function escapeHtml(str) {
 // joueurs d'un coup d'œil, pas une vraie identité. La couleur est dérivée de l'id du
 // participant (stable même s'il se renomme, change du coup si un autre participant
 // prend sa place au même id ne se produit jamais — les id sont uniques par connexion).
-// Palette de couleurs d'avatar pré-choisies à la main, plutôt qu'une teinte HSL calculée
-// en continu sur toute la roue chromatique (le hash pouvait tomber sur une teinte trop
-// proche du vert du tapis ou de l'or de l'interface, ou simplement peu lisible/terne).
-// Même principe que Twitch pour ses pseudos en chat : le hash choisit un INDEX dans une
-// liste de couleurs fixes plutôt qu'une valeur libre — garantit un rendu correct dans
-// tous les cas. Verts et ors volontairement absents (déjà utilisés ailleurs dans l'appli —
-// tapis, boutons — les réutiliser ici prêterait à confusion avec ces éléments d'interface).
-// Saturation/luminosité choisies pour rester lisibles à la fois comme fond d'avatar (avec
-// le texte blanc de l'initiale, voir .mini-avatar) et comme texte de nom dans le chat (sur
-// le fond sombre de .chat-messages, voir renderChat).
+// Palette de couleurs d'avatar : les 15 couleurs par défaut officielles de Twitch (celles
+// proposées gratuitement dans son sélecteur "Chat Identity", sans abonnement Turbo/Prime)
+// — même liste, mêmes valeurs hexadécimales exactes.
 const AVATAR_COLOR_PALETTE = [
-    'hsl(0, 55%, 50%)',    // rouge
-    'hsl(15, 55%, 50%)',   // rouge-orangé
-    'hsl(190, 55%, 42%)',  // cyan
-    'hsl(205, 60%, 48%)',  // bleu clair
-    'hsl(220, 60%, 55%)',  // bleu
-    'hsl(235, 55%, 58%)',  // bleu-violet
-    'hsl(255, 50%, 58%)',  // indigo
-    'hsl(270, 45%, 55%)',  // violet
-    'hsl(285, 45%, 52%)',  // violet-magenta
-    'hsl(305, 50%, 50%)',  // magenta
-    'hsl(325, 55%, 52%)',  // rose vif
-    'hsl(340, 60%, 52%)',  // rose-rouge
-    'hsl(355, 50%, 48%)',  // bordeaux
-    'hsl(15, 40%, 40%)',   // brique
+    '#FF0000', // Red
+    '#0000FF', // Blue
+    '#00FF00', // Green
+    '#8A2BE2', // BlueViolet
+    '#FF7F50', // Coral
+    '#5F9EA0', // CadetBlue
+    '#D2691E', // Chocolate
+    '#1E90FF', // DodgerBlue
+    '#B22222', // Firebrick
+    '#DAA520', // GoldenRod
+    '#FF69B4', // HotPink
+    '#FF4500', // OrangeRed
+    '#2E8B57', // SeaGreen
+    '#00FF7F', // SpringGreen
+    '#9ACD32', // YellowGreen
 ];
 
 function avatarColorForId(id) {
@@ -548,6 +542,22 @@ function avatarColorForId(id) {
     return AVATAR_COLOR_PALETTE[hash % AVATAR_COLOR_PALETTE.length];
 }
 
+// Certaines des 15 couleurs Twitch (Green, SpringGreen, HotPink...) sont trop claires
+// pour rester lisibles avec le texte blanc fixe de l'initiale dans le rond d'avatar —
+// Twitch, lui, ne les utilise qu'en texte sur fond sombre, jamais en aplat avec du blanc
+// dessus. Calcule donc noir ou blanc selon la luminosité perçue de la couleur de fond
+// (formule standard de luminance relative), plutôt qu'un blanc fixe qui échouerait sur
+// les teintes claires de la palette.
+function avatarTextColorFor(hexColor) {
+    const r = parseInt(hexColor.slice(1, 3), 16);
+    const g = parseInt(hexColor.slice(3, 5), 16);
+    const b = parseInt(hexColor.slice(5, 7), 16);
+    const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+    return luminance > 0.55 ? '#17231d' : '#ffffff';
+}
+
+
+
 function avatarInitial(name) {
     const trimmed = (name || '').trim();
     return trimmed ? trimmed[0].toUpperCase() : '?';
@@ -557,7 +567,8 @@ function avatarInitial(name) {
 function avatarHtml(participantId) {
     const p = participants.find(x => x.id === participantId);
     if (!p) return '';
-    return `<span class="mini-avatar" style="background:${avatarColorForId(p.id)}">${escapeHtml(avatarInitial(p.name))}</span>`;
+    const bg = avatarColorForId(p.id);
+    return `<span class="mini-avatar" style="background:${bg};color:${avatarTextColorFor(bg)}">${escapeHtml(avatarInitial(p.name))}</span>`;
 }
 
 function defaultParticipantName(pid) {
