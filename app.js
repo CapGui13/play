@@ -606,6 +606,11 @@ function showScreen(id) {
         // l'ouvre.
         if (id === 'screen-landing' && chatPanelOpen) uiToggleChat();
     }
+
+    // Voir échange avec Guillaume : sur l'écran d'accueil, rien n'est encore connecté, le
+    // trait de séparation sous la barre de statut n'a donc rien à séparer et fait juste
+    // ligne parasite (voir la règle CSS body.on-landing-screen .connection-bar).
+    document.body.classList.toggle('on-landing-screen', id === 'screen-landing');
 }
 
 function setConnectionStatus(connected) {

@@ -101,6 +101,13 @@ body {
     color: var(--text);
 }
 
+/* Sur l'écran d'accueil, rien n'est encore connecté : le trait sous la barre n'a rien à
+   séparer visuellement, il fait juste ligne parasite en haut de page (voir échange avec
+   Guillaume). Classe posée par showScreen() dans app.js. */
+body.on-landing-screen .connection-bar {
+    border-bottom-color: transparent;
+}
+
 .connection-status.connected { color: #7fd99a; }
 .connection-status.disconnected { color: #e0857a; }
 
