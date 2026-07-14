@@ -39,6 +39,24 @@ jobs:
           echo "CACHE_NAME -> ${NEW_CACHE_NAME}"
           grep CACHE_NAME sw.js
 
+      - name: Régénérer donnes/catalogue.json à partir du contenu réel du dossier
+        # Plus besoin d'éditer catalogue.json à la main (voir donnes/README.md) : à chaque
+        # déploiement, il est reconstruit en listant simplement les .pbn/.lin réellement
+        # présents dans donnes/. Ajouter une donne à la bibliothèque du club se résume donc
+        # à déposer le fichier dans ce dossier et pousser — rien d'autre à tenir à jour.
+        run: |
+          python3 -c "
+          import json, os
+          files = sorted(
+              f for f in os.listdir('donnes')
+              if f.lower().endswith(('.pbn', '.lin'))
+          )
+          with open('donnes/catalogue.json', 'w', encoding='utf-8') as out:
+              json.dump(files, out, ensure_ascii=False, indent=4)
+              out.write('\n')
+          print(files)
+          "
+
       - name: Préparer les fichiers pour Pages
         uses: actions/upload-pages-artifact@v3
         with:
