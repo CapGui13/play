@@ -1062,10 +1062,17 @@ function validateAndUseDealText(text, filename, onDone) {
     infoEl.style.display = 'flex';
 
     // Avertissements non bloquants (la partie peut démarrer quand même) : format de
-    // fichier ambigu (voir parseDealFile) et/ou absence de PAR dans le fichier.
+    // fichier ambigu (voir parseDealFile) et/ou absence de toute info de contrat optimal.
+    // Deux sources indépendantes dans le PBN peuvent la fournir (voir deal-parser.js) :
+    // [OptimumScore]/[OptimumContract] (résumé rapide "Par : 4♠ S (NS +420)" affiché dans
+    // LA PRÉVISUALISATION uniquement — voir dealPreviewParText) et [OptimumResultTable]
+    // (la table complète du double mort, affichée PENDANT LA PARTIE avec mise en évidence
+    // du meilleur contrat — voir renderDDTable). Un fichier peut avoir l'un sans l'autre :
+    // n'avertir que si aucun des deux n'est disponible, sinon le message serait faux pour
+    // un fichier qui a la table complète mais pas le résumé rapide.
     const warnings = [];
     if (parsedDeals._formatWarning) warnings.push(parsedDeals._formatWarning);
-    if (!parsedDeals.some(d => d.par)) {
+    if (!parsedDeals.some(d => d.par || d.ddTable)) {
         warnings.push('PARs non disponibles dans ce fichier — les contrats optimaux ne seront pas affichés.');
     }
     if (warnings.length > 0) {
