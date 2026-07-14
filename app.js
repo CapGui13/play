@@ -1622,20 +1622,31 @@ function renderRoomBoard() {
     // robots ne sont pas des "personnes dans la salle", ça n'a pas sa place dans ce
     // panneau (contrairement au relevé d'enchères, où "Bot" reste utile pour savoir qui
     // a annoncé quoi — voir ledgerSeatLabel).
-    const seatRows = SEATS.map(seat => {
+    //
+    // Regroupement par participant plutôt qu'une ligne par siège : en mode diagonale ou
+    // "maître du jeu", une même personne peut occuper 2 sièges — elle ne doit apparaître
+    // qu'une fois, avec ses sièges listés ensemble (ex. "Nord + Sud"), pas deux fois.
+    const seatsByParticipant = new Map(); // id -> [seat, seat, ...], dans l'ordre N/E/S/O
+    SEATS.forEach(seat => {
         const pid = seatAssignment[seat];
-        const p = pid ? participants.find(x => x.id === pid) : null;
+        if (!pid) return;
+        if (!seatsByParticipant.has(pid)) seatsByParticipant.set(pid, []);
+        seatsByParticipant.get(pid).push(seat);
+    });
+
+    const seatRows = [...seatsByParticipant.keys()].map(pid => {
+        const p = participants.find(x => x.id === pid);
         if (!p) return '';
+        const seatsLabel = seatsByParticipant.get(pid).map(seatFullName).join(' + ');
         const disconnectedTag = p.disconnected ? ' <span class="disconnected-tag">🔌</span>' : '';
         const occupant = `${avatarHtml(p.id)}<span class="room-board-name">${escapeHtml(p.name)}</span>${disconnectedTag}`;
-        return `<div class="room-board-seat"><span class="room-board-seat-label">${seatFullName(seat)}</span>${occupant}</div>`;
+        return `<div class="room-board-seat"><span class="room-board-seat-label">${seatsLabel}</span>${occupant}</div>`;
     }).filter(Boolean).join('');
 
     // Quiconque n'occupe aucun siège est kibbitzer (voir isKibbitzer) : plus de liste à
     // part à maintenir, on liste simplement tous les participants absents de
     // seatAssignment.
-    const seatedIds = new Set(SEATS.map(seat => seatAssignment[seat]).filter(Boolean));
-    const kibbitzerNames = participants.filter(p => !seatedIds.has(p.id));
+    const kibbitzerNames = participants.filter(p => !seatsByParticipant.has(p.id));
     const kibbitzersHtml = kibbitzerNames.length > 0
         ? `<div class="room-board-kibbitzers">
                <span class="room-board-section-label">👁 Kibbitz :</span>

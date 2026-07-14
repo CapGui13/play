@@ -80,6 +80,23 @@
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
+/* Empêche la sélection de texte (et, sur iOS, le menu Copier/Partager) au tap long —
+   gênant sur une appli qu'on manipule surtout au doigt (boutons d'enchères, sièges,
+   avatars...), là où on ne cherche jamais réellement à sélectionner du texte. Restauré
+   explicitement sur les champs de saisie juste en dessous : sans ça, plus moyen de
+   sélectionner/éditer le texte qu'on y tape (code de salon, pseudo...). */
+* {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none; /* menu contextuel iOS au tap long (Copier/Partager/Rechercher) */
+}
+
+input, textarea, [contenteditable] {
+    -webkit-user-select: text;
+    user-select: text;
+    -webkit-touch-callout: default;
+}
+
 body {
     font-family: var(--font-body);
     background: var(--bg);
