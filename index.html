@@ -25,10 +25,27 @@
 <div id="connectionBar" class="connection-bar">
     <span id="connectionStatus" class="connection-status">⚪ Pas encore connecté</span>
     <button type="button" id="reconnectBtn" class="btn btn-primary btn-small" style="display:none;" onclick="uiReconnect()">🔌 Se reconnecter</button>
+    <button type="button" id="chatToggleBtn" class="debug-toggle-btn" onclick="uiToggleChat()">💬<span id="chatUnreadBadge" class="chat-unread-badge" style="display:none;"></span></button>
     <!-- Masqué pour l'instant (voir échange avec Guillaume) : le panneau et toute sa
          logique (pushDebugLog, uiToggleDebugPanel, testTurnConnectivity...) restent
          intacts, il suffit de retirer ce commentaire et le style pour le réactiver. -->
     <!-- <button type="button" class="debug-toggle-btn" onclick="uiToggleDebugPanel()">🐞</button> -->
+</div>
+
+<!-- Chat écrit entre tous les participants (voir uiSendChatMessage/handlePeerData dans
+     app.js) : panneau flottant plutôt qu'un espace permanent dans la mise en page — après
+     les difficultés récentes avec le budget d'espace sur mobile, on évite d'ajouter une
+     nouvelle zone fixe qui devrait, elle aussi, se disputer la hauteur d'écran disponible. -->
+<div id="chatPanel" class="chat-panel" style="display:none;">
+    <div class="chat-panel-header">
+        <span>💬 Chat</span>
+        <button type="button" class="btn btn-secondary btn-small" onclick="uiToggleChat()">Fermer ✕</button>
+    </div>
+    <div id="chatMessages" class="chat-messages"></div>
+    <div class="chat-input-row">
+        <input type="text" id="chatInput" class="chat-input" maxlength="500" placeholder="Écrire un message…" onkeydown="uiChatInputKeydown(event)">
+        <button type="button" class="btn btn-primary btn-small" onclick="uiSendChatMessage()">Envoyer</button>
+    </div>
 </div>
 
 <!-- Bannières PWA : nouvelle version dispo, invite à l'installation iOS, hors-ligne.

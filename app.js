@@ -619,6 +619,9 @@ function uiCreateRoom() {
     guestIndexByToken = {};
     prevSeatAssignmentSnapshot = null;
     prevParticipantsDisconnectedSnapshot = null;
+    chatMessages = [];
+    chatUnreadCount = 0;
+    updateChatUnreadBadge();
     pendingParsedDeals = null;
     pendingParsedSource = null;
     pendingOrderedDeals = null;
@@ -764,6 +767,9 @@ function uiJoinRoom() {
     everConnectedAsGuest = false;
     prevSeatAssignmentSnapshot = null;
     prevParticipantsDisconnectedSnapshot = null;
+    chatMessages = [];
+    chatUnreadCount = 0;
+    updateChatUnreadBadge();
 
     peerConn = new BridgePeerConnection(buildGuestHandlers());
     const token = getReconnectToken();
@@ -1387,6 +1393,12 @@ function handlePeerData(msg, guestIndex) {
             break;
         }
 
+        case 'chat': {
+            addChatMessage(msg);
+            relayIfHost(msg, guestIndex);
+            break;
+        }
+
         case 'reset-auction': {
             if (!deals || msg.boardIndex !== boardIndex) return;
             auctionHistory = [];
@@ -1594,6 +1606,89 @@ function renderGameHeader() {
     const mySeatsLabel = mySeats && mySeats.length > 0 ? mySeats.map(seatFullName).join(' + ') : 'kibbitzer';
     document.getElementById('dealerVulnLabel').textContent =
         `Donneur : ${seatFullName(deal.dealer)} · ${VULN_LABEL[deal.vulnerable]} · Vous jouez : ${mySeatsLabel}`;
+}
+
+// ===== Chat =====
+//
+// Diffusion par le même mécanisme que les enchères (voir 'call' dans handlePeerData) :
+// un invité envoie à l'hôte, qui relaie aux autres invités (relayIfHost) — les invités ne
+// sont jamais connectés entre eux. L'hôte, lui, diffuse directement à tout le monde.
+// Historique gardé en mémoire pour la session en cours seulement : pas inclus dans
+// 'resync', un joueur qui se reconnecte ne revoit pas les messages d'avant sa coupure —
+// acceptable pour une fonctionnalité de confort, pas une donnée de jeu à préserver à tout
+// prix.
+let chatMessages = [];
+let chatPanelOpen = false;
+let chatUnreadCount = 0;
+
+function uiToggleChat() {
+    chatPanelOpen = !chatPanelOpen;
+    const panel = document.getElementById('chatPanel');
+    if (panel) panel.style.display = chatPanelOpen ? 'flex' : 'none';
+    if (chatPanelOpen) {
+        chatUnreadCount = 0;
+        updateChatUnreadBadge();
+        renderChat();
+        const input = document.getElementById('chatInput');
+        if (input) input.focus();
+    }
+}
+
+function updateChatUnreadBadge() {
+    const badge = document.getElementById('chatUnreadBadge');
+    if (!badge) return;
+    if (chatUnreadCount > 0) {
+        badge.textContent = chatUnreadCount > 9 ? '9+' : String(chatUnreadCount);
+        badge.style.display = 'inline-flex';
+    } else {
+        badge.style.display = 'none';
+    }
+}
+
+// Point d'entrée UNIQUE pour tout message de chat, qu'il vienne de moi (voir
+// uiSendChatMessage) ou d'un autre participant (voir handlePeerData) : ajoute au journal,
+// met à jour l'affichage, et incrémente le badge seulement si le panneau est fermé.
+function addChatMessage(msg) {
+    chatMessages.push(msg);
+    renderChat();
+    if (!chatPanelOpen) {
+        chatUnreadCount++;
+        updateChatUnreadBadge();
+    }
+}
+
+function renderChat() {
+    const el = document.getElementById('chatMessages');
+    if (!el) return;
+    el.innerHTML = chatMessages.map(m => {
+        const mine = m.senderId === myParticipantId;
+        const senderHtml = mine ? '' : `<span class="chat-message-sender">${escapeHtml(m.senderName)}</span>`;
+        return `<div class="chat-message ${mine ? 'is-mine' : ''}">${senderHtml}<span class="chat-message-text">${escapeHtml(m.text)}</span></div>`;
+    }).join('');
+    el.scrollTop = el.scrollHeight; // toujours faire défiler vers le message le plus récent
+}
+
+function uiChatInputKeydown(event) {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    uiSendChatMessage();
+}
+
+function uiSendChatMessage() {
+    const input = document.getElementById('chatInput');
+    if (!input || !peerConn) return;
+    const text = input.value.trim().slice(0, 500);
+    if (!text) return;
+    input.value = '';
+
+    const me = participants.find(p => p.id === myParticipantId);
+    const msg = { type: 'chat', senderId: myParticipantId, senderName: me ? me.name : '?', text };
+    addChatMessage(msg);
+    // Même appel pour l'hôte (diffuse directement à tous les invités) et pour un invité
+    // (envoie à l'hôte, qui relaiera) : send() sans guestIndex explicite diffuse déjà à
+    // toutes les connexions actives de ce peer, qui n'en a qu'une seule (l'hôte) côté
+    // invité — voir peer-connection.js.
+    peerConn.send(msg);
 }
 
 // ===== Panneau "Salle" (qui est présent pendant la partie) =====
