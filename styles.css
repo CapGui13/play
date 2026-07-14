@@ -824,6 +824,13 @@ body.on-landing-screen .connection-bar {
     margin-left: 6px;
 }
 
+/* Poussé en bout de ligne plutôt que juste après le nom (voir renderParticipantsList dans
+   app.js) : le row est en flex-wrap, donc ce bouton se retrouve naturellement sur sa
+   propre ligne sur les écrans étroits plutôt que de coller au texte. */
+.transfer-host-btn {
+    margin-left: auto;
+}
+
 .kibbitzer-note {
     margin-bottom: 10px;
 }

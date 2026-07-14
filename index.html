@@ -126,6 +126,19 @@
             <button id="copyShareLinkBtn" class="btn btn-primary" onclick="uiCopyShareLink()">🔗 Copier lien de connexion</button>
         </div>
 
+        <!-- Spécifique à l'hôte iOS, distinct de #iosLockScreenWarning : ici l'enjeu n'est
+             pas juste un désagrément en cours de partie mais un échec de connexion complet
+             (voir échange avec Guillaume — "Aucune partie trouvée" côté invités quand
+             l'hôte quitte l'appli pour partager le code, iOS suspendant la connexion en
+             arrière-plan). Toujours affiché (jamais masqué définitivement comme l'autre
+             note) : les conséquences ici sont plus graves qu'une gêne ponctuelle. -->
+        <div id="iosHostShareWarning" class="pwa-inline-note" style="display:none;">
+            ⚠️ Ne quittez pas cette page tant que vos invités n'ont pas rejoint : copiez le
+            lien puis revenez ici avant de le coller ailleurs, ou partagez le code à voix
+            haute/par un autre appareil. Sur iPhone, changer d'appli coupe la connexion et
+            vos invités verront "Aucune partie trouvée".
+        </div>
+
         <div class="form-group form-group-name">
             <label>Votre pseudo</label>
             <input type="text" id="myNameInput" class="name-input" maxlength="20" oninput="uiUpdateMyName()" onblur="uiMyNameBlur()" onfocus="this.select()">
@@ -135,6 +148,9 @@
             <div class="lobby-participants">
                 <h3>Participants</h3>
                 <ul id="participantsList" class="participants-list"></ul>
+                <!-- Statut du transfert d'hôte (voir uiTransferHost/showHostTransferStatus dans
+                     app.js) : masqué par défaut, affiché seulement pendant/après une tentative. -->
+                <div id="hostTransferStatus" class="error-banner" style="display:none;"></div>
             </div>
             <div class="lobby-table">
                 <div id="seatAssignmentGrid" class="seat-assignment-grid"></div>

@@ -126,12 +126,36 @@ Pour revenir :
   était.
 
 Limites connues :
-- Ceci ne couvre que la reconnexion d'un **invité**. Si c'est l'**hôte** qui part, la
-  partie ne peut pas reprendre (son identifiant de connexion change à chaque nouvelle
-  partie) — il faudra recréer une partie et repartager un nouveau code.
+- Ceci ne couvre que la reconnexion d'un **invité**. Si c'est l'**hôte** qui part une fois
+  la partie lancée, la partie ne peut pas reprendre (son identifiant de connexion change à
+  chaque nouvelle partie) — il faudra recréer une partie et repartager un nouveau code.
+  Dans le salon (avant le lancement), voir "Transfert d'hôte" ci-dessous, qui couvre un cas
+  proche mais différent (un départ volontaire, pas une coupure).
 - Deux onglets ouverts sur la même partie, dans le même navigateur, partagent le même
   jeton — sans conséquence pour un usage normal (un onglet par joueur), mais à éviter si
   vous testez seul avec plusieurs onglets pour simuler plusieurs joueurs.
+
+## Transfert d'hôte
+
+Dans le salon d'attente, **avant de charger les donnes**, l'hôte peut céder son rôle à
+n'importe quel autre participant connecté : un bouton **"👑 Transférer l'hôte"** apparaît à
+côté de son nom dans la liste des participants. Cas d'usage typique : la création de la
+partie échoue sur votre propre appareil (réseau capricieux), mais fonctionne très bien
+depuis le téléphone d'un ami — il crée la partie, vous le rejoignez, puis vous vous faites
+transférer le rôle d'hôte pour reprendre la main (charger les donnes, composer la table).
+
+Techniquement, un nouveau code de partie est généré pour l'occasion (PeerJS ne permet pas
+de reprendre fiablement l'ancien identifiant tout de suite) : tout le monde, y compris
+l'ancien hôte, rejoint automatiquement cette nouvelle salle en arrière-plan, sans rien à
+resaisir — pseudos et sièges déjà assignés sont conservés.
+
+Limites connues :
+- Uniquement possible **dans le salon**, avant que la partie ait démarré.
+- Le participant visé doit être connecté au moment du transfert (pas dans le cas d'une
+  place réservée en attente de reconnexion).
+- Sur iPhone, comme pour la création de partie (voir l'avertissement affiché dans le
+  salon), ne changez pas d'application pendant les quelques secondes que prend le
+  transfert — iOS pourrait couper la connexion en plein milieu.
 
 ## Fichiers
 

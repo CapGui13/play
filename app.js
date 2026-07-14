@@ -78,6 +78,26 @@ let currentRoomCode = null; // pour uiReconnect() : on doit se souvenir du code 
 // deux, pour que seatAssignment (qui référence le jeton, stable) reste valide.
 let guestIndexByToken = {};
 
+// ===== Transfert d'hôte (salon uniquement, avant le lancement de la partie) =====
+//
+// Voir échange avec Guillaume : permet à l'hôte de céder son rôle à un autre participant
+// connecté, dans le salon, avant de charger les donnes. Utile notamment quand la création
+// de la partie échoue sur son propre appareil (réseau) : un ami crée la partie, puis
+// Guillaume se la fait transférer une fois dans le salon.
+//
+// hostTransferInProgress : vrai entre l'envoi de 'prepare-become-host' et la réception de
+// 'become-host-ready'/'become-host-failed' — évite de lancer un second transfert pendant
+// qu'un premier est encore en cours.
+let hostTransferInProgress = false;
+// Jeton du participant visé par le transfert en cours (pour retrouver sa connexion au
+// moment de la réponse) — uniquement pertinent côté ancien hôte, le temps du transfert.
+let pendingHostTransferTarget = null;
+// Jeton de reconnexion que l'hôte actuel s'apprête à utiliser une fois redevenu invité
+// (généré au moment de lancer le transfert, voir uiTransferHost) — transmis au nouvel
+// hôte dans 'prepare-become-host' pour qu'il puisse déjà lui réserver sa place/son siège
+// sous ce jeton, avant même qu'il ne se reconnecte.
+let pendingHostTransferOldToken = null;
+
 // Jeton de reconnexion propre à ce navigateur, généré une fois puis conservé dans
 // localStorage — survit à un rechargement ET à la fermeture/réouverture de l'onglet
 // (contrairement à sessionStorage, qui est isolé par onglet et aurait généré un nouveau
@@ -689,14 +709,26 @@ function uiCreateRoom() {
     pendingParsedSource = null;
     pendingOrderedDeals = null;
 
-    peerConn = new BridgePeerConnection({
+    peerConn = new BridgePeerConnection(buildHostHandlers());
+    peerConn.createRoom();
+}
+
+// Handlers PeerJS côté hôte — partagés entre uiCreateRoom (nouvelle partie) et la prise de
+// rôle après un transfert d'hôte (voir uiTransferHost/'prepare-become-host'), qui doivent
+// tous deux traiter les connexions entrantes exactement de la même façon. Seul le
+// comportement à l'ouverture du Peer diffère (onOpenExtra) : une toute nouvelle partie
+// atterrit dans le salon normalement, une prise de rôle a besoin de faire autre chose
+// d'abord (prévenir l'ancien hôte) avant de basculer l'écran.
+function buildHostHandlers(onOpenExtra) {
+    return {
         onOpen: (role, roomCode) => {
             currentRoomCode = roomCode;
             const url = new URL(window.location.href);
             url.searchParams.set('room', roomCode);
             document.getElementById('shareLinkInput').value = url.toString();
             document.getElementById('lobbyRoomCodeInline').textContent = `(code ${roomCode})`;
-            enterLobbyScreen();
+            if (onOpenExtra) onOpenExtra(roomCode);
+            else enterLobbyScreen();
         },
         onGuestConnected: (guestIndex, metadata) => {
             setConnectionStatus(true);
@@ -767,8 +799,7 @@ function uiCreateRoom() {
         onError: (err) => {
             showLandingError('Erreur de connexion : ' + ((err && (err.message || err.type)) || err));
         }
-    });
-    peerConn.createRoom();
+    };
 }
 
 // Construit les handlers PeerJS côté invité — partagés entre uiJoinRoom (première
@@ -816,12 +847,24 @@ function buildGuestHandlers() {
 
 function uiJoinRoom() {
     document.getElementById('landingError').style.display = 'none';
-    if (peerConn) peerConn.destroy();
     const code = document.getElementById('joinCodeInput').value.trim().toUpperCase();
     if (code.length !== 4) {
         showLandingError('Entrez un code à 4 lettres.');
         return;
     }
+    chatMessages = [];
+    chatUnreadCount = 0;
+    updateChatUnreadBadge();
+    connectAsGuest(code, getReconnectToken(), savedNickname);
+}
+
+// Rejoint (ou re-rejoint) une salle en tant qu'invité, avec un jeton et un pseudo donnés.
+// Partagé par uiJoinRoom (première connexion) et le transfert d'hôte (voir 'host-transferred'
+// / 'become-host-ready' dans handlePeerData) : dans les deux cas, on repart d'un état de
+// salon vierge, qui sera reconstitué dès réception du premier 'lobby-state' du nouvel hôte —
+// exactement comme un rejoin normal.
+function connectAsGuest(code, token, nickname) {
+    if (peerConn) peerConn.destroy();
 
     myRole = 'guest';
     myParticipantId = null; // fixé à réception du message 'welcome'
@@ -831,14 +874,10 @@ function uiJoinRoom() {
     everConnectedAsGuest = false;
     prevSeatAssignmentSnapshot = null;
     prevParticipantsDisconnectedSnapshot = null;
-    chatMessages = [];
-    chatUnreadCount = 0;
-    updateChatUnreadBadge();
 
     peerConn = new BridgePeerConnection(buildGuestHandlers());
-    const token = getReconnectToken();
     pushDebugLog(`Connexion au salon ${code} avec le jeton ${token.slice(0, 10)}…`);
-    peerConn.joinRoom(code, { reconnectToken: token, nickname: savedNickname });
+    peerConn.joinRoom(code, { reconnectToken: token, nickname: nickname });
 }
 
 // Reconnexion après coupure : même code de salon, même jeton (localStorage) — l'hôte
@@ -890,6 +929,16 @@ function enterLobbyScreen() {
     document.getElementById('hostSetupPanel').style.display = myRole === 'host' ? 'block' : 'none';
     document.getElementById('guestWaitingNote').style.display = myRole === 'host' ? 'none' : 'block';
 
+    // Voir échange avec Guillaume (session ratée avec 2 amis sur iPhone, "Aucune partie
+    // trouvée" côté invités) : contrairement à #iosLockScreenWarning (dismissible, montré
+    // une fois sur l'écran d'accueil), ce rappel-ci reste affiché à chaque fois qu'on
+    // devient hôte sur iOS, tant que les conséquences d'un oubli sont un échec de
+    // connexion complet pour les invités plutôt qu'une simple gêne en cours de partie.
+    const iosHostWarning = document.getElementById('iosHostShareWarning');
+    if (iosHostWarning) {
+        iosHostWarning.style.display = (myRole === 'host' && isIosDevice()) ? 'block' : 'none';
+    }
+
     const nameInput = document.getElementById('myNameInput');
     // On ne touche jamais au champ pendant que l'utilisateur est en train d'y taper
     // (sinon un lobby-state reçu pile pendant l'effacement du nom réécrase ce qu'il
@@ -924,6 +973,9 @@ function renderParticipantsList() {
         return;
     }
     const isHost = myRole === 'host';
+    // Le transfert d'hôte n'a de sens qu'avant le lancement de la partie (voir uiTransferHost)
+    // et seulement vers quelqu'un d'effectivement connecté à cet instant.
+    const canOfferTransfer = isHost && !deals;
     list.innerHTML = participants.map(p => {
         const canRename = isHost && p.id !== myParticipantId;
         const nameHtml = canRename
@@ -934,6 +986,10 @@ function renderParticipantsList() {
         // Bleu si assis à un siège (voir participantHasAPlace), rouge sinon — sans siège,
         // devient kibbitzer automatiquement, ce n'est pas un problème à corriger.
         const placementClass = participantHasAPlace(p.id) ? 'is-assigned' : 'is-unassigned';
+        const showTransferBtn = canOfferTransfer && p.id !== myParticipantId && !p.disconnected;
+        const transferBtnHtml = showTransferBtn
+            ? `<button type="button" class="btn btn-secondary btn-small transfer-host-btn" onclick="uiTransferHost('${p.id}')" title="Transférer le rôle d'hôte à ${escapeHtml(p.name)}">👑 Transférer l'hôte</button>`
+            : '';
         return `
         <li class="participant-item ${placementClass} ${p.id === myParticipantId ? 'is-me' : ''}">
             ${avatarHtml(p.id)}
@@ -941,6 +997,7 @@ function renderParticipantsList() {
             ${p.id === 'host' ? ' <span class="host-tag">(hôte)</span>' : ''}
             ${p.id === myParticipantId ? ' <span class="me-tag">(vous)</span>' : ''}
             ${p.disconnected ? ' <span class="disconnected-tag">🔌 déconnecté — place réservée</span>' : ''}
+            ${transferBtnHtml}
         </li>
     `;
     }).join('');
@@ -1086,6 +1143,65 @@ function uiAssignSeat(seat, participantId) {
 
 function broadcastLobbyState() {
     peerConn.send({ type: 'lobby-state', participants, seatAssignment });
+}
+
+// Affiche/masque le petit bandeau de statut du transfert d'hôte, dans le salon (distinct
+// de #hostSetupError, réservé aux erreurs de chargement de fichier de donnes).
+function showHostTransferStatus(message, isError) {
+    const el = document.getElementById('hostTransferStatus');
+    if (!el) return;
+    if (!message) { el.style.display = 'none'; return; }
+    el.textContent = message;
+    el.className = 'error-banner' + (isError ? '' : ' is-warning');
+    el.style.display = 'block';
+}
+
+// Lance le transfert du rôle d'hôte vers `targetId`, un participant actuellement connecté
+// (voir le bouton "👑" dans renderParticipantsList). Ne fait que la première moitié du
+// travail : envoyer à ce participant tout ce qu'il faut pour qu'il devienne hôte à son
+// tour (voir 'prepare-become-host' dans handlePeerData) ; la bascule effective de l'ancien
+// hôte se fait plus tard, à la réception de 'become-host-ready'.
+function uiTransferHost(targetId) {
+    if (myRole !== 'host' || deals) return; // uniquement possible dans le salon, avant le lancement
+    if (hostTransferInProgress) return;
+
+    const guestIndex = guestIndexByToken[targetId];
+    const target = participants.find(p => p.id === targetId);
+    if (guestIndex === undefined || !target || target.disconnected) {
+        showHostTransferStatus('Ce joueur doit être connecté pour devenir hôte.', true);
+        return;
+    }
+    if (!confirm(`Transférer le rôle d'hôte à ${target.name} ? Vous redeviendrez un simple participant, sur une nouvelle salle.`)) {
+        return;
+    }
+
+    hostTransferInProgress = true;
+    pendingHostTransferTarget = targetId;
+    // Généré maintenant (pas seulement au moment de rejoindre la nouvelle salle) : il faut
+    // que le nouvel hôte connaisse déjà ce jeton pour préparer la liste des participants et
+    // les sièges AVANT même que je ne m'y reconnecte.
+    pendingHostTransferOldToken = getReconnectToken();
+    showHostTransferStatus(`Transfert de l'hôte à ${target.name} en cours...`, false);
+
+    // On recalcule dès maintenant participants/seatAssignment tels qu'ils doivent apparaître
+    // une fois le transfert effectif : mon entrée 'host' devient mon jeton personnel, et
+    // l'entrée du participant ciblé devient 'host'. Envoyer un état déjà cohérent évite au
+    // nouvel hôte d'avoir à faire lui-même cette traduction (il ne connaît pas forcément mon
+    // jeton avant que je ne le lui donne ici).
+    const newParticipants = participants.map(p => {
+        if (p.id === 'host') return { ...p, id: pendingHostTransferOldToken };
+        if (p.id === targetId) return { ...p, id: 'host' };
+        return p;
+    });
+    const newSeatAssignment = {};
+    SEATS.forEach(seat => {
+        const occupant = seatAssignment[seat];
+        if (occupant === 'host') newSeatAssignment[seat] = pendingHostTransferOldToken;
+        else if (occupant === targetId) newSeatAssignment[seat] = 'host';
+        else newSeatAssignment[seat] = occupant;
+    });
+
+    peerConn.send({ type: 'prepare-become-host', participants: newParticipants, seatAssignment: newSeatAssignment }, guestIndex);
 }
 
 // ===== Démarrage de la partie (hôte) =====
@@ -1374,6 +1490,90 @@ function handlePeerData(msg, guestIndex) {
     switch (msg.type) {
         case 'welcome': {
             myParticipantId = msg.yourId;
+            break;
+        }
+
+        // Reçu par le participant CIBLÉ par un transfert d'hôte (voir uiTransferHost) : il
+        // doit créer sa propre salle (nouveau code, PeerJS ne permet pas de reprendre
+        // fiablement l'ancien identifiant tout de suite) puis prévenir l'ancien hôte dès que
+        // c'est prêt — c'est par CETTE connexion, celle qui reçoit ce message, qu'on le
+        // préviendra, donc on ne la coupe qu'une fois le nouveau code obtenu et transmis.
+        case 'prepare-become-host': {
+            if (myRole !== 'guest') break;
+            pushDebugLog('Transfert d\'hôte reçu, création de la nouvelle salle...');
+
+            const inheritedParticipants = msg.participants;
+            const inheritedSeatAssignment = msg.seatAssignment;
+
+            const claimPeer = new BridgePeerConnection(buildHostHandlers((newRoomCode) => {
+                // On a le nouveau code : prévenir l'ancien hôte AVANT de couper la connexion
+                // vers lui (c'est la seule voie pour le lui dire). Un court délai laisse le
+                // temps au message de partir sur le canal WebRTC avant qu'on ne le ferme.
+                if (peerConn) peerConn.send({ type: 'become-host-ready', newRoomCode });
+                setTimeout(() => {
+                    if (peerConn) peerConn.destroy();
+                    peerConn = claimPeer;
+                    myRole = 'host';
+                    myParticipantId = 'host';
+                    participants = inheritedParticipants;
+                    seatAssignment = inheritedSeatAssignment;
+                    guestIndexByToken = {};
+                    prevSeatAssignmentSnapshot = null;
+                    prevParticipantsDisconnectedSnapshot = null;
+                    enterLobbyScreen();
+                    renderLobby();
+                }, 300);
+            }));
+            // Repli propre si la création de la nouvelle salle échoue (réseau, etc.) :
+            // prévenir l'ancien hôte plutôt que de le laisser attendre indéfiniment, sans
+            // toucher à quoi que ce soit côté local (on reste un invité normal, connecté
+            // comme avant à l'ancien hôte).
+            claimPeer.handlers.onError = (err) => {
+                pushDebugLog('Échec de la prise de rôle hôte : ' + ((err && (err.message || err.type)) || err));
+                if (peerConn) peerConn.send({ type: 'become-host-failed', reason: (err && err.type) || 'erreur inconnue' });
+            };
+            claimPeer.createRoom();
+            break;
+        }
+
+        // Reçu par l'ANCIEN hôte : le participant ciblé a bien créé sa nouvelle salle. On
+        // prévient tous les autres invités connectés (pas lui, il le sait déjà), puis on
+        // rejoint nous-mêmes cette nouvelle salle comme simple participant.
+        case 'become-host-ready': {
+            if (myRole !== 'host' || !hostTransferInProgress) break;
+            const newRoomCode = msg.newRoomCode;
+            const targetIndex = guestIndexByToken[pendingHostTransferTarget];
+            peerConn.sendExcept({ type: 'host-transferred', newRoomCode }, targetIndex);
+
+            const myOldToken = pendingHostTransferOldToken;
+            const myName = savedNickname;
+            hostTransferInProgress = false;
+            pendingHostTransferTarget = null;
+            pendingHostTransferOldToken = null;
+            showHostTransferStatus(null);
+
+            connectAsGuest(newRoomCode, myOldToken, myName);
+            break;
+        }
+
+        // Reçu par l'ANCIEN hôte : le transfert a échoué chez le participant ciblé (voir
+        // 'prepare-become-host' ci-dessus) — on reste hôte, rien d'autre à faire.
+        case 'become-host-failed': {
+            if (myRole !== 'host' || !hostTransferInProgress) break;
+            hostTransferInProgress = false;
+            pendingHostTransferTarget = null;
+            pendingHostTransferOldToken = null;
+            showHostTransferStatus("Le transfert a échoué (" + (msg.reason || 'raison inconnue') + "). Vous restez hôte.", true);
+            break;
+        }
+
+        // Reçu par tout invité qui n'était NI la cible du transfert (déjà géré dans
+        // 'prepare-become-host') NI l'ancien hôte (déjà géré dans 'become-host-ready') :
+        // on rejoint simplement la nouvelle salle avec son propre jeton, comme un join normal.
+        case 'host-transferred': {
+            if (myRole !== 'guest') break;
+            pushDebugLog('Hôte transféré, on rejoint la nouvelle salle ' + msg.newRoomCode);
+            connectAsGuest(msg.newRoomCode, getReconnectToken(), savedNickname);
             break;
         }
 
