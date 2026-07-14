@@ -100,6 +100,15 @@ body {
     margin: 0 auto;
 }
 
+/* Contour de focus clavier — accessibilité (tabulation) — plutôt que le contour bleu par
+   défaut du navigateur, souvent invisible sur les fonds sombres de l'appli. `:focus-
+   visible` (pas `:focus`) : ne s'affiche qu'à la navigation clavier, pas au clic/tap, qui
+   n'en a pas besoin visuellement et le rendrait juste envahissant. */
+:focus-visible {
+    outline: 2px solid var(--brass-bright);
+    outline-offset: 2px;
+}
+
 /* ===== Barre de connexion ===== */
 .connection-bar {
     position: fixed;
@@ -312,7 +321,7 @@ body {
 }
 
 .btn:hover { transform: translateY(-1px); }
-.btn:active { transform: translateY(0); }
+.btn:active { transform: translateY(0) scale(0.97); }
 
 .btn-primary {
     background: linear-gradient(180deg, var(--brass-bright), var(--brass));
@@ -1052,6 +1061,9 @@ body {
 
 @media (prefers-reduced-motion: reduce) {
     .hand-card-active::after { animation: none; content: none; }
+    .turn-indicator.my-turn { animation: none; }
+    .auction-ledger td.is-latest-call { animation: none; }
+    .contract-result.contract-reveal { animation: none; }
 }
 
 .hand-card-title {
@@ -1225,6 +1237,19 @@ body {
     border: 1px solid var(--border);
 }
 
+/* Flash bref sur la toute dernière enchère jouée (voir renderAuctionLedger dans app.js,
+   qui marque cette cellule précise à chaque rendu) : le fond part d'une teinte or vive
+   puis s'estompe vers le fond normal de la cellule en une fraction de seconde — repérable
+   au coin de l'œil sans avoir à chercher la nouvelle annonce dans la grille. */
+.auction-ledger td.is-latest-call {
+    animation: latest-call-flash 0.9s ease-out;
+}
+
+@keyframes latest-call-flash {
+    0% { background: color-mix(in srgb, var(--brass-bright) 55%, var(--card)); }
+    100% { background: var(--card); }
+}
+
 .auction-ledger .call-suit.spades { color: var(--text); }
 .auction-ledger .call-suit.hearts { color: color-mix(in srgb, #c0272d 70%, var(--text)); }
 .auction-ledger .call-suit.diamonds { color: color-mix(in srgb, var(--suit-orange) 70%, var(--text)); }
@@ -1239,6 +1264,19 @@ body {
     margin-bottom: 16px;
     font-size: 0.95rem;
     text-align: center;
+}
+
+/* Petite mise en valeur au moment précis où le contrat final apparaît (pas à chaque
+   re-rendu tant qu'il reste affiché — voir le drapeau wasHidden dans checkAuctionEnd) :
+   c'est le point d'aboutissement de toute l'enchère, ça mérite un peu plus qu'un
+   affichage sec. transform+opacity uniquement (pas de box-shadow animée), 350ms. */
+.contract-result.contract-reveal {
+    animation: contract-reveal 0.35s ease-out;
+}
+
+@keyframes contract-reveal {
+    from { opacity: 0; transform: scale(0.94); }
+    to { opacity: 1; transform: scale(1); }
 }
 
 .contract-result .info-text {
@@ -1354,6 +1392,10 @@ table.dd-table td {
     transform: translateY(-1px);
 }
 
+.call-btn:not(:disabled):active {
+    transform: translateY(0) scale(0.95);
+}
+
 .call-btn:disabled {
     opacity: 0.28;
     cursor: not-allowed;
@@ -1390,6 +1432,12 @@ table.dd-table td {
 .turn-indicator.my-turn {
     background: color-mix(in srgb, #2f8f5b 22%, var(--card));
     color: color-mix(in srgb, #2f8f5b 75%, var(--text));
+    animation: turn-glow 2.4s ease-in-out infinite;
+}
+
+@keyframes turn-glow {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(47, 143, 91, 0); }
+    50% { box-shadow: 0 0 12px 1px rgba(47, 143, 91, 0.35); }
 }
 
 .turn-indicator.their-turn {

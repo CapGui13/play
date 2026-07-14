@@ -1742,6 +1742,11 @@ function renderAuctionLedger() {
     const dealerIdx = SEATS.indexOf(deal.dealer);
     const slots = new Array(dealerIdx).fill('');
     auctionHistory.forEach(entry => slots.push(formatCallCellHtml(entry.call)));
+    // Index de la toute dernière enchère jouée (pas juste la dernière case du tableau,
+    // qui peut être vide en fin de ligne) : sert à lui appliquer un bref flash visuel à
+    // chaque nouvelle annonce, pour la repérer d'un coup d'œil sans avoir à la chercher
+    // dans la grille (voir .is-latest-call plus bas / styles.css).
+    const lastIndex = auctionHistory.length > 0 ? slots.length - 1 : -1;
 
     const rows = [];
     for (let i = 0; i < slots.length || rows.length === 0; i += 4) {
@@ -1750,8 +1755,14 @@ function renderAuctionLedger() {
     }
 
     const body = document.getElementById('auctionLedgerBody');
+    let flatIndex = 0;
     body.innerHTML = rows.map(row => {
-        const cells = [0, 1, 2, 3].map(i => `<td>${row[i] != null ? row[i] : ''}</td>`);
+        const cells = [0, 1, 2, 3].map(i => {
+            const isLatest = flatIndex === lastIndex;
+            flatIndex++;
+            const cls = isLatest ? ' class="is-latest-call"' : '';
+            return `<td${cls}>${row[i] != null ? row[i] : ''}</td>`;
+        });
         return `<tr>${cells.join('')}</tr>`;
     }).join('');
 }
@@ -1923,6 +1934,11 @@ function checkAuctionEnd() {
     }
 
     const contract = determineContract(auctionHistory);
+    // Ne joue l'animation de révélation (voir .contract-reveal dans styles.css) qu'au
+    // moment précis où le contrat apparaît, pas à chaque re-rendu (renderBoard tourne
+    // pour bien d'autres raisons — reconnexion d'un joueur, etc. — tant que la donne
+    // reste sur cet écran) : on la déclenche seulement s'il était masqué juste avant.
+    const wasHidden = resultEl.style.display === 'none' || resultEl.style.display === '';
     resultEl.style.display = 'block';
     if (!contract) {
         resultEl.innerHTML = "↩️ Donne passée — personne n'a annoncé.";
@@ -1931,6 +1947,15 @@ function checkAuctionEnd() {
         const strainLabel = formatStrainLabel(contract.strain);
         const contractHtml = `<span class="call-suit ${strainCls}">${contract.level}${strainLabel}${escapeHtml(contract.doubled)}</span>`;
         resultEl.innerHTML = `Contrat final : <strong>${contractHtml}</strong> par <strong>${seatFullName(contract.declarer)}</strong>`;
+    }
+    if (wasHidden) {
+        // Retire puis relit offsetWidth avant de rajouter la classe : sans ce "force
+        // reflow", le navigateur ne rejouerait pas l'animation si la classe était déjà
+        // présente d'un affichage précédent (peu probable ici vu qu'on ne la retire
+        // jamais ailleurs, mais le filet de sécurité ne coûte rien).
+        resultEl.classList.remove('contract-reveal');
+        void resultEl.offsetWidth;
+        resultEl.classList.add('contract-reveal');
     }
 
     const ddTableHtml = renderDDTable(currentDeal().ddTable);
