@@ -1497,6 +1497,61 @@ table.dd-table td {
     color: color-mix(in srgb, #3ca05a 70%, var(--text));
 }
 
+/* Panneau "Salle" (voir renderRoomBoard/uiToggleRoomBoard dans app.js) : qui est présent
+   pendant la partie, masqué par défaut — le salon d'attente montre déjà cette information
+   avant le lancement, mais disparaît ensuite ; ce panneau comble ce trou sans occuper de
+   place en continu (contrairement à la bannière de reconnexion, qui elle doit rester
+   visible sans action de l'utilisateur puisqu'elle signale un problème). */
+.room-board {
+    background: var(--bg-table);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 10px 14px;
+    margin-bottom: 14px;
+    font-size: 0.85rem;
+}
+
+.room-board-seats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.room-board-seat {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--surface-2);
+    border-radius: 6px;
+    padding: 5px 10px;
+}
+
+.room-board-seat-label {
+    font-weight: 700;
+    color: var(--brass-bright);
+    font-size: 0.78rem;
+}
+
+.room-board-name {
+    white-space: nowrap;
+}
+
+.room-board-kibitzers {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--line);
+}
+
+.room-board-section-label {
+    font-weight: 600;
+    color: var(--text-muted);
+    font-size: 0.78rem;
+}
+
 .next-board-panel {
     text-align: center;
     margin-top: 20px;

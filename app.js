@@ -1638,6 +1638,10 @@ function renderBoard() {
     renderUndoAskBanner();
     renderBoardSkipControls();
     renderReconnectionBanner();
+    // Seulement si le panneau est actuellement ouvert (voir uiToggleRoomBoard) : pas
+    // besoin de reconstruire son contenu tant que personne ne le regarde.
+    const roomBoardEl = document.getElementById('roomBoard');
+    if (roomBoardEl && roomBoardEl.style.display !== 'none') renderRoomBoard();
     maybeAutoPass();
 }
 
@@ -1652,6 +1656,53 @@ function renderGameHeader() {
     const mySeatsLabel = mySeats && mySeats.length > 0 ? mySeats.map(seatFullName).join(' + ') : 'spectateur';
     document.getElementById('dealerVulnLabel').textContent =
         `Donneur : ${seatFullName(deal.dealer)} · ${VULN_LABEL[deal.vulnerable]} · Vous jouez : ${mySeatsLabel}`;
+}
+
+// ===== Panneau "Salle" (qui est présent pendant la partie) =====
+//
+// Le salon d'attente montre déjà qui est là et où (renderSeatAssignmentGrid /
+// renderKibitzerAssignmentGrid), mais cet écran disparaît une fois la partie lancée — il
+// n'y avait alors plus aucun moyen de voir qui est présent, seulement (voir
+// renderReconnectionBanner) une alerte quand quelqu'un se déconnecte. Masqué par défaut
+// (comme le panneau de diagnostic) pour ne pas prendre de place en continu ; l'utilisateur
+// l'ouvre s'il en a besoin.
+function uiToggleRoomBoard() {
+    const el = document.getElementById('roomBoard');
+    if (!el) return;
+    const show = el.style.display === 'none';
+    if (show) renderRoomBoard();
+    el.style.display = show ? 'block' : 'none';
+}
+
+function renderRoomBoard() {
+    const el = document.getElementById('roomBoard');
+    if (!el) return;
+
+    const seatRows = SEATS.map(seat => {
+        const pid = seatAssignment[seat];
+        const p = pid ? participants.find(x => x.id === pid) : null;
+        let occupant;
+        if (!p) {
+            occupant = '<span class="mini-avatar mini-avatar-robot">🤖</span><span class="room-board-name">Robot (passe)</span>';
+        } else {
+            const disconnectedTag = p.disconnected ? ' <span class="disconnected-tag">🔌</span>' : '';
+            occupant = `${avatarHtml(p.id)}<span class="room-board-name">${escapeHtml(p.name)}</span>${disconnectedTag}`;
+        }
+        return `<div class="room-board-seat"><span class="room-board-seat-label">${seatFullName(seat)}</span>${occupant}</div>`;
+    }).join('');
+
+    const kibitzerNames = kibitzerAssignment
+        .filter(Boolean)
+        .map(pid => participants.find(x => x.id === pid))
+        .filter(Boolean);
+    const kibitzersHtml = kibitzerNames.length > 0
+        ? `<div class="room-board-kibitzers">
+               <span class="room-board-section-label">👁 Kibitz :</span>
+               ${kibitzerNames.map(p => `${avatarHtml(p.id)}<span class="room-board-name">${escapeHtml(p.name)}</span>`).join('')}
+           </div>`
+        : '';
+
+    el.innerHTML = `<div class="room-board-seats">${seatRows}</div>${kibitzersHtml}`;
 }
 
 function renderMyHands() {
