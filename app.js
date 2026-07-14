@@ -534,8 +534,14 @@ const AVATAR_COLOR_PALETTE = [
 ];
 
 function avatarColorForId(id) {
+    // Mélange le code de salon dans le hash (pas l'id seul) : une couleur différente à
+    // chaque nouvelle partie plutôt qu'une "couleur de signature" fixe pour toujours sur
+    // cet appareil — mais stable pendant toute la durée d'UNE partie, y compris après une
+    // reconnexion (le code de salon ne change pas entre-temps, seul le jeton pourrait
+    // changer de contexte). Sans code de salon connu (avant qu'une partie ait démarré),
+    // repli sur l'id seul.
     let hash = 0;
-    const str = String(id || '');
+    const str = (currentRoomCode || '') + '|' + String(id || '');
     for (let i = 0; i < str.length; i++) {
         hash = (hash * 31 + str.charCodeAt(i)) >>> 0;
     }
@@ -654,6 +660,7 @@ function uiCreateRoom() {
 
     peerConn = new BridgePeerConnection({
         onOpen: (role, roomCode) => {
+            currentRoomCode = roomCode;
             const url = new URL(window.location.href);
             url.searchParams.set('room', roomCode);
             document.getElementById('shareLinkInput').value = url.toString();
