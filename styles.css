@@ -1592,22 +1592,33 @@ table.dd-table td {
         display: flex;
         flex-direction: column;
         gap: 8px;
-        overflow: hidden;
+        /* Filet de sécurité : en théorie, les budgets ci-dessous (mains + relevé + boîte
+           d'enchères) sont censés tenir exactement dans la hauteur disponible sans le
+           moindre scroll de page. En pratique, la hauteur réelle de l'en-tête varie
+           légèrement selon l'appareil (taille de police système, etc.) et un calcul
+           serré peut déborder de quelques dizaines de pixels. Plutôt qu'un overflow:
+           hidden strict qui rendrait alors le bas de l'écran (le relevé !) invisible et
+           inatteignable, un débordement propose ici un scroll de secours — imperceptible
+           si le calcul tombe juste, mais qui garantit qu'on peut TOUJOURS atteindre le
+           relevé en dernier recours plutôt que de le voir disparaître purement et
+           simplement. */
+        overflow-y: auto;
         /* Réserve la place occupée par #biddingBox une fois qu'il passe en position
            fixed ci-dessous (sinon le relevé grandirait pour combler cet espace et son
            bas se retrouverait masqué derrière la boîte d'enchères). */
-        padding-bottom: 26vh; /* repli pour les navigateurs sans support de dvh */
-        padding-bottom: 26dvh;
+        padding-bottom: 22vh; /* repli pour les navigateurs sans support de dvh */
+        padding-bottom: 22dvh;
     }
 
-    /* Mains du joueur : ~30% de la hauteur d'écran (un peu plus que les 25% d'origine —
-       voir le budget repris à la boîte d'enchères ci-dessous, moins prioritaire puisqu'on
-       ne la consulte que ponctuellement à son tour, contrairement à la main qu'on regarde
-       en continu). Défile verticalement en interne si plusieurs mains y tiennent mal (mode
-       diagonale / "maître du jeu"). */
+    /* Mains du joueur : budget resserré à ~22% de la hauteur d'écran (moins que les
+       tentatives précédentes) pour laisser la priorité au relevé d'enchères juste en
+       dessous, qui est l'information qu'on doit pouvoir suivre en continu pendant
+       l'enchère — la main, elle, une fois mémorisée en début de donne, n'a besoin d'être
+       reconsultée que ponctuellement. Défile verticalement en interne si plusieurs mains
+       y tiennent mal (mode diagonale / "maître du jeu"). */
     .hands-panel {
-        flex: 0 0 30vh; /* repli pour les navigateurs sans support de dvh */
-        flex: 0 0 30dvh;
+        flex: 0 0 22vh; /* repli pour les navigateurs sans support de dvh */
+        flex: 0 0 22dvh;
         min-height: 0;
         overflow-y: auto;
     }
@@ -1639,16 +1650,25 @@ table.dd-table td {
     }
 
     /* Seule cette zone (relevé + bandeaux + contrat + double mort) défile : la boîte
-       d'enchères, elle, est sortie du flux normal juste en dessous (position: fixed). */
+       d'enchères, elle, est sortie du flux normal juste en dessous (position: fixed).
+       min-height : c'est le contenu le plus important à garder visible en continu
+       pendant l'enchère — un plancher explicite l'empêche d'être purement et simplement
+       écrasé à zéro si le reste du calcul de hauteur est légèrement optimiste sur un
+       appareil donné (voir le scroll de secours sur .game-body ci-dessus, qui prend le
+       relais si même ce plancher ne suffit pas à tout faire tenir). */
     .auction-scroll-area {
         flex: 1 1 auto;
-        min-height: 0;
+        min-height: 140px;
         overflow-y: auto;
     }
 
+    /* Indicateur de tour resserré (padding/police réduits) : sur les captures de test, il
+       prenait une place disproportionnée par rapport à l'information qu'il porte. */
     #turnIndicator {
         flex: 0 0 auto;
-        margin-top: 6px;
+        margin-top: 4px;
+        padding: 5px;
+        font-size: 0.8rem;
     }
 
     /* Boîte d'enchères : fixée en bas de l'écran (consigne "position: fixed bottom"),
@@ -1656,9 +1676,10 @@ table.dd-table td {
        plafond de hauteur avec défilement interne pour les 7 lignes de paliers (1 à 7),
        et un fond opaque + une ombre portée pour bien la détacher du contenu qui défile
        derrière elle. env(safe-area-inset-bottom) évite qu'elle passe sous la barre
-       gestuelle des iPhone récents. Plafond réduit à 26% (contre 32% initialement) au
-       profit de la main du joueur — voir .hands-panel ci-dessus — le défilement interne
-       de la grille de paliers reste disponible pour les enchères hautes, moins fréquentes. */
+       gestuelle des iPhone récents. Plafond réduit à 22% (voir .hands-panel et le
+       padding-bottom de .game-body, tous deux alignés sur ce même chiffre) au profit du
+       relevé d'enchères — le défilement interne de la grille de paliers reste disponible
+       pour les enchères hautes, moins fréquentes. */
     #biddingBox {
         position: fixed;
         left: 0;
@@ -1666,8 +1687,8 @@ table.dd-table td {
         bottom: 0;
         z-index: 50;
         margin: 0;
-        max-height: 26vh; /* repli pour les navigateurs sans support de dvh */
-        max-height: 26dvh;
+        max-height: 22vh; /* repli pour les navigateurs sans support de dvh */
+        max-height: 22dvh;
         overflow-y: auto;
         background: var(--bg);
         border-top: 1px solid var(--border);
