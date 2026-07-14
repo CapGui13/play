@@ -23,45 +23,9 @@
     --font-body: 'Work Sans', 'Segoe UI', sans-serif;
     --font-mono: 'IBM Plex Mono', 'Consolas', monospace;
 
-    /* ----- Thème clair (par défaut) -----
-       Variables de surface/texte qui, elles, changent selon le thème (voir
-       [data-theme="dark"] plus bas). --bg-table/--surface-2 sont des voiles translucides
-       posés sur --bg (plutôt que des couleurs opaques) : cette approche reste cohérente
-       quel que soit --bg choisi, dans les deux thèmes, sans devoir la recalculer à la
-       main à chaque fois. */
-    --bg: #efe7d6;
-    --bg-table: rgba(23, 35, 29, 0.06);
-    --surface-2: rgba(23, 35, 29, 0.07);
-    --card: #ffffff;
-    --text: #17231d;
-    --text-muted: color-mix(in srgb, var(--text) 62%, transparent);
-    --bid-button: #f2e2ba;
-    --border: rgba(23, 35, 29, 0.16);
-    --input-bg: rgba(23, 35, 29, 0.05);
-
-    /* Couleurs de couleur (♥/♦/♣) : les teintes "vives" utilisées jusqu'ici (d94f43,
-       f0a04b, 4f8de0) n'étaient calibrées que pour un fond sombre — sur un fond clair
-       elles perdent tout contraste. On permute donc vers les teintes plus soutenues
-       ci-dessous en thème clair, et vers les teintes vives en thème sombre (voir
-       [data-theme="dark"]) — même nom de variable partout dans le fichier, valeur
-       différente selon le thème, aucun site d'appel à modifier. Pique reste #17231d
-       (= --text) : voir suit-icon.spades / call-btn.spades / etc., qui référencent
-       directement var(--text) plutôt qu'une variable --suit-black dédiée. */
-    --suit-red: #b5382f;
-    --suit-orange: #c96a1f;
-    --suit-blue: #1d4ed8;
-}
-
-/* ----- Thème sombre -----
-   Reprend telles quelles les valeurs déjà utilisées partout dans ce fichier avant
-   l'introduction du thème clair (tapis vert foncé, panneaux translucides sur fond
-   sombre) : aucune régression visuelle pour qui utilisait déjà l'appli, et c'est le
-   thème appliqué par défaut si le système est en dark mode (voir uiToggleTheme/
-   initThemeToggle dans app.js). Seul --card est réellement nouveau : les mains et le
-   relevé d'enchères, jusqu'ici toujours blancs quel que soit le thème, adoptent
-   désormais un panneau sombre en mode sombre plutôt que de rester une feuille blanche
-   éclatante au milieu d'une interface sombre. */
-[data-theme="dark"] {
+    /* Un seul thème (sombre) — il y a eu un thème clair basculable, retiré depuis (inutile
+       en usage réel). Ces valeurs sont celles utilisées historiquement, avant même
+       l'introduction (puis le retrait) du thème clair. */
     --bg: #0b3d2e;
     --bg-table: rgba(0, 0, 0, 0.18);
     --surface-2: rgba(0, 0, 0, 0.15);
@@ -99,17 +63,10 @@ input, textarea, [contenteditable] {
 
 body {
     font-family: var(--font-body);
-    background: var(--bg);
+    background: radial-gradient(ellipse at top, var(--felt-mid) 0%, var(--felt-deep) 70%);
     color: var(--text);
     min-height: 100vh;
     padding: calc(56px + var(--safe-top)) 20px 20px;
-    transition: background-color 0.2s ease, color 0.2s ease;
-}
-
-/* Le dégradé "tapis" n'a de sens qu'en mode sombre (--bg y vaut le vert profond utilisé
-   comme base du dégradé) ; en mode clair, --bg est une couleur plate. */
-[data-theme="dark"] body {
-    background: radial-gradient(ellipse at top, var(--felt-mid) 0%, var(--felt-deep) 70%);
 }
 
 .app-container {
@@ -146,6 +103,13 @@ body {
 
 .connection-status.connected { color: #7fd99a; }
 .connection-status.disconnected { color: #e0857a; }
+
+/* Masqué pour l'instant (voir échange avec Guillaume) : setConnectionStatus() dans app.js
+   continue de le mettre à jour normalement (texte + classe connected/disconnected), donc
+   gardé DANS le DOM plutôt que retiré du HTML (contrairement au bouton du panneau de
+   diagnostic) — le supprimer aurait fait planter ce code, qui écrit dedans sans vérifier
+   qu'il existe. Un seul display:none à retirer ici pour tout réactiver. */
+#connectionStatus { display: none; }
 
 .room-code-badge {
     color: var(--brass-bright);
@@ -408,9 +372,8 @@ body {
 
 /* Bannières de statut (erreur, avertissement, succès) : la teinte semble "coller" une
    couleur fixe, mais background/border/texte sont chacun mélangés avec --card et --text
-   du thème courant (color-mix) plutôt que codés en dur — donc un rouge/ambre/vert qui
-   reste lisible aussi bien sur fond clair que sombre, sans bloc [data-theme] séparé à
-   maintenir pour chacune. */
+   (color-mix) plutôt que codés en dur — reste cohérent avec le reste de la palette sans
+   valeurs à dupliquer pour chaque bannière. */
 .error-banner {
     margin-top: 18px;
     background: color-mix(in srgb, #c0392b 20%, var(--card));

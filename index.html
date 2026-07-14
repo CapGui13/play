@@ -18,23 +18,6 @@
 <meta name="apple-mobile-web-app-title" content="Enchères">
 <link rel="apple-touch-icon" href="icons/apple-icon-180.png">
 
-<!-- Applique le thème AVANT le rendu de la page (avant même le CSS) : app.js n'est chargé
-     qu'en fin de <body>, donc attendre son exécution pour poser data-theme laisserait
-     voir un flash du mauvais thème (thème clair par défaut, puis bascule visible vers
-     sombre) le temps qu'il se charge. La logique complète du bouton toggle (localStorage,
-     resynchronisation si le système change de préférence) est dans app.js — voir
-     initThemeToggle/uiToggleTheme — ce script ne fait que ce strict minimum. -->
-<script>
-(function() {
-    try {
-        var saved = localStorage.getItem('bridgeBidTheme');
-        var theme = saved || (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
-        document.documentElement.setAttribute('data-theme', theme);
-    } catch (e) {
-        document.documentElement.setAttribute('data-theme', 'dark');
-    }
-})();
-</script>
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -43,7 +26,6 @@
     <span id="connectionStatus" class="connection-status">⚪ Pas encore connecté</span>
     <span id="roomCodeBadge" class="room-code-badge" style="display:none;"></span>
     <button type="button" id="reconnectBtn" class="btn btn-primary btn-small" style="display:none;" onclick="uiReconnect()">🔌 Se reconnecter</button>
-    <button type="button" id="themeToggleBtn" class="debug-toggle-btn" onclick="uiToggleTheme()" aria-label="Changer de thème" title="Changer de thème">🌙</button>
     <!-- Masqué pour l'instant (voir échange avec Guillaume) : le panneau et toute sa
          logique (pushDebugLog, uiToggleDebugPanel, testTurnConnectivity...) restent
          intacts, il suffit de retirer ce commentaire et le style pour le réactiver. -->

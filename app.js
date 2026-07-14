@@ -114,59 +114,6 @@ function isKibbitzer() {
     return !mySeats || mySeats.length === 0;
 }
 
-// ===== Thème clair / sombre =====
-//
-// Le thème est déjà posé de façon synchrone sur <html> avant même le chargement de ce
-// fichier (voir le petit script inline en tête de index.html), pour éviter un flash du
-// mauvais thème. Ce qui suit gère le bouton toggle, la persistance du choix, et la
-// resynchronisation si le système change de préférence en cours de session.
-const THEME_STORAGE_KEY = 'bridgeBidTheme';
-
-function currentTheme() {
-    return document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
-}
-
-function applyTheme(theme) {
-    document.documentElement.setAttribute('data-theme', theme);
-    const btn = document.getElementById('themeToggleBtn');
-    if (!btn) return;
-    // L'icône représente l'action (le thème vers lequel on bascule si on clique), pas le
-    // thème actuellement affiché.
-    btn.textContent = theme === 'dark' ? '☀️' : '🌙';
-    btn.title = theme === 'dark' ? 'Passer en thème clair' : 'Passer en thème sombre';
-}
-
-function uiToggleTheme() {
-    const next = currentTheme() === 'dark' ? 'light' : 'dark';
-    try {
-        localStorage.setItem(THEME_STORAGE_KEY, next);
-    } catch (e) {
-        // localStorage indisponible (navigation privée stricte, etc.) : le choix ne
-        // survivra pas à un rechargement, mais le bouton reste fonctionnel pour la
-        // session en cours.
-    }
-    applyTheme(next);
-}
-
-// Synchronise l'icône du bouton avec le thème déjà posé sur <html>, et réagit si
-// l'utilisateur change la préférence de son système EN COURS DE SESSION — mais
-// seulement s'il n'a jamais fait de choix explicite via le bouton : une préférence
-// système est une valeur par défaut, pas une décision de l'utilisateur, donc on ne doit
-// pas écraser un choix déjà fait.
-function initThemeToggle() {
-    applyTheme(currentTheme());
-    if (!window.matchMedia) return;
-    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
-        let hasManualChoice;
-        try {
-            hasManualChoice = localStorage.getItem(THEME_STORAGE_KEY) !== null;
-        } catch (err) {
-            hasManualChoice = false;
-        }
-        if (!hasManualChoice) applyTheme(e.matches ? 'dark' : 'light');
-    });
-}
-
 // ===== Préférences d'affichage des mains (locales, persistées, indépendantes du réseau) =====
 //
 // Purement cosmétique et propre à chaque appareil (comme le jeton de reconnexion) : pas
@@ -2596,7 +2543,6 @@ function initOfflineHandling() {
 // ===== Initialisation =====
 
 window.addEventListener('DOMContentLoaded', () => {
-    initThemeToggle();
     initServiceWorker();
     initIosInstallHint();
     initIosLockScreenWarning();
