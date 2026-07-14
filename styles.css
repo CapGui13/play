@@ -257,15 +257,9 @@ body {
     align-self: flex-start;
 }
 
-.chat-message.is-mine {
-    align-self: flex-end;
-    background: color-mix(in srgb, var(--brass) 25%, var(--card));
-}
-
 .chat-message-sender {
     font-size: 0.85rem;
     font-weight: 700;
-    color: var(--brass-bright);
 }
 
 .chat-message-text {

@@ -1661,11 +1661,12 @@ function renderChat() {
     const el = document.getElementById('chatMessages');
     if (!el) return;
     el.innerHTML = chatMessages.map(m => {
-        const mine = m.senderId === myParticipantId;
-        // Le nom précède toujours le message, y compris pour les siens (voir échange avec
-        // Guillaume) — "Pseudo : message" sur une seule ligne, pas le nom au-dessus comme
-        // dans une bulle de messagerie classique.
-        return `<div class="chat-message ${mine ? 'is-mine' : ''}"><span class="chat-message-sender">${escapeHtml(m.senderName)} :</span> <span class="chat-message-text">${escapeHtml(m.text)}</span></div>`;
+        // Tous les messages partent de la gauche, y compris les siens (pas de bulle
+        // alignée à droite façon messagerie) — le nom précède toujours le message, avec
+        // sa couleur reprise de avatarColorForId (même couleur que la petite pastille
+        // d'avatar de ce participant ailleurs dans l'appli, pour un repère cohérent).
+        const senderColor = avatarColorForId(m.senderId);
+        return `<div class="chat-message"><span class="chat-message-sender" style="color:${senderColor}">${escapeHtml(m.senderName)} :</span> <span class="chat-message-text">${escapeHtml(m.text)}</span></div>`;
     }).join('');
     el.scrollTop = el.scrollHeight; // toujours faire défiler vers le message le plus récent
 }
