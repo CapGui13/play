@@ -420,7 +420,12 @@ let auctionHistory = [];    // historique de la donne en cours : [{seat, call}, 
 // PAS au moment de cliquer sur "Commencer la partie", puisqu'à cet instant l'écran du
 // salon (et donc le message) disparaît immédiatement avec le passage à l'écran de jeu.
 let pendingParsedDeals = null;
-let pendingParsedFile = null; // le File dont pendingParsedDeals est le résultat, pour savoir si le cache est encore valable
+// Identifie la source dont pendingParsedDeals est le résultat, pour savoir si le cache
+// est encore valable sans avoir à relire/re-fetch : soit l'objet File choisi via l'input
+// upload, soit une chaîne 'library:nomDeFichier' pour une donne piochée dans la
+// bibliothèque du club (voir uiHandleDealLibraryChosen) — comparée uniquement par
+// égalité (===), jamais utilisée comme un vrai File au-delà de ce contrôle.
+let pendingParsedSource = null;
 
 // Ordre effectivement utilisé pour la partie : soit pendingParsedDeals tel quel (ordre du
 // fichier), soit une copie mélangée, selon la case "Ordre aléatoire des donnes" (voir
@@ -457,6 +462,44 @@ function refreshPendingOrderedDeals() {
 // Appelé par la case "Ordre aléatoire des donnes" du salon d'attente.
 function uiToggleRandomizeDeals() {
     refreshPendingOrderedDeals();
+}
+
+// ===== Bibliothèque de donnes du club =====
+//
+// donnes/catalogue.json est un simple tableau de noms de fichiers (voir donnes/README.md
+// pour la marche à suivre pour en ajouter) : ["exemple.pbn", "autre-exemple.lin"]. Pas de
+// backend — ajouter une donne à la bibliothèque, c'est déposer le fichier dans donnes/ et
+// ajouter son nom à ce tableau, puis pousser sur GitHub comme le reste du site.
+//
+// Chargé une fois au démarrage de l'appli plutôt qu'à l'entrée dans le salon : peu de
+// risque que le catalogue change en cours de session, et ça évite un aller-retour réseau
+// à chaque fois que l'hôte revient sur cet écran.
+function initDealLibrary() {
+    fetch('donnes/catalogue.json')
+        .then(resp => {
+            if (!resp.ok) throw new Error('catalogue absent ou illisible');
+            return resp.json();
+        })
+        .then(filenames => {
+            if (!Array.isArray(filenames) || filenames.length === 0) return; // bibliothèque vide : on laisse le groupe masqué
+
+            const select = document.getElementById('dealLibrarySelect');
+            const group = document.getElementById('dealLibraryGroup');
+            if (!select || !group) return;
+
+            filenames.forEach(filename => {
+                const option = document.createElement('option');
+                option.value = filename;
+                option.textContent = filename;
+                select.appendChild(option);
+            });
+            group.style.display = 'block';
+        })
+        .catch(() => {
+            // Pas de bibliothèque déployée (ou catalogue.json absent/vide) : ce n'est pas
+            // une erreur pour l'utilisateur, juste une fonctionnalité qui ne s'active pas.
+            // Le groupe reste masqué (voir style initial dans index.html), pas de message.
+        });
 }
 
 // --- Demande d'annulation (undo) ---
@@ -520,7 +563,14 @@ function defaultParticipantName(pid) {
 
 function showScreen(id) {
     document.querySelectorAll('.screen').forEach(el => el.style.display = 'none');
-    document.getElementById(id).style.display = 'block';
+    // '' (et non 'block' en dur) : un style inline a une priorité absolue sur n'importe
+    // quelle règle de styles.css, y compris #screen-game { display: flex; ... } posé par
+    // le layout plein écran mobile (voir @media max-width:768px) — le forcer à 'block'
+    // ici l'écrasait silencieusement et faisait s'effondrer tout le système de répartition
+    // des hauteurs (mains/enchères/boîte fixée en bas), avec un retour au scroll de page
+    // classique. Laisser vide restaure le display défini par la feuille de style (block
+    // par défaut pour un <section>, flex pour #screen-game sous 768px).
+    document.getElementById(id).style.display = '';
 }
 
 function setConnectionStatus(connected) {
@@ -595,7 +645,7 @@ function uiCreateRoom() {
     prevKibitzerAssignmentSnapshot = null;
     prevParticipantsDisconnectedSnapshot = null;
     pendingParsedDeals = null;
-    pendingParsedFile = null;
+    pendingParsedSource = null;
     pendingOrderedDeals = null;
 
     peerConn = new BridgePeerConnection({
@@ -1047,51 +1097,72 @@ function clearHostSetupMessage() {
     document.getElementById('hostSetupError').style.display = 'none';
 }
 
-// Lit et parse un fichier de donnes, affichant tout de suite l'erreur ou l'avertissement
-// "PARs non disponibles" s'il y a lieu. `onDone` reçoit le tableau de donnes parsées, ou
-// `null` si la lecture/le parsing a échoué (l'erreur est alors déjà affichée).
-function readAndValidateDealFile(file, onDone) {
+// Parse et valide un texte de donnes déjà en main (peu importe sa provenance — fichier
+// local lu via FileReader, ou donne de la bibliothèque récupérée via fetch, voir
+// readAndValidateDealFile / readAndValidateDealFromLibrary), affichant tout de suite
+// l'erreur ou l'avertissement "PARs non disponibles" s'il y a lieu. `onDone` reçoit le
+// tableau de donnes parsées, ou `null` si le parsing a échoué (l'erreur est alors déjà
+// affichée).
+function validateAndUseDealText(text, filename, onDone) {
     clearHostSetupMessage();
     const infoEl = document.getElementById('dealFileInfo');
     infoEl.style.display = 'none';
 
+    let parsedDeals;
+    try {
+        parsedDeals = parseDealFile(text, filename);
+    } catch (err) {
+        setHostSetupMessage(err.message, false);
+        onDone(null);
+        return;
+    }
+
+    const n = parsedDeals.length;
+    document.getElementById('dealFileInfoText').textContent =
+        `✅ ${n} donne${n > 1 ? 's' : ''} chargée${n > 1 ? 's' : ''}`;
+    infoEl.style.display = 'flex';
+
+    // Avertissements non bloquants (la partie peut démarrer quand même) : format de
+    // fichier ambigu (voir parseDealFile) et/ou absence de PAR dans le fichier.
+    const warnings = [];
+    if (parsedDeals._formatWarning) warnings.push(parsedDeals._formatWarning);
+    if (!parsedDeals.some(d => d.par)) {
+        warnings.push('PARs non disponibles dans ce fichier — les contrats optimaux ne seront pas affichés.');
+    }
+    if (warnings.length > 0) {
+        setHostSetupMessage(warnings.join('\n⚠️ '), true);
+    }
+
+    onDone(parsedDeals);
+}
+
+// Lit un fichier local (upload) puis délègue à validateAndUseDealText.
+function readAndValidateDealFile(file, onDone) {
     const reader = new FileReader();
-
-    reader.onload = () => {
-        let parsedDeals;
-        try {
-            parsedDeals = parseDealFile(reader.result, file.name);
-        } catch (err) {
-            setHostSetupMessage(err.message, false);
-            onDone(null);
-            return;
-        }
-
-        const n = parsedDeals.length;
-        document.getElementById('dealFileInfoText').textContent =
-            `✅ ${n} donne${n > 1 ? 's' : ''} chargée${n > 1 ? 's' : ''}`;
-        infoEl.style.display = 'flex';
-
-        // Avertissements non bloquants (la partie peut démarrer quand même) : format de
-        // fichier ambigu (voir parseDealFile) et/ou absence de PAR dans le fichier.
-        const warnings = [];
-        if (parsedDeals._formatWarning) warnings.push(parsedDeals._formatWarning);
-        if (!parsedDeals.some(d => d.par)) {
-            warnings.push('PARs non disponibles dans ce fichier — les contrats optimaux ne seront pas affichés.');
-        }
-        if (warnings.length > 0) {
-            setHostSetupMessage(warnings.join('\n⚠️ '), true);
-        }
-
-        onDone(parsedDeals);
-    };
-
+    reader.onload = () => validateAndUseDealText(reader.result, file.name, onDone);
     reader.onerror = () => {
+        clearHostSetupMessage();
         setHostSetupMessage('Impossible de lire ce fichier.', false);
         onDone(null);
     };
-
     reader.readAsText(file);
+}
+
+// Récupère une donne de la bibliothèque du club (voir donnes/catalogue.json) puis délègue
+// à validateAndUseDealText — même circuit de validation que l'upload, seule la façon
+// d'obtenir le texte change.
+function readAndValidateDealFromLibrary(filename, onDone) {
+    fetch(`donnes/${encodeURIComponent(filename)}`)
+        .then(resp => {
+            if (!resp.ok) throw new Error(`Fichier introuvable dans la bibliothèque (HTTP ${resp.status}).`);
+            return resp.text();
+        })
+        .then(text => validateAndUseDealText(text, filename, onDone))
+        .catch(err => {
+            clearHostSetupMessage();
+            setHostSetupMessage(err.message || 'Impossible de charger cette donne depuis la bibliothèque.', false);
+            onDone(null);
+        });
 }
 
 // Appelé dès que l'hôte choisit (ou change) le fichier de donnes, pour parser et valider
@@ -1101,7 +1172,7 @@ function readAndValidateDealFile(file, onDone) {
 function uiHandleDealFileChosen() {
     const fileInput = document.getElementById('dealFileInput');
     pendingParsedDeals = null;
-    pendingParsedFile = null;
+    pendingParsedSource = null;
     pendingOrderedDeals = null;
 
     if (!fileInput.files || fileInput.files.length === 0) {
@@ -1110,9 +1181,41 @@ function uiHandleDealFileChosen() {
         return;
     }
 
+    // Un fichier local et une donne de bibliothèque sont mutuellement exclusifs (une
+    // seule source à la fois, pour éviter toute ambiguïté sur celle qui sera utilisée) :
+    // choisir l'un désélectionne l'autre.
+    const librarySelect = document.getElementById('dealLibrarySelect');
+    if (librarySelect) librarySelect.value = '';
+
     const file = fileInput.files[0];
     readAndValidateDealFile(file, (parsedDeals) => {
-        pendingParsedFile = file;
+        pendingParsedSource = file;
+        pendingParsedDeals = parsedDeals;
+        refreshPendingOrderedDeals();
+    });
+}
+
+// Symétrique de uiHandleDealFileChosen, pour une donne piochée dans la bibliothèque du
+// club (voir donnes/catalogue.json et initDealLibrary) plutôt qu'un fichier local.
+function uiHandleDealLibraryChosen() {
+    const select = document.getElementById('dealLibrarySelect');
+    const filename = select ? select.value : '';
+    pendingParsedDeals = null;
+    pendingParsedSource = null;
+    pendingOrderedDeals = null;
+
+    if (!filename) {
+        clearHostSetupMessage();
+        document.getElementById('dealFileInfo').style.display = 'none';
+        return;
+    }
+
+    // Réciproquement, choisir dans la bibliothèque désélectionne le fichier local.
+    const fileInput = document.getElementById('dealFileInput');
+    if (fileInput) fileInput.value = '';
+
+    readAndValidateDealFromLibrary(filename, (parsedDeals) => {
+        pendingParsedSource = `library:${filename}`;
         pendingParsedDeals = parsedDeals;
         refreshPendingOrderedDeals();
     });
@@ -1182,18 +1285,19 @@ function renderDealPreview(dealsToPreview) {
 
 function uiStartGameAsHost() {
     const fileInput = document.getElementById('dealFileInput');
+    const librarySelect = document.getElementById('dealLibrarySelect');
+    const file = (fileInput.files && fileInput.files[0]) || null;
+    const libraryFilename = librarySelect ? librarySelect.value : '';
 
-    if (!fileInput.files || fileInput.files.length === 0) {
-        setHostSetupMessage('Choisissez un fichier .pbn ou .lin.', false);
+    if (!file && !libraryFilename) {
+        setHostSetupMessage('Choisissez un fichier .pbn ou .lin, ou une donne dans la bibliothèque.', false);
         return;
     }
-
-    const file = fileInput.files[0];
 
     // Reçoit les donnes déjà dans l'ordre à utiliser pour jouer (mélangé ou non, voir
     // pendingOrderedDeals / refreshPendingOrderedDeals) — jamais l'ordre brut du fichier.
     const proceedWithDeals = (orderedDeals) => {
-        if (!orderedDeals) return; // l'erreur est déjà affichée par readAndValidateDealFile
+        if (!orderedDeals) return; // l'erreur est déjà affichée par readAndValidateDealFile/readAndValidateDealFromLibrary
 
         deals = orderedDeals;
         boardIndex = 0;
@@ -1220,23 +1324,35 @@ function uiStartGameAsHost() {
         enterGameScreen();
     };
 
-    // Cas normal : le fichier a déjà été lu et parsé au moment où il a été choisi (voir
-    // uiHandleDealFileChosen) — pas besoin de le relire, et le message éventuel
-    // (erreur ou avertissement PAR) est déjà affiché depuis ce moment-là.
-    if (pendingParsedFile === file) {
+    // Source effectivement active : le fichier local prime si les deux sont, par un
+    // hasard quelconque, renseignés à la fois (ne devrait pas arriver, voir
+    // uiHandleDealFileChosen/uiHandleDealLibraryChosen qui désélectionnent l'autre à
+    // chaque choix, mais on tranche explicitement plutôt que de laisser un cas ambigu).
+    const activeSource = file || `library:${libraryFilename}`;
+
+    // Cas normal : la source a déjà été lue et parsée au moment où elle a été choisie
+    // (voir uiHandleDealFileChosen / uiHandleDealLibraryChosen) — pas besoin de la
+    // relire, et le message éventuel (erreur ou avertissement PAR) est déjà affiché
+    // depuis ce moment-là.
+    if (pendingParsedSource === activeSource) {
         proceedWithDeals(pendingOrderedDeals);
         return;
     }
 
-    // Filet de sécurité si, pour une raison quelconque, le cache ne correspond pas au
-    // fichier actuellement sélectionné (ex. écouteur 'change' non déclenché) : on relit,
+    // Filet de sécurité si, pour une raison quelconque, le cache ne correspond pas à la
+    // source actuellement sélectionnée (ex. écouteur 'change' non déclenché) : on relit,
     // puis on applique l'ordre aléatoire éventuel avant de démarrer.
-    readAndValidateDealFile(file, (parsedDeals) => {
-        pendingParsedFile = file;
+    const onReloaded = (parsedDeals) => {
+        pendingParsedSource = activeSource;
         pendingParsedDeals = parsedDeals;
         refreshPendingOrderedDeals();
         proceedWithDeals(pendingOrderedDeals);
-    });
+    };
+    if (file) {
+        readAndValidateDealFile(file, onReloaded);
+    } else {
+        readAndValidateDealFromLibrary(libraryFilename, onReloaded);
+    }
 }
 
 // ===== Réception des messages des autres joueurs =====
@@ -2322,6 +2438,7 @@ window.addEventListener('DOMContentLoaded', () => {
     initIosInstallHint();
     initIosLockScreenWarning();
     initOfflineHandling();
+    initDealLibrary();
 
     // Rafraîchit uniquement le texte du décompte ("déconnecté depuis Xs") de la bannière
     // de reconnexion — pas besoin d'un message réseau pour ça, chaque client calcule son
