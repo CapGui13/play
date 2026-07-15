@@ -206,12 +206,19 @@ body.on-landing-screen .connection-bar {
    bas à droite à partir d'un écran de tablette. */
 .chat-panel {
     position: fixed;
-    bottom: 0;
-    left: 0;
-    right: 0;
+    bottom: 10px;
+    /* Aligné sur la marge de 20px de body (voir échange avec Guillaume : le panneau collé
+       aux bords, à 0, paraissait "plus large que le reste" — tout le reste de l'appli est
+       en retrait de 20px). max-width en renfort : garantit que rien à l'intérieur (nom
+       trop long, etc.) ne peut pousser la boîte au-delà de l'écran, quoi qu'il arrive. */
+    left: 14px;
+    right: 14px;
+    max-width: calc(100vw - 28px);
     max-height: 60vh;
     background: var(--card);
+    border: 1px solid var(--border);
     border-top: 2px solid var(--brass);
+    border-radius: 14px;
     z-index: 200;
     display: flex;
     flex-direction: column;
@@ -225,6 +232,7 @@ body.on-landing-screen .connection-bar {
         right: 16px;
         bottom: 16px;
         width: 340px;
+        max-width: 340px;
         max-height: 480px;
         border-radius: 12px;
         border: 1px solid var(--border);
@@ -246,6 +254,7 @@ body.on-landing-screen .connection-bar {
 .chat-messages {
     flex: 1;
     overflow-y: auto;
+    overflow-x: hidden;
     padding: 10px 14px;
     display: flex;
     flex-direction: column;
@@ -1636,6 +1645,7 @@ table.dd-table td.dd-secondary-contract {
     flex-shrink: 0;
     max-height: 90px;
     overflow-y: auto;
+    overflow-x: hidden;
     padding: 8px 14px;
     border-bottom: 1px solid var(--border);
     font-size: 0.78rem;

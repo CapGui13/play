@@ -101,8 +101,14 @@
             <div class="landing-card">
                 <h2>Rejoindre une partie</h2>
                 <p>Entrez le code à 4 lettres partagé par l'autre joueur.</p>
-                <input type="text" id="joinCodeInput" class="code-input" placeholder="EX: BQXK" maxlength="4" autocapitalize="characters">
-                <button id="joinRoomBtn" class="btn btn-secondary" onclick="uiJoinRoom()">Rejoindre</button>
+                <input type="text" id="joinCodeInput" class="code-input" placeholder="EX: BQXK" maxlength="4" autocapitalize="characters" enterkeyhint="go" onkeydown="uiJoinCodeInputKeydown(event)">
+                <!-- ontouchstart : ferme le clavier virtuel DÈS le début du tap sur ce bouton plutôt
+                     qu'au clic — sur mobile, avec le clavier encore ouvert, le premier tap sert
+                     souvent juste à le fermer (le navigateur avale le clic), d'où le "il faut
+                     appuyer 2 fois" remonté par Guillaume. Fermer le clavier plus tôt, dès le
+                     contact, laisse le second temps du même geste (touchend/click) s'exécuter
+                     normalement. Sans effet indésirable au clavier/souris (pas d'événement touch). -->
+                <button id="joinRoomBtn" class="btn btn-secondary" ontouchstart="document.activeElement && document.activeElement.blur()" onclick="uiJoinRoom()">Rejoindre</button>
             </div>
         </div>
         <div id="landingError" class="error-banner" style="display:none;"></div>

@@ -126,6 +126,11 @@ class BridgePeerConnection {
         this._connectTimeoutId = null;
         this._slowHintTimeoutId = null;
         this._settled = false; // vrai une fois au moins une connexion établie (désarme les timeouts)
+        // Vrai tant que la connexion au serveur de signalisation PeerJS tient (voir
+        // isConnected ci-dessous et l'événement 'disconnected' dans createRoom/joinRoom) :
+        // distinct de l'état ouvert/fermé des DataConnection p2p elles-mêmes, qui peuvent
+        // rester "ouvertes" un moment après une coupure côté signalisation.
+        this.signalingOpen = true;
     }
 
     get conn() {
@@ -268,6 +273,14 @@ class BridgePeerConnection {
 
         this.peer.on('disconnected', () => {
             this._log('Peer hôte déconnecté du serveur de signalisation.');
+            // Distinct de 'close' sur une DataConnection (voir onPeerDisconnected) : ici,
+            // c'est la connexion au serveur de signalisation PeerJS lui-même qui est
+            // tombée (WebSocket coupé — Wi-Fi, mise en veille...). Les parties déjà
+            // établies avec des invités continuent parfois de fonctionner un moment via
+            // leur canal WebRTC direct, mais plus personne de nouveau ne peut rejoindre
+            // tant que ce n'est pas rétabli — donc remonté quand même à l'appli.
+            this.signalingOpen = false;
+            if (this.handlers.onSignalingDisconnected) this.handlers.onSignalingDisconnected();
         });
 
         this.peer.on('error', (err) => {
@@ -297,6 +310,15 @@ class BridgePeerConnection {
 
         this.peer.on('disconnected', () => {
             this._log('Peer invité déconnecté du serveur de signalisation.');
+            // Voir échange avec Guillaume : c'est très probablement ce cas précis qui
+            // laissait le bouton "🔌 Se reconnecter" ne jamais apparaître. La coupure au
+            // niveau du serveur de signalisation (WebSocket) est un événement DIFFÉRENT de
+            // la fermeture de la DataConnection p2p (voir onPeerDisconnected) — cette
+            // dernière peut mettre du temps à se déclencher, ou ne jamais se déclencher
+            // proprement, après une coupure côté signalisation seule. Sans ce relais, rien
+            // ne prévenait l'appli que la connexion était compromise.
+            this.signalingOpen = false;
+            if (this.handlers.onSignalingDisconnected) this.handlers.onSignalingDisconnected();
         });
 
         this.peer.on('error', (err) => {
@@ -329,7 +351,7 @@ class BridgePeerConnection {
     }
 
     isConnected() {
-        return this.conns.some(c => c && c.open);
+        return this.signalingOpen && this.conns.some(c => c && c.open);
     }
 
     allConnected() {

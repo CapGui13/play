@@ -797,6 +797,16 @@ function buildHostHandlers(onOpenExtra) {
         onSlowConnection: () => {},
         onTimeout: () => {},
         onData: handlePeerData,
+        // Voir onSignalingDisconnected côté invité (buildGuestHandlers) : même lacune côté
+        // hôte, avec une conséquence différente — les invités déjà connectés continuent
+        // parfois de fonctionner un moment via leur canal WebRTC direct, mais personne de
+        // nouveau ne peut plus rejoindre la partie tant que ce n'est pas rétabli. Ça
+        // correspond très probablement au souci "Aucune partie trouvée" déjà diagnostiqué
+        // (host qui change d'appli sur iPhone juste après avoir créé la salle) : au moins,
+        // maintenant, le statut reflète ce problème au lieu de rester "🟢 Connecté".
+        onSignalingDisconnected: () => {
+            setConnectionStatus(false);
+        },
         onError: (err) => {
             showLandingError('Erreur de connexion : ' + ((err && (err.message || err.type)) || err));
         }
@@ -816,6 +826,14 @@ function buildGuestHandlers() {
             renderReconnectButton();
         },
         onPeerDisconnected: () => {
+            setConnectionStatus(false);
+            renderReconnectButton();
+        },
+        // Voir échange avec Guillaume ("le bouton Se reconnecter n'apparaît pas") : sans ce
+        // handler, une coupure de la connexion au serveur de signalisation (WebSocket) qui
+        // ne provoque pas de fermeture propre de la DataConnection passait complètement
+        // inaperçue — ni le statut ni le bouton ne se mettaient à jour.
+        onSignalingDisconnected: () => {
             setConnectionStatus(false);
             renderReconnectButton();
         },
@@ -844,6 +862,15 @@ function buildGuestHandlers() {
             }
         }
     };
+}
+
+// Voir échange avec Guillaume (double tap nécessaire sur "Rejoindre" au clavier mobile) :
+// valider directement depuis le clavier virtuel (touche "Aller", voir enterkeyhint="go"
+// dans index.html) contourne complètement le souci, plutôt que de devoir taper le bouton.
+function uiJoinCodeInputKeydown(event) {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    uiJoinRoom();
 }
 
 function uiJoinRoom() {
