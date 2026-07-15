@@ -39,6 +39,22 @@
 const PEER_ID_PREFIX = 'bridge-bid-v1-';
 const CONNECTION_TIMEOUT_MS = 45000; // au-delà, on considère que ça n'aboutira pas
 
+// Voir échange avec Guillaume ("Lost connection to server" au tout premier essai) : le
+// service cloud public et gratuit de PeerJS a, de temps en temps, un aléa transitoire au
+// moment précis de s'y enregistrer — sans lien avec le code de salon ni le réseau de la
+// personne en particulier. Plutôt que de faire échouer tout de suite, on retente
+// automatiquement quelques fois avant d'abandonner pour de bon (voir _attemptCreateRoom/
+// _attemptJoinRoom). Uniquement pour la toute première tentative de connexion, jamais une
+// fois déjà connecté (ce cas-là est géré séparément par peer.reconnect(), voir 'disconnected').
+const MAX_INITIAL_CONNECT_RETRIES = 2; // donc 3 tentatives au total
+const INITIAL_CONNECT_RETRY_DELAY_MS = 1500;
+// Types d'erreur PeerJS considérés comme transitoires (réseau/serveur), donc valant la
+// peine d'être retentés — par opposition à des erreurs de fond qui ne se résoudraient pas
+// en réessayant (identifiant invalide, navigateur incompatible...). 'unavailable-id' est
+// inclus séparément côté hôte uniquement (voir _attemptCreateRoom) : un nouveau code de
+// salon est alors généré à chaque tentative, ce qui résout ce cas précis.
+const RETRIABLE_ERROR_TYPES = ['network', 'server-error', 'socket-error', 'socket-closed'];
+
 // Configuration ICE explicite : serveurs STUN publics de Google (découverte d'adresse),
 // complétés par un serveur TURN (ExpressTURN, compte gratuit) qui relaie réellement les
 // données quand une connexion directe échoue — cas fréquent avec les NAT restrictifs,
@@ -131,6 +147,12 @@ class BridgePeerConnection {
         // distinct de l'état ouvert/fermé des DataConnection p2p elles-mêmes, qui peuvent
         // rester "ouvertes" un moment après une coupure côté signalisation.
         this.signalingOpen = true;
+        // Vrai une fois que 'open' s'est déclenché au moins une fois (voir _attemptCreateRoom/
+        // _attemptJoinRoom) : distingue un aléa réseau sur la toute première tentative de
+        // connexion (retentée automatiquement, voir plus bas) d'une coupure survenant après
+        // coup, une fois déjà bien connecté (gérée séparément par reconnect()/'disconnected').
+        this._everOpened = false;
+        this._connectRetries = 0;
     }
 
     get conn() {
@@ -244,14 +266,25 @@ class BridgePeerConnection {
     createRoom(cap = 6) {
         this.role = 'host';
         this.maxGuests = cap;
+        this._everOpened = false;
+        this._connectRetries = 0;
+        this._attemptCreateRoom(cap);
+    }
+
+    // Une tentative de création, isolée pour pouvoir être rejouée telle quelle en cas
+    // d'aléa réseau transitoire (voir RETRIABLE_ERROR_TYPES et le handler 'error' plus bas).
+    // Génère un NOUVEAU code à chaque tentative — utile en particulier pour 'unavailable-id'
+    // (collision d'identifiant, très improbable mais possible), que ça résout au passage.
+    _attemptCreateRoom(cap) {
         this.roomCode = makeRoomCode();
         const id = PEER_ID_PREFIX + this.roomCode;
-        this._log('Création de la partie, id =', id);
+        this._log('Création de la partie, id =', id, this._connectRetries ? `(tentative ${this._connectRetries + 1})` : '');
         this.peer = new Peer(id, { config: ICE_CONFIG, debug: 1 });
 
         this.peer.on('open', () => {
             this._log('Peer hôte ouvert, en attente de connexions...');
             this.signalingOpen = true; // aussi vrai en cas de succès d'un reconnect() après coupure
+            this._everOpened = true;
             if (this.handlers.onOpen) this.handlers.onOpen('host', this.roomCode);
         });
 
@@ -296,6 +329,18 @@ class BridgePeerConnection {
 
         this.peer.on('error', (err) => {
             this._log('Erreur Peer (hôte) :', err.type, err);
+            // Retry uniquement pour la toute première connexion (jamais ouverte ne serait-
+            // ce qu'une fois) — passé ce cap, une erreur relève de 'disconnected'/reconnect()
+            // ci-dessus, pas de ce mécanisme-ci (voir RETRIABLE_ERROR_TYPES en tête de fichier).
+            const canRetry = !this._everOpened && this._connectRetries < MAX_INITIAL_CONNECT_RETRIES
+                && (RETRIABLE_ERROR_TYPES.includes(err.type) || err.type === 'unavailable-id');
+            if (canRetry) {
+                this._connectRetries++;
+                this._log(`Nouvelle tentative de création (${this._connectRetries}/${MAX_INITIAL_CONNECT_RETRIES}) dans ${INITIAL_CONNECT_RETRY_DELAY_MS}ms...`);
+                if (this.peer && !this.peer.destroyed) this.peer.destroy();
+                setTimeout(() => this._attemptCreateRoom(cap), INITIAL_CONNECT_RETRY_DELAY_MS);
+                return;
+            }
             if (this.handlers.onError) this.handlers.onError(err);
         });
     }
@@ -307,12 +352,24 @@ class BridgePeerConnection {
         this.role = 'guest';
         this.maxGuests = 1; // du point de vue d'un invité, il n'y a qu'une connexion : vers l'hôte
         this.roomCode = roomCode.toUpperCase().trim();
+        this._everOpened = false;
+        this._connectRetries = 0;
+        this._attemptJoinRoom(metadata);
+    }
+
+    // Une tentative de connexion, isolée pour pouvoir être rejouée telle quelle en cas
+    // d'aléa réseau transitoire au moment de s'enregistrer auprès du serveur de
+    // signalisation (voir RETRIABLE_ERROR_TYPES et le handler 'error' plus bas) — le code
+    // de salon, lui, ne change pas d'une tentative à l'autre (contrairement à
+    // _attemptCreateRoom côté hôte).
+    _attemptJoinRoom(metadata) {
         const targetId = PEER_ID_PREFIX + this.roomCode;
         this.peer = new Peer({ config: ICE_CONFIG, debug: 1 });
 
         this.peer.on('open', () => {
             this._log('Peer invité ouvert, tentative de connexion à', targetId);
             this.signalingOpen = true; // aussi vrai en cas de succès d'un reconnect() après coupure
+            this._everOpened = true;
             const conn = this.peer.connect(targetId, { reliable: true, metadata: metadata || {} });
             this.conns = [conn];
             this._armTimeouts();
@@ -343,6 +400,19 @@ class BridgePeerConnection {
 
         this.peer.on('error', (err) => {
             this._log('Erreur Peer (invité) :', err.type, err);
+            // Retry uniquement pour la toute première connexion (jamais ouverte ne serait-
+            // ce qu'une fois) — passé ce cap, une erreur relève de 'disconnected'/reconnect()
+            // ci-dessus, pas de ce mécanisme-ci. Contrairement à l'hôte, pas de cas
+            // 'unavailable-id' possible ici : ce Peer n'a pas d'identifiant imposé.
+            const canRetry = !this._everOpened && this._connectRetries < MAX_INITIAL_CONNECT_RETRIES
+                && RETRIABLE_ERROR_TYPES.includes(err.type);
+            if (canRetry) {
+                this._connectRetries++;
+                this._log(`Nouvelle tentative de connexion (${this._connectRetries}/${MAX_INITIAL_CONNECT_RETRIES}) dans ${INITIAL_CONNECT_RETRY_DELAY_MS}ms...`);
+                if (this.peer && !this.peer.destroyed) this.peer.destroy();
+                setTimeout(() => this._attemptJoinRoom(metadata), INITIAL_CONNECT_RETRY_DELAY_MS);
+                return;
+            }
             this._clearTimers();
             if (this.handlers.onError) this.handlers.onError(err);
         });
