@@ -62,9 +62,17 @@ const MAX_POST_OPEN_RECONNECT_ATTEMPTS = 5;
 const RETRIABLE_ERROR_TYPES = ['network', 'server-error', 'socket-error', 'socket-closed'];
 
 // Configuration ICE explicite : serveurs STUN publics de Google (découverte d'adresse),
-// complétés par un serveur TURN (ExpressTURN, compte gratuit) qui relaie réellement les
-// données quand une connexion directe échoue — cas fréquent avec les NAT restrictifs,
-// certains pare-feux, ou le "NAT hairpinning".
+// complétés par DEUX fournisseurs TURN indépendants (relais qui font réellement transiter
+// les données quand une connexion directe échoue — cas fréquent avec les NAT restrictifs,
+// certains pare-feux, le "NAT hairpinning", ou l'isolation client d'un partage de connexion
+// mobile). Deux fournisseurs plutôt qu'un seul : voir échange avec Guillaume — le premier
+// (ExpressTURN) s'est révélé, au moins ponctuellement, indisponible (échec de résolution
+// DNS, puis "508 capacité insuffisante" une fois la résolution aboutie) — un service
+// gratuit et mutualisé n'a aucune garantie de disponibilité. Le second (Open Relay
+// Project, openrelay.metered.ca) est un service gratuit distinct, avec ses propres
+// identifiants publics documentés (pas un secret — conçu pour être utilisé tel quel) :
+// si l'un des deux est indisponible à un instant donné, la négociation ICE a une vraie
+// chance de réussir quand même via l'autre.
 const ICE_CONFIG = {
     iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
@@ -84,6 +92,27 @@ const ICE_CONFIG = {
             urls: 'turns:free.expressturn.com:443?transport=tcp',
             username: '000000002098770532',
             credential: 'zIohrx8x/vvzdIwz7VVCZ1nj2fI='
+        },
+        { urls: 'stun:stun.relay.metered.ca:80' },
+        {
+            urls: 'turn:global.relay.metered.ca:80',
+            username: 'openrelayproject',
+            credential: 'openrelayproject'
+        },
+        {
+            urls: 'turn:global.relay.metered.ca:80?transport=tcp',
+            username: 'openrelayproject',
+            credential: 'openrelayproject'
+        },
+        {
+            urls: 'turn:global.relay.metered.ca:443',
+            username: 'openrelayproject',
+            credential: 'openrelayproject'
+        },
+        {
+            urls: 'turns:global.relay.metered.ca:443?transport=tcp',
+            username: 'openrelayproject',
+            credential: 'openrelayproject'
         }
     ]
 };
