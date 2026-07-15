@@ -814,7 +814,7 @@ body.on-landing-screen .connection-bar {
 }
 
 /* Bleu si assis à un siège (voir participantHasAPlace), rouge sinon — pas un problème en
-   soi (voir la note dans le salon : sans siège, on devient kibbitzer automatiquement),
+   soi (voir la note dans le salon : sans siège, on devient kibbitz automatiquement),
    juste un repère visuel pour l'hôte sur qui reste à placer à la table. */
 .participant-item.is-assigned {
     color: var(--suit-blue);
@@ -849,7 +849,7 @@ body.on-landing-screen .connection-bar {
     margin-left: auto;
 }
 
-.kibbitzer-note {
+.kibbitz-note {
     margin-bottom: 10px;
 }
 
@@ -1022,17 +1022,6 @@ body.on-landing-screen .connection-bar {
 .seat-assign-select option {
     background: var(--card);
     color: var(--text);
-}
-
-/* Remplace l'ancienne grille d'assignation Kibbitz (3 cases à choisir manuellement) :
-   depuis que tout participant sans siège devient automatiquement kibbitzer, il n'y a
-   plus rien à assigner ici, juste à l'expliquer une fois. */
-.lobby-kibbitz-note {
-    margin-top: 14px;
-    font-size: 0.85rem;
-    color: rgba(246, 241, 227, 0.68);
-    color: var(--text-muted);
-    text-align: center;
 }
 
 /* Sur un écran étroit, une croix à 4 colonnes laisse trop peu de place aux menus
@@ -1681,7 +1670,7 @@ table.dd-table td.dd-secondary-contract {
     white-space: nowrap;
 }
 
-.room-board-kibbitzers {
+.room-board-kibbitz {
     display: flex;
     align-items: center;
     flex-wrap: wrap;

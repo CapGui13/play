@@ -45,7 +45,7 @@ let myRole = null;          // 'host' | 'guest'
 let myParticipantId = null; // 'host', ou le jeton de reconnexion de l'invité (stable entre reconnexions)
 let participants = [];      // [{ id, name, disconnected }, ...] — état du salon, maintenu par l'hôte
 let seatAssignment = { N: null, E: null, S: null, W: null }; // id de participant, ou null (robot)
-// Pas de statut "spectateur" séparé : quiconque n'occupe aucun siège est kibbitzer (voir
+// Pas de statut "spectateur" séparé : quiconque n'occupe aucun siège est kibbitz (voir
 // SEATS.every / mySeats.length === 0 un peu partout dans ce fichier) et voit donc les 4
 // mains dès le début de la donne — inutile de l'assigner manuellement, ça découle
 // directement de seatAssignment.
@@ -126,11 +126,11 @@ function getReconnectToken() {
 let mySeats = null;         // sièges contrôlés par ce joueur pendant la partie
 let autoPassSeats = [];     // sièges non assignés (robot "passe") — décidé par l'hôte au lancement
 
-// Plus de statut kibbitzer suivi séparément (source de bug : oublié pour un joueur qui
+// Plus de statut kibbitz suivi séparément (source de bug : oublié pour un joueur qui
 // rejoint après le lancement de la partie, resté "spectateur" sans les mains) — un
-// kibbitzer, c'est simplement quiconque n'occupe aucun siège, dérivé à la demande plutôt
+// kibbitz, c'est simplement quiconque n'occupe aucun siège, dérivé à la demande plutôt
 // que traqué en parallèle de mySeats.
-function isKibbitzer() {
+function isKibbitz() {
     return !mySeats || mySeats.length === 0;
 }
 
@@ -509,7 +509,7 @@ function currentDeal() {
     return deals[boardIndex];
 }
 
-// Un kibbitzer (non assigné à un siège) ne peut pas naviguer entre les donnes ; tout
+// Un kibbitz (non assigné à un siège) ne peut pas naviguer entre les donnes ; tout
 // joueur actif (hôte ou invité) le peut.
 function canControlBoard() {
     return myRole === 'host' || (mySeats && mySeats.length > 0);
@@ -705,6 +705,7 @@ function uiCreateRoom() {
     chatMessages = [];
     chatUnreadCount = 0;
     updateChatUnreadBadge();
+    lobbyChatAutoOpened = false;
     pendingParsedDeals = null;
     pendingParsedSource = null;
     pendingOrderedDeals = null;
@@ -874,6 +875,7 @@ function connectAsGuest(code, token, nickname) {
     everConnectedAsGuest = false;
     prevSeatAssignmentSnapshot = null;
     prevParticipantsDisconnectedSnapshot = null;
+    lobbyChatAutoOpened = false;
 
     peerConn = new BridgePeerConnection(buildGuestHandlers());
     pushDebugLog(`Connexion au salon ${code} avec le jeton ${token.slice(0, 10)}…`);
@@ -948,6 +950,17 @@ function enterLobbyScreen() {
         nameInput.value = me ? me.name : '';
     }
 
+    // Voir échange avec Guillaume : dans le salon, le chat s'ouvre automatiquement — pas
+    // besoin d'aller cliquer sur 💬 pour voir qui est là et papoter en attendant que tout
+    // le monde arrive. `lobbyChatAutoOpened` évite de le rouvrir de force à chaque nouveau
+    // 'lobby-state' reçu (enterLobbyScreen est réappelée à chaque changement de
+    // participant) : une seule fois par entrée fraîche dans le salon, sinon on écraserait
+    // le choix de quelqu'un qui l'aurait refermé volontairement entre-temps.
+    if (!deals && !lobbyChatAutoOpened) {
+        lobbyChatAutoOpened = true;
+        if (!chatPanelOpen) uiToggleChat();
+    }
+
     renderLobby();
 }
 
@@ -958,8 +971,8 @@ function renderLobby() {
 
 // Vrai si ce participant occupe un siège à la table — utilisé pour la coloration de son
 // nom dans la liste des participants (bleu si placé, rouge sinon). Il n'y a plus de
-// "place de kibbitzer" à assigner à part : quiconque n'a pas de siège devient
-// automatiquement kibbitzer une fois la partie lancée (voir isKibbitzer), donc rien
+// "place de kibbitz" à assigner à part : quiconque n'a pas de siège devient
+// automatiquement kibbitz une fois la partie lancée (voir isKibbitz), donc rien
 // d'autre à cocher ici.
 function participantHasAPlace(participantId) {
     return SEATS.some(seat => seatAssignment[seat] === participantId);
@@ -984,7 +997,7 @@ function renderParticipantsList() {
                    onblur="uiRenameParticipantBlur('${p.id}', this)">`
             : escapeHtml(p.name);
         // Bleu si assis à un siège (voir participantHasAPlace), rouge sinon — sans siège,
-        // devient kibbitzer automatiquement, ce n'est pas un problème à corriger.
+        // devient kibbitz automatiquement, ce n'est pas un problème à corriger.
         const placementClass = participantHasAPlace(p.id) ? 'is-assigned' : 'is-unassigned';
         const showTransferBtn = canOfferTransfer && p.id !== myParticipantId && !p.disconnected;
         const transferBtnHtml = showTransferBtn
@@ -1520,6 +1533,7 @@ function handlePeerData(msg, guestIndex) {
                     guestIndexByToken = {};
                     prevSeatAssignmentSnapshot = null;
                     prevParticipantsDisconnectedSnapshot = null;
+                    lobbyChatAutoOpened = false;
                     enterLobbyScreen();
                     renderLobby();
                 }, 300);
@@ -1820,7 +1834,7 @@ function renderReconnectionBanner() {
         return;
     }
 
-    // Seuls les joueurs assis à la table intéressent cette bannière : un kibbitzer
+    // Seuls les joueurs assis à la table intéressent cette bannière : un kibbitz
     // déconnecté ne bloque rien pour personne.
     const waiting = participants.filter(p =>
         p.disconnected && Object.values(seatAssignment).includes(p.id)
@@ -1867,7 +1881,7 @@ function updateBoardControlVisibility() {
 function renderGameHeader() {
     const deal = currentDeal();
     document.getElementById('boardNumberLabel').textContent = `Donne #${deal.board} (${boardIndex + 1}/${deals.length})`;
-    const mySeatsLabel = mySeats && mySeats.length > 0 ? mySeats.map(seatFullName).join(' + ') : 'kibbitzer';
+    const mySeatsLabel = mySeats && mySeats.length > 0 ? mySeats.map(seatFullName).join(' + ') : 'kibbitz';
     document.getElementById('dealerVulnLabel').textContent =
         `Donneur : ${seatFullName(deal.dealer)} · ${VULN_LABEL[deal.vulnerable]} · Vous jouez : ${mySeatsLabel}`;
 }
@@ -1883,6 +1897,10 @@ function renderGameHeader() {
 // prix.
 let chatMessages = [];
 let chatPanelOpen = false;
+// Voir enterLobbyScreen : vrai une fois le chat auto-ouvert pour l'entrée en cours dans le
+// salon, remis à false à chaque nouvelle session (création, jointure, transfert d'hôte) —
+// voir uiCreateRoom, connectAsGuest, et la prise de rôle dans 'prepare-become-host'.
+let lobbyChatAutoOpened = false;
 let chatUnreadCount = 0;
 
 function uiToggleChat() {
@@ -1998,23 +2016,25 @@ function renderRoomBoard() {
         return `<div class="room-board-seat"><span class="room-board-seat-label">${seatsLabel}</span>${occupant}</div>`;
     }).filter(Boolean).join('');
 
-    // Quiconque n'occupe aucun siège est kibbitzer (voir isKibbitzer) : plus de liste à
-    // part à maintenir, on liste simplement tous les participants absents de
-    // seatAssignment.
-    const kibbitzerNames = participants.filter(p => !seatsByParticipant.has(p.id));
-    const kibbitzersHtml = kibbitzerNames.length > 0
-        ? `<div class="room-board-kibbitzers">
+    // Quiconque n'occupe aucun siège est kibbitz (voir isKibbitz) : plus de liste à part à
+    // maintenir, on liste simplement tous les participants absents de seatAssignment. Mais
+    // seulement une fois la partie lancée (voir échange avec Guillaume) : dans le salon,
+    // ne pas avoir de siège ne veut encore rien dire — l'hôte est peut-être justement en
+    // train de composer la table — donc l'étiquette "Kibbitz" n'y a pas sa place.
+    const kibbitzNames = deals ? participants.filter(p => !seatsByParticipant.has(p.id)) : [];
+    const kibbitzHtml = kibbitzNames.length > 0
+        ? `<div class="room-board-kibbitz">
                <span class="room-board-section-label">👁 Kibbitz :</span>
-               ${kibbitzerNames.map(p => `${avatarHtml(p.id)}<span class="room-board-name">${escapeHtml(p.name)}</span>`).join('')}
+               ${kibbitzNames.map(p => `${avatarHtml(p.id)}<span class="room-board-name">${escapeHtml(p.name)}</span>`).join('')}
            </div>`
         : '';
 
-    if (!seatRows && !kibbitzersHtml) {
+    if (!seatRows && !kibbitzHtml) {
         el.innerHTML = '<div class="info-text">Personne d\'autre pour l\'instant — les sièges vides sont joués par des robots.</div>';
         return;
     }
 
-    el.innerHTML = `<div class="room-board-seats">${seatRows}</div>${kibbitzersHtml}`;
+    el.innerHTML = `<div class="room-board-seats">${seatRows}</div>${kibbitzHtml}`;
 }
 
 function renderMyHands() {
@@ -2022,14 +2042,14 @@ function renderMyHands() {
     const container = document.getElementById('myHandsContainer');
 
     if (!mySeats || mySeats.length === 0) {
-        // Plus de statut "spectateur" séparé : quiconque n'a pas de siège est kibbitzer et
-        // voit les 4 mains dès le début (voir isKibbitzer). Les mains elles-mêmes
+        // Plus de statut "spectateur" séparé : quiconque n'a pas de siège est kibbitz et
+        // voit les 4 mains dès le début (voir isKibbitz). Les mains elles-mêmes
         // s'affichent dans #allHandsDiagram (voir checkAuctionEnd/renderAllHandsDiagram) —
         // le même emplacement central, en grille N/E/S/O, que celui utilisé quand l'hôte
         // active "Voir les 4 mains". Les construire ici, dans le panneau latéral étroit
         // des mains, les aurait affichées à l'étroit et mal calibrées plutôt qu'au centre.
         container.innerHTML =
-            '<div class="info-text kibbitzer-note">👁 Vous suivez la partie en kibbitzer : vous voyez les 4 mains ci-dessous.</div>';
+            '<div class="info-text kibbitz-note">👁 Vous suivez la partie en kibbitz : vous voyez les 4 mains ci-dessous.</div>';
         return;
     }
 
@@ -2204,7 +2224,7 @@ function applyCall(seat, call) {
 
 // Construit le HTML des 4 mains, affiché dans #allHandsDiagram (voir
 // renderAllHandsDiagram) — révélé à tout le monde une fois l'enchère terminée, à l'hôte
-// seul s'il active "Voir les 4 mains" en cours d'enchère, et en continu à un kibbitzer
+// seul s'il active "Voir les 4 mains" en cours d'enchère, et en continu à un kibbitz
 // (voir checkAuctionEnd).
 function buildAllHandsHtml(deal) {
     return SEATS.map(seat => {
@@ -2374,11 +2394,11 @@ function checkAuctionEnd() {
     // L'hôte peut choisir de voir les 4 mains à tout moment (voir uiToggleHostSeeAllHands),
     // même pendant l'enchère — un outil réservé à lui seul (vérifier une donne, aider un
     // débutant en direct...), jamais envoyé ni visible pour les autres joueurs. Un
-    // kibbitzer, lui, voit toujours les 4 mains dès le début (voir renderMyHands) — pas
+    // kibbitz, lui, voit toujours les 4 mains dès le début (voir renderMyHands) — pas
     // besoin d'attendre la fin de l'enchère ni une action de l'hôte, puisqu'il n'est
     // assis à aucun siège et ne peut donc rien "tricher" en les voyant.
     const hostForcedReveal = myRole === 'host' && hostSeeAllHands;
-    const showAllHandsEarly = hostForcedReveal || isKibbitzer();
+    const showAllHandsEarly = hostForcedReveal || isKibbitz();
 
     if (!auctionOver) {
         resultEl.style.display = 'none';

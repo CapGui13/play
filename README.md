@@ -75,7 +75,7 @@ Aucune clé, aucun compte externe à configurer : tout fonctionne dès la mise e
 
 **Pendant la partie** :
 - Chaque joueur ne voit que les mains qu'il contrôle (une ou deux). Sans siège assigné, on
-  suit la partie en **kibbitzer** : les 4 mains sont visibles dès le début de la donne.
+  suit la partie en **kibbitz** : les 4 mains sont visibles dès le début de la donne.
   Quand on contrôle plusieurs sièges (mode "maître du jeu" ou diagonale), celle dont c'est
   le tour est mise en valeur (halo doré, léger balayage lumineux) et les autres grisées,
   pour repérer d'un coup d'œil laquelle demande une action.
@@ -85,7 +85,7 @@ Aucune clé, aucun compte externe à configurer : tout fonctionne dès la mise e
   contrat final s'affiche, avec un bouton pour passer à la donne suivante.
 - Le bouton **"Recommencer l'enchère"** relance l'enchère de la donne en cours. Seuls les
   joueurs actifs (assignés à au moins un siège) peuvent recommencer l'enchère ou changer
-  de donne ; un kibbitzer ne peut que regarder.
+  de donne ; un kibbitz ne peut que regarder.
 - Le bouton **"Demander un undo"** propose d'annuler la dernière annonce (utile en cas de
   mauvais clic). Si l'équipe adverse compte un humain, elle doit accepter ou refuser ; si
   elle n'est faite que de robots (ou si vous jouez les deux camps), l'annulation est
