@@ -48,6 +48,12 @@ const CONNECTION_TIMEOUT_MS = 45000; // au-delà, on considère que ça n'abouti
 // fois déjà connecté (ce cas-là est géré séparément par peer.reconnect(), voir 'disconnected').
 const MAX_INITIAL_CONNECT_RETRIES = 2; // donc 3 tentatives au total
 const INITIAL_CONNECT_RETRY_DELAY_MS = 1500;
+// Reconnexions automatiques via peer.reconnect() APRÈS une première connexion réussie
+// (voir 'disconnected' dans _attemptCreateRoom/_attemptJoinRoom) : bornées elles aussi,
+// par sécurité, au cas où le réseau resterait durablement indisponible même après un
+// premier succès — sans quoi ce mécanisme pourrait, comme le bug corrigé avec Guillaume,
+// tourner indéfiniment.
+const MAX_POST_OPEN_RECONNECT_ATTEMPTS = 5;
 // Types d'erreur PeerJS considérés comme transitoires (réseau/serveur), donc valant la
 // peine d'être retentés — par opposition à des erreurs de fond qui ne se résoudraient pas
 // en réessayant (identifiant invalide, navigateur incompatible...). 'unavailable-id' est
@@ -153,6 +159,7 @@ class BridgePeerConnection {
         // coup, une fois déjà bien connecté (gérée séparément par reconnect()/'disconnected').
         this._everOpened = false;
         this._connectRetries = 0;
+        this._postOpenReconnectAttempts = 0;
     }
 
     get conn() {
@@ -285,6 +292,7 @@ class BridgePeerConnection {
             this._log('Peer hôte ouvert, en attente de connexions...');
             this.signalingOpen = true; // aussi vrai en cas de succès d'un reconnect() après coupure
             this._everOpened = true;
+            this._postOpenReconnectAttempts = 0; // nouveau crédit de tentatives à chaque succès
             if (this.handlers.onOpen) this.handlers.onOpen('host', this.roomCode);
         });
 
@@ -306,6 +314,18 @@ class BridgePeerConnection {
         });
 
         this.peer.on('disconnected', () => {
+            this.signalingOpen = false;
+            // Voir le journal de diagnostic de Guillaume (4G, ne marchait toujours pas) :
+            // 'disconnected' se déclenche AUSSI pendant la toute première tentative de
+            // connexion (en plus de 'error', déjà géré par le retry borné ci-dessous) — un
+            // appel à reconnect() ici à ce stade-là entrait en boucle avec ce retry, les
+            // deux mécanismes se relançant l'un l'autre indéfiniment, sans jamais
+            // s'arrêter ni remonter d'erreur (c'est ce qui produisait le déluge de lignes
+            // "Erreur/déconnecté" en boucle dans le journal). Ce reconnect() automatique
+            // n'a de sens QUE pour une connexion déjà établie une première fois (le cas
+            // qu'il visait à l'origine : coupure après coup, voir plus bas) — pendant la
+            // première tentative, on laisse le retry borné de 'error' faire seul son travail.
+            if (!this._everOpened) return;
             this._log('Peer hôte déconnecté du serveur de signalisation, tentative de reconnexion automatique...');
             // Distinct de 'close' sur une DataConnection (voir onPeerDisconnected) : ici,
             // c'est la connexion au serveur de signalisation PeerJS lui-même qui est
@@ -321,8 +341,15 @@ class BridgePeerConnection {
             // retente une connexion au serveur de signalisation en conservant le MÊME
             // identifiant (le code de salon reste valable), sans avoir besoin de tout
             // recréer. Échoue silencieusement si l'identifiant a entre-temps été repris
-            // par quelqu'un d'autre (très improbable en pratique).
-            this.signalingOpen = false;
+            // par quelqu'un d'autre (très improbable en pratique). Bornée elle aussi (voir
+            // _postOpenReconnectAttempts) : au cas où le réseau resterait durablement
+            // indisponible même après une connexion initiale réussie.
+            if (this._postOpenReconnectAttempts >= MAX_POST_OPEN_RECONNECT_ATTEMPTS) {
+                this._log('Trop de tentatives de reconnexion automatique après coupure, abandon (voir bouton "Se reconnecter" manuel).');
+                if (this.handlers.onSignalingDisconnected) this.handlers.onSignalingDisconnected();
+                return;
+            }
+            this._postOpenReconnectAttempts++;
             if (this.peer && !this.peer.destroyed) this.peer.reconnect();
             if (this.handlers.onSignalingDisconnected) this.handlers.onSignalingDisconnected();
         });
@@ -370,6 +397,7 @@ class BridgePeerConnection {
             this._log('Peer invité ouvert, tentative de connexion à', targetId);
             this.signalingOpen = true; // aussi vrai en cas de succès d'un reconnect() après coupure
             this._everOpened = true;
+            this._postOpenReconnectAttempts = 0; // nouveau crédit de tentatives à chaque succès
             const conn = this.peer.connect(targetId, { reliable: true, metadata: metadata || {} });
             this.conns = [conn];
             this._armTimeouts();
@@ -378,6 +406,13 @@ class BridgePeerConnection {
         });
 
         this.peer.on('disconnected', () => {
+            this.signalingOpen = false;
+            // Voir le correctif symétrique côté hôte (_attemptCreateRoom) : même bug de
+            // boucle infinie possible ici pendant la toute première tentative de
+            // connexion, pour la même raison (reconnect() ici entrant en conflit avec le
+            // retry borné de 'error'). On ne tente ce reconnect() automatique qu'après une
+            // première ouverture réussie.
+            if (!this._everOpened) return;
             this._log('Peer invité déconnecté du serveur de signalisation, tentative de reconnexion automatique...');
             // Voir échange avec Guillaume : c'est très probablement ce cas précis qui
             // laissait le bouton "🔌 Se reconnecter" ne jamais apparaître. La coupure au
@@ -392,9 +427,15 @@ class BridgePeerConnection {
             // redéclenche ci-dessus et relance une connexion vers l'hôte avec le jeton de
             // reconnexion habituel (metadata.reconnectToken) — l'hôte la traite alors
             // comme un retour normal (voir onGuestConnected), sans que rien de manuel ne
-            // soit nécessaire.
+            // soit nécessaire. Bornée (voir _postOpenReconnectAttempts) : au cas où le
+            // réseau resterait durablement indisponible.
+            if (this._postOpenReconnectAttempts >= MAX_POST_OPEN_RECONNECT_ATTEMPTS) {
+                this._log('Trop de tentatives de reconnexion automatique après coupure, abandon (voir bouton "Se reconnecter" manuel).');
+                if (this.handlers.onSignalingDisconnected) this.handlers.onSignalingDisconnected();
+                return;
+            }
+            this._postOpenReconnectAttempts++;
             if (this.peer && !this.peer.destroyed) this.peer.reconnect();
-            this.signalingOpen = false;
             if (this.handlers.onSignalingDisconnected) this.handlers.onSignalingDisconnected();
         });
 
