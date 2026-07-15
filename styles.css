@@ -231,9 +231,9 @@ body.on-landing-screen .connection-bar {
         left: auto;
         right: 16px;
         bottom: 16px;
-        width: 340px;
-        max-width: 340px;
-        max-height: 480px;
+        width: 400px;
+        max-width: 400px;
+        max-height: 620px;
         border-radius: 12px;
         border: 1px solid var(--border);
         border-top: 2px solid var(--brass);
@@ -782,14 +782,15 @@ body.on-landing-screen .connection-bar {
     color: var(--text);
 }
 
-.form-group input[type="file"] {
-    width: 100%;
-    padding: 8px;
-    border-radius: 6px;
-    background: var(--input-bg);
-    border: 1px solid rgba(64, 190, 184, 0.35);
-    color: var(--text);
-    font-size: 0.85rem;
+/* Le bouton "Choisir un fichier" est un <label> à des fins d'accessibilité/déclenchement
+   (voir index.html), pas un vrai libellé de champ — la règle .form-group label ci-dessus
+   (margin-bottom:6px, pensée pour de vrais libellés au-dessus d'un champ) s'appliquait
+   aussi à lui, décalant son alignement vertical avec le texte du nom de fichier juste à
+   côté (voir échange avec Guillaume, confirmé par repro isolée). Seule la marge est
+   réinitialisée ici : le reste de l'apparence du bouton vient de .btn/.btn-secondary/
+   .btn-small comme n'importe quel autre bouton, pas touché par cette règle-ci. */
+.form-group label.file-picker-btn {
+    margin-bottom: 0;
 }
 
 /* Remplace le rendu natif de <input type="file"> (bouton système inconsistant d'un
@@ -808,11 +809,13 @@ body.on-landing-screen .connection-bar {
 
 .file-picker-btn {
     flex-shrink: 0;
+    line-height: 1;
     cursor: pointer;
 }
 
 .file-picker-name {
     font-size: 0.82rem;
+    line-height: 1;
     color: rgba(246, 241, 227, 0.68);
     color: var(--text-muted);
     overflow: hidden;
@@ -858,6 +861,7 @@ body.on-landing-screen .connection-bar {
    uiHandleDealFileChosen/uiHandleDealLibraryChosen). */
 .form-group-divider {
     text-align: center;
+    max-width: 280px;
     font-size: 0.78rem;
     font-style: italic;
     color: rgba(246, 241, 227, 0.68);
@@ -1845,8 +1849,7 @@ table.dd-table td.dd-secondary-contract {
     .code-input,
     .name-input,
     .participant-rename-input,
-    .seat-assign-select,
-    .form-group input[type="file"] {
+    .seat-assign-select {
         font-size: 16px;
     }
 

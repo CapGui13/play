@@ -2096,6 +2096,11 @@ function uiSendChatMessage() {
     const text = input.value.trim().slice(0, 500);
     if (!text) return;
     input.value = '';
+    // Voir échange avec Guillaume : cliquer sur "Envoyer" déplace le focus sur le bouton
+    // lui-même — sans ce refocus explicite, il fallait recliquer dans le champ pour
+    // continuer à écrire. Sans effet quand l'envoi vient d'Entrée (voir
+    // uiChatInputKeydown) : le champ avait déjà le focus dans ce cas.
+    input.focus();
 
     const me = participants.find(p => p.id === myParticipantId);
     const msg = { type: 'chat', senderId: myParticipantId, senderName: me ? me.name : '?', text };

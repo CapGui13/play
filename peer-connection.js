@@ -251,6 +251,7 @@ class BridgePeerConnection {
 
         this.peer.on('open', () => {
             this._log('Peer hôte ouvert, en attente de connexions...');
+            this.signalingOpen = true; // aussi vrai en cas de succès d'un reconnect() après coupure
             if (this.handlers.onOpen) this.handlers.onOpen('host', this.roomCode);
         });
 
@@ -272,14 +273,24 @@ class BridgePeerConnection {
         });
 
         this.peer.on('disconnected', () => {
-            this._log('Peer hôte déconnecté du serveur de signalisation.');
+            this._log('Peer hôte déconnecté du serveur de signalisation, tentative de reconnexion automatique...');
             // Distinct de 'close' sur une DataConnection (voir onPeerDisconnected) : ici,
             // c'est la connexion au serveur de signalisation PeerJS lui-même qui est
-            // tombée (WebSocket coupé — Wi-Fi, mise en veille...). Les parties déjà
-            // établies avec des invités continuent parfois de fonctionner un moment via
-            // leur canal WebRTC direct, mais plus personne de nouveau ne peut rejoindre
-            // tant que ce n'est pas rétabli — donc remonté quand même à l'appli.
+            // tombée (WebSocket coupé — Wi-Fi, mise en veille, ou simplement un NAT/pare-
+            // feu qui referme une connexion restée inactive un moment : voir échange avec
+            // Guillaume, "un second invité n'arrive plus à rejoindre après quelques
+            // minutes" — le premier invité, déjà connecté en direct, ne s'en aperçoit même
+            // pas, mais l'hôte devient injoignable pour quiconque essaierait de le
+            // rejoindre APRÈS coup). Les parties déjà établies avec des invités continuent
+            // parfois de fonctionner un moment via leur canal WebRTC direct, mais plus
+            // personne de nouveau ne peut rejoindre tant que ce n'est pas rétabli.
+            // this.peer.reconnect() : méthode officielle de PeerJS pour ce cas précis —
+            // retente une connexion au serveur de signalisation en conservant le MÊME
+            // identifiant (le code de salon reste valable), sans avoir besoin de tout
+            // recréer. Échoue silencieusement si l'identifiant a entre-temps été repris
+            // par quelqu'un d'autre (très improbable en pratique).
             this.signalingOpen = false;
+            if (this.peer && !this.peer.destroyed) this.peer.reconnect();
             if (this.handlers.onSignalingDisconnected) this.handlers.onSignalingDisconnected();
         });
 
@@ -301,6 +312,7 @@ class BridgePeerConnection {
 
         this.peer.on('open', () => {
             this._log('Peer invité ouvert, tentative de connexion à', targetId);
+            this.signalingOpen = true; // aussi vrai en cas de succès d'un reconnect() après coupure
             const conn = this.peer.connect(targetId, { reliable: true, metadata: metadata || {} });
             this.conns = [conn];
             this._armTimeouts();
@@ -309,7 +321,7 @@ class BridgePeerConnection {
         });
 
         this.peer.on('disconnected', () => {
-            this._log('Peer invité déconnecté du serveur de signalisation.');
+            this._log('Peer invité déconnecté du serveur de signalisation, tentative de reconnexion automatique...');
             // Voir échange avec Guillaume : c'est très probablement ce cas précis qui
             // laissait le bouton "🔌 Se reconnecter" ne jamais apparaître. La coupure au
             // niveau du serveur de signalisation (WebSocket) est un événement DIFFÉRENT de
@@ -317,6 +329,14 @@ class BridgePeerConnection {
             // dernière peut mettre du temps à se déclencher, ou ne jamais se déclencher
             // proprement, après une coupure côté signalisation seule. Sans ce relais, rien
             // ne prévenait l'appli que la connexion était compromise.
+            // this.peer.reconnect() : méthode officielle de PeerJS pour ce cas précis —
+            // retente automatiquement une connexion au serveur de signalisation, en
+            // conservant le même jeton PeerJS interne. Si elle aboutit, 'open' se
+            // redéclenche ci-dessus et relance une connexion vers l'hôte avec le jeton de
+            // reconnexion habituel (metadata.reconnectToken) — l'hôte la traite alors
+            // comme un retour normal (voir onGuestConnected), sans que rien de manuel ne
+            // soit nécessaire.
+            if (this.peer && !this.peer.destroyed) this.peer.reconnect();
             this.signalingOpen = false;
             if (this.handlers.onSignalingDisconnected) this.handlers.onSignalingDisconnected();
         });
