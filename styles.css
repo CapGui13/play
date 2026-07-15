@@ -91,6 +91,7 @@ body {
     justify-content: center;
     gap: 16px;
     align-items: center;
+    background: rgba(28, 36, 32, 0.92);
     background: color-mix(in srgb, var(--card) 92%, transparent);
     backdrop-filter: blur(4px);
     padding: calc(8px + var(--safe-top)) 16px 8px;
@@ -314,13 +315,16 @@ body.on-landing-screen .connection-bar {
     padding: 8px 16px;
     border-radius: 8px;
     font-size: 0.85rem;
+    background: #3f3d21;
     background: color-mix(in srgb, var(--brass) 20%, var(--card));
     border: 1px solid color-mix(in srgb, var(--brass) 45%, var(--card));
     color: var(--text);
 }
 
 .pwa-banner-warning {
+    background: #423c22;
     background: color-mix(in srgb, var(--warn-amber) 20%, var(--card));
+    border-color: #715925;
     border-color: color-mix(in srgb, var(--warn-amber) 45%, var(--card));
 }
 
@@ -334,6 +338,7 @@ body.on-landing-screen .connection-bar {
     border-radius: 8px;
     font-size: 0.85rem;
     text-align: center;
+    background: #3a3722;
     background: color-mix(in srgb, var(--warn-amber) 16%, var(--card));
     border: 1px solid color-mix(in srgb, var(--warn-amber) 40%, var(--card));
     color: var(--text);
@@ -365,6 +370,7 @@ body.on-landing-screen .connection-bar {
 }
 
 .tagline {
+    color: rgba(246, 241, 227, 0.68);
     color: var(--text-muted);
     font-size: 1.05rem;
     max-width: 480px;
@@ -402,6 +408,7 @@ body.on-landing-screen .connection-bar {
 }
 
 .landing-card p {
+    color: rgba(246, 241, 227, 0.68);
     color: var(--text-muted);
     font-size: 0.92rem;
     line-height: 1.5;
@@ -495,8 +502,10 @@ body.on-landing-screen .connection-bar {
    valeurs à dupliquer pour chaque bannière. */
 .error-banner {
     margin-top: 18px;
+    background: #3d2822;
     background: color-mix(in srgb, #c0392b 20%, var(--card));
     border: 1px solid color-mix(in srgb, #c0392b 45%, var(--card));
+    color: #d07062;
     color: color-mix(in srgb, #c0392b 70%, var(--text));
     padding: 12px 16px;
     border-radius: 8px;
@@ -508,8 +517,11 @@ body.on-landing-screen .connection-bar {
    démarrer quand même, donc une teinte ambre plutôt que le rouge réservé aux erreurs qui
    empêchent réellement de continuer (fichier illisible, aucun fichier choisi). */
 .error-banner.is-warning {
+    background: #463e22;
     background: color-mix(in srgb, var(--warn-amber) 22%, var(--card));
+    border-color: #7a5f26;
     border-color: color-mix(in srgb, var(--warn-amber) 50%, var(--card));
+    color: #e0b059;
     color: color-mix(in srgb, var(--warn-amber) 75%, var(--text));
 }
 
@@ -519,8 +531,10 @@ body.on-landing-screen .connection-bar {
     align-items: center;
     justify-content: space-between;
     gap: 12px;
+    background: #223a2a;
     background: color-mix(in srgb, #3ca05a 18%, var(--card));
     border: 1px solid color-mix(in srgb, #3ca05a 45%, var(--card));
+    color: #74b883;
     color: color-mix(in srgb, #3ca05a 70%, var(--text));
     padding: 10px 14px;
     border-radius: 8px;
@@ -635,6 +649,7 @@ body.on-landing-screen .connection-bar {
     font-family: var(--font-mono);
     font-size: 0.95rem;
     font-weight: 400;
+    color: rgba(246, 241, 227, 0.68);
     color: var(--text-muted);
     letter-spacing: 0.5px;
 }
@@ -657,6 +672,7 @@ body.on-landing-screen .connection-bar {
 
 .waiting-status {
     font-size: 0.95rem;
+    color: rgba(246, 241, 227, 0.68);
     color: var(--text-muted);
     margin-bottom: 10px;
 }
@@ -680,6 +696,7 @@ body.on-landing-screen .connection-bar {
     font-size: 1.1rem;
     margin-bottom: 12px;
     text-align: center;
+    color: #5cc2b9;
     color: color-mix(in srgb, #28b3ab 75%, var(--text));
 }
 
@@ -727,6 +744,7 @@ body.on-landing-screen .connection-bar {
     text-align: center;
     font-size: 0.78rem;
     font-style: italic;
+    color: rgba(246, 241, 227, 0.68);
     color: var(--text-muted);
     margin: 4px 0;
 }
@@ -893,6 +911,7 @@ body.on-landing-screen .connection-bar {
     /* Panneau volontairement proche de l'opacité totale (dérivé de --card) : il doit
        masquer le halo doré de .seat-assignment-grid::before qui passe juste derrière,
        pas simplement le teinter comme les autres panneaux translucides du salon. */
+    background: rgba(28, 36, 32, 0.85);
     background: color-mix(in srgb, var(--card) 85%, transparent);
 }
 
@@ -967,6 +986,7 @@ body.on-landing-screen .connection-bar {
 }
 
 .mini-avatar-robot {
+    background: rgba(246, 241, 227, 0.1) !important;
     background: color-mix(in srgb, var(--text) 10%, transparent) !important;
     font-size: 0.75rem;
 }
@@ -1010,6 +1030,7 @@ body.on-landing-screen .connection-bar {
 .lobby-kibbitz-note {
     margin-top: 14px;
     font-size: 0.85rem;
+    color: rgba(246, 241, 227, 0.68);
     color: var(--text-muted);
     text-align: center;
 }
@@ -1079,6 +1100,7 @@ body.on-landing-screen .connection-bar {
 
 .dealer-vuln-label {
     font-size: 0.85rem;
+    color: rgba(246, 241, 227, 0.68);
     color: var(--text-muted);
 }
 
@@ -1135,6 +1157,7 @@ body.on-landing-screen .connection-bar {
     font-weight: 600;
     font-size: 0.95rem;
     margin-bottom: 8px;
+    color: #7a9f8b;
     color: color-mix(in srgb, var(--felt-mid) 55%, var(--text));
 }
 
@@ -1155,7 +1178,9 @@ body.on-landing-screen .connection-bar {
     font-family: var(--font-body);
     font-weight: 600;
     font-size: 0.72rem;
+    color: #6e9883;
     color: color-mix(in srgb, var(--felt-mid) 60%, var(--text));
+    background: #1b2d26;
     background: color-mix(in srgb, var(--felt-mid) 16%, var(--card));
     border-radius: 999px;
     padding: 2px 8px;
@@ -1306,14 +1331,14 @@ body.on-landing-screen .connection-bar {
 }
 
 @keyframes latest-call-flash {
-    0% { background: color-mix(in srgb, var(--brass-bright) 55%, var(--card)); }
+    0% { background: #887837; background: color-mix(in srgb, var(--brass-bright) 55%, var(--card)); }
     100% { background: var(--card); }
 }
 
 .auction-ledger .call-suit.spades { color: var(--text); }
-.auction-ledger .call-suit.hearts { color: color-mix(in srgb, #c0272d 70%, var(--text)); }
-.auction-ledger .call-suit.diamonds { color: color-mix(in srgb, var(--suit-orange) 70%, var(--text)); }
-.auction-ledger .call-suit.clubs { color: color-mix(in srgb, var(--suit-blue) 70%, var(--text)); }
+.auction-ledger .call-suit.hearts { color: #d06464; color: color-mix(in srgb, #c0272d 70%, var(--text)); }
+.auction-ledger .call-suit.diamonds { color: #f2b879; color: color-mix(in srgb, var(--suit-orange) 70%, var(--text)); }
+.auction-ledger .call-suit.clubs { color: #81abe1; color: color-mix(in srgb, var(--suit-blue) 70%, var(--text)); }
 .auction-ledger .call-suit.notrump { color: var(--text); }
 
 .contract-result {
@@ -1341,6 +1366,7 @@ body.on-landing-screen .connection-bar {
 
 .contract-result .info-text {
     font-size: 0.8rem;
+    color: rgba(246, 241, 227, 0.68);
     color: var(--text-muted);
     margin-top: 6px;
     font-style: italic;
@@ -1348,6 +1374,7 @@ body.on-landing-screen .connection-bar {
 
 .dd-table-title {
     font-size: 0.8rem;
+    color: rgba(246, 241, 227, 0.68);
     color: var(--text-muted);
     margin-top: 14px;
     margin-bottom: 6px;
@@ -1381,6 +1408,7 @@ table.dd-table th, table.dd-table td {
 table.dd-table thead th {
     color: var(--brass-bright);
     font-weight: 600;
+    background: #2d3430;
     background: color-mix(in srgb, var(--text) 8%, var(--card));
 }
 
@@ -1388,6 +1416,7 @@ table.dd-table tbody th {
     font-family: var(--font-body);
     font-weight: 600;
     color: var(--text);
+    background: #2d3430;
     background: color-mix(in srgb, var(--text) 8%, var(--card));
 }
 
@@ -1418,7 +1447,16 @@ table.dd-table td.dd-best-contract {
    respectivement) : cette variante n'a pas besoin d'un texte blanc, donc autant
    s'adapter proprement au thème comme le reste de l'appli. */
 table.dd-table td.dd-secondary-contract {
+    /* Repli pour les navigateurs sans support de color-mix() (Safari < 16.2, donc iOS
+       < 16.2 — voir échange avec Guillaume : sur un iPhone plus ancien, la déclaration
+       color-mix() ci-dessous est purement invalide et ignorée, sans le moindre repli,
+       laissant la case sans couleur du tout). Même technique appliquée automatiquement à
+       tout le reste de la feuille de style (voir en tête de fichier) : valeur plate
+       précalculée d'abord, color-mix() ensuite en amélioration progressive.
+    */
+    background: #213f2f;
     background: color-mix(in srgb, #2f8f5b 25%, var(--card));
+    color: #6bac84;
     color: color-mix(in srgb, #2f8f5b 70%, var(--text));
     font-weight: 600;
 }
@@ -1511,6 +1549,7 @@ table.dd-table td.dd-secondary-contract {
 
 .call-btn-special {
     flex: 1;
+    background: rgba(246, 241, 227, 0.12);
     background: color-mix(in srgb, var(--text) 12%, transparent);
 }
 
@@ -1523,7 +1562,9 @@ table.dd-table td.dd-secondary-contract {
 }
 
 .turn-indicator.my-turn {
+    background: #203c2d;
     background: color-mix(in srgb, #2f8f5b 22%, var(--card));
+    color: #61a87d;
     color: color-mix(in srgb, #2f8f5b 75%, var(--text));
     animation: turn-glow 2.4s ease-in-out infinite;
 }
@@ -1534,6 +1575,7 @@ table.dd-table td.dd-secondary-contract {
 }
 
 .turn-indicator.their-turn {
+    color: rgba(246, 241, 227, 0.68);
     color: var(--text-muted);
 }
 
@@ -1544,6 +1586,7 @@ table.dd-table td.dd-secondary-contract {
 
 .undo-status-text {
     font-size: 0.8rem;
+    color: rgba(246, 241, 227, 0.68);
     color: var(--text-muted);
     font-style: italic;
     align-self: center;
@@ -1579,14 +1622,18 @@ table.dd-table td.dd-secondary-contract {
 }
 
 .reconnection-banner.is-waiting {
+    background: #423c22;
     background: color-mix(in srgb, var(--warn-amber) 20%, var(--card));
     border: 1px solid color-mix(in srgb, var(--warn-amber) 45%, var(--card));
+    color: #e0b059;
     color: color-mix(in srgb, var(--warn-amber) 75%, var(--text));
 }
 
 .reconnection-banner.is-back {
+    background: #223d2c;
     background: color-mix(in srgb, #3ca05a 20%, var(--card));
     border: 1px solid color-mix(in srgb, #3ca05a 45%, var(--card));
+    color: #74b883;
     color: color-mix(in srgb, #3ca05a 70%, var(--text));
 }
 
@@ -1646,6 +1693,7 @@ table.dd-table td.dd-secondary-contract {
 
 .room-board-section-label {
     font-weight: 600;
+    color: rgba(246, 241, 227, 0.68);
     color: var(--text-muted);
     font-size: 0.72rem;
 }
@@ -1657,6 +1705,7 @@ table.dd-table td.dd-secondary-contract {
 
 .info-text {
     font-size: 0.85rem;
+    color: rgba(246, 241, 227, 0.68);
     color: var(--text-muted);
 }
 
