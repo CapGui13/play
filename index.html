@@ -175,13 +175,17 @@
         <div id="hostSetupPanel" class="host-setup-panel" style="display:none;">
             <h3>Charger les donnes</h3>
             <div class="form-group">
-                <label>Fichier .pbn ou .lin exporté depuis le générateur</label>
-                <input type="file" id="dealFileInput" accept=".pbn,.lin,text/plain">
+                <label>Importer un fichier .pbn ou .lin</label>
+                <div class="file-picker">
+                    <label for="dealFileInput" class="btn btn-secondary btn-small file-picker-btn">📁 Choisir un fichier</label>
+                    <span id="dealFileNameDisplay" class="file-picker-name">Aucun fichier choisi</span>
+                    <input type="file" id="dealFileInput" accept=".pbn,.lin,text/plain" class="visually-hidden">
+                </div>
             </div>
             <div id="dealLibraryGroup" class="form-group" style="display:none;">
                 <div class="form-group-divider">ou</div>
-                <label for="dealLibrarySelect">Piocher dans la bibliothèque du club</label>
-                <select id="dealLibrarySelect" onchange="uiHandleDealLibraryChosen()">
+                <label for="dealLibrarySelect">Utiliser la bibliothèque de donnes</label>
+                <select id="dealLibrarySelect" class="deal-library-select" onchange="uiHandleDealLibraryChosen()">
                     <option value="">— Choisir une donne —</option>
                 </select>
             </div>
@@ -196,7 +200,9 @@
                 <span id="dealFileInfoText"></span>
                 <button type="button" class="btn btn-secondary btn-small" onclick="uiPreviewDeals()">👁 Prévisualiser</button>
             </div>
-            <button id="startGameBtn" class="btn btn-success" onclick="uiStartGameAsHost()">Commencer la partie</button>
+            <div class="start-game-row">
+                <button id="startGameBtn" class="btn btn-success" onclick="uiStartGameAsHost()">Commencer la partie</button>
+            </div>
         </div>
 
         <div id="guestWaitingNote" class="waiting-status" style="display:none;">⏳ En attente que l'hôte lance la partie...</div>

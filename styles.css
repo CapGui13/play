@@ -792,6 +792,40 @@ body.on-landing-screen .connection-bar {
     font-size: 0.85rem;
 }
 
+/* Remplace le rendu natif de <input type="file"> (bouton système inconsistant d'un
+   navigateur à l'autre, et bien plus large que nécessaire) : le vrai input reste dans le
+   DOM (voir .visually-hidden, même technique que #shareLinkInput) et se déclenche via son
+   <label for=...>, ce qui permet de le faire ressembler à un bouton normal de l'appli. Le
+   nom du fichier choisi s'affiche à côté, mis à jour en JS (voir uiHandleDealFileChosen) —
+   pas de raison que ce nom prenne toute la largeur du panneau comme le faisait le champ
+   natif. */
+.file-picker {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.file-picker-btn {
+    flex-shrink: 0;
+    cursor: pointer;
+}
+
+.file-picker-name {
+    font-size: 0.82rem;
+    color: rgba(246, 241, 227, 0.68);
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+}
+
+.file-picker-name.has-file {
+    color: var(--text);
+    font-weight: 600;
+}
+
 .form-group select {
     width: 100%;
     padding: 8px;
@@ -808,6 +842,16 @@ body.on-landing-screen .connection-bar {
     color: var(--text);
 }
 
+/* Plus étroit que la pleine largeur du panneau (trop imposant pour ce que c'est), et un
+   peu plus affirmé visuellement (bordure teal plus marquée) pour se distinguer d'un champ
+   de formulaire quelconque. */
+.deal-library-select {
+    width: auto;
+    max-width: 280px;
+    border-width: 1.5px;
+    border-color: rgba(64, 190, 184, 0.55);
+}
+
 /* Séparateur "ou" entre les deux sources de donnes possibles (upload / bibliothèque du
    club) — juste un repère visuel, pas un vrai bouton bascule : les deux champs restent
    utilisables l'un comme l'autre, ils se désélectionnent mutuellement au choix (voir
@@ -821,7 +865,23 @@ body.on-landing-screen .connection-bar {
     margin: 4px 0;
 }
 
-.form-group-checkbox { margin-bottom: 10px; }
+/* Centré et détaché des deux options de source de donnes au-dessus (marge du haut plus
+   généreuse) : voir échange avec Guillaume — sans cet espace, ça pouvait laisser croire
+   que c'était une troisième alternative au fichier/à la bibliothèque, alors que c'est un
+   réglage à part qui s'applique aux deux. display:flex ici (pas text-align, sans effet sur
+   .checkbox-label qui est display:flex !important, donc un bloc, pas de l'inline) pour le
+   centrer via justify-content. */
+.form-group-checkbox {
+    display: flex;
+    justify-content: center;
+    margin-top: 20px;
+    margin-bottom: 10px;
+}
+
+.start-game-row {
+    margin-top: 14px;
+    text-align: center;
+}
 
 .checkbox-label {
     display: flex !important;

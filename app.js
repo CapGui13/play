@@ -1418,11 +1418,24 @@ function readAndValidateDealFromLibrary(filename, onDone) {
 // tout de suite — voir readAndValidateDealFile. L'hôte voit ainsi l'éventuel message
 // pendant qu'il compose encore la table, et uiStartGameAsHost n'a plus qu'à réutiliser ce
 // résultat (pendingParsedDeals) sans relire le fichier une seconde fois.
+// Tient à jour l'affichage du nom de fichier à côté du bouton "Choisir un fichier" (voir
+// échange avec Guillaume : remplace le texte natif "Aucun fichier choisi" du navigateur,
+// bien plus large que nécessaire, par un affichage compact qu'on contrôle nous-mêmes).
+function updateDealFileNameDisplay() {
+    const display = document.getElementById('dealFileNameDisplay');
+    if (!display) return;
+    const fileInput = document.getElementById('dealFileInput');
+    const file = fileInput && fileInput.files && fileInput.files[0];
+    display.textContent = file ? file.name : 'Aucun fichier choisi';
+    display.classList.toggle('has-file', !!file);
+}
+
 function uiHandleDealFileChosen() {
     const fileInput = document.getElementById('dealFileInput');
     pendingParsedDeals = null;
     pendingParsedSource = null;
     pendingOrderedDeals = null;
+    updateDealFileNameDisplay();
 
     if (!fileInput.files || fileInput.files.length === 0) {
         clearHostSetupMessage();
@@ -1462,6 +1475,7 @@ function uiHandleDealLibraryChosen() {
     // Réciproquement, choisir dans la bibliothèque désélectionne le fichier local.
     const fileInput = document.getElementById('dealFileInput');
     if (fileInput) fileInput.value = '';
+    updateDealFileNameDisplay();
 
     readAndValidateDealFromLibrary(filename, (parsedDeals) => {
         pendingParsedSource = `library:${filename}`;
