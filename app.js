@@ -790,6 +790,16 @@ function buildHostHandlers(onOpenExtra) {
                 if (p) { p.disconnected = true; p.disconnectedAt = Date.now(); }
             }
             hostPendingUndo = null; // un invité qui part au milieu d'un arbitrage : on ne reste pas bloqué
+            // Voir audit : si le participant qui vient de partir était justement la cible
+            // d'un transfert d'hôte en cours, plus aucune réponse ('become-host-ready' ou
+            // '-failed') n'arrivera jamais — sans ce filet, hostTransferInProgress resterait
+            // bloqué à true pour toujours, empêchant tout nouveau transfert.
+            if (hostTransferInProgress && token === pendingHostTransferTarget) {
+                hostTransferInProgress = false;
+                pendingHostTransferTarget = null;
+                pendingHostTransferOldToken = null;
+                showHostTransferStatus('Le participant visé par le transfert vient de se déconnecter. Transfert annulé, vous restez hôte.', true);
+            }
             broadcastLobbyState();
             renderLobby();
             if (deals) renderBoard();
@@ -1242,6 +1252,18 @@ function uiTransferHost(targetId) {
     });
 
     peerConn.send({ type: 'prepare-become-host', participants: newParticipants, seatAssignment: newSeatAssignment }, guestIndex);
+
+    // Filet de sécurité : au cas où ni 'become-host-ready' ni 'become-host-failed' ni même
+    // onPeerDisconnected ne se déclenchent (silence radio complet — improbable mais pas
+    // impossible), on ne reste jamais bloqué plus de 20s sur "transfert en cours".
+    setTimeout(() => {
+        if (hostTransferInProgress && pendingHostTransferTarget === targetId) {
+            hostTransferInProgress = false;
+            pendingHostTransferTarget = null;
+            pendingHostTransferOldToken = null;
+            showHostTransferStatus('Le transfert a expiré sans réponse. Vous restez hôte, réessayez si besoin.', true);
+        }
+    }, 20000);
 }
 
 // ===== Démarrage de la partie (hôte) =====
