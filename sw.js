@@ -44,20 +44,35 @@ self.addEventListener('install', (event) => {
     event.waitUntil(
         (async () => {
             const cache = await caches.open(CACHE_NAME);
-            await cache.addAll(CORE_ASSETS);
+            // { cache: 'reload' } plutôt que cache.addAll(CORE_ASSETS) tel quel : ce
+            // dernier fait un fetch() par défaut, qui peut très bien être satisfait par le
+            // cache HTTP du navigateur (pas celui, distinct, de la Cache Storage API ici)
+            // si GitHub Pages sert ces fichiers avec des en-têtes de cache — auquel cas ce
+            // nouveau service worker se met bien à jour lui-même (CACHE_NAME différent),
+            // mais y recopie des fichiers encore périmés, sans jamais vraiment retourner
+            // sur le réseau. C'est très exactement ce qui obligeait à un Ctrl+Maj+R (qui,
+            // lui, ignore le cache HTTP) pour voir une mise à jour appliquée (voir échange
+            // avec Guillaume) : 'reload' force ici la même chose systématiquement, sans
+            // rien à faire côté utilisateur.
+            await Promise.all(
+                CORE_ASSETS.map(async (url) => {
+                    const resp = await fetch(url, { cache: 'reload' });
+                    await cache.put(url, resp);
+                })
+            );
             await Promise.allSettled(
                 EXTERNAL_ASSETS.map(async (url) => {
                     // mode:'no-cors' : ces domaines ne renvoient pas forcément d'en-têtes
                     // CORS permissifs. La réponse est alors "opaque" (illisible pour nous,
                     // mais parfaitement rejouable par le navigateur) — suffisant pour de la
                     // mise en cache pure, sans avoir besoin d'en inspecter le contenu.
-                    const resp = await fetch(url, { mode: 'no-cors' });
+                    const resp = await fetch(url, { mode: 'no-cors', cache: 'reload' });
                     await cache.put(url, resp);
                 })
             );
-            // N'active pas immédiatement ce nouveau service worker : voir la logique de
-            // bannière "nouvelle version" dans app.js (initServiceWorker), qui attend une
-            // confirmation explicite de l'utilisateur avant d'appeler skipWaiting().
+            // N'active pas immédiatement ce nouveau service worker : voir tryAutoApplyUpdate
+            // dans app.js, qui attend qu'aucune salle ne soit active avant d'appeler
+            // skipWaiting() automatiquement.
         })()
     );
 });

@@ -2971,6 +2971,13 @@ function initServiceWorker() {
                 }
             });
         });
+
+        // Revérifie explicitement toutes les 60s si une nouvelle version existe, plutôt que
+        // de dépendre uniquement du cycle de vérification du navigateur (qui peut attendre
+        // jusqu'à 24h avant de re-regarder sw.js) — sans ça, une page laissée ouverte
+        // pouvait mettre très longtemps à seulement DÉTECTER un déploiement, avant même de
+        // songer à l'appliquer.
+        setInterval(() => registration.update(), 60000);
     }).catch((err) => {
         pushDebugLog('Service worker : échec d\'enregistrement — ' + (err && err.message));
     });
