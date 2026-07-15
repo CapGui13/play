@@ -500,6 +500,69 @@ body.on-landing-screen .connection-bar {
 .form-group-name { text-align: center; }
 .form-group-name .name-input { margin: 0 auto; }
 
+/* Le pseudo et le bouton de transfert d'hôte (voir échange avec Guillaume — un seul
+   bouton ici plutôt qu'un par participant) partagent la même ligne, centrés ensemble ;
+   passe sur deux lignes de lui-même sur un écran étroit (flex-wrap) sans rien à gérer en
+   JS pour ça. */
+.name-input-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.host-transfer-widget {
+    position: relative;
+}
+
+.transfer-menu {
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    margin-top: 6px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+    min-width: 200px;
+    max-width: 260px;
+    z-index: 50;
+    overflow: hidden;
+}
+
+.transfer-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    text-align: left;
+    padding: 9px 12px;
+    background: none;
+    border: none;
+    border-bottom: 1px solid var(--border);
+    color: var(--text);
+    font-family: var(--font-body);
+    font-size: 0.88rem;
+    cursor: pointer;
+}
+
+.transfer-menu-item:last-child { border-bottom: none; }
+
+.transfer-menu-item:hover,
+.transfer-menu-item:focus-visible {
+    background: var(--surface-2);
+    outline: none;
+}
+
+.transfer-menu-empty {
+    padding: 9px 12px;
+    font-size: 0.82rem;
+    color: rgba(246, 241, 227, 0.68);
+    color: var(--text-muted);
+}
+
 .name-input:focus {
     outline: none;
     border-color: var(--brass);
@@ -851,19 +914,13 @@ body.on-landing-screen .connection-bar {
     margin-left: 6px;
 }
 
-/* Poussé en bout de ligne plutôt que juste après le nom (voir renderParticipantsList dans
-   app.js) : le row est en flex-wrap, donc ce bouton se retrouve naturellement sur sa
-   propre ligne sur les écrans étroits plutôt que de coller au texte. */
-.transfer-host-btn {
-    margin-left: auto;
-}
-
 .kibbitz-note {
     margin-bottom: 10px;
 }
 
 .participant-rename-input {
-    width: auto;
+    flex: 1 1 60px;
+    min-width: 40px;
     max-width: 160px;
     font-family: var(--font-body);
     font-size: 0.9rem;

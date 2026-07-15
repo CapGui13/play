@@ -52,15 +52,13 @@
     </div>
 </div>
 
-<!-- Bannières PWA : nouvelle version dispo, invite à l'installation iOS, hors-ligne.
-     Un seul gestionnaire par bannière dans app.js (updateBanner / iosInstallBanner /
-     offlineBanner) ; toutes masquées par défaut, affichées/masquées en JS selon le
-     contexte (voir initServiceWorker, initIosInstallHint, initOfflineHandling). -->
-<div id="updateBanner" class="pwa-banner" style="display:none;">
-    <span>🔄 Nouvelle version disponible.</span>
-    <button type="button" class="btn btn-primary btn-small" onclick="uiReloadForUpdate()">Recharger</button>
-</div>
-
+<!-- Bannières PWA : invite à l'installation iOS, hors-ligne. La mise à jour, elle, n'a plus
+     de bannière : elle s'applique automatiquement dès qu'aucune salle n'est active (voir
+     tryAutoApplyUpdate dans app.js — échange avec Guillaume, qui préfère que ça se fasse
+     tout seul plutôt que de devoir cliquer "Recharger"). Un seul gestionnaire par bannière
+     restante dans app.js (iosInstallBanner / offlineBanner) ; masquées par défaut,
+     affichées/masquées en JS selon le contexte (voir initIosInstallHint,
+     initOfflineHandling). -->
 <div id="iosInstallBanner" class="pwa-banner" style="display:none;">
     <span>📲 Sur iPhone : appuyez sur <strong>Partager</strong> puis <strong>Sur l'écran d'accueil</strong> pour installer l'appli.</span>
     <button type="button" class="btn btn-secondary btn-small" onclick="uiDismissIosInstallHint()">Fermer</button>
@@ -147,7 +145,18 @@
 
         <div class="form-group form-group-name">
             <label>Votre pseudo</label>
-            <input type="text" id="myNameInput" class="name-input" maxlength="20" oninput="uiUpdateMyName()" onblur="uiMyNameBlur()" onfocus="this.select()">
+            <div class="name-input-row">
+                <input type="text" id="myNameInput" class="name-input" maxlength="20" oninput="uiUpdateMyName()" onblur="uiMyNameBlur()" onfocus="this.select()">
+                <!-- Un seul bouton, ici, plutôt qu'un par participant dans la liste (voir
+                     échange avec Guillaume) : ouvre un menu déroulant listant les
+                     participants à qui transférer. Masqué par défaut — affiché par
+                     renderHostTransferWidget() dans app.js uniquement pour l'hôte, dans le
+                     salon, quand au moins un autre participant est connecté. -->
+                <div id="hostTransferWidget" class="host-transfer-widget" style="display:none;">
+                    <button type="button" id="hostTransferToggleBtn" class="btn btn-secondary btn-small" onclick="uiToggleTransferMenu()">👑 Transférer l'hôte ▾</button>
+                    <div id="transferMenu" class="transfer-menu" style="display:none;"></div>
+                </div>
+            </div>
         </div>
 
         <div class="lobby-body">

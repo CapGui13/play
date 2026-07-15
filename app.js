@@ -631,6 +631,11 @@ function showScreen(id) {
     // trait de séparation sous la barre de statut n'a donc rien à séparer et fait juste
     // ligne parasite (voir la règle CSS body.on-landing-screen .connection-bar).
     document.body.classList.toggle('on-landing-screen', id === 'screen-landing');
+
+    // Chaque changement d'écran est une occasion de retenter une mise à jour PWA restée en
+    // attente (voir tryAutoApplyUpdate) — sans effet tant qu'une connexion de salle est
+    // active, donc sans risque à appeler ici systématiquement, y compris pour screen-game.
+    tryAutoApplyUpdate();
 }
 
 function setConnectionStatus(connected) {
@@ -1004,6 +1009,7 @@ function enterLobbyScreen() {
 function renderLobby() {
     renderParticipantsList();
     renderSeatAssignmentGrid();
+    renderHostTransferWidget();
 }
 
 // Vrai si ce participant occupe un siège à la table — utilisé pour la coloration de son
@@ -1023,9 +1029,6 @@ function renderParticipantsList() {
         return;
     }
     const isHost = myRole === 'host';
-    // Le transfert d'hôte n'a de sens qu'avant le lancement de la partie (voir uiTransferHost)
-    // et seulement vers quelqu'un d'effectivement connecté à cet instant.
-    const canOfferTransfer = isHost && !deals;
     list.innerHTML = participants.map(p => {
         const canRename = isHost && p.id !== myParticipantId;
         const nameHtml = canRename
@@ -1036,10 +1039,6 @@ function renderParticipantsList() {
         // Bleu si assis à un siège (voir participantHasAPlace), rouge sinon — sans siège,
         // devient kibbitz automatiquement, ce n'est pas un problème à corriger.
         const placementClass = participantHasAPlace(p.id) ? 'is-assigned' : 'is-unassigned';
-        const showTransferBtn = canOfferTransfer && p.id !== myParticipantId && !p.disconnected;
-        const transferBtnHtml = showTransferBtn
-            ? `<button type="button" class="btn btn-secondary btn-small transfer-host-btn" onclick="uiTransferHost('${p.id}')" title="Transférer le rôle d'hôte à ${escapeHtml(p.name)}">👑 Transférer l'hôte</button>`
-            : '';
         return `
         <li class="participant-item ${placementClass} ${p.id === myParticipantId ? 'is-me' : ''}">
             ${avatarHtml(p.id)}
@@ -1047,7 +1046,6 @@ function renderParticipantsList() {
             ${p.id === 'host' ? ' <span class="host-tag">(hôte)</span>' : ''}
             ${p.id === myParticipantId ? ' <span class="me-tag">(vous)</span>' : ''}
             ${p.disconnected ? ' <span class="disconnected-tag">🔌 déconnecté — place réservée</span>' : ''}
-            ${transferBtnHtml}
         </li>
     `;
     }).join('');
@@ -1206,12 +1204,64 @@ function showHostTransferStatus(message, isError) {
     el.style.display = 'block';
 }
 
+// Bouton unique à côté du pseudo (voir échange avec Guillaume : un seul bouton, pas un par
+// participant dans la liste), qui ouvre un menu déroulant listant qui peut recevoir le
+// rôle d'hôte. Visible seulement pour l'hôte, dans le salon, tant qu'au moins un autre
+// participant connecté existe — sinon rien à proposer.
+function renderHostTransferWidget() {
+    const widget = document.getElementById('hostTransferWidget');
+    if (!widget) return;
+
+    const isHost = myRole === 'host';
+    const eligible = isHost && !deals
+        ? participants.filter(p => p.id !== myParticipantId && !p.disconnected)
+        : [];
+
+    if (!isHost || deals) {
+        widget.style.display = 'none';
+        uiCloseTransferMenu();
+        return;
+    }
+    widget.style.display = '';
+
+    const menu = document.getElementById('transferMenu');
+    if (!menu) return;
+    menu.innerHTML = eligible.length > 0
+        ? eligible.map(p => `<button type="button" class="transfer-menu-item" onclick="uiTransferHost('${p.id}')">${avatarHtml(p.id)}${escapeHtml(p.name)}</button>`).join('')
+        : `<div class="transfer-menu-empty">Personne d'autre pour l'instant.</div>`;
+}
+
+function uiToggleTransferMenu() {
+    const menu = document.getElementById('transferMenu');
+    if (!menu) return;
+    if (menu.style.display === 'block') {
+        uiCloseTransferMenu();
+    } else {
+        menu.style.display = 'block';
+        // Ferme au clic ailleurs sur la page — posé au tick suivant, sinon le clic sur le
+        // bouton lui-même (qui vient de déclencher cette ouverture) le refermerait aussitôt.
+        setTimeout(() => document.addEventListener('click', uiTransferMenuOutsideClick), 0);
+    }
+}
+
+function uiCloseTransferMenu() {
+    const menu = document.getElementById('transferMenu');
+    if (menu) menu.style.display = 'none';
+    document.removeEventListener('click', uiTransferMenuOutsideClick);
+}
+
+function uiTransferMenuOutsideClick(event) {
+    const widget = document.getElementById('hostTransferWidget');
+    if (widget && !widget.contains(event.target)) uiCloseTransferMenu();
+}
+
 // Lance le transfert du rôle d'hôte vers `targetId`, un participant actuellement connecté
-// (voir le bouton "👑" dans renderParticipantsList). Ne fait que la première moitié du
-// travail : envoyer à ce participant tout ce qu'il faut pour qu'il devienne hôte à son
+// (voir le menu déroulant dans renderHostTransferWidget). Ne fait que la première moitié
+// du travail : envoyer à ce participant tout ce qu'il faut pour qu'il devienne hôte à son
 // tour (voir 'prepare-become-host' dans handlePeerData) ; la bascule effective de l'ancien
 // hôte se fait plus tard, à la réception de 'become-host-ready'.
 function uiTransferHost(targetId) {
+    uiCloseTransferMenu();
     if (myRole !== 'host' || deals) return; // uniquement possible dans le salon, avant le lancement
     if (hostTransferInProgress) return;
 
@@ -2079,7 +2129,10 @@ function renderRoomBoard() {
         : '';
 
     if (!seatRows && !kibbitzHtml) {
-        el.innerHTML = '<div class="info-text">Personne d\'autre pour l\'instant — les sièges vides sont joués par des robots.</div>';
+        // Rien à afficher (personne d'autre pour l'instant) : on laisse vide plutôt que
+        // d'occuper de la place avec un message (voir échange avec Guillaume — superflu).
+        // .room-board:empty se masque déjà tout seul (voir styles.css).
+        el.innerHTML = '';
         return;
     }
 
@@ -2866,21 +2919,24 @@ function initServiceWorker() {
     if (!('serviceWorker' in navigator)) return;
 
     navigator.serviceWorker.register('sw.js').then((registration) => {
-        // Un service worker déjà en attente (installé lors d'une visite précédente,
-        // jamais activé faute de rechargement) : la bannière doit s'afficher tout de
-        // suite, pas seulement lors d'une future mise à jour détectée dans cette session.
-        if (registration.waiting) showUpdateBanner(registration);
+        // Un service worker déjà en attente (installé lors d'une visite précédente, jamais
+        // activé faute de rechargement) : on tente de l'appliquer tout de suite, pas
+        // seulement lors d'une future mise à jour détectée dans cette session.
+        if (registration.waiting) {
+            pendingSwRegistration = registration;
+            tryAutoApplyUpdate();
+        }
 
         registration.addEventListener('updatefound', () => {
             const newWorker = registration.installing;
             if (!newWorker) return;
             newWorker.addEventListener('statechange', () => {
                 // 'installed' + un controller déjà actif = une mise à jour est prête et
-                // attend (voir l'appel différé à skipWaiting dans uiReloadForUpdate) ;
-                // sans controller actif, ce serait la toute première installation du site,
-                // pas une mise à jour à annoncer.
+                // attend ; sans controller actif, ce serait la toute première installation
+                // du site, pas une mise à jour à appliquer.
                 if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-                    showUpdateBanner(registration);
+                    pendingSwRegistration = registration;
+                    tryAutoApplyUpdate();
                 }
             });
         });
@@ -2898,20 +2954,28 @@ function initServiceWorker() {
         reloadedForUpdate = true;
         window.location.reload();
     });
+
+    // Filet de sécurité : si une mise à jour est détectée pendant qu'une connexion de salle
+    // est active (voir tryAutoApplyUpdate ci-dessous), elle reste en attente sans jamais
+    // relancer d'elle-même — ce sondage périodique retente régulièrement, pour l'appliquer
+    // dès qu'on revient à un moment sûr (plus aucune salle active) sans dépendre uniquement
+    // d'un changement d'écran pour s'en rendre compte.
+    setInterval(tryAutoApplyUpdate, 30000);
 }
 
-function showUpdateBanner(registration) {
-    pendingSwRegistration = registration;
-    const banner = document.getElementById('updateBanner');
-    if (banner) banner.style.display = 'flex';
-}
-
-function uiReloadForUpdate() {
-    if (pendingSwRegistration && pendingSwRegistration.waiting) {
-        pendingSwRegistration.waiting.postMessage('skipWaiting');
-    } else {
-        window.location.reload();
-    }
+// Voir échange avec Guillaume : plus de bannière "Nouvelle version disponible" à cliquer,
+// la mise à jour s'applique automatiquement — SAUF s'il y a une connexion de salle active
+// (peerConn non nul), qu'on soit hôte ou invité, dans le salon ou en pleine donne. Ne pas
+// se limiter à "pas en pleine donne" (deals) : un rechargement forcé pendant que l'hôte est
+// encore dans le salon le laisserait bloqué, sans façon de s'y reconnecter (voir la
+// limitation déjà documentée dans le README — l'identifiant de connexion de l'hôte change à
+// chaque nouvelle partie). Dans ce cas, retenté plus tard (voir les appels dans showScreen
+// et le sondage périodique) : au pire, elle s'appliquera à la prochaine ouverture de la
+// page, exactement comme avant, juste sans bouton à cliquer.
+function tryAutoApplyUpdate() {
+    if (!pendingSwRegistration || !pendingSwRegistration.waiting) return;
+    if (peerConn) return;
+    pendingSwRegistration.waiting.postMessage('skipWaiting');
 }
 
 // iPadOS se fait passer pour un Mac (navigator.platform "MacIntel") depuis la version 13 :

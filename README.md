@@ -184,12 +184,14 @@ automatiquement (Android), ou l'utilisateur passe par Partager → Sur l'écran 
 cache via la constante `CACHE_NAME` en tête de fichier, mais elle n'est plus à incrémenter
 à la main : le workflow `.github/workflows/deploy.yml` la réécrit tout seul à chaque push
 sur `main`, avec un identifiant dérivé du commit (`bridge-encheres-<sha>`), avant de
-déployer. Chaque déploiement a donc forcément un `CACHE_NAME` différent du précédent, et
-le service worker détecte toujours la mise à jour — la bannière "Nouvelle version
-disponible" s'affiche automatiquement chez les joueurs ayant déjà installé l'appli ; il
-leur suffit de cliquer "Recharger". Ça vaut aussi pour `donnes/catalogue.json` et les
-fichiers de `donnes/`, mis en cache dès leur premier chargement bien que non listés dans
-`CORE_ASSETS` (voir `donnes/README.md`).
+déployer. Chaque déploiement a donc forcément un `CACHE_NAME` différent du précédent, et le
+service worker détecte toujours la mise à jour — appliquée **automatiquement**, sans rien à
+cliquer, chez les joueurs ayant déjà installé l'appli. Par sécurité, elle attend qu'aucune
+salle ne soit active (ni hôte ni invité connecté à une partie, en salon ou en jeu) avant de
+recharger la page toute seule — sinon elle patiente et retente régulièrement, jusqu'à ce que
+ce soit le cas. Ça vaut aussi pour `donnes/catalogue.json` et les fichiers de `donnes/`, mis
+en cache dès leur premier chargement bien que non listés dans `CORE_ASSETS` (voir
+`donnes/README.md`).
 
 Prérequis pour que ce workflow s'exécute : **Settings → Pages → Source** doit être réglé
 sur *"GitHub Actions"* (pas *"Deploy from a branch"*). Après un `git push`, l'onglet
