@@ -908,6 +908,11 @@ function uiJoinRoom() {
 // exactement comme un rejoin normal.
 function connectAsGuest(code, token, nickname) {
     if (peerConn) peerConn.destroy();
+    // Statut honnête tout de suite : sans ça, la barre garde l'affichage précédent
+    // ("Connecté") pendant tout le temps de la nouvelle connexion, ce qui pouvait laisser
+    // penser à tort que quelque chose avait cassé pendant un transfert d'hôte alors que la
+    // reconnexion était juste en cours (voir échange avec Guillaume).
+    setConnectionStatus(false);
 
     myRole = 'guest';
     myParticipantId = null; // fixé à réception du message 'welcome'
@@ -1616,26 +1621,38 @@ function handlePeerData(msg, guestIndex) {
 
             const inheritedParticipants = msg.participants;
             const inheritedSeatAssignment = msg.seatAssignment;
+            // Gardée dans une variable locale plutôt que relue depuis la globale `peerConn`
+            // plus bas : voir le commentaire juste après sur la bascule immédiate de l'état.
+            const oldPeerConn = peerConn;
 
             const claimPeer = new BridgePeerConnection(buildHostHandlers((newRoomCode) => {
-                // On a le nouveau code : prévenir l'ancien hôte AVANT de couper la connexion
-                // vers lui (c'est la seule voie pour le lui dire). Un court délai laisse le
-                // temps au message de partir sur le canal WebRTC avant qu'on ne le ferme.
-                if (peerConn) peerConn.send({ type: 'become-host-ready', newRoomCode });
-                setTimeout(() => {
-                    if (peerConn) peerConn.destroy();
-                    peerConn = claimPeer;
-                    myRole = 'host';
-                    myParticipantId = 'host';
-                    participants = inheritedParticipants;
-                    seatAssignment = inheritedSeatAssignment;
-                    guestIndexByToken = {};
-                    prevSeatAssignmentSnapshot = null;
-                    prevParticipantsDisconnectedSnapshot = null;
-                    lobbyChatAutoOpened = false;
-                    enterLobbyScreen();
-                    renderLobby();
-                }, 300);
+                // BASCULE IMMÉDIATE ET SYNCHRONE de tout l'état global, avant même de
+                // prévenir l'ancien hôte. Sans ça (l'ancienne version attendait 300ms avant
+                // de le faire) : `claimPeer` accepte déjà des connexions entrantes dès son
+                // ouverture (le gestionnaire 'connection' de peer-connection.js est posé dès
+                // la création), donc toute connexion arrivant pendant ces 300ms déclenchait
+                // les handlers de buildHostHandlers alors qu'ils référençaient encore
+                // l'ANCIEN état (peerConn pointant vers l'ancienne connexion, participants
+                // pas encore hérités) — c'est très probablement ce qui causait les
+                // déconnexions observées pendant un transfert (voir échange avec Guillaume).
+                peerConn = claimPeer;
+                myRole = 'host';
+                myParticipantId = 'host';
+                participants = inheritedParticipants;
+                seatAssignment = inheritedSeatAssignment;
+                guestIndexByToken = {};
+                prevSeatAssignmentSnapshot = null;
+                prevParticipantsDisconnectedSnapshot = null;
+                lobbyChatAutoOpened = false;
+                enterLobbyScreen();
+                renderLobby();
+
+                // Prévenir l'ancien hôte APRÈS la bascule locale (peu importe l'ordre réel
+                // de réception chez lui, ça n'a plus d'incidence) puis fermer l'ancienne
+                // connexion avec un court délai, pour laisser le message le temps de partir
+                // sur le canal WebRTC avant de la couper.
+                if (oldPeerConn) oldPeerConn.send({ type: 'become-host-ready', newRoomCode });
+                setTimeout(() => { if (oldPeerConn) oldPeerConn.destroy(); }, 300);
             }));
             // Repli propre si la création de la nouvelle salle échoue (réseau, etc.) :
             // prévenir l'ancien hôte plutôt que de le laisser attendre indéfiniment, sans
@@ -1643,7 +1660,7 @@ function handlePeerData(msg, guestIndex) {
             // comme avant à l'ancien hôte).
             claimPeer.handlers.onError = (err) => {
                 pushDebugLog('Échec de la prise de rôle hôte : ' + ((err && (err.message || err.type)) || err));
-                if (peerConn) peerConn.send({ type: 'become-host-failed', reason: (err && err.type) || 'erreur inconnue' });
+                if (oldPeerConn) oldPeerConn.send({ type: 'become-host-failed', reason: (err && err.type) || 'erreur inconnue' });
             };
             claimPeer.createRoom();
             break;
