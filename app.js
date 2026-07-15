@@ -869,11 +869,28 @@ function buildGuestHandlers() {
         },
         onData: handlePeerData,
         onError: (err) => {
-            if (!deals) showScreen('screen-landing');
-            if (err && err.type === 'peer-unavailable') {
-                showLandingError("Aucune partie trouvée avec ce code. Vérifiez le code ou demandez à l'hôte de le repartager.");
+            // Voir échange avec Guillaume ("je suis ressorti du salon, puis 'Lost connection
+            // to server' en retapant un code") : une erreur peut désormais survenir bien
+            // après un premier join réussi — notamment quand la tentative de reconnexion
+            // automatique en arrière-plan (voir peer.reconnect() dans peer-connection.js,
+            // déclenché après une coupure de signalisation) échoue à son tour. Avant ce
+            // correctif, TOUTE erreur ici renvoyait vers l'écran d'accueil avec un bandeau
+            // "Erreur de connexion", même en plein milieu d'une session par ailleurs
+            // fonctionnelle — perturbant pour rien et laissant l'appli dans un état confus
+            // pour retaper un nouveau code ensuite. Désormais, seule une VRAIE première
+            // tentative de connexion qui échoue (jamais connecté ne serait-ce qu'une fois)
+            // déclenche ce comportement ; passé ce cap, on s'en remet simplement au statut
+            // et au bouton "🔌 Se reconnecter" (déjà mis à jour par onSignalingDisconnected/
+            // onPeerDisconnected), sans rien arracher à l'écran.
+            if (!everConnectedAsGuest) {
+                if (!deals) showScreen('screen-landing');
+                if (err && err.type === 'peer-unavailable') {
+                    showLandingError("Aucune partie trouvée avec ce code. Vérifiez le code ou demandez à l'hôte de le repartager.");
+                } else {
+                    showLandingError('Erreur de connexion : ' + ((err && (err.message || err.type)) || err));
+                }
             } else {
-                showLandingError('Erreur de connexion : ' + ((err && (err.message || err.type)) || err));
+                pushDebugLog('Erreur (après connexion déjà établie), ignorée côté interface : ' + ((err && (err.message || err.type)) || err));
             }
         }
     };
