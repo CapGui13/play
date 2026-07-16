@@ -1837,7 +1837,7 @@ function handlePeerData(msg, guestIndex) {
                 if (targetGuestIndex !== undefined) peerConn.send(msg, targetGuestIndex);
                 break;
             }
-            triggerWizzEffect(msg.senderName);
+            triggerWizzEffect();
             break;
         }
 
@@ -2231,7 +2231,7 @@ function uiSendWizz(targetId) {
 // @keyframes wizzShake dans styles.css) et un petit bip généré à la volée (pas de fichier
 // audio à charger). Respecte prefers-reduced-motion : le tremblement est alors sauté, seul
 // le bandeau reste pour prévenir sans désagrément visuel.
-function triggerWizzEffect(senderName) {
+function triggerWizzEffect() {
     const prefersReducedMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     if (!prefersReducedMotion) {
         document.body.classList.remove('wizz-shake'); // relance l'animation même si déjà en cours (rewizz rapide)
@@ -2240,7 +2240,7 @@ function triggerWizzEffect(senderName) {
         setTimeout(() => document.body.classList.remove('wizz-shake'), 600);
     }
     playWizzSound();
-    flashWizzToast(senderName);
+    flashWizzToast();
 }
 
 // Bip classique généré via Web Audio (deux notes brèves) plutôt qu'un fichier son à
@@ -2269,7 +2269,10 @@ function playWizzSound() {
 
 // Petit bandeau temporaire en haut de l'écran, plutôt qu'une alert() bloquante — cohérent
 // avec le ton léger de la fonctionnalité.
-function flashWizzToast(senderName) {
+// Petit bandeau temporaire en haut de l'écran, plutôt qu'une alert() bloquante — cohérent
+// avec le ton léger de la fonctionnalité. Interpelle la personne wizzée par son propre
+// pseudo (voir échange avec Guillaume), pas par celui de l'expéditeur.
+function flashWizzToast() {
     let toast = document.getElementById('wizzToast');
     if (!toast) {
         toast = document.createElement('div');
@@ -2277,7 +2280,9 @@ function flashWizzToast(senderName) {
         toast.className = 'wizz-toast';
         document.body.appendChild(toast);
     }
-    toast.textContent = `🔔 ${senderName} vous a fait trembler !`;
+    const me = participants.find(p => p.id === myParticipantId);
+    const myName = me ? me.name : '';
+    toast.textContent = `🔔 Réveillez-vous ${myName}, on vous attend !`;
     toast.classList.remove('visible');
     void toast.offsetWidth;
     toast.classList.add('visible');
