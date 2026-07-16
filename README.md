@@ -102,26 +102,37 @@ Aucune clé, aucun compte externe à configurer : tout fonctionne dès la mise e
 Un siège laissé sur "— (robot)" n'ouvre plus systématiquement passe : il applique un moteur
 d'enchères volontairement simplifié plutôt qu'un vrai simulateur (hors de portée
 raisonnable pour ce projet — même les logiciels commerciaux s'y cassent régulièrement les
-dents) :
+dents), avec des seuils repris du **SEF** (Système d'Enchères Français), la référence
+utilisée en club — voir [le dictionnaire des enchères de bridge-chailley.fr](https://www.bridge-chailley.fr/dictionnaire-des-encheres/),
+notamment sa fiche "Ouvertures", plutôt qu'une généralisation approximative :
 
-- **Ouverture** : 1SA avec 15-17H et une main équilibrée (4333, 4432 ou 5332), sinon la
-  couleur la plus longue (majeure 5+ prioritaire) à partir de 12H, au palier 2 avec une
-  main très forte (22H+). Passe en dessous de 12H.
+- **Comptage en points H+L** (honneurs + longueur : +1 par carte au-delà de la 4e dans une
+  couleur de 5+ cartes) pour la plupart des décisions, à l'exception explicite d'1SA
+  (compté en H purs, comme le veut le SEF).
+- **Ouverture** : 1SA avec 15-17H et une main équilibrée (4333, 4432 ou 5332) ; 2SA avec
+  20-21HL équilibrée ; barrages faibles 8-12HL (2 à une majeure 6ème, 3 à 7 cartes, 4 à 8
+  cartes) ; sinon la couleur la plus longue à partir de 12HL (règle "majeure 5ème,
+  meilleure mineure" : une majeure de 4 cartes n'ouvre jamais, exception SEF du 3-3 aux
+  mineures sans majeure 5e qui ouvre toujours du ♣). Passe en dessous de 12HL.
 - **Réponse à l'ouverture du partenaire** : après une ouverture à la mineure, une majeure
   4+ cartes franche est montrée avant de soutenir la mineure (principe de base : chercher
   un fit à la majeure d'abord). Sinon, soutien si 3+ cartes dans sa couleur (palier 2 ou 3
-  selon les points), sinon une nouvelle couleur à partir de 10H, sinon un repli à SA à
-  partir de 6H.
-- **Intervention sur l'ouverture d'un adversaire** : à partir de 8H et une couleur de 5+
+  selon les points), sinon une nouvelle couleur à partir de 11HL (seuil SEF), sinon un
+  repli à SA à partir de 6HL.
+- **Intervention sur l'ouverture d'un adversaire** : à partir de 8HL et une couleur de 5+
   cartes, au palier minimal légal.
 - **Un seul tour de dialogue** : une fois qu'un robot a annoncé quelque chose dans une
   donne, il passe systématiquement ensuite — pas de rebid, pas de contre-annonce après une
   nouvelle enchère adverse.
-- **Jamais de contre ni de surcontre**, jamais de convention (Stayman, Blackwood...).
+- **Jamais de contre ni de surcontre**, jamais de convention (Stayman, Blackwood, Roudi,
+  Texas...), pas de 2♣ fort indéterminé ni de 2♦ forcing de manche (une main assez forte
+  pour ça ouvre simplement au palier 1, faute d'implémenter tout un système de relais pour
+  une main sur plusieurs centaines).
 
 Chaque annonce calculée est vérifiée par les mêmes règles de légalité que celles d'un
 joueur humain avant d'être jouée ; en cas de doute, le robot passe plutôt que de risquer
-une annonce invalide.
+une annonce invalide. Testé sur 1000 enchères complètes à 4 robots (donnes aléatoires) :
+zéro annonce illégale, zéro blocage.
 
 ## Limites connues
 

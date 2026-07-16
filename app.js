@@ -2241,29 +2241,80 @@ function suitLengths(hand) {
 }
 
 // Décision d'OUVERTURE (personne n'a encore annoncé quoi que ce soit dans cette donne).
+// Points d'honneur (H) + points de longueur (L) : +1 par carte au-delà de la 4e dans
+// chaque couleur de 5+ cartes (5 cartes = +1, 6 cartes = +2, etc.) — barème SEF utilisé
+// pour la plupart des décisions d'ouverture (à l'exception notable d'1SA, qui se compte en
+// H purs : voir decideRobotOpening). Source : fiche "Ouvertures" du SEF, bridge-chailley.fr
+// (voir échange avec Guillaume).
+function computeHandHL(hand) {
+    const lengths = suitLengths(hand);
+    let lengthPoints = 0;
+    for (const suit of ['S', 'H', 'D', 'C']) {
+        if (lengths[suit] >= 5) lengthPoints += lengths[suit] - 4;
+    }
+    return computeHandHcp(hand) + lengthPoints;
+}
+
+// Choix de la couleur d'ouverture à la couleur (donc hors 1SA/2SA/barrages, déjà écartés
+// par decideRobotOpening avant d'en arriver là) : toujours la majeure 5+ la plus longue si
+// elle est au moins aussi longue que la meilleure mineure (le système "majeure 5ème"
+// n'autorise jamais l'ouverture d'une majeure à 4 cartes, quoi qu'il arrive) ; sinon la
+// mineure la plus longue — sauf l'exception SEF explicite du 3-3 aux mineures (sans
+// majeure 5e), qui ouvre systématiquement du ♣ plutôt que du ♦ malgré l'égalité.
+function decideOpeningSuit(lengths) {
+    const majorLen = Math.max(lengths.S >= 5 ? lengths.S : 0, lengths.H >= 5 ? lengths.H : 0);
+    const minorLen = Math.max(lengths.D, lengths.C);
+    if (majorLen > 0 && majorLen >= minorLen) {
+        return (lengths.S >= 5 && lengths.S >= lengths.H) ? 'S' : 'H';
+    }
+    if (lengths.D === 3 && lengths.C === 3) return 'C'; // exception SEF
+    return lengths.D >= lengths.C ? 'D' : 'C';
+}
+
+// Décision d'OUVERTURE (personne n'a encore annoncé quoi que ce soit dans cette donne).
+// Seuils repris de la fiche "Ouvertures" du SEF (voir échange avec Guillaume), simplifiée
+// pour l'essentiel — sans 2♣ fort indéterminé ni 2♦ forcing de manche (main exceptionnelle
+// hors barème, laissée à une ouverture au palier 1 par défaut, faute d'implémenter tout un
+// système de relais pour une main sur plusieurs centaines).
 function decideRobotOpening(hand, hcp) {
     const lengths = suitLengths(hand);
-    if (hcp >= 15 && hcp <= 17 && isHandBalancedForNT(lengths)) return '1NT';
-    if (hcp < 12) return 'PASS';
+    const hl = computeHandHL(hand);
+    const balanced = isHandBalancedForNT(lengths);
 
-    const majorFit = ['S', 'H'].find(suit => lengths[suit] >= 5);
-    const suit = majorFit || longestSuitPreferHigh(lengths);
-    // Main très forte (22H+) : ouverture "fort" simplifiée au palier 2 dans la couleur la
-    // plus longue plutôt qu'un vrai 2♣ conventionnel forcing (hors périmètre ici).
-    const level = hcp >= 22 ? 2 : 1;
-    return level + suit;
+    // 1SA : exception SEF explicite, on compte ici en H purs, pas en HL.
+    if (hcp >= 15 && hcp <= 17 && balanced) return '1NT';
+    // 2SA : 20-21HL, main régulière (ni 5 cartes à une majeure, sauf couleur "laide" —
+    // nuance non reprise ici par simplicité).
+    if (hl >= 20 && hl <= 21 && balanced) return '2NT';
+
+    // Barrages faibles (8-12HL, système "majeure 5ème") : 6 cartes à une majeure au
+    // palier 2 ("2 faible"), 7 cartes au palier 3, 8 cartes au palier 4 — toujours la
+    // couleur la plus longue.
+    if (hl >= 8 && hl <= 12) {
+        const longest = longestSuitPreferHigh(lengths);
+        const len = lengths[longest];
+        const isMajor = (longest === 'S' || longest === 'H');
+        if (isMajor && len === 6) return '2' + longest;
+        if (len === 7) return '3' + longest;
+        if (len === 8) return '4' + longest;
+    }
+
+    if (hl < 12) return 'PASS';
+
+    const suit = decideOpeningSuit(lengths);
+    return '1' + suit;
 }
 
 // Décision de RÉPONSE à une annonce du PARTENAIRE (sa dernière annonce chiffrée est aussi
 // la dernière de toute l'enchère, sans intervention adverse entre les deux).
-function decideRobotResponse(hand, hcp, partnerCall, seat, history) {
+function decideRobotResponse(hand, hl, partnerCall, seat, history) {
     const lengths = suitLengths(hand);
     const bid = parseBid(partnerCall);
 
     if (bid.strain === 'NT') {
         // Réponse à 1SA : juste une estimation du total de points à eux deux, sans
         // Stayman/Texas/transferts (hors périmètre) — élève la manche si ça semble jouable.
-        if (hcp >= 10) {
+        if (hl >= 10) {
             const call = (bid.level + 2) + 'NT';
             if (isCallLegal(history, call, seat)) return call;
         }
@@ -2277,7 +2328,7 @@ function decideRobotResponse(hand, hcp, partnerCall, seat, history) {
     // franche au palier 1 passe AVANT de soutenir la mineure du partenaire — le principe
     // qu'on cherche d'abord un fit à la majeure, plus rentable, avant de se rabattre sur
     // la mineure (voir échange avec Guillaume : bug trouvé en jouant, l'inverse était fait).
-    if (hcp >= 6 && partnerOpenedMinor) {
+    if (hl >= 6 && partnerOpenedMinor) {
         const major = ['S', 'H'].find(s => lengths[s] >= 4);
         if (major) {
             const call = '1' + major;
@@ -2287,14 +2338,15 @@ function decideRobotResponse(hand, hcp, partnerCall, seat, history) {
 
     // Soutien si fit (3+ cartes dans la couleur du partenaire) : au palier 2 avec peu de
     // points, au palier 3 (invite) avec une belle main — simplifié à ces deux paliers.
-    if (lengths[suit] >= 3 && hcp >= 6) {
-        const raiseLevel = bid.level + (hcp >= 10 ? 2 : 1);
+    if (lengths[suit] >= 3 && hl >= 6) {
+        const raiseLevel = bid.level + (hl >= 10 ? 2 : 1);
         const call = raiseLevel + suit;
         if (isCallLegal(history, call, seat)) return call;
     }
 
-    // Pas de fit : nouvelle couleur (4+ cartes) si assez de points, au palier minimal légal.
-    if (hcp >= 10) {
+    // Pas de fit : nouvelle couleur (4+ cartes), au moins 11HL (seuil SEF pour un
+    // changement de couleur), au palier minimal légal.
+    if (hl >= 11) {
         const newSuit = longestSuitPreferHigh(lengths);
         if (newSuit !== suit && lengths[newSuit] >= 4) {
             for (let level = bid.level; level <= 7; level++) {
@@ -2305,7 +2357,7 @@ function decideRobotResponse(hand, hcp, partnerCall, seat, history) {
     }
 
     // Repli : SA au palier minimal légal si un peu de points mais rien de mieux à dire.
-    if (hcp >= 6) {
+    if (hl >= 6) {
         for (let level = bid.level; level <= 7; level++) {
             const call = level + 'NT';
             if (isCallLegal(history, call, seat)) return call;
@@ -2316,10 +2368,10 @@ function decideRobotResponse(hand, hcp, partnerCall, seat, history) {
 }
 
 // Décision d'INTERVENTION sur l'ouverture (ou l'enchère la plus récente) d'un ADVERSAIRE :
-// il faut une couleur solide (5+ cartes) et assez de points pour se manifester, au palier
-// minimal légal dans cette couleur.
-function decideRobotIntervention(hand, hcp, seat, history) {
-    if (hcp < 8) return 'PASS';
+// il faut une couleur solide (5+ cartes) et assez de points (HL) pour se manifester, au
+// palier minimal légal dans cette couleur.
+function decideRobotIntervention(hand, hl, seat, history) {
+    if (hl < 8) return 'PASS';
     const lengths = suitLengths(hand);
     const suit = longestSuitPreferHigh(lengths);
     if (lengths[suit] < 5) return 'PASS';
@@ -2339,6 +2391,7 @@ function decideRobotIntervention(hand, hcp, seat, history) {
 function decideRobotCall(seat, deal, history) {
     const hand = deal.hands[seat];
     const hcp = computeHandHcp(hand);
+    const hl = computeHandHL(hand);
     const hasSpokenBefore = history.some(entry => entry.seat === seat);
 
     let call = 'PASS';
@@ -2347,9 +2400,9 @@ function decideRobotCall(seat, deal, history) {
         if (!lastBid) {
             call = decideRobotOpening(hand, hcp);
         } else if (partnershipOf(lastBid.seat) === partnershipOf(seat)) {
-            call = decideRobotResponse(hand, hcp, lastBid.call, seat, history);
+            call = decideRobotResponse(hand, hl, lastBid.call, seat, history);
         } else {
-            call = decideRobotIntervention(hand, hcp, seat, history);
+            call = decideRobotIntervention(hand, hl, seat, history);
         }
     }
 
