@@ -36,9 +36,10 @@
 </div>
 
 <!-- Chat écrit entre tous les participants (voir uiSendChatMessage/handlePeerData dans
-     app.js) : panneau flottant plutôt qu'un espace permanent dans la mise en page — après
-     les difficultés récentes avec le budget d'espace sur mobile, on évite d'ajouter une
-     nouvelle zone fixe qui devrait, elle aussi, se disputer la hauteur d'écran disponible. -->
+     app.js) : panneau flottant par défaut (salon, accueil) — sauf en pleine partie, où il
+     rejoint le flux normal de la page tout en bas (voir dockChatIntoGameScreen dans app.js
+     et échange avec Guillaume : sur mobile, le panneau flottant recouvrait la boîte
+     d'enchères, pile la zone où il faut pouvoir taper à tout moment). -->
 <div id="chatPanel" class="chat-panel" style="display:none;">
     <div class="chat-panel-header">
         <span>💬 Chat</span>
@@ -128,19 +129,6 @@
         <div id="lobbyRoomCodeBlock" style="display:none;">
             <input type="text" id="shareLinkInput" class="visually-hidden" readonly tabindex="-1" aria-hidden="true">
             <button id="copyShareLinkBtn" class="btn btn-primary" onclick="uiCopyShareLink()">🔗 Copier lien de connexion</button>
-        </div>
-
-        <!-- Spécifique à l'hôte iOS, distinct de #iosLockScreenWarning : ici l'enjeu n'est
-             pas juste un désagrément en cours de partie mais un échec de connexion complet
-             (voir échange avec Guillaume — "Aucune partie trouvée" côté invités quand
-             l'hôte quitte l'appli pour partager le code, iOS suspendant la connexion en
-             arrière-plan). Toujours affiché (jamais masqué définitivement comme l'autre
-             note) : les conséquences ici sont plus graves qu'une gêne ponctuelle. -->
-        <div id="iosHostShareWarning" class="pwa-inline-note" style="display:none;">
-            ⚠️ Ne quittez pas cette page tant que vos invités n'ont pas rejoint : copiez le
-            lien puis revenez ici avant de le coller ailleurs, ou partagez le code à voix
-            haute/par un autre appareil. Sur iPhone, changer d'appli coupe la connexion et
-            vos invités verront "Aucune partie trouvée".
         </div>
 
         <div class="form-group form-group-name">

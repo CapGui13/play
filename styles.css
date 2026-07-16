@@ -246,6 +246,26 @@ body.on-landing-screen .connection-bar {
     }
 }
 
+/* Variante "ancrée" (voir dockChatIntoGameScreen dans app.js) : utilisée uniquement sur
+   l'écran de jeu, où le chat rejoint le flux normal de la page au lieu de flotter
+   par-dessus le reste. Annule tout le positionnement flottant (fixed/left/right/bottom),
+   y compris la variante desktop ci-dessus — une seule déclaration par propriété suffit
+   puisque .chat-panel-docked est plus spécifique (deux classes) que .chat-panel seul. */
+.chat-panel.chat-panel-docked {
+    position: static;
+    width: 100%;
+    max-width: 100%;
+    margin-top: 16px;
+    box-shadow: none;
+}
+
+@media (min-width: 600px) {
+    .chat-panel.chat-panel-docked {
+        width: 100%;
+        max-width: 100%;
+    }
+}
+
 .chat-panel-header {
     display: flex;
     justify-content: space-between;
@@ -1160,25 +1180,28 @@ body.on-landing-screen .connection-bar {
     color: var(--text);
 }
 
-/* Sur un écran étroit, une croix à 4 colonnes laisse trop peu de place aux menus
-   déroulants Ouest/Est : on repasse à une simple liste empilée, plus lisible qu'une
-   fidélité géométrique à une vraie table. */
+/* Sur un écran étroit, la croix à 4 colonnes du bureau (Nord/Sud sur 2 colonnes, Ouest/Est
+   sur les 2 autres, tout sur la même ligne) laissait trop peu de place aux menus déroulants
+   Ouest/Est. Plutôt que d'abandonner la forme de table pour une simple liste empilée (voir
+   échange avec Guillaume — "juste en ligne" perdait la lecture spatiale de la table), on
+   reprend le même motif que .all-hands-diagram plus bas dans ce fichier : Nord et Sud en
+   pleine largeur (leur propre ligne), Ouest et Est côte à côte entre les deux. Chaque case
+   garde sa mise en page en colonne d'origine (libellé au-dessus, menu en pleine largeur en
+   dessous) plutôt que la disposition en ligne (libellé à gauche, menu à droite) qui n'avait
+   de sens que pour des cases pleine largeur. */
 @media (max-width: 560px) {
     .seat-assignment-grid {
-        display: flex;
-        flex-direction: column;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        grid-template-rows: auto auto auto;
+        gap: 8px;
     }
-    .seat-assignment-grid::before {
-        display: none;
-    }
-    .seat-assignment-grid .seat-box {
-        flex-direction: row;
-        justify-content: space-between;
-        align-items: center;
-    }
-    .seat-assignment-grid .seat-box-label { text-align: left; }
-    .seat-assignment-grid .seat-box-name { text-align: right; }
-    .seat-assignment-grid .seat-assign-select { width: auto; max-width: 55%; }
+    .seat-pos-N { grid-column: 1 / 3; grid-row: 1; }
+    .seat-pos-W { grid-column: 1; grid-row: 2; }
+    .seat-pos-E { grid-column: 2; grid-row: 2; }
+    .seat-pos-S { grid-column: 1 / 3; grid-row: 3; }
+
+    .seat-assignment-grid .seat-assign-select { max-width: 100%; }
 }
 
 /* ===== Écran de jeu ===== */

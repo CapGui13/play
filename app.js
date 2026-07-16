@@ -612,6 +612,15 @@ function showScreen(id) {
     // par défaut pour un <section>, flex pour #screen-game sous 768px).
     document.getElementById(id).style.display = '';
 
+    // Voir échange avec Guillaume (chat qui recouvrait la boîte d'enchères sur mobile,
+    // mesuré : le panneau flottant, à 555-834px, chevauchait la boîte à 547-945px) :
+    // en pleine partie, le chat n'est plus un panneau flottant par-dessus le reste (voir
+    // dockChatIntoGameScreen/undockChatFromGameScreen) — il rejoint le flux normal de la
+    // page, tout en bas, après la boîte d'enchères. Ailleurs (salon, accueil), il reste un
+    // panneau flottant classique : moins de contenu à côté, la place ne manque pas autant.
+    if (id === 'screen-game') dockChatIntoGameScreen();
+    else undockChatFromGameScreen();
+
     // Le chat n'a de sens qu'une fois dans un salon ou en partie (il faut des participants
     // à qui parler) : masqué sur l'écran d'accueil, affiché partout ailleurs. Point de
     // contrôle unique ici plutôt que dispersé à chaque appel de showScreen (voir échange
@@ -994,16 +1003,6 @@ function enterLobbyScreen() {
     document.getElementById('lobbyRoomCodeBlock').style.display = myRole === 'host' ? 'block' : 'none';
     document.getElementById('hostSetupPanel').style.display = myRole === 'host' ? 'block' : 'none';
     document.getElementById('guestWaitingNote').style.display = myRole === 'host' ? 'none' : 'block';
-
-    // Voir échange avec Guillaume (session ratée avec 2 amis sur iPhone, "Aucune partie
-    // trouvée" côté invités) : contrairement à #iosLockScreenWarning (dismissible, montré
-    // une fois sur l'écran d'accueil), ce rappel-ci reste affiché à chaque fois qu'on
-    // devient hôte sur iOS, tant que les conséquences d'un oubli sont un échec de
-    // connexion complet pour les invités plutôt qu'une simple gêne en cours de partie.
-    const iosHostWarning = document.getElementById('iosHostShareWarning');
-    if (iosHostWarning) {
-        iosHostWarning.style.display = (myRole === 'host' && isIosDevice()) ? 'block' : 'none';
-    }
 
     const nameInput = document.getElementById('myNameInput');
     // On ne touche jamais au champ pendant que l'utilisateur est en train d'y taper
@@ -2049,6 +2048,33 @@ let chatPanelOpen = false;
 // voir uiCreateRoom, connectAsGuest, et la prise de rôle dans 'prepare-become-host'.
 let lobbyChatAutoOpened = false;
 let chatUnreadCount = 0;
+
+// Déplace physiquement #chatPanel dans le flux normal du document, à la toute fin de
+// l'écran de jeu (après la boîte d'enchères) — voir échange avec Guillaume : sur mobile,
+// le panneau flottant (position:fixed) se superposait à la boîte d'enchères, pile la zone
+// où il faut pouvoir taper à tout moment. Rejoindre le flux normal règle ça : ouvrir le
+// chat pousse le contenu, il ne le recouvre plus jamais. Idempotent (rien ne se passe si
+// déjà à sa place) : peut être appelé à chaque changement d'écran sans souci.
+function dockChatIntoGameScreen() {
+    const panel = document.getElementById('chatPanel');
+    const gameScreen = document.getElementById('screen-game');
+    if (!panel || !gameScreen) return;
+    if (panel.parentElement !== gameScreen) gameScreen.appendChild(panel);
+    panel.classList.add('chat-panel-docked');
+}
+
+// Symétrique : replace le chat dans son emplacement d'origine (juste après la barre de
+// connexion), en panneau flottant classique — utilisé partout ailleurs que l'écran de jeu
+// (salon, accueil), où la place ne manque pas aussi cruellement.
+function undockChatFromGameScreen() {
+    const panel = document.getElementById('chatPanel');
+    const connectionBar = document.getElementById('connectionBar');
+    if (!panel || !connectionBar) return;
+    panel.classList.remove('chat-panel-docked');
+    if (panel.previousElementSibling !== connectionBar) {
+        connectionBar.insertAdjacentElement('afterend', panel);
+    }
+}
 
 function uiToggleChat() {
     chatPanelOpen = !chatPanelOpen;
