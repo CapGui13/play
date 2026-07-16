@@ -608,17 +608,29 @@ function dealToPbnStringForDD(deal) {
     return 'N:' + hands;
 }
 
+// Incrémenté à chaque nouveau lancement de calcul (voir kickOffBackgroundDD) : si l'hôte
+// change de source (nouveau fichier, nouvelle génération aléatoire) pendant qu'un calcul
+// précédent est encore en vol, les résultats tardifs de l'ANCIEN lot doivent être ignorés
+// plutôt que d'être appliqués à de nouvelles donnes qui partagent, par coïncidence, le
+// même numéro de board (très courant : la plupart des fichiers/générations commencent à
+// la donne 1). Même principe que ddCurrentGenerationId dans dds-controller.js (gen/).
+let ddResultGenerationId = 0;
+
 // Lance le calcul pour toutes les donnes fournies, par lots de RANDOM_DEAL_DD_CHUNK_SIZE
 // envoyés en parallèle (pas de limite de concurrence ici contrairement à
 // dds-controller.js : un lot de 40 donnes max, donc 4 requêtes au plus, largement sous ce
-// qui justifierait de les échelonner).
+// qui justifierait de les échelonner). Un seul point d'appel, quelle que soit la source
+// (donnes aléatoires ou fichier/bibliothèque sans PAR, voir validateAndUseDealText) :
+// c'est ICI qu'un nouveau lot invalide implicitement tout lot précédent encore en vol.
 function kickOffBackgroundDD(dealsList) {
+    ddResultGenerationId++;
+    const generationId = ddResultGenerationId;
     for (let i = 0; i < dealsList.length; i += RANDOM_DEAL_DD_CHUNK_SIZE) {
-        sendDDChunk(dealsList.slice(i, i + RANDOM_DEAL_DD_CHUNK_SIZE));
+        sendDDChunk(dealsList.slice(i, i + RANDOM_DEAL_DD_CHUNK_SIZE), generationId);
     }
 }
 
-async function sendDDChunk(chunk) {
+async function sendDDChunk(chunk, generationId) {
     const items = chunk.map(deal => ({ id: deal.board, pbn: dealToPbnStringForDD(deal) }));
     try {
         const response = await fetch(RANDOM_DEAL_DD_SERVER_URL, {
@@ -628,6 +640,7 @@ async function sendDDChunk(chunk) {
         });
         if (!response.ok) throw new Error('HTTP ' + response.status);
         const data = await response.json();
+        if (generationId !== ddResultGenerationId) return; // lot périmé, voir ddResultGenerationId
         for (const r of data.results) {
             if (r.table) applyDDResultToBoard(r.id, r.table);
         }
@@ -1628,7 +1641,13 @@ function validateAndUseDealText(text, filename, onDone) {
     const warnings = [];
     if (parsedDeals._formatWarning) warnings.push(parsedDeals._formatWarning);
     if (!parsedDeals.some(d => d.par || d.ddTable)) {
-        warnings.push('PARs non disponibles dans ce fichier — les contrats optimaux ne seront pas affichés.');
+        warnings.push('PARs non disponibles dans ce fichier — calcul du double mort en arrière-plan, les contrats optimaux s\'afficheront en fin de donne dès qu\'ils seront prêts.');
+        // Voir échange avec Guillaume : même mécanisme que pour les donnes aléatoires
+        // (uiGenerateRandomDeals) — un fichier importé sans aucune info de contrat
+        // optimal profite du même calcul en arrière-plan plutôt que de rester sans PAR
+        // pour toute la partie. Rien à faire si le fichier a DÉJÀ cette info (le .some()
+        // ci-dessus l'aurait empêché d'entrer dans cette branche).
+        kickOffBackgroundDD(parsedDeals);
     }
     if (warnings.length > 0) {
         setHostSetupMessage(warnings.join('\n⚠️ '), true);
