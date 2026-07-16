@@ -2388,6 +2388,16 @@ function decideRobotIntervention(hand, hl, seat, history) {
 // robot ne doit JAMAIS produire une annonce illégale, quitte à se rabattre sur passe si le
 // calcul ci-dessus a un trou quelque part ; un blocage de la partie serait bien pire qu'un
 // robot un peu trop passif.
+//
+// Note sur une main très forte mais "passée" (voir échange avec Guillaume) : une fois 3
+// passes consécutifs après une annonce, l'enchère est terminée — dans n'importe quelle
+// partie de bridge, l'ouvreur ne reparle plus, quelle que soit la force de sa main.
+// maybeRobotBid (plus bas) vérifie déjà isAuctionOver avant même de solliciter cette
+// fonction, donc il n'y a structurellement aucune occasion de "rebidder" dans ce cas
+// précis — ce n'est pas un trou de ce moteur simplifié, c'est la mécanique même du jeu.
+// Un tel risque existe même en SEF réel avec des mains fortes mais non équilibrées (12 à
+// 23-24HL, système "majeure 5ème") ; seules les mains ÉQUILIBRÉES très fortes en sont à
+// l'abri, via 1SA/2SA (voir decideRobotOpening).
 function decideRobotCall(seat, deal, history) {
     const hand = deal.hands[seat];
     const hcp = computeHandHcp(hand);
