@@ -5,9 +5,10 @@ s'entraîner aux enchères en temps réel sur des donnes importées (fichier `.p
 exporté depuis le générateur de donnes).
 
 Aucun serveur : la connexion entre les navigateurs se fait directement en pair-à-pair
-(WebRTC, via le service public gratuit PeerJS pour la mise en relation initiale, et un
-relais TURN gratuit en secours si la connexion directe échoue — voir `ICE_CONFIG` dans
-`peer-connection.js`). Le site peut donc être hébergé gratuitement sur GitHub Pages.
+(WebRTC, via le service public gratuit PeerJS pour la mise en relation initiale, et deux
+relais TURN gratuits et indépendants en secours si la connexion directe échoue — voir
+`ICE_CONFIG` dans `peer-connection.js`). Le site peut donc être hébergé gratuitement sur
+GitHub Pages.
 
 ## Composition libre de la table
 
@@ -97,9 +98,10 @@ Aucune clé, aucun compte externe à configurer : tout fonctionne dès la mise e
 
 ## Limites connues
 
-- **Connexion directe (WebRTC)** : fonctionne dans l'immense majorité des cas grâce au
-  relais TURN de secours, mais la mise en relation initiale peut occasionnellement
-  prendre jusqu'à une trentaine de secondes sur certains réseaux.
+- **Connexion directe (WebRTC)** : fonctionne dans l'immense majorité des cas grâce aux
+  relais TURN de secours (deux fournisseurs indépendants), mais la mise en relation
+  initiale peut occasionnellement prendre jusqu'à une trentaine de secondes sur certains
+  réseaux.
 - Tous les joueurs doivent être en ligne **en même temps** pour établir la connexion
   initiale, mais une coupure en cours de partie n'est plus fatale (voir "Reconnexion"
   ci-dessous).

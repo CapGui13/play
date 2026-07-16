@@ -61,21 +61,18 @@ const MAX_POST_OPEN_RECONNECT_ATTEMPTS = 5;
 // salon est alors généré à chaque tentative, ce qui résout ce cas précis.
 const RETRIABLE_ERROR_TYPES = ['network', 'server-error', 'socket-error', 'socket-closed'];
 
-// Configuration ICE explicite : serveurs STUN publics (Google + Open Relay/metered.ca,
-// aucun des deux n'a besoin d'identifiants), complétés par un relais TURN (ExpressTURN,
-// compte gratuit) qui fait réellement transiter les données quand une connexion directe
-// échoue — cas fréquent avec les NAT restrictifs, certains pare-feux, le "NAT
-// hairpinning", ou l'isolation client d'un partage de connexion mobile.
-//
-// CORRECTIF (voir échange avec Guillaume) : un second fournisseur TURN (Open Relay
-// Project) avait été ajouté ici pour donner une vraie alternative si ExpressTURN est
-// indisponible — mais avec des identifiants publics statiques
-// (`openrelayproject`/`openrelayproject`) qui se sont révélés déjà dépréciés (confirmé
-// par recherche : ce service exige désormais la création d'un compte pour limiter les
-// abus, d'où le "400 Bad Request" observé plutôt qu'un vrai relais). Retirés ici plutôt
-// que de laisser des identifiants qui ne marchent plus faire perdre du temps à chaque
-// négociation ICE pour rien. Si Guillaume crée un compte gratuit chez ce fournisseur (ou
-// un autre), ses VRAIS identifiants pourront être ajoutés ici de la même façon.
+// Configuration ICE explicite : serveurs STUN publics (Google + Metered, aucun des deux
+// n'a besoin d'identifiants), complétés par DEUX fournisseurs TURN indépendants
+// (relais qui font réellement transiter les données quand une connexion directe échoue —
+// cas fréquent avec les NAT restrictifs, certains pare-feux, le "NAT hairpinning", ou
+// l'isolation client d'un partage de connexion mobile) :
+//   - ExpressTURN (compte gratuit de Guillaume)
+//   - Metered / Open Relay (compte gratuit de Guillaume, identifiant généré depuis son
+//     tableau de bord — voir échange avec Guillaume : une première tentative avec des
+//     identifiants publics partagés `openrelayproject`/`openrelayproject` avait échoué,
+//     ce fournisseur exigeant désormais un vrai compte pour limiter les abus)
+// Si l'un des deux est indisponible à un instant donné (quota, panne, limite de débit...),
+// la négociation ICE a une vraie chance de réussir quand même via l'autre.
 const ICE_CONFIG = {
     iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
@@ -96,6 +93,26 @@ const ICE_CONFIG = {
             urls: 'turns:free.expressturn.com:443?transport=tcp',
             username: '000000002098770532',
             credential: 'zIohrx8x/vvzdIwz7VVCZ1nj2fI='
+        },
+        {
+            urls: 'turn:standard.relay.metered.ca:80',
+            username: '770bea7717c25ad27a475345',
+            credential: '2lEc2n+zXAKRFb15'
+        },
+        {
+            urls: 'turn:standard.relay.metered.ca:80?transport=tcp',
+            username: '770bea7717c25ad27a475345',
+            credential: '2lEc2n+zXAKRFb15'
+        },
+        {
+            urls: 'turn:standard.relay.metered.ca:443',
+            username: '770bea7717c25ad27a475345',
+            credential: '2lEc2n+zXAKRFb15'
+        },
+        {
+            urls: 'turns:standard.relay.metered.ca:443?transport=tcp',
+            username: '770bea7717c25ad27a475345',
+            credential: '2lEc2n+zXAKRFb15'
         }
     ]
 };
