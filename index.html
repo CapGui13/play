@@ -29,7 +29,10 @@
          est sur l'écran d'accueil, pas encore dans un salon/une partie. Affiché/masqué
          ensuite depuis showScreen() dans app.js selon l'écran courant. -->
     <button type="button" id="chatToggleBtn" class="debug-toggle-btn" style="display:none;" onclick="uiToggleChat()">💬<span id="chatUnreadBadge" class="chat-unread-badge" style="display:none;"></span></button>
-    <button type="button" class="debug-toggle-btn" onclick="uiToggleDebugPanel()">🐞</button>
+    <!-- Masqué pour l'instant (voir échange avec Guillaume) : le panneau et toute sa
+         logique (pushDebugLog, uiToggleDebugPanel, testTurnConnectivity...) restent
+         intacts, il suffit de retirer ce commentaire et le style pour le réactiver. -->
+    <!-- <button type="button" class="debug-toggle-btn" onclick="uiToggleDebugPanel()">🐞</button> -->
 </div>
 
 <!-- Chat écrit entre tous les participants (voir uiSendChatMessage/handlePeerData dans
