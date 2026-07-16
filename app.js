@@ -2960,12 +2960,119 @@ function renderDDTable(ddTable, dealVulnerable) {
         return `<tr><th class="${STRAIN_CLASS[strain]}">${labelHtml}</th>${cells}</tr>`;
     }).join('');
     return `
-        <div class="dd-table-title">Table du double mort (fournie dans le fichier)</div>
+        <div class="dd-table-title">Table du double mort</div>
         <table class="dd-table">
             <thead><tr><th></th>${DD_TABLE_SEAT_ORDER.map(p => `<th>${SEAT_ABBR_FR[p]}</th>`).join('')}</tr></thead>
             <tbody>${rows}</tbody>
         </table>
     `;
+}
+
+// ===== Export PBN d'une donne jouée (voir échange avec Guillaume) =====
+//
+// Envoie la donne courante à une fonction serverless Vercel dédiée (à ajouter au même
+// projet que l'API de double mort, voir api/export-deal.js — pas fourni ici en l'état,
+// c'est un fichier à part que Guillaume doit déployer lui-même), qui l'écrit dans
+// donnes_export/ sur GitHub. Le jeton d'écriture reste entièrement côté serveur — jamais
+// transmis ni visible depuis le navigateur (voir le commentaire en tête de ce fichier-là).
+const DEAL_EXPORT_SERVER_URL = 'https://api-gen-beta.vercel.app/api/export-deal';
+
+// Construit le contenu PBN d'une donne JOUÉE : mêmes tags que buildPBNBlock dans
+// generator.js (gen/) pour la donne elle-même et la table du double mort si disponible,
+// complétés par le contrat obtenu et l'enchère réellement menée — propre à une donne
+// jouée ici, pas à une donne fraîchement générée.
+function buildPlayedDealPBN(deal, history) {
+    const handsStr = ['N', 'E', 'S', 'W']
+        .map(pos => ['S', 'H', 'D', 'C'].map(suit => deal.hands[pos][suit]).join('.'))
+        .join(' ');
+
+    let pbn = '';
+    pbn += `[Event "Table d'enchères"]\n`;
+    pbn += `[Site "capgui13.github.io/play"]\n`;
+    pbn += `[Board "${deal.board}"]\n`;
+    pbn += `[Dealer "${deal.dealer}"]\n`;
+    pbn += `[Vulnerable "${deal.vulnerable}"]\n`;
+    pbn += `[Deal "N:${handsStr}"]\n`;
+
+    // Contrat obtenu (pas un résultat de levées : l'appli ne couvre que la phase
+    // d'enchères, pas le jeu de la carte — voir README) et déclarant, si l'enchère n'a pas
+    // été passée sans annonce.
+    const contract = determineContract(history);
+    if (contract) {
+        pbn += `[Contract "${contract.level}${contract.strain}${contract.doubled}"]\n`;
+        pbn += `[Declarer "${contract.declarer}"]\n`;
+    }
+
+    // Séquence d'enchères réellement menée (4 annonces par ligne, convention PBN
+    // courante mais non obligatoire — juste plus lisible à l'œil).
+    if (history.length > 0) {
+        pbn += `[Auction "${deal.dealer}"]\n`;
+        const tokens = history.map(entry => (isPass(entry.call) ? 'Pass' : entry.call));
+        for (let i = 0; i < tokens.length; i += 4) {
+            pbn += tokens.slice(i, i + 4).join(' ') + '\n';
+        }
+    }
+
+    // Table complète du double mort, si elle a eu le temps d'être calculée (voir
+    // kickOffBackgroundDD) — même format que buildPBNBlock dans generator.js, pour rester
+    // relisible par les mêmes outils (dont cette appli elle-même).
+    if (deal.ddTable) {
+        pbn += `[OptimumResultTable "Declarer;Denomination\\2R;Result\\2R"]\n`;
+        const denomForStrain = { N: 'NT', S: 'S', H: 'H', D: 'D', C: 'C' };
+        ['N', 'E', 'S', 'W'].forEach(declarer => {
+            ['N', 'S', 'H', 'D', 'C'].forEach(strain => {
+                pbn += `${declarer} ${denomForStrain[strain]} ${deal.ddTable[strain][declarer]}\n`;
+            });
+        });
+    }
+
+    pbn += `\n`;
+    return pbn;
+}
+
+function setDealExportStatus(text, isError) {
+    const el = document.getElementById('dealExportStatus');
+    if (!el) return;
+    el.textContent = text;
+    el.classList.toggle('is-error', !!isError);
+}
+
+// Bouton "📤 Export PBN" sous la table du double mort (voir checkAuctionEnd) : envoie la
+// donne courante, telle qu'elle a été effectivement jouée, à la fonction serverless
+// dédiée. Nom de fichier horodaté à la seconde près : collision quasiment impossible mais,
+// le cas échéant, l'export échoue proprement (voir api/export-deal.js) plutôt que
+// d'écraser silencieusement un export précédent.
+function uiExportDealPBN() {
+    if (myRole !== 'host') return;
+    const deal = currentDeal();
+    if (!deal) return;
+
+    const btn = document.getElementById('dealExportBtn');
+    if (btn) btn.disabled = true;
+    setDealExportStatus('⏳ Export en cours...', false);
+
+    const content = buildPlayedDealPBN(deal, auctionHistory);
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+    const filename = `donne-${deal.board}-${stamp}.pbn`;
+
+    fetch(DEAL_EXPORT_SERVER_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename, content })
+    })
+        .then(async (response) => {
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok || !data.ok) throw new Error(data.error || ('HTTP ' + response.status));
+            setDealExportStatus(`✅ Exportée : ${data.path}`, false);
+        })
+        .catch((err) => {
+            setDealExportStatus('❌ Échec de l\'export : ' + ((err && err.message) || err), true);
+        })
+        .finally(() => {
+            if (btn) btn.disabled = false;
+        });
 }
 
 function checkAuctionEnd() {
@@ -3023,6 +3130,18 @@ function checkAuctionEnd() {
     const ddTableHtml = renderDDTable(currentDeal().ddTable, currentDeal().vulnerable);
     if (ddTableHtml) {
         resultEl.innerHTML += ddTableHtml;
+        // Voir échange avec Guillaume : bouton d'export PBN de cette donne, réservé à
+        // l'hôte (c'est lui qui a la main sur le déroulement de la partie), affiché
+        // seulement une fois le double mort disponible — cohérent avec le fait que ce
+        // bouton vit "dans le module qui affiche le PAR".
+        if (myRole === 'host') {
+            resultEl.innerHTML += `
+                <div class="dd-export-row">
+                    <button type="button" class="btn btn-secondary btn-small" id="dealExportBtn" onclick="uiExportDealPBN()">📤 Export PBN</button>
+                    <span id="dealExportStatus" class="dd-export-status"></span>
+                </div>
+            `;
+        }
     }
 
     renderAllHandsDiagram();

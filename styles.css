@@ -1526,6 +1526,26 @@ body.on-landing-screen .connection-bar {
     font-style: italic;
 }
 
+/* Bouton d'export PBN sous la table du double mort (voir uiExportDealPBN dans app.js). */
+.dd-export-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-top: 10px;
+}
+
+.dd-export-status {
+    font-size: 0.82rem;
+    color: rgba(246, 241, 227, 0.68);
+    color: var(--text-muted);
+}
+
+.dd-export-status.is-error {
+    color: #d06464;
+    color: color-mix(in srgb, #c0392b 70%, var(--text));
+}
+
 /* Même traitement "carte" que .auction-ledger (fond --card, bord arrondi) plutôt que de
    se fondre dans le fond du panneau d'enchères — visuellement plus proche de la table du
    double mort du générateur de donnes (fond distinct, cellules bien délimitées), dont
