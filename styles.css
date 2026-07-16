@@ -833,6 +833,17 @@ body.on-landing-screen .connection-bar {
     flex-wrap: wrap;
 }
 
+.random-deal-count-input {
+    width: 70px;
+    padding: 8px;
+    border-radius: 6px;
+    background: var(--input-bg);
+    border: 1px solid rgba(64, 190, 184, 0.35);
+    color: var(--text);
+    font-size: 0.85rem;
+    text-align: center;
+}
+
 .file-picker-btn {
     flex-shrink: 0;
     line-height: 1;

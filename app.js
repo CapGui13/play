@@ -443,6 +443,241 @@ function shuffleDealsArray(arr) {
     return shuffled;
 }
 
+// ===== Génération de donnes aléatoires (voir échange avec Guillaume) =====
+//
+// Même algorithme que le générateur autonome (gen/generator.js, dont les fichiers ont été
+// fournis pour cette fonctionnalité) : mélange Fisher-Yates d'un jeu de 52 cartes, une
+// carte sur quatre à chaque position dans l'ordre N/E/S/O, tri par rang au sein de chaque
+// couleur. Cycle donneur/vulnérabilité standard sur 16 donnes, identique à BRIDGE_CYCLE
+// dans le générateur.
+const RANDOM_DEAL_CARD_VALUES = ['A', 'K', 'Q', 'J', 'T', '9', '8', '7', '6', '5', '4', '3', '2'];
+const RANDOM_DEAL_BRIDGE_CYCLE = [
+    { dealer: 'N', vulnerable: 'None' }, { dealer: 'E', vulnerable: 'NS' },
+    { dealer: 'S', vulnerable: 'EW' }, { dealer: 'W', vulnerable: 'Both' },
+    { dealer: 'N', vulnerable: 'NS' }, { dealer: 'E', vulnerable: 'EW' },
+    { dealer: 'S', vulnerable: 'Both' }, { dealer: 'W', vulnerable: 'None' },
+    { dealer: 'N', vulnerable: 'EW' }, { dealer: 'E', vulnerable: 'Both' },
+    { dealer: 'S', vulnerable: 'None' }, { dealer: 'W', vulnerable: 'NS' },
+    { dealer: 'N', vulnerable: 'Both' }, { dealer: 'E', vulnerable: 'None' },
+    { dealer: 'S', vulnerable: 'NS' }, { dealer: 'W', vulnerable: 'EW' }
+];
+// Nombre de nouvelles tentatives de mélange max par donne avant d'abandonner la contrainte
+// pour celle-ci (voir dealSatisfiesHumanLineConstraint) — un filet de sécurité purement
+// théorique : avec la contrainte demandée (12H+ chez au moins un des deux, dans une ligne
+// à 2 humains), la probabilité d'échouer autant de fois de suite est astronomiquement
+// faible, mais on évite quand même une boucle infinie dans l'absolu.
+const RANDOM_DEAL_MAX_RETRIES = 500;
+
+function shuffledDeck() {
+    const deck = [];
+    for (const suit of ['S', 'H', 'D', 'C']) {
+        for (const rank of RANDOM_DEAL_CARD_VALUES) deck.push(suit + rank);
+    }
+    for (let i = deck.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [deck[i], deck[j]] = [deck[j], deck[i]];
+    }
+    return deck;
+}
+
+// Distribue un jeu mélangé en 4 mains (une carte sur 4 à chaque position, dans l'ordre
+// N/E/S/O), triées par rang au sein de chaque couleur — même logique que le générateur.
+function dealFromDeck(deck) {
+    const hands = { N: emptyHandBySuit(), E: emptyHandBySuit(), S: emptyHandBySuit(), W: emptyHandBySuit() };
+    const positions = ['N', 'E', 'S', 'W'];
+    deck.forEach((card, i) => {
+        const suit = card[0], rank = card[1];
+        hands[positions[i % 4]][suit] += rank;
+    });
+    for (const pos of positions) {
+        for (const suit of ['S', 'H', 'D', 'C']) {
+            hands[pos][suit] = hands[pos][suit]
+                .split('')
+                .sort((a, b) => RANDOM_DEAL_CARD_VALUES.indexOf(a) - RANDOM_DEAL_CARD_VALUES.indexOf(b))
+                .join('');
+        }
+    }
+    return hands;
+}
+
+function emptyHandBySuit() {
+    return { S: '', H: '', D: '', C: '' };
+}
+
+// Contrainte demandée par Guillaume : dans toute ligne (NS ou EO) occupée par 2 humains
+// (pas de robot), au moins l'un des deux doit avoir 12H+. Une ligne avec un seul humain
+// (partenaire robot) ou aucun n'a pas de contrainte — rien à vérifier pour elle.
+function dealSatisfiesHumanLineConstraint(hands, seatAssignment) {
+    const lines = [['N', 'S'], ['E', 'W']];
+    for (const [seatA, seatB] of lines) {
+        const bothHuman = !!seatAssignment[seatA] && !!seatAssignment[seatB];
+        if (!bothHuman) continue;
+        const hcpA = computeHandHcp(hands[seatA]);
+        const hcpB = computeHandHcp(hands[seatB]);
+        if (hcpA < 12 && hcpB < 12) return false;
+    }
+    return true;
+}
+
+// Génère une seule donne (numéro de board donné), en retentant tant que la contrainte
+// n'est pas respectée. `seatAssignment` figé au moment de la génération (voir
+// uiGenerateRandomDeals) : un changement de composition de table après coup ne redéclenche
+// pas une nouvelle génération, comme pour n'importe quel autre outil de génération.
+function generateRandomDeal(boardNumber, seatAssignment) {
+    let hands;
+    let attempts = 0;
+    do {
+        hands = dealFromDeck(shuffledDeck());
+        attempts++;
+    } while (!dealSatisfiesHumanLineConstraint(hands, seatAssignment) && attempts < RANDOM_DEAL_MAX_RETRIES);
+
+    const cycle = RANDOM_DEAL_BRIDGE_CYCLE[(boardNumber - 1) % 16];
+    return {
+        board: boardNumber,
+        dealer: cycle.dealer,
+        vulnerable: cycle.vulnerable,
+        hands,
+        par: null,   // pas de résumé PAR préformaté (spécifique à l'import PBN) ; le
+                     // double mort complet (ddTable) suffit à afficher le PAR en fin de
+                     // donne, voir kickOffBackgroundDD et renderDDTable existant.
+        ddTable: null
+    };
+}
+
+function generateRandomDeals(count, seatAssignment) {
+    const deals = [];
+    for (let i = 1; i <= count; i++) {
+        deals.push(generateRandomDeal(i, seatAssignment));
+    }
+    return deals;
+}
+
+// Bouton "🎲 Générer" du salon : génère `count` donnes aléatoires et les branche sur
+// EXACTEMENT le même circuit que l'import d'un fichier ou de la bibliothèque
+// (pendingParsedSource/pendingParsedDeals/pendingOrderedDeals, voir uiStartGameAsHost) —
+// aucune des deux ne connaît de traitement spécial, "random" n'est qu'une source de plus.
+function uiGenerateRandomDeals() {
+    const countInput = document.getElementById('randomDealCount');
+    const count = countInput ? parseInt(countInput.value, 10) : NaN;
+    if (!Number.isFinite(count) || count < 1 || count > 40) {
+        setHostSetupMessage('Choisissez un nombre de donnes entre 1 et 40.', false);
+        return;
+    }
+
+    // Désélectionne les deux autres sources, comme elles se désélectionnent déjà
+    // mutuellement entre elles (voir uiHandleDealFileChosen/uiHandleDealLibraryChosen) :
+    // une seule source active à la fois, pour éviter toute ambiguïté sur celle qui sera
+    // effectivement utilisée.
+    const fileInput = document.getElementById('dealFileInput');
+    if (fileInput) fileInput.value = '';
+    updateDealFileNameDisplay();
+    const librarySelect = document.getElementById('dealLibrarySelect');
+    if (librarySelect) librarySelect.value = '';
+    document.getElementById('dealFileInfo').style.display = 'none'; // rien à prévisualiser pour du random
+
+    const generated = generateRandomDeals(count, seatAssignment);
+    pendingParsedSource = 'random';
+    pendingParsedDeals = generated;
+    refreshPendingOrderedDeals();
+
+    setHostSetupMessage(
+        `${count} donne(s) générée(s) — le calcul du double mort tourne en arrière-plan, le PAR s'affichera en fin de donne dès qu'il sera prêt.`,
+        true
+    );
+
+    kickOffBackgroundDD(generated);
+}
+
+// ===== Double mort en arrière-plan pour les donnes générées aléatoirement =====
+//
+// Réutilise TELLE QUELLE l'API serverless déjà utilisée par le générateur externe
+// (gen/dds-controller.js, voir les fichiers fournis par Guillaume pour cette
+// fonctionnalité) : même URL, même format de requête/réponse. Comme table-encheres est
+// hébergé sur le même domaine (capgui13.github.io), le CORS déjà en place pour le
+// générateur (Access-Control-Allow-Origin restreint à ce domaine, pas au sous-dossier)
+// couvre aussi cette appli sans rien à reconfigurer côté serveur.
+const RANDOM_DEAL_DD_SERVER_URL = 'https://api-gen-beta.vercel.app/api/dds';
+const RANDOM_DEAL_DD_CHUNK_SIZE = 10; // donnes par requête HTTP, comme dds-controller.js
+
+// Même format PBN que dealToPBNString dans generator.js (gen/), à ceci près que les mains
+// sont déjà des chaînes ici (pas des tableaux de rangs) — pas de .join('') à faire.
+function dealToPbnStringForDD(deal) {
+    const hands = ['N', 'E', 'S', 'W']
+        .map(pos => ['S', 'H', 'D', 'C'].map(suit => deal.hands[pos][suit]).join('.'))
+        .join(' ');
+    return 'N:' + hands;
+}
+
+// Lance le calcul pour toutes les donnes fournies, par lots de RANDOM_DEAL_DD_CHUNK_SIZE
+// envoyés en parallèle (pas de limite de concurrence ici contrairement à
+// dds-controller.js : un lot de 40 donnes max, donc 4 requêtes au plus, largement sous ce
+// qui justifierait de les échelonner).
+function kickOffBackgroundDD(dealsList) {
+    for (let i = 0; i < dealsList.length; i += RANDOM_DEAL_DD_CHUNK_SIZE) {
+        sendDDChunk(dealsList.slice(i, i + RANDOM_DEAL_DD_CHUNK_SIZE));
+    }
+}
+
+async function sendDDChunk(chunk) {
+    const items = chunk.map(deal => ({ id: deal.board, pbn: dealToPbnStringForDD(deal) }));
+    try {
+        const response = await fetch(RANDOM_DEAL_DD_SERVER_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ items })
+        });
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        const data = await response.json();
+        for (const r of data.results) {
+            if (r.table) applyDDResultToBoard(r.id, r.table);
+        }
+    } catch (err) {
+        // Échec silencieux du point de vue du joueur : pas de PAR pour ce lot, mais la
+        // partie elle-même n'est pas affectée (voir échange avec Guillaume — le calcul DD
+        // est un bonus, jamais un prérequis pour jouer). Tracé dans le journal de
+        // diagnostic pour comprendre après coup si ça arrive souvent.
+        pushDebugLog('Double mort en arrière-plan : échec pour un lot (' + ((err && err.message) || err) + ')');
+    }
+}
+
+// Point d'entrée UNIQUE pour appliquer un résultat de double mort à une donne, quelle que
+// soit la provenance : calcul local (si on est l'hôte, voir sendDDChunk) ou message relayé
+// par l'hôte (voir handlePeerData, cas 'dd-result', côté invité comme côté hôte
+// nouvellement transféré). `boardNumber` (deal.board), pas un index de tableau : l'ordre
+// dans `deals` peut différer de l'ordre de génération si "Ordre aléatoire des donnes" est
+// coché (voir refreshPendingOrderedDeals).
+function applyDDResultToBoard(boardNumber, table) {
+    // Avant le lancement de la partie, les donnes générées vivent dans pendingParsedDeals
+    // (pas encore dans `deals`, qui ne prend vie qu'au clic sur "Commencer la partie" —
+    // voir uiStartGameAsHost) : écrire ici sur les mêmes objets suffit, puisque
+    // pendingOrderedDeals (donc `deals` ensuite) référence CES MÊMES objets, jamais une
+    // copie (voir shuffleDealsArray, qui ne fait que réordonner, jamais cloner).
+    const pool = deals || pendingParsedDeals;
+    if (!pool) return;
+    const idx = pool.findIndex(d => d.board === boardNumber);
+    if (idx === -1) return;
+    pool[idx].ddTable = table;
+
+    if (deals && pool === deals) {
+        // La partie est déjà lancée. Si on regarde justement cette donne-là et que
+        // l'enchère est terminée, on rafraîchit l'affichage pour faire apparaître le PAR
+        // sans attendre un changement de donne.
+        if (idx === boardIndex && isAuctionOver(auctionHistory)) checkAuctionEnd();
+
+        // Relais aux invités : eux n'ont reçu qu'un instantané figé des donnes au moment
+        // du 'start-game' (voir uiStartGameAsHost) — un résultat de double mort arrivé
+        // après coup ne leur parviendrait jamais sans ce message dédié. Seul l'hôte
+        // calcule le double mort (uiGenerateRandomDeals n'est accessible que depuis son
+        // propre panneau), donc seul lui a besoin de le relayer.
+        if (myRole === 'host') {
+            participants.filter(p => p.id !== 'host' && !p.disconnected).forEach(p => {
+                const guestIndex = guestIndexForParticipant(p.id);
+                if (guestIndex != null) peerConn.send({ type: 'dd-result', boardNumber, table }, guestIndex);
+            });
+        }
+    }
+}
+
 // Recalcule pendingOrderedDeals à partir de pendingParsedDeals et de l'état actuel de la
 // case à cocher. Appelé au chargement du fichier et à chaque bascule de la case.
 function refreshPendingOrderedDeals() {
@@ -1568,9 +1803,14 @@ function uiStartGameAsHost() {
     const librarySelect = document.getElementById('dealLibrarySelect');
     const file = (fileInput.files && fileInput.files[0]) || null;
     const libraryFilename = librarySelect ? librarySelect.value : '';
+    // Voir uiGenerateRandomDeals : une troisième source, au même niveau que le fichier et
+    // la bibliothèque — déjà entièrement parsée en mémoire (pas de lecture asynchrone à
+    // refaire, contrairement aux deux autres), donc toujours "à jour" tant que
+    // pendingParsedSource vaut 'random'.
+    const hasRandomDeals = pendingParsedSource === 'random' && !!pendingParsedDeals;
 
-    if (!file && !libraryFilename) {
-        setHostSetupMessage('Choisissez un fichier .pbn ou .lin, ou une donne dans la bibliothèque.', false);
+    if (!file && !libraryFilename && !hasRandomDeals) {
+        setHostSetupMessage('Choisissez un fichier .pbn ou .lin, une donne dans la bibliothèque, ou générez des donnes aléatoires.', false);
         return;
     }
 
@@ -1599,16 +1839,18 @@ function uiStartGameAsHost() {
         enterGameScreen();
     };
 
-    // Source effectivement active : le fichier local prime si les deux sont, par un
-    // hasard quelconque, renseignés à la fois (ne devrait pas arriver, voir
+    // Source effectivement active : le fichier local prime sur la bibliothèque si les deux
+    // sont, par un hasard quelconque, renseignés à la fois (ne devrait pas arriver, voir
     // uiHandleDealFileChosen/uiHandleDealLibraryChosen qui désélectionnent l'autre à
-    // chaque choix, mais on tranche explicitement plutôt que de laisser un cas ambigu).
-    const activeSource = file || `library:${libraryFilename}`;
+    // chaque choix, mais on tranche explicitement plutôt que de laisser un cas ambigu) ;
+    // "random", lui, ne peut être actif que si aucun des deux ne l'est (voir
+    // uiGenerateRandomDeals, qui les désélectionne tous les deux).
+    const activeSource = hasRandomDeals ? 'random' : (file || `library:${libraryFilename}`);
 
     // Cas normal : la source a déjà été lue et parsée au moment où elle a été choisie
-    // (voir uiHandleDealFileChosen / uiHandleDealLibraryChosen) — pas besoin de la
-    // relire, et le message éventuel (erreur ou avertissement PAR) est déjà affiché
-    // depuis ce moment-là.
+    // (voir uiHandleDealFileChosen / uiHandleDealLibraryChosen / uiGenerateRandomDeals) —
+    // pas besoin de la relire, et le message éventuel (erreur ou avertissement PAR) est
+    // déjà affiché depuis ce moment-là.
     if (pendingParsedSource === activeSource) {
         proceedWithDeals(pendingOrderedDeals);
         return;
@@ -1616,7 +1858,10 @@ function uiStartGameAsHost() {
 
     // Filet de sécurité si, pour une raison quelconque, le cache ne correspond pas à la
     // source actuellement sélectionnée (ex. écouteur 'change' non déclenché) : on relit,
-    // puis on applique l'ordre aléatoire éventuel avant de démarrer.
+    // puis on applique l'ordre aléatoire éventuel avant de démarrer. Ne concerne jamais
+    // "random" (déjà entièrement en mémoire dès sa génération, jamais besoin d'une
+    // relecture asynchrone) : rien à faire ici dans ce cas, la branche ci-dessus l'aura
+    // déjà traité.
     const onReloaded = (parsedDeals) => {
         pendingParsedSource = activeSource;
         pendingParsedDeals = parsedDeals;
@@ -1838,6 +2083,19 @@ function handlePeerData(msg, guestIndex) {
                 break;
             }
             triggerWizzEffect();
+            break;
+        }
+
+        // Résultat de double mort arrivé APRÈS le lancement de la partie (voir
+        // applyDDResultToBoard côté hôte, qui envoie ce message) — un invité n'a reçu
+        // qu'un instantané figé des donnes via 'start-game', donc ce relais est le seul
+        // moyen pour lui de recevoir un PAR calculé après coup.
+        case 'dd-result': {
+            if (!deals) break;
+            const idx = deals.findIndex(d => d.board === msg.boardNumber);
+            if (idx === -1) break;
+            deals[idx].ddTable = msg.table;
+            if (idx === boardIndex && isAuctionOver(auctionHistory)) checkAuctionEnd();
             break;
         }
 

@@ -177,6 +177,21 @@
                     <option value="">— Choisir une donne —</option>
                 </select>
             </div>
+            <div class="form-group">
+                <div class="form-group-divider">ou</div>
+                <label for="randomDealCount">Donnes aléatoires</label>
+                <!-- Voir échange avec Guillaume : mélange direct dans le navigateur (même
+                     algorithme que gen/generator.js), avec une seule contrainte — dans
+                     toute ligne occupée par 2 humains distincts, au moins l'un des deux a
+                     12H+ (voir dealSatisfiesHumanLineConstraint dans app.js). Le double
+                     mort de chaque donne est calculé en arrière-plan dès la génération
+                     (voir kickOffBackgroundDD), pour que le PAR soit prêt à s'afficher en
+                     fin de donne sans attente perceptible. -->
+                <div class="file-picker">
+                    <input type="number" id="randomDealCount" class="random-deal-count-input" min="1" max="40" value="8">
+                    <button type="button" class="btn btn-secondary btn-small" onclick="uiGenerateRandomDeals()">🎲 Générer</button>
+                </div>
+            </div>
             <div class="form-group form-group-checkbox">
                 <label class="checkbox-label">
                     <input type="checkbox" id="randomizeDealsToggle" onchange="uiToggleRandomizeDeals()">
