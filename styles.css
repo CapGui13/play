@@ -1180,28 +1180,14 @@ body.on-landing-screen .connection-bar {
     color: var(--text);
 }
 
-/* Sur un écran étroit, la croix à 4 colonnes du bureau (Nord/Sud sur 2 colonnes, Ouest/Est
-   sur les 2 autres, tout sur la même ligne) laissait trop peu de place aux menus déroulants
-   Ouest/Est. Plutôt que d'abandonner la forme de table pour une simple liste empilée (voir
-   échange avec Guillaume — "juste en ligne" perdait la lecture spatiale de la table), on
-   reprend le même motif que .all-hands-diagram plus bas dans ce fichier : Nord et Sud en
-   pleine largeur (leur propre ligne), Ouest et Est côte à côte entre les deux. Chaque case
-   garde sa mise en page en colonne d'origine (libellé au-dessus, menu en pleine largeur en
-   dessous) plutôt que la disposition en ligne (libellé à gauche, menu à droite) qui n'avait
-   de sens que pour des cases pleine largeur. */
+/* Sur un écran étroit, on reprend exactement la même croix qu'au bureau (Nord/Ouest/Est/
+   Sud occupent chacun 2 des 4 colonnes, donc tous la même taille — voir échange avec
+   Guillaume : il tient à cette identité visuelle uniforme, pas à des cases Nord/Sud plus
+   grandes que Ouest/Est) : juste un espacement resserré, rien d'autre à changer. */
 @media (max-width: 560px) {
     .seat-assignment-grid {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        grid-template-rows: auto auto auto;
-        gap: 8px;
+        gap: 8px 6px;
     }
-    .seat-pos-N { grid-column: 1 / 3; grid-row: 1; }
-    .seat-pos-W { grid-column: 1; grid-row: 2; }
-    .seat-pos-E { grid-column: 2; grid-row: 2; }
-    .seat-pos-S { grid-column: 1 / 3; grid-row: 3; }
-
-    .seat-assignment-grid .seat-assign-select { max-width: 100%; }
 }
 
 /* ===== Écran de jeu ===== */

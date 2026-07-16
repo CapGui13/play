@@ -613,13 +613,14 @@ function showScreen(id) {
     document.getElementById(id).style.display = '';
 
     // Voir échange avec Guillaume (chat qui recouvrait la boîte d'enchères sur mobile,
-    // mesuré : le panneau flottant, à 555-834px, chevauchait la boîte à 547-945px) :
-    // en pleine partie, le chat n'est plus un panneau flottant par-dessus le reste (voir
-    // dockChatIntoGameScreen/undockChatFromGameScreen) — il rejoint le flux normal de la
-    // page, tout en bas, après la boîte d'enchères. Ailleurs (salon, accueil), il reste un
-    // panneau flottant classique : moins de contenu à côté, la place ne manque pas autant.
-    if (id === 'screen-game') dockChatIntoGameScreen();
-    else undockChatFromGameScreen();
+    // mesuré : le panneau flottant, à 555-834px, chevauchait la boîte à 547-945px) : dans
+    // le salon comme en pleine partie, le chat n'est plus un panneau flottant par-dessus
+    // le reste (voir dockChatIntoScreen/undockChatFromScreen) — il rejoint le flux normal
+    // de la page, tout en bas. Seul l'écran d'accueil garde le panneau flottant classique
+    // (le chat n'y a de toute façon aucun sens, voir plus bas — masqué avant même de se
+    // poser la question de son ancrage).
+    if (id === 'screen-game' || id === 'screen-lobby') dockChatIntoScreen(id);
+    else undockChatFromScreen();
 
     // Le chat n'a de sens qu'une fois dans un salon ou en partie (il faut des participants
     // à qui parler) : masqué sur l'écran d'accueil, affiché partout ailleurs. Point de
@@ -2050,23 +2051,24 @@ let lobbyChatAutoOpened = false;
 let chatUnreadCount = 0;
 
 // Déplace physiquement #chatPanel dans le flux normal du document, à la toute fin de
-// l'écran de jeu (après la boîte d'enchères) — voir échange avec Guillaume : sur mobile,
-// le panneau flottant (position:fixed) se superposait à la boîte d'enchères, pile la zone
-// où il faut pouvoir taper à tout moment. Rejoindre le flux normal règle ça : ouvrir le
-// chat pousse le contenu, il ne le recouvre plus jamais. Idempotent (rien ne se passe si
-// déjà à sa place) : peut être appelé à chaque changement d'écran sans souci.
-function dockChatIntoGameScreen() {
+// l'écran donné (après tout son contenu) — voir échange avec Guillaume : sur mobile, le
+// panneau flottant (position:fixed) se superposait à la boîte d'enchères (écran de jeu)
+// et, de la même façon, au reste du salon (écran lobby). Rejoindre le flux normal règle
+// ça : ouvrir le chat pousse le contenu, il ne le recouvre plus jamais. Idempotent (rien
+// ne se passe si déjà à sa place) : peut être appelé à chaque changement d'écran sans
+// souci, y compris en boucle sur le même écran.
+function dockChatIntoScreen(screenId) {
     const panel = document.getElementById('chatPanel');
-    const gameScreen = document.getElementById('screen-game');
-    if (!panel || !gameScreen) return;
-    if (panel.parentElement !== gameScreen) gameScreen.appendChild(panel);
+    const targetScreen = document.getElementById(screenId);
+    if (!panel || !targetScreen) return;
+    if (panel.parentElement !== targetScreen) targetScreen.appendChild(panel);
     panel.classList.add('chat-panel-docked');
 }
 
 // Symétrique : replace le chat dans son emplacement d'origine (juste après la barre de
-// connexion), en panneau flottant classique — utilisé partout ailleurs que l'écran de jeu
-// (salon, accueil), où la place ne manque pas aussi cruellement.
-function undockChatFromGameScreen() {
+// connexion), en panneau flottant classique — utilisé uniquement sur l'écran d'accueil,
+// où le chat n'a de toute façon aucun sens (personne à qui parler) et reste masqué.
+function undockChatFromScreen() {
     const panel = document.getElementById('chatPanel');
     const connectionBar = document.getElementById('connectionBar');
     if (!panel || !connectionBar) return;
