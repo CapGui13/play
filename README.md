@@ -107,9 +107,11 @@ dents) :
 - **Ouverture** : 1SA avec 15-17H et une main équilibrée (4333, 4432 ou 5332), sinon la
   couleur la plus longue (majeure 5+ prioritaire) à partir de 12H, au palier 2 avec une
   main très forte (22H+). Passe en dessous de 12H.
-- **Réponse à l'ouverture du partenaire** : soutien si 3+ cartes dans sa couleur (palier 2
-  ou 3 selon les points), sinon une nouvelle couleur à partir de 10H, sinon un repli à SA
-  à partir de 6H.
+- **Réponse à l'ouverture du partenaire** : après une ouverture à la mineure, une majeure
+  4+ cartes franche est montrée avant de soutenir la mineure (principe de base : chercher
+  un fit à la majeure d'abord). Sinon, soutien si 3+ cartes dans sa couleur (palier 2 ou 3
+  selon les points), sinon une nouvelle couleur à partir de 10H, sinon un repli à SA à
+  partir de 6H.
 - **Intervention sur l'ouverture d'un adversaire** : à partir de 8H et une couleur de 5+
   cartes, au palier minimal légal.
 - **Un seul tour de dialogue** : une fois qu'un robot a annoncé quelque chose dans une

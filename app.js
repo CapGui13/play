@@ -2271,6 +2271,20 @@ function decideRobotResponse(hand, hcp, partnerCall, seat, history) {
     }
 
     const suit = bid.strain;
+    const partnerOpenedMinor = (suit === 'C' || suit === 'D');
+
+    // Priorité de base : après une ouverture à la MINEURE, montrer une majeure 4+ cartes
+    // franche au palier 1 passe AVANT de soutenir la mineure du partenaire — le principe
+    // qu'on cherche d'abord un fit à la majeure, plus rentable, avant de se rabattre sur
+    // la mineure (voir échange avec Guillaume : bug trouvé en jouant, l'inverse était fait).
+    if (hcp >= 6 && partnerOpenedMinor) {
+        const major = ['S', 'H'].find(s => lengths[s] >= 4);
+        if (major) {
+            const call = '1' + major;
+            if (isCallLegal(history, call, seat)) return call;
+        }
+    }
+
     // Soutien si fit (3+ cartes dans la couleur du partenaire) : au palier 2 avec peu de
     // points, au palier 3 (invite) avec une belle main — simplifié à ces deux paliers.
     if (lengths[suit] >= 3 && hcp >= 6) {
