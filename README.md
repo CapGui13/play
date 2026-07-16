@@ -62,7 +62,8 @@ Aucune clé, aucun compte externe à configurer : tout fonctionne dès la mise e
 3. Partage ce code ou ce lien aux autres joueurs.
 4. Au fil de leur connexion, chacun apparaît dans la liste des participants du salon.
 5. L'hôte assigne chacun à un ou plusieurs sièges via les menus déroulants Nord/Est/Sud/Ouest
-   (un siège laissé sur "— (robot : passe)" sera joué automatiquement).
+   (un siège laissé sur "— (robot)" sera joué automatiquement — voir "Enchères automatiques
+   des robots" plus bas).
 6. L'hôte choisit le fichier `.pbn` ou `.lin` à charger, puis clique sur
    **"Commencer la partie"**.
 
@@ -95,6 +96,30 @@ Aucune clé, aucun compte externe à configurer : tout fonctionne dès la mise e
   précédente ou suivante à tout moment (même en pleine enchère), sans attendre la fin de
   l'enchère en cours. Seul l'hôte les voit ; les autres joueurs continuent d'utiliser le
   bouton "Donne suivante →" qui n'apparaît qu'une fois l'enchère terminée.
+
+## Enchères automatiques des robots
+
+Un siège laissé sur "— (robot)" n'ouvre plus systématiquement passe : il applique un moteur
+d'enchères volontairement simplifié plutôt qu'un vrai simulateur (hors de portée
+raisonnable pour ce projet — même les logiciels commerciaux s'y cassent régulièrement les
+dents) :
+
+- **Ouverture** : 1SA avec 15-17H et une main équilibrée (4333, 4432 ou 5332), sinon la
+  couleur la plus longue (majeure 5+ prioritaire) à partir de 12H, au palier 2 avec une
+  main très forte (22H+). Passe en dessous de 12H.
+- **Réponse à l'ouverture du partenaire** : soutien si 3+ cartes dans sa couleur (palier 2
+  ou 3 selon les points), sinon une nouvelle couleur à partir de 10H, sinon un repli à SA
+  à partir de 6H.
+- **Intervention sur l'ouverture d'un adversaire** : à partir de 8H et une couleur de 5+
+  cartes, au palier minimal légal.
+- **Un seul tour de dialogue** : une fois qu'un robot a annoncé quelque chose dans une
+  donne, il passe systématiquement ensuite — pas de rebid, pas de contre-annonce après une
+  nouvelle enchère adverse.
+- **Jamais de contre ni de surcontre**, jamais de convention (Stayman, Blackwood...).
+
+Chaque annonce calculée est vérifiée par les mêmes règles de légalité que celles d'un
+joueur humain avant d'être jouée ; en cas de doute, le robot passe plutôt que de risquer
+une annonce invalide.
 
 ## Limites connues
 

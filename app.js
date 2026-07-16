@@ -1371,7 +1371,7 @@ function renderSeatAssignmentGrid() {
         const assignedId = seatAssignment[seat];
         const flashClass = justAssigned(seat) ? ' just-assigned' : '';
         if (isHost) {
-            const options = ['<option value="">— (robot : passe)</option>']
+            const options = ['<option value="">— (robot)</option>']
                 .concat(participants.map(p =>
                     `<option value="${p.id}" ${p.id === assignedId ? 'selected' : ''}>${escapeHtml(p.name)}</option>`
                 ));
@@ -2128,7 +2128,7 @@ function handlePeerData(msg, guestIndex) {
             renderMyHands();
             checkAuctionEnd();
             relayIfHost(msg, guestIndex);
-            maybeAutoPass(); // sans effet si on n'est pas l'hôte ; couvre le cas où c'est
+            maybeRobotBid(); // sans effet si on n'est pas l'hôte ; couvre le cas où c'est
                               // un invité qui a demandé le reset (l'hôte doit prendre le relais)
             break;
         }
@@ -2199,11 +2199,155 @@ function relayIfHost(msg, fromGuestIndex) {
     }
 }
 
-// ===== Robot "passe automatique" (sièges non assignés) =====
+// ===== Moteur d'enchères basique des robots (voir échange avec Guillaume) =====
 //
-// Seul l'hôte injecte les passes automatiques (pour ne jamais les déclencher en double),
-// puis les diffuse comme n'importe quelle annonce.
-function maybeAutoPass() {
+// Volontairement limité, pour rester robuste et lisible plutôt que de viser un vrai
+// moteur d'enchères (hors de portée raisonnable ici — même les logiciels commerciaux s'y
+// cassent régulièrement les dents) :
+//   - Ouvertures standard (1SA 15-17H équilibré, sinon la couleur la plus longue,
+//     palier 2 si main très forte), réponse simple à l'ouverture du PARTENAIRE (soutien,
+//     nouvelle couleur, ou SA de repli selon les points), et interventions simples sur
+//     l'ouverture d'un ADVERSAIRE (5+ cartes, 8H+, au palier minimal légal).
+//   - Un seul tour de dialogue : dès qu'un robot a parlé une fois dans une donne, il passe
+//     systématiquement ensuite (pas de rebid, pas de contre-annonce après une nouvelle
+//     enchère adverse).
+//   - Jamais de contre ni de surcontre (X/XX), jamais de convention (Stayman, Blackwood...).
+// Le tout est un COMPLÉMENT au tirage au sort des donnes, pas un simulateur d'enchère
+// réaliste : l'objectif est que les robots ne soient plus totalement muets, pas de
+// remplacer un vrai partenaire de bridge.
+
+// Vrai s'il n'y a ni singleton ni chicane, et au plus un doubleton (4333, 4432, 5332) —
+// définition standard d'une main "équilibrée" pour une ouverture à SA.
+function isHandBalancedForNT(lengths) {
+    const values = ['S', 'H', 'D', 'C'].map(s => lengths[s]);
+    if (values.some(l => l <= 1)) return false;
+    return values.filter(l => l === 2).length <= 1;
+}
+
+// Couleur la plus longue, en départageant les égalités par le rang (Pique > Cœur >
+// Carreau > Trèfle) — simplification assumée plutôt qu'une vraie règle de choix entre
+// mineures 4-4 par exemple.
+function longestSuitPreferHigh(lengths) {
+    const order = ['S', 'H', 'D', 'C'];
+    let best = order[0];
+    for (const suit of order.slice(1)) {
+        if (lengths[suit] > lengths[best]) best = suit;
+    }
+    return best;
+}
+
+function suitLengths(hand) {
+    return { S: hand.S.length, H: hand.H.length, D: hand.D.length, C: hand.C.length };
+}
+
+// Décision d'OUVERTURE (personne n'a encore annoncé quoi que ce soit dans cette donne).
+function decideRobotOpening(hand, hcp) {
+    const lengths = suitLengths(hand);
+    if (hcp >= 15 && hcp <= 17 && isHandBalancedForNT(lengths)) return '1NT';
+    if (hcp < 12) return 'PASS';
+
+    const majorFit = ['S', 'H'].find(suit => lengths[suit] >= 5);
+    const suit = majorFit || longestSuitPreferHigh(lengths);
+    // Main très forte (22H+) : ouverture "fort" simplifiée au palier 2 dans la couleur la
+    // plus longue plutôt qu'un vrai 2♣ conventionnel forcing (hors périmètre ici).
+    const level = hcp >= 22 ? 2 : 1;
+    return level + suit;
+}
+
+// Décision de RÉPONSE à une annonce du PARTENAIRE (sa dernière annonce chiffrée est aussi
+// la dernière de toute l'enchère, sans intervention adverse entre les deux).
+function decideRobotResponse(hand, hcp, partnerCall, seat, history) {
+    const lengths = suitLengths(hand);
+    const bid = parseBid(partnerCall);
+
+    if (bid.strain === 'NT') {
+        // Réponse à 1SA : juste une estimation du total de points à eux deux, sans
+        // Stayman/Texas/transferts (hors périmètre) — élève la manche si ça semble jouable.
+        if (hcp >= 10) {
+            const call = (bid.level + 2) + 'NT';
+            if (isCallLegal(history, call, seat)) return call;
+        }
+        return 'PASS';
+    }
+
+    const suit = bid.strain;
+    // Soutien si fit (3+ cartes dans la couleur du partenaire) : au palier 2 avec peu de
+    // points, au palier 3 (invite) avec une belle main — simplifié à ces deux paliers.
+    if (lengths[suit] >= 3 && hcp >= 6) {
+        const raiseLevel = bid.level + (hcp >= 10 ? 2 : 1);
+        const call = raiseLevel + suit;
+        if (isCallLegal(history, call, seat)) return call;
+    }
+
+    // Pas de fit : nouvelle couleur (4+ cartes) si assez de points, au palier minimal légal.
+    if (hcp >= 10) {
+        const newSuit = longestSuitPreferHigh(lengths);
+        if (newSuit !== suit && lengths[newSuit] >= 4) {
+            for (let level = bid.level; level <= 7; level++) {
+                const call = level + newSuit;
+                if (isCallLegal(history, call, seat)) return call;
+            }
+        }
+    }
+
+    // Repli : SA au palier minimal légal si un peu de points mais rien de mieux à dire.
+    if (hcp >= 6) {
+        for (let level = bid.level; level <= 7; level++) {
+            const call = level + 'NT';
+            if (isCallLegal(history, call, seat)) return call;
+        }
+    }
+
+    return 'PASS';
+}
+
+// Décision d'INTERVENTION sur l'ouverture (ou l'enchère la plus récente) d'un ADVERSAIRE :
+// il faut une couleur solide (5+ cartes) et assez de points pour se manifester, au palier
+// minimal légal dans cette couleur.
+function decideRobotIntervention(hand, hcp, seat, history) {
+    if (hcp < 8) return 'PASS';
+    const lengths = suitLengths(hand);
+    const suit = longestSuitPreferHigh(lengths);
+    if (lengths[suit] < 5) return 'PASS';
+
+    for (let level = 1; level <= 7; level++) {
+        const call = level + suit;
+        if (isCallLegal(history, call, seat)) return call;
+    }
+    return 'PASS';
+}
+
+// Point d'entrée unique : détermine l'annonce d'un robot pour son tour actuel. Toujours
+// validée par isCallLegal juste avant d'être renvoyée (filet de sécurité ultime) — un
+// robot ne doit JAMAIS produire une annonce illégale, quitte à se rabattre sur passe si le
+// calcul ci-dessus a un trou quelque part ; un blocage de la partie serait bien pire qu'un
+// robot un peu trop passif.
+function decideRobotCall(seat, deal, history) {
+    const hand = deal.hands[seat];
+    const hcp = computeHandHcp(hand);
+    const hasSpokenBefore = history.some(entry => entry.seat === seat);
+
+    let call = 'PASS';
+    if (!hasSpokenBefore) {
+        const lastBid = getLastActualBid(history);
+        if (!lastBid) {
+            call = decideRobotOpening(hand, hcp);
+        } else if (partnershipOf(lastBid.seat) === partnershipOf(seat)) {
+            call = decideRobotResponse(hand, hcp, lastBid.call, seat, history);
+        } else {
+            call = decideRobotIntervention(hand, hcp, seat, history);
+        }
+    }
+
+    if (call !== 'PASS' && !isCallLegal(history, call, seat)) call = 'PASS';
+    return call;
+}
+
+// ===== Enchères automatiques des robots (sièges non assignés) =====
+//
+// Seul l'hôte calcule et injecte les annonces des robots (pour ne jamais les déclencher en
+// double), puis les diffuse comme n'importe quelle annonce.
+function maybeRobotBid() {
     if (myRole !== 'host') return;
     if (!autoPassSeats || autoPassSeats.length === 0) return;
     if (!deals || isAuctionOver(auctionHistory)) return;
@@ -2222,8 +2366,9 @@ function maybeAutoPass() {
         const stillTurnSeat = currentTurnSeat(currentDeal().dealer, auctionHistory);
         if (stillTurnSeat !== turnSeat) return;
 
-        applyCall(turnSeat, 'PASS');
-        peerConn.send({ type: 'call', boardIndex, seat: turnSeat, call: 'PASS' });
+        const call = decideRobotCall(turnSeat, currentDeal(), auctionHistory);
+        applyCall(turnSeat, call);
+        peerConn.send({ type: 'call', boardIndex, seat: turnSeat, call });
     }, 300);
 }
 
@@ -2311,7 +2456,7 @@ function renderBoard() {
     // "qui est présent", voir uiToggleChat) : pas besoin de reconstruire son contenu tant
     // que personne ne le regarde.
     if (chatPanelOpen) renderRoomBoard();
-    maybeAutoPass();
+    maybeRobotBid();
 }
 
 function updateBoardControlVisibility() {
@@ -2683,7 +2828,7 @@ function formatCallCellHtml(call) {
 function ledgerSeatLabel(seat) {
     if (!showLedgerNames) return SEAT_ABBR_FR[seat];
     const pid = typeof seatAssignment !== 'undefined' ? seatAssignment[seat] : null;
-    if (!pid) return 'Bot'; // siège non assigné : joué par le robot "passe" (voir maybeAutoPass)
+    if (!pid) return 'Bot'; // siège non assigné : joué par le robot (voir maybeRobotBid)
     const p = participants.find(x => x.id === pid);
     const name = p && p.name ? p.name.trim() : '';
     return name || SEAT_ABBR_FR[seat]; // quelqu'un est bien assigné ici, pas un bot : jamais "Bot" dans ce cas
@@ -2802,7 +2947,7 @@ function applyCall(seat, call) {
     renderMyHands();
     checkAuctionEnd();
     renderUndoControls();
-    maybeAutoPass();
+    maybeRobotBid();
 }
 
 // Construit le HTML des 4 mains, affiché dans #allHandsDiagram (voir
@@ -3241,7 +3386,7 @@ function seatsOfParticipant(pid) {
 // Détermine quelle entrée de l'historique une demande d'undo doit effectivement annuler.
 // Pour un invité : la dernière annonce parmi celles produites par UN des sièges qu'il
 // contrôle — pas forcément la toute dernière case du tableau, puisqu'un ou plusieurs
-// robots ont pu passer automatiquement juste après (voir maybeAutoPass) si le joueur a
+// robots ont pu passer automatiquement juste après (voir maybeRobotBid) si le joueur a
 // mis un peu de temps à cliquer sur "undo". On renvoie alors l'index de SA dernière
 // annonce ; applyUndoAsHost retirera cette annonce et tout ce qui a suivi (uniquement des
 // passes robot, puisqu'aucun autre humain n'a pu jouer avant que ce ne soit à nouveau le
@@ -3420,7 +3565,7 @@ function applyUndoAsHost(pending) {
     checkAuctionEnd();
     clearUndoUiState();
     peerConn.send({ type: 'undo-apply', boardIndex: pending.boardIndex, newLength: pending.targetIndex });
-    maybeAutoPass(); // si l'annulation redonne la main à un siège robot, il doit rejouer
+    maybeRobotBid(); // si l'annulation redonne la main à un siège robot, il doit rejouer
 }
 
 // Réponse de l'utilisateur au bandeau "on me demande d'annuler".
@@ -3456,7 +3601,7 @@ function uiResetAuction() {
     renderMyHands();
     checkAuctionEnd();
     peerConn.send({ type: 'reset-auction', boardIndex });
-    maybeAutoPass(); // sans effet si on n'est pas l'hôte (voir maybeAutoPass) ; utile si le
+    maybeRobotBid(); // sans effet si on n'est pas l'hôte (voir maybeRobotBid) ; utile si le
                       // dealer (ou tout siège en tête d'enchère après reset) est un robot
 }
 
