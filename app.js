@@ -1824,6 +1824,23 @@ function handlePeerData(msg, guestIndex) {
             break;
         }
 
+        // Voir échange avec Guillaume : le "wizz" façon MSN Messenger. Contrairement au
+        // chat (diffusé à tout le monde), un wizz est ciblé — relayIfHost ne convient pas
+        // ici puisqu'il diffuserait à TOUS les autres invités, pas seulement au bon. Un
+        // hôte qui reçoit un wizz qui n'est pas pour lui le retransmet spécifiquement au
+        // bon invité (topologie en étoile : c'est le seul chemin possible entre deux
+        // invités) ; un invité, lui, ne reçoit jamais un wizz qui ne lui est pas destiné
+        // (l'hôte a déjà fait ce tri avant de relayer), donc l'applique directement.
+        case 'wizz': {
+            if (myRole === 'host' && msg.targetId !== 'host') {
+                const targetGuestIndex = guestIndexByToken[msg.targetId];
+                if (targetGuestIndex !== undefined) peerConn.send(msg, targetGuestIndex);
+                break;
+            }
+            triggerWizzEffect(msg.senderName);
+            break;
+        }
+
         case 'reset-auction': {
             if (!deals || msg.boardIndex !== boardIndex) return;
             auctionHistory = [];
@@ -2167,6 +2184,107 @@ function uiSendChatMessage() {
 // Fusionné dans le panneau de chat (voir uiToggleChat) plutôt qu'un panneau séparé à
 // part : un bandeau "qui est présent", toujours visible en haut du chat, complète
 // naturellement les messages plutôt que de demander un clic de plus pour y accéder.
+// ===== Wizz (voir échange avec Guillaume : le "nudge" de MSN Messenger — cliquer sur le
+// nom de quelqu'un fait trembler son écran) =====
+//
+// Un seul message réseau ('wizz'), avec un routage à deux vitesses selon qui l'envoie :
+// - l'hôte connaît directement la connexion de chaque invité (guestIndexByToken), donc
+//   lui envoie le wizz en ciblé, sans détour ;
+// - un invité, lui, n'a qu'une seule connexion possible (l'hôte) : il lui envoie le wizz
+//   à charge pour l'hôte de le relayer vers le vrai destinataire si ce n'est pas lui-même
+//   (voir le cas 'wizz' dans handlePeerData) — topologie en étoile oblige.
+const WIZZ_COOLDOWN_MS = 4000; // évite le spam frénétique entre amis, sans l'interdire
+const wizzCooldownUntil = {}; // targetId -> timestamp, purement local (pas besoin de sync réseau)
+
+// Nom cliquable pour envoyer un wizz — sauf le sien (se faire trembler soi-même n'a pas de
+// sens) et celui de quelqu'un de déconnecté (personne pour le recevoir).
+function wizzableNameHtml(p) {
+    const name = `<span class="room-board-name">${escapeHtml(p.name)}</span>`;
+    if (p.id === myParticipantId || p.disconnected) return name;
+    return `<span class="room-board-name wizzable" onclick="uiSendWizz('${p.id}')" title="Faire trembler l'écran de ${escapeHtml(p.name)}">${escapeHtml(p.name)} 🔔</span>`;
+}
+
+function uiSendWizz(targetId) {
+    if (!peerConn || targetId === myParticipantId) return;
+    const now = Date.now();
+    if (wizzCooldownUntil[targetId] && now < wizzCooldownUntil[targetId]) return; // encore en sablier, on ignore silencieusement
+    wizzCooldownUntil[targetId] = now + WIZZ_COOLDOWN_MS;
+
+    const me = participants.find(p => p.id === myParticipantId);
+    const senderName = me ? me.name : '?';
+    const msg = { type: 'wizz', targetId, senderName };
+
+    if (myRole === 'host') {
+        // L'hôte connaît directement la connexion du destinataire : envoi ciblé, pas de
+        // relais nécessaire.
+        const guestIndex = guestIndexByToken[targetId];
+        if (guestIndex === undefined) return; // plus connecté entre-temps, tant pis
+        peerConn.send(msg, guestIndex);
+    } else {
+        // Invité : un seul destinataire réseau possible (l'hôte), qui relaiera si besoin
+        // (voir handlePeerData, cas 'wizz' avec targetId !== 'host').
+        peerConn.send(msg);
+    }
+}
+
+// Effet visuel + sonore reçu quand on se fait wizzer : tremblement bref de l'écran (voir
+// @keyframes wizzShake dans styles.css) et un petit bip généré à la volée (pas de fichier
+// audio à charger). Respecte prefers-reduced-motion : le tremblement est alors sauté, seul
+// le bandeau reste pour prévenir sans désagrément visuel.
+function triggerWizzEffect(senderName) {
+    const prefersReducedMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (!prefersReducedMotion) {
+        document.body.classList.remove('wizz-shake'); // relance l'animation même si déjà en cours (rewizz rapide)
+        void document.body.offsetWidth; // force un reflow, sinon retirer/remettre la même classe dans le même tick ne relance rien
+        document.body.classList.add('wizz-shake');
+        setTimeout(() => document.body.classList.remove('wizz-shake'), 600);
+    }
+    playWizzSound();
+    flashWizzToast(senderName);
+}
+
+// Bip classique généré via Web Audio (deux notes brèves) plutôt qu'un fichier son à
+// héberger — cohérent avec le reste de l'appli (aucun asset audio nulle part ailleurs).
+// Échoue silencieusement si l'API n'est pas dispo ou si le navigateur bloque l'audio sans
+// interaction préalable (peu grave : l'effet visuel + le bandeau suffisent à prévenir).
+function playWizzSound() {
+    try {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        if (!AudioCtx) return;
+        const ctx = new AudioCtx();
+        [880, 660].forEach((freq, i) => {
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.type = 'sine';
+            osc.frequency.value = freq;
+            gain.gain.value = 0.15;
+            osc.connect(gain).connect(ctx.destination);
+            const start = ctx.currentTime + i * 0.12;
+            osc.start(start);
+            gain.gain.exponentialRampToValueAtTime(0.001, start + 0.15);
+            osc.stop(start + 0.16);
+        });
+    } catch (e) { /* tant pis, l'effet visuel suffit */ }
+}
+
+// Petit bandeau temporaire en haut de l'écran, plutôt qu'une alert() bloquante — cohérent
+// avec le ton léger de la fonctionnalité.
+function flashWizzToast(senderName) {
+    let toast = document.getElementById('wizzToast');
+    if (!toast) {
+        toast = document.createElement('div');
+        toast.id = 'wizzToast';
+        toast.className = 'wizz-toast';
+        document.body.appendChild(toast);
+    }
+    toast.textContent = `🔔 ${senderName} vous a fait trembler !`;
+    toast.classList.remove('visible');
+    void toast.offsetWidth;
+    toast.classList.add('visible');
+    clearTimeout(toast._hideTimer);
+    toast._hideTimer = setTimeout(() => toast.classList.remove('visible'), 2200);
+}
+
 function renderRoomBoard() {
     const el = document.getElementById('roomBoard');
     if (!el) return;
@@ -2192,7 +2310,7 @@ function renderRoomBoard() {
         if (!p) return '';
         const seatsLabel = seatsByParticipant.get(pid).map(seatFullName).join(' + ');
         const disconnectedTag = p.disconnected ? ' <span class="disconnected-tag">🔌</span>' : '';
-        const occupant = `${avatarHtml(p.id)}<span class="room-board-name">${escapeHtml(p.name)}</span>${disconnectedTag}`;
+        const occupant = `${avatarHtml(p.id)}${wizzableNameHtml(p)}${disconnectedTag}`;
         return `<div class="room-board-seat"><span class="room-board-seat-label">${seatsLabel}</span>${occupant}</div>`;
     }).filter(Boolean).join('');
 
@@ -2205,7 +2323,7 @@ function renderRoomBoard() {
     const kibbitzHtml = kibbitzNames.length > 0
         ? `<div class="room-board-kibbitz">
                <span class="room-board-section-label">👁 Kibbitz :</span>
-               ${kibbitzNames.map(p => `${avatarHtml(p.id)}<span class="room-board-name">${escapeHtml(p.name)}</span>`).join('')}
+               ${kibbitzNames.map(p => `${avatarHtml(p.id)}${wizzableNameHtml(p)}`).join('')}
            </div>`
         : '';
 
