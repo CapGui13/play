@@ -232,6 +232,53 @@ Guillaume) :
   retomber sur un repli générique invitant seulement (palier 3) — alors que la manche est
   déjà acquise. Ajout d'un palier "16+ HLD → manche directe" (donne 7).
 
+**Suite du répondant en zone de manche connue** (voir échange avec Guillaume, retour sur
+la donne 5) : ma première tentative (une heuristique de longueur de fit maison) ne
+correspondait pas à ce qu'il avait demandé — remplacée par sa règle réelle, plus simple :
+une ouverture à la couleur promet 12+, donc un répondant ayant lui-même 12+ sait que son
+camp a 24+ à eux deux et doit continuer jusqu'à la manche. Priorité systématique à un fit
+MAJEUR de 8+ cartes *connu* (la couleur d'ouverture promet 5+ si majeure, un rebid en
+nouvelle couleur promet 4+) ; à défaut, manche à SA directement, sans explorer un fit
+mineur. Ne considère que les couleurs déjà montrées par l'OUVREUR, pas une éventuelle
+longue du répondant lui-même chez qui elle n'a pas été explicitement demandée — un
+raffinement possible si besoin.
+
+**Corrections supplémentaires suite aux donnes 5 et 6, encore affinées** (voir échange
+avec Guillaume) :
+- **Pas de rebid forcé si un adversaire est intervenu** : la règle "reparle toujours après
+  une nouvelle couleur" ne s'applique que si personne d'autre n'a parlé depuis — une fois
+  la concurrence entrée en jeu (adversaire intervenu entre la réponse du partenaire et mon
+  tour), ce n'est plus vraiment forcing, l'ouvreur peut légitimement passer (donne 6 :
+  Est n'a plus à reparler après l'intervention de Nord). La loi des atouts et le filet
+  18HL+ restent inchangés, eux.
+- **Reverse (bicolore cher)** : une 2e couleur qui EXIGE le palier 2 pour être annoncée
+  ET qui rang plus haut que l'ouverture (donc le partenaire devrait monter d'un cran pour
+  revenir à la 1ère couleur) promet 17HL+ — pas juste "une couleur plus chère" en
+  général. Un bicolore économique montrable au palier 1 (donne 5 : 1♣ puis 1♠, le
+  partenaire ayant répondu 1♥) n'est jamais un reverse, quel que soit le rang des
+  couleurs — ma première version de cette règle comparait les rangs sans vérifier le
+  palier réellement nécessaire, cassant à tort la donne 5 en la corrigeant.
+
+**Correction critique sur la donne 7** (voir échange avec Guillaume) : j'avais mal compris
+le sens d'un saut direct à la manche en soutien — ça ne montre PAS une main forte, mais
+l'inverse (barrage, main faible et distribuée avec 5+ atouts, déjà couvert plus haut dans
+l'échelle). Une main VRAIMENT forte (16+ points de soutien) doit au contraire **différer**
+: annoncer une nouvelle couleur (la plus longue des 3 autres si 4+ cartes, sinon la plus
+courte comme relais faute de mieux) pour forcer l'ouvreur à reparler, puis confirmer le
+fit à la manche une fois la suite en zone de manche connue déclenchée (voir
+decideResponderContinuationAfterNewSuit, corrigé au passage pour viser directement la
+manche plutôt que le palier minimal légal, qui sous-vendait aussi la main).
+
+**Correction sur la donne 8** (voir échange avec Guillaume) : une réponse en nouvelle
+couleur sur un barrage du partenaire est déjà forcing un tour — pas besoin de sauter pour
+montrer une main forte (le saut, lui, aurait un tout autre sens : splinter). Retiré le
+saut que j'avais ajouté à tort, et déplacé la décision du bon côté : c'est l'OUVREUR du
+barrage qui juge, à son rebid, s'il pousse à la manche — avec un fit (3+ cartes) et une
+main en haut de sa fourchette (8-12HL, zone haute = 11HL+), il pousse directement à la
+manche dans la couleur du partenaire ; sinon il répète sa propre couleur. Logique dédiée
+aux ouvertures de barrage (palier 2+), distincte de la logique des ouvertures naturelles
+au palier 1.
+
 ## Corrections issues d'une relecture de session (voir échange avec Guillaume)
 
 Après une session de test, Guillaume a exporté le fichier et relu chaque donne en détail
