@@ -118,7 +118,9 @@ notamment sa fiche "Ouvertures", plutôt qu'une généralisation approximative :
   4+ cartes franche est montrée avant de soutenir la mineure (principe de base : chercher
   un fit à la majeure d'abord). Sinon, soutien si 3+ cartes dans sa couleur (palier 2 ou 3
   selon les points), sinon une nouvelle couleur à partir de 11HL (seuil SEF), sinon un
-  repli à SA à partir de 6HL.
+  repli à SA à partir de 6HL. Réponse à 1SA/2SA : manche à 3SA (jamais 4SA — bug corrigé à
+  l'audit) dès 10HL après 1SA, ou seulement 4HL après 2SA (l'ouverture promet déjà
+  beaucoup plus de points).
 - **Intervention sur l'ouverture d'un adversaire** : à partir de 8HL et une couleur de 5+
   cartes, au palier minimal légal.
 - **Un seul tour de dialogue** : une fois qu'un robot a annoncé quelque chose dans une

@@ -2203,15 +2203,26 @@ function relayIfHost(msg, fromGuestIndex) {
 //
 // Volontairement limité, pour rester robuste et lisible plutôt que de viser un vrai
 // moteur d'enchères (hors de portée raisonnable ici — même les logiciels commerciaux s'y
-// cassent régulièrement les dents) :
-//   - Ouvertures standard (1SA 15-17H équilibré, sinon la couleur la plus longue,
-//     palier 2 si main très forte), réponse simple à l'ouverture du PARTENAIRE (soutien,
-//     nouvelle couleur, ou SA de repli selon les points), et interventions simples sur
-//     l'ouverture d'un ADVERSAIRE (5+ cartes, 8H+, au palier minimal légal).
+// cassent régulièrement les dents). Seuils repris de la fiche "Ouvertures" du SEF
+// (Système d'Enchères Français, la référence utilisée en club — voir
+// bridge-chailley.fr/dictionnaire-des-encheres/), pas d'une généralisation approximative :
+//   - Comptage en points H+L (honneurs + longueur, voir computeHandHL) pour la plupart des
+//     décisions, à l'exception explicite d'1SA (compté en H purs, comme le veut le SEF).
+//   - Ouvertures : 1SA (15-17H équilibrée), 2SA (20-21HL équilibrée), barrages faibles
+//     (8-12HL : 2 à une majeure 6ème, 3 à 7 cartes, 4 à 8 cartes), sinon la couleur la
+//     plus longue à partir de 12HL (système "majeure 5ème, meilleure mineure").
+//   - Réponse à l'ouverture du PARTENAIRE : majeure 4+ montrée avant de soutenir une
+//     mineure, sinon soutien si fit (palier 2 ou 3 selon les points), sinon nouvelle
+//     couleur à partir de 11HL, sinon repli à SA.
+//   - Intervention simple sur l'ouverture d'un ADVERSAIRE (5+ cartes, 8HL+, palier
+//     minimal légal).
 //   - Un seul tour de dialogue : dès qu'un robot a parlé une fois dans une donne, il passe
 //     systématiquement ensuite (pas de rebid, pas de contre-annonce après une nouvelle
-//     enchère adverse).
-//   - Jamais de contre ni de surcontre (X/XX), jamais de convention (Stayman, Blackwood...).
+//     enchère adverse) — y compris pour une main exceptionnellement forte : une fois
+//     "passée" (3 passes consécutifs), l'enchère est terminée dans n'importe quelle partie
+//     de bridge, ce n'est pas une limitation propre à ce moteur (voir decideRobotCall).
+//   - Jamais de contre ni de surcontre (X/XX), jamais de convention (Stayman, Blackwood,
+//     Roudi, Texas...), pas de 2♣ fort indéterminé ni de 2♦ forcing de manche.
 // Le tout est un COMPLÉMENT au tirage au sort des donnes, pas un simulateur d'enchère
 // réaliste : l'objectif est que les robots ne soient plus totalement muets, pas de
 // remplacer un vrai partenaire de bridge.
@@ -2240,12 +2251,11 @@ function suitLengths(hand) {
     return { S: hand.S.length, H: hand.H.length, D: hand.D.length, C: hand.C.length };
 }
 
-// Décision d'OUVERTURE (personne n'a encore annoncé quoi que ce soit dans cette donne).
 // Points d'honneur (H) + points de longueur (L) : +1 par carte au-delà de la 4e dans
 // chaque couleur de 5+ cartes (5 cartes = +1, 6 cartes = +2, etc.) — barème SEF utilisé
-// pour la plupart des décisions d'ouverture (à l'exception notable d'1SA, qui se compte en
-// H purs : voir decideRobotOpening). Source : fiche "Ouvertures" du SEF, bridge-chailley.fr
-// (voir échange avec Guillaume).
+// pour la plupart des décisions (à l'exception notable d'1SA, qui se compte en H purs :
+// voir decideRobotOpening). Source : fiche "Ouvertures" du SEF, bridge-chailley.fr (voir
+// échange avec Guillaume).
 function computeHandHL(hand) {
     const lengths = suitLengths(hand);
     let lengthPoints = 0;
@@ -2276,9 +2286,8 @@ function decideOpeningSuit(lengths) {
 // pour l'essentiel — sans 2♣ fort indéterminé ni 2♦ forcing de manche (main exceptionnelle
 // hors barème, laissée à une ouverture au palier 1 par défaut, faute d'implémenter tout un
 // système de relais pour une main sur plusieurs centaines).
-function decideRobotOpening(hand, hcp) {
+function decideRobotOpening(hand, hcp, hl) {
     const lengths = suitLengths(hand);
-    const hl = computeHandHL(hand);
     const balanced = isHandBalancedForNT(lengths);
 
     // 1SA : exception SEF explicite, on compte ici en H purs, pas en HL.
@@ -2312,10 +2321,14 @@ function decideRobotResponse(hand, hl, partnerCall, seat, history) {
     const bid = parseBid(partnerCall);
 
     if (bid.strain === 'NT') {
-        // Réponse à 1SA : juste une estimation du total de points à eux deux, sans
-        // Stayman/Texas/transferts (hors périmètre) — élève la manche si ça semble jouable.
-        if (hl >= 10) {
-            const call = (bid.level + 2) + 'NT';
+        // La manche à SA est TOUJOURS 3SA, quel que soit le palier d'ouverture (1SA ou
+        // 2SA) — seul le nombre de points nécessaires pour y arriver change selon ce que
+        // l'ouverture elle-même promet déjà. Bug trouvé à l'audit : l'ancienne formule
+        // "palier d'ouverture + 2" donnait à tort 4SA sur une ouverture de 2SA, et exigeait
+        // 10HL même dans ce cas alors que 20-21HL + 4-5H suffisent déjà pour la manche.
+        const neededHL = (bid.level === 1) ? 10 : 4;
+        if (hl >= neededHL) {
+            const call = '3NT';
             if (isCallLegal(history, call, seat)) return call;
         }
         return 'PASS';
@@ -2408,7 +2421,7 @@ function decideRobotCall(seat, deal, history) {
     if (!hasSpokenBefore) {
         const lastBid = getLastActualBid(history);
         if (!lastBid) {
-            call = decideRobotOpening(hand, hcp);
+            call = decideRobotOpening(hand, hcp, hl);
         } else if (partnershipOf(lastBid.seat) === partnershipOf(seat)) {
             call = decideRobotResponse(hand, hl, lastBid.call, seat, history);
         } else {
