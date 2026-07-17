@@ -2213,15 +2213,20 @@ function relayIfHost(msg, fromGuestIndex) {
 //     plus longue à partir de 12HL (système "majeure 5ème, meilleure mineure").
 //   - Réponse à l'ouverture du PARTENAIRE : majeure 4+ montrée avant de soutenir une
 //     mineure, sinon soutien si fit (palier 2 ou 3 selon les points), sinon nouvelle
-//     couleur à partir de 11HL, sinon repli à SA.
-//   - Intervention simple sur l'ouverture d'un ADVERSAIRE (5+ cartes, 8HL+, palier
-//     minimal légal).
+//     couleur à partir de 11HL, sinon repli à SA — avec repérage simple d'un fit majeur
+//     après 1SA/2SA (manche directe à la majeure plutôt qu'à SA si 5+ cartes franches).
+//   - Intervention sur l'ouverture d'un ADVERSAIRE : contre d'appel (takeout) si la main
+//     s'y prête (12HL+, courte dans leur couleur, support ailleurs), sinon une couleur
+//     naturelle (5+ cartes, HL ajusté par vulnérabilité) au palier minimal légal — et
+//     réponse quasi obligatoire au contre du PARTENAIRE, dans la meilleure des 3 couleurs
+//     restantes.
 //   - Un seul tour de dialogue : dès qu'un robot a parlé une fois dans une donne, il passe
 //     systématiquement ensuite (pas de rebid, pas de contre-annonce après une nouvelle
 //     enchère adverse) — y compris pour une main exceptionnellement forte : une fois
 //     "passée" (3 passes consécutifs), l'enchère est terminée dans n'importe quelle partie
 //     de bridge, ce n'est pas une limitation propre à ce moteur (voir decideRobotCall).
-//   - Jamais de contre ni de surcontre (X/XX), jamais de convention (Stayman, Blackwood,
+//   - Contre d'appel (takeout) seulement — jamais de surcontre, jamais de contre de
+//     pénalité, jamais de convention (Stayman, Blackwood,
 //     Roudi, Texas...), pas de 2♣ fort indéterminé ni de 2♦ forcing de manche.
 // Le tout est un COMPLÉMENT au tirage au sort des donnes, pas un simulateur d'enchère
 // réaliste : l'objectif est que les robots ne soient plus totalement muets, pas de
@@ -2249,6 +2254,16 @@ function longestSuitPreferHigh(lengths) {
 
 function suitLengths(hand) {
     return { S: hand.S.length, H: hand.H.length, D: hand.D.length, C: hand.C.length };
+}
+
+// Vrai si `seat` est vulnérable sur cette donne — utilisé pour ajuster l'agressivité des
+// barrages et interventions (voir échange avec Guillaume) : le SEF réel les resserre
+// vulnérable (le risque d'un gros nombre de plis de chute contré coûte plus cher) et les
+// desserre non-vulnérable.
+function isSeatVulnerable(seat, dealVulnerable) {
+    if (dealVulnerable === 'Both') return true;
+    if (dealVulnerable === 'None') return false;
+    return partnershipOf(seat) === dealVulnerable; // 'NS' ou 'EW'
 }
 
 // Points d'honneur (H) + points de longueur (L) : +1 par carte au-delà de la 4e dans
@@ -2286,7 +2301,7 @@ function decideOpeningSuit(lengths) {
 // pour l'essentiel — sans 2♣ fort indéterminé ni 2♦ forcing de manche (main exceptionnelle
 // hors barème, laissée à une ouverture au palier 1 par défaut, faute d'implémenter tout un
 // système de relais pour une main sur plusieurs centaines).
-function decideRobotOpening(hand, hcp, hl) {
+function decideRobotOpening(hand, hcp, hl, dealVulnerable, seat) {
     const lengths = suitLengths(hand);
     const balanced = isHandBalancedForNT(lengths);
 
@@ -2296,10 +2311,13 @@ function decideRobotOpening(hand, hcp, hl) {
     // nuance non reprise ici par simplicité).
     if (hl >= 20 && hl <= 21 && balanced) return '2NT';
 
-    // Barrages faibles (8-12HL, système "majeure 5ème") : 6 cartes à une majeure au
-    // palier 2 ("2 faible"), 7 cartes au palier 3, 8 cartes au palier 4 — toujours la
-    // couleur la plus longue.
-    if (hl >= 8 && hl <= 12) {
+    // Barrages faibles (système "majeure 5ème") : 6 cartes à une majeure au palier 2
+    // ("2 faible"), 7 cartes au palier 3, 8 cartes au palier 4 — toujours la couleur la
+    // plus longue. Plage resserrée vulnérable (10-12HL, un barrage foireux coûte plus
+    // cher contré) que non-vulnérable (8-12HL, plus agressif — voir échange avec
+    // Guillaume).
+    const barrageFloor = isSeatVulnerable(seat, dealVulnerable) ? 10 : 8;
+    if (hl >= barrageFloor && hl <= 12) {
         const longest = longestSuitPreferHigh(lengths);
         const len = lengths[longest];
         const isMajor = (longest === 'S' || longest === 'H');
@@ -2328,6 +2346,15 @@ function decideRobotResponse(hand, hl, partnerCall, seat, history) {
         // 10HL même dans ce cas alors que 20-21HL + 4-5H suffisent déjà pour la manche.
         const neededHL = (bid.level === 1) ? 10 : 4;
         if (hl >= neededHL) {
+            // Repérage simple d'un fit majeur (pas un vrai Stayman/Texas, hors périmètre) :
+            // avec une majeure 5+ franche, la manche à la majeure est généralement
+            // meilleure qu'à SA (voir échange avec Guillaume) — jouable même avec aussi
+            // peu que 2 cartes chez le partenaire, donc pas besoin de le lui demander.
+            const major = ['S', 'H'].find(s => lengths[s] >= 5);
+            if (major) {
+                const call = '4' + major;
+                if (isCallLegal(history, call, seat)) return call;
+            }
             const call = '3NT';
             if (isCallLegal(history, call, seat)) return call;
         }
@@ -2381,17 +2408,76 @@ function decideRobotResponse(hand, hl, partnerCall, seat, history) {
 }
 
 // Décision d'INTERVENTION sur l'ouverture (ou l'enchère la plus récente) d'un ADVERSAIRE :
-// il faut une couleur solide (5+ cartes) et assez de points (HL) pour se manifester, au
-// palier minimal légal dans cette couleur.
-function decideRobotIntervention(hand, hl, seat, history) {
-    if (hl < 8) return 'PASS';
+// contre d'appel si la main s'y prête (voir échange avec Guillaume), sinon une couleur
+// solide (5+ cartes) et assez de points (HL, ajustés par vulnérabilité) pour un
+// contre-appel naturel, au palier minimal légal.
+function decideRobotIntervention(hand, hl, seat, history, dealVulnerable) {
     const lengths = suitLengths(hand);
+    const lastBid = getLastActualBid(history); // l'enchère adverse à laquelle on réagit
+
+    // Contre d'appel ("takeout") : main d'ouverture (12HL+), courte dans la couleur
+    // adverse (0-2 cartes), un support raisonnable dans les 3 autres — simplifié à "3
+    // cartes partout ailleurs, ou au moins 2 des 3 autres couleurs à 4+ cartes" plutôt que
+    // d'exiger un support parfait dans les 3. Ne s'applique qu'après une ouverture à la
+    // couleur (jamais après du SA adverse, un tout autre type de contre hors périmètre).
+    if (lastBid) {
+        const oppBid = parseBid(lastBid.call);
+        if (oppBid && oppBid.strain !== 'NT' && hl >= 12 && lengths[oppBid.strain] <= 2) {
+            const otherSuits = ['S', 'H', 'D', 'C'].filter(s => s !== oppBid.strain);
+            const has4Count = otherSuits.filter(s => lengths[s] >= 4).length;
+            const allAtLeast3 = otherSuits.every(s => lengths[s] >= 3);
+            if (allAtLeast3 || has4Count >= 2) {
+                const call = 'X';
+                if (isCallLegal(history, call, seat)) return call;
+            }
+        }
+    }
+
+    // Intervention naturelle : seuil resserré vulnérable (10HL) que non-vulnérable (8HL),
+    // même logique que pour les barrages (voir decideRobotOpening).
+    const threshold = isSeatVulnerable(seat, dealVulnerable) ? 10 : 8;
+    if (hl < threshold) return 'PASS';
     const suit = longestSuitPreferHigh(lengths);
     if (lengths[suit] < 5) return 'PASS';
 
     for (let level = 1; level <= 7; level++) {
         const call = level + suit;
         if (isCallLegal(history, call, seat)) return call;
+    }
+    return 'PASS';
+}
+
+// Décision de RÉPONSE au contre d'appel du PARTENAIRE : quasiment obligatoire (main
+// faible ou non), dans l'une des 3 couleurs non contrées — la plus longue chez soi.
+// Simplifié à un seul palier selon les points, sans vrai barème de saut ni main
+// "punitive" (laisser le contre en place avec une longue couleur adverse), hors périmètre.
+function decideRobotResponseToDouble(hand, hl, seat, history) {
+    const lengths = suitLengths(hand);
+    const doubleEntry = getLastNonPassCall(history); // le contre lui-même
+    const doubleIndex = history.indexOf(doubleEntry);
+    let doubledSuit = null;
+    for (let i = doubleIndex - 1; i >= 0; i--) {
+        if (isBidCall(history[i].call)) { doubledSuit = parseBid(history[i].call).strain; break; }
+    }
+    if (!doubledSuit || doubledSuit === 'NT') return 'PASS'; // sécurité, ne devrait pas arriver
+
+    const candidates = ['S', 'H', 'D', 'C'].filter(s => s !== doubledSuit);
+    const bestSuit = candidates.reduce((best, s) => (lengths[s] > lengths[best] ? s : best), candidates[0]);
+
+    // Réponse quasi obligatoire : palier 1 avec une main faible, palier 2 avec 10HL+
+    // (approximation grossière, pas un vrai barème de saut).
+    const startLevel = hl >= 10 ? 2 : 1;
+    for (let level = startLevel; level <= 7; level++) {
+        const call = level + bestSuit;
+        if (isCallLegal(history, call, seat)) return call;
+    }
+    // Filet : si la couleur préférée n'est jouable à aucun palier (ne devrait
+    // essentiellement jamais arriver), tente les deux autres avant d'abandonner.
+    for (const s of candidates) {
+        for (let level = 1; level <= 7; level++) {
+            const call = level + s;
+            if (isCallLegal(history, call, seat)) return call;
+        }
     }
     return 'PASS';
 }
@@ -2424,13 +2510,23 @@ function decideRobotCall(seat, deal, history) {
 
     let call = 'PASS';
     if (!hasBidBefore) {
-        const lastBid = getLastActualBid(history);
-        if (!lastBid) {
-            call = decideRobotOpening(hand, hcp, hl);
-        } else if (partnershipOf(lastBid.seat) === partnershipOf(seat)) {
-            call = decideRobotResponse(hand, hl, lastBid.call, seat, history);
+        // Le partenaire vient-il de contrer (dernière annonce non-passe, passes
+        // intercalés ignorés) ? Voir decideRobotResponseToDouble.
+        const lastNonPass = getLastNonPassCall(history);
+        const partnerJustDoubled = lastNonPass && isDouble(lastNonPass.call)
+            && partnershipOf(lastNonPass.seat) === partnershipOf(seat);
+
+        if (partnerJustDoubled) {
+            call = decideRobotResponseToDouble(hand, hl, seat, history);
         } else {
-            call = decideRobotIntervention(hand, hl, seat, history);
+            const lastBid = getLastActualBid(history);
+            if (!lastBid) {
+                call = decideRobotOpening(hand, hcp, hl, deal.vulnerable, seat);
+            } else if (partnershipOf(lastBid.seat) === partnershipOf(seat)) {
+                call = decideRobotResponse(hand, hl, lastBid.call, seat, history);
+            } else {
+                call = decideRobotIntervention(hand, hl, seat, history, deal.vulnerable);
+            }
         }
     }
 

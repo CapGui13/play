@@ -118,23 +118,32 @@ notamment sa fiche "Ouvertures", plutôt qu'une généralisation approximative :
   4+ cartes franche est montrée avant de soutenir la mineure (principe de base : chercher
   un fit à la majeure d'abord). Sinon, soutien si 3+ cartes dans sa couleur (palier 2 ou 3
   selon les points), sinon une nouvelle couleur à partir de 11HL (seuil SEF), sinon un
-  repli à SA à partir de 6HL. Réponse à 1SA/2SA : manche à 3SA (jamais 4SA — bug corrigé à
-  l'audit) dès 10HL après 1SA, ou seulement 4HL après 2SA (l'ouverture promet déjà
-  beaucoup plus de points).
-- **Intervention sur l'ouverture d'un adversaire** : à partir de 8HL et une couleur de 5+
-  cartes, au palier minimal légal.
+  repli à SA à partir de 6HL. Réponse à 1SA/2SA : manche directe à la majeure si 5+ cartes
+  franches (repérage simple du fit, pas un vrai Stayman/Texas), sinon 3SA (jamais 4SA —
+  bug corrigé à l'audit) dès 10HL après 1SA, ou seulement 4HL après 2SA (l'ouverture promet
+  déjà beaucoup plus de points).
+- **Intervention sur l'ouverture d'un adversaire** : **contre d'appel** si la main s'y
+  prête (12HL+, courte dans la couleur adverse — 0-2 cartes —, support raisonnable dans
+  les 3 autres), sinon une intervention naturelle (5+ cartes, HL ajusté par vulnérabilité —
+  voir plus bas), au palier minimal légal.
+- **Réponse au contre du partenaire** : quasi obligatoire, dans la meilleure des 3 couleurs
+  non contrées, au palier minimal légal (ou 2 avec 10HL+) — pas de main "punitive" (laisser
+  le contre en place), hors périmètre.
+- **Vulnérabilité** : barrages et interventions naturelles resserrés (seuil relevé de 8HL à
+  10HL) quand le camp du robot est vulnérable, plus agressifs sinon — comme le vrai SEF.
 - **Un seul tour de dialogue** : une fois qu'un robot a annoncé quelque chose dans une
   donne, il passe systématiquement ensuite — pas de rebid, pas de contre-annonce après une
   nouvelle enchère adverse.
-- **Jamais de contre ni de surcontre**, jamais de convention (Stayman, Blackwood, Roudi,
+- **Contre d'appel (takeout) seulement** — jamais de surcontre, jamais de contre de
+  pénalité, jamais de convention (Stayman, Blackwood, Roudi,
   Texas...), pas de 2♣ fort indéterminé ni de 2♦ forcing de manche (une main assez forte
   pour ça ouvre simplement au palier 1, faute d'implémenter tout un système de relais pour
   une main sur plusieurs centaines).
 
 Chaque annonce calculée est vérifiée par les mêmes règles de légalité que celles d'un
 joueur humain avant d'être jouée ; en cas de doute, le robot passe plutôt que de risquer
-une annonce invalide. Testé sur 2000 enchères complètes à 4 robots (donnes aléatoires) :
-zéro annonce illégale, zéro blocage.
+une annonce invalide. Testé sur 3000 enchères complètes à 4 robots (donnes aléatoires,
+tout le cycle donneur/vulnérabilité) : zéro annonce illégale, zéro blocage.
 
 **Bug important corrigé** (voir échange avec Guillaume, "les séquences s'arrêtent toujours
 trop tôt") : un simple passe initial (faute de points pour ouvrir — très fréquent) comptait
