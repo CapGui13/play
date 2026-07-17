@@ -2516,10 +2516,23 @@ function decideRobotResponse(hand, hcp, hl, partnerCall, seat, history, partnerP
     // Avec les DEUX majeures à 4 cartes, on annonce "économiquement" — Cœur (le moins
     // cher) d'abord, pas Pique — pour garder la main de montrer Pique ensuite si besoin
     // sans se fermer d'options (bug trouvé à l'audit, donne 6 : l'ordre était inversé).
-    if (hl >= 6 && partnerOpenedMinor) {
-        const major = ['H', 'S'].find(s => lengths[s] >= 4);
-        if (major) {
-            const call = '1' + major;
+    //
+    // Exception "points de manche" (voir échange avec Guillaume, donne 1) : cette priorité
+    // à la majeure ne vaut que pour une main limitée qui cherche un fit rapide en un seul
+    // tour. Avec 12+ (zone de manche connue, plusieurs tours possibles pour tout montrer)
+    // ET une couleur de 5+ cartes plus longue que la majeure trouvée, on montre la longue
+    // d'abord — plus informatif qu'une majeure 4ème qui ne dit rien sur la vraie forme.
+    const major4 = partnerOpenedMinor ? ['H', 'S'].find(s => lengths[s] >= 4) : null;
+    const longerSuit = hcp >= 12 && major4
+        ? ['S', 'H', 'D', 'C'].find(s => s !== suit && lengths[s] >= 5 && lengths[s] > lengths[major4])
+        : null;
+    if (hl >= 6 && partnerOpenedMinor && major4 && !longerSuit) {
+        const call = '1' + major4;
+        if (isCallLegal(history, call, seat)) return call;
+    }
+    if (longerSuit) {
+        for (let level = bid.level; level <= 7; level++) {
+            const call = level + longerSuit;
             if (isCallLegal(history, call, seat)) return call;
         }
     }
@@ -2688,10 +2701,34 @@ function decideResponderContinuationAfterNewSuit(hand, hcp, hl, openingBid, myRe
 // faible ou non), dans l'une des 3 couleurs non contrées — la plus longue chez soi.
 // Simplifié à un seul palier selon les points, sans vrai barème de saut ni main
 // "punitive" (laisser le contre en place avec une longue couleur adverse), hors périmètre.
-function decideRobotResponseToDouble(hand, hl, seat, history) {
+// Reçoit l'INDEX du contre dans l'historique plutôt que de le redériver via
+// getLastNonPassCall (voir échange avec Guillaume, donne 4) : si un adversaire a reparlé
+// depuis (ex. une surenchère après le contre), ce n'est plus la dernière annonce non-passe
+// de toute l'enchère — c'est l'appelant (decideRobotCall) qui a déjà fait cette recherche
+// correctement en remontant l'historique depuis mon propre camp.
+// Suite du CONTREUR d'appel après la réponse du partenaire (voir échange avec Guillaume,
+// donne 4) : avec de la réserve au-delà du minimum du contre (voir échange avec
+// Guillaume : 15H+, le contre lui-même promettait déjà 12H+) ET un fit pour la couleur
+// choisie par le partenaire (3+ cartes), on pousse directement à la manche plutôt que de
+// laisser filer un partiel — le partenaire a déjà répondu, rien d'autre à attendre de lui.
+function decideDoublerFollowUp(hand, hcp, hl, partnerResponseCall, seat, history) {
     const lengths = suitLengths(hand);
-    const doubleEntry = getLastNonPassCall(history); // le contre lui-même
-    const doubleIndex = history.indexOf(doubleEntry);
+    const responseBid = parseBid(partnerResponseCall);
+    if (!responseBid) return 'PASS'; // partenaire qui a lui-même contré/passé à ce stade : hors périmètre, filet de sécurité
+
+    if (hcp >= 15 && lengths[responseBid.strain] >= 3) {
+        const isMajor = responseBid.strain === 'S' || responseBid.strain === 'H';
+        const gameLevel = isMajor ? 4 : 5;
+        for (let level = Math.max(gameLevel, responseBid.level); level <= 7; level++) {
+            const call = level + responseBid.strain;
+            if (isCallLegal(history, call, seat)) return call;
+        }
+    }
+    return 'PASS';
+}
+
+function decideRobotResponseToDouble(hand, hcp, hl, doubleIndex, seat, history) {
+    const lengths = suitLengths(hand);
     let doubledSuit = null;
     for (let i = doubleIndex - 1; i >= 0; i--) {
         if (isBidCall(history[i].call)) { doubledSuit = parseBid(history[i].call).strain; break; }
@@ -2701,9 +2738,12 @@ function decideRobotResponseToDouble(hand, hl, seat, history) {
     const candidates = ['S', 'H', 'D', 'C'].filter(s => s !== doubledSuit);
     const bestSuit = candidates.reduce((best, s) => (lengths[s] > lengths[best] ? s : best), candidates[0]);
 
-    // Réponse quasi obligatoire : palier 1 avec une main faible, palier 2 avec 10HL+
-    // (approximation grossière, pas un vrai barème de saut).
-    const startLevel = hl >= 10 ? 2 : 1;
+    // Points de soutien (voir échange avec Guillaume, donne 4 : main de 8H comptée à 10
+    // avec la courte) plutôt que HL brut — le contre du partenaire ne garantit pas de
+    // longueur précise dans la couleur choisie, on prend 3 cartes comme minimum par
+    // défaut (cohérent avec le reste du moteur pour une ouverture à la mineure).
+    const supportPoints = computeSupportPoints(hand, bestSuit, 3);
+    const startLevel = supportPoints >= 10 ? 2 : 1;
     for (let level = startLevel; level <= 7; level++) {
         const call = level + bestSuit;
         if (isCallLegal(history, call, seat)) return call;
@@ -2738,6 +2778,29 @@ function isExactly5332(lengths) {
 function decideOpenerRebidAfterNewSuit(hand, hcp, hl, myBid, partnerParsed, seat, history) {
     const lengths = suitLengths(hand);
 
+    // Fit pour la couleur du partenaire (voir échange avec Guillaume, donnes 5 et 7) :
+    // priorité ABSOLUE sur toute idée de montrer une 2e couleur perso, mais seulement à
+    // partir de 4 cartes chez moi — une réponse en changement de couleur ne garantit que
+    // 4+ chez le partenaire (jamais 5+, contrairement à une ouverture à la majeure), donc
+    // il faut mes 4+ pour atteindre un vrai fit de 8 cartes ; avec seulement 3, ce n'est
+    // pas un fit exploitable (voir donne 5 : bug trouvé en corrigeant donne 7 — Nord n'a
+    // que 3 cœurs là-bas, la main mérite de montrer sa propre 2e couleur à la place).
+    // Mêmes zones que pour les ouvertures : 12-14H = soutien simple (palier minimal
+    // légal) ; 15-17H = invite (palier 3) ; 18H+ = manche directe (palier 4 pour une
+    // majeure, 5 pour une mineure).
+    if (lengths[partnerParsed.strain] >= 4) {
+        const fitSuit = partnerParsed.strain;
+        const isMajorFit = fitSuit === 'S' || fitSuit === 'H';
+        let targetLevel = partnerParsed.level;
+        if (hcp >= 18) targetLevel = isMajorFit ? 4 : 5;
+        else if (hcp >= 15) targetLevel = 3;
+
+        for (let level = Math.max(targetLevel, partnerParsed.level); level <= 7; level++) {
+            const call = level + fitSuit;
+            if (isCallLegal(history, call, seat)) return call;
+        }
+    }
+
     if (hcp >= 15 && isExactly5332(lengths)) {
         const call = '2NT';
         if (isCallLegal(history, call, seat)) return call;
@@ -2751,7 +2814,7 @@ function decideOpenerRebidAfterNewSuit(hand, hcp, hl, myBid, partnerParsed, seat
     // distinction n'est pas juste "couleur plus chère", mais bien "faut-il le palier 2
     // pour la montrer" — un bicolore économique au palier 1, comme 1♣ puis 1♠, n'est
     // JAMAIS un reverse, quel que soit le rang des couleurs).
-    const candidates = ['S', 'H', 'D', 'C'].filter(s => s !== myBid.strain && lengths[s] >= 4);
+    const candidates = ['S', 'H', 'D', 'C'].filter(s => s !== myBid.strain && s !== partnerParsed.strain && lengths[s] >= 4);
     let secondSuit = null;
     let secondSuitLevel = null;
     for (const s of candidates) {
@@ -2956,14 +3019,19 @@ function decideRobotCall(seat, deal, history) {
     let explanation = '';
 
     if (myBids.length === 0) {
-        // Le partenaire vient-il de contrer (dernière annonce non-passe, passes
-        // intercalés ignorés) ? Voir decideRobotResponseToDouble.
-        const lastNonPass = getLastNonPassCall(history);
-        const partnerJustDoubled = lastNonPass && isDouble(lastNonPass.call)
-            && partnershipOf(lastNonPass.seat) === partnershipOf(seat);
+        // Cherche la dernière action RÉELLE (annonce ou contre) de MON PROPRE camp, en
+        // remontant l'historique — pas seulement la toute dernière de l'enchère (voir
+        // échange avec Guillaume, donne 4) : un adversaire qui reparle après le contre du
+        // partenaire "libère" formellement de l'obligation de répondre, mais n'empêche pas
+        // de le faire si la main le justifie (ici, Sud a un fit et doit répondre quand
+        // même). Cette même recherche gère aussi bids ET contre uniformément.
+        const myPartnerLastAction = history.slice().reverse()
+            .find(e => partnershipOf(e.seat) === partnershipOf(seat) && !isPass(e.call));
+        const partnerJustDoubled = myPartnerLastAction && isDouble(myPartnerLastAction.call);
 
         if (partnerJustDoubled) {
-            call = decideRobotResponseToDouble(hand, hl, seat, history);
+            const doubleIndex = history.indexOf(myPartnerLastAction);
+            call = decideRobotResponseToDouble(hand, hcp, hl, doubleIndex, seat, history);
             explanation = `Réponse au contre du partenaire (${points})`;
         } else {
             const lastBid = getLastActualBid(history);
@@ -3031,6 +3099,16 @@ function decideRobotCall(seat, deal, history) {
                 .some(e => isBidCall(e.call) && partnershipOf(e.seat) !== partnershipOf(seat));
             call = decideRobotOpenerRebid(hand, hcp, hl, myBids[0].call, myPartnerBid.call, seat, history, opponentInterveningAfterPartner);
             explanation = `Rebid de l'ouvreur après ${formatCallForDisplay(myPartnerBid.call)} du partenaire (${points})`;
+        } else if (isDouble(myBids[0].call) && myPartnerBid) {
+            // Ma seule annonce précédente était un CONTRE (d'appel) — voir échange avec
+            // Guillaume, donne 4 : ce n'est ni une ouverture ni une réponse, la logique de
+            // suite du répondant plus bas ne s'y applique pas du tout (elle tenterait de
+            // parser mon contre comme une annonce chiffrée, échouerait silencieusement et
+            // me ferait passer à tort). Voir decideDoublerFollowUp : avec de la réserve
+            // au-delà du minimum du contre et un fit pour la couleur choisie par le
+            // partenaire, on pousse à la manche.
+            call = decideDoublerFollowUp(hand, hcp, hl, myPartnerBid.call, seat, history);
+            explanation = `Suite après contre, réponse ${formatCallForDisplay(myPartnerBid.call)} du partenaire (${points})`;
         } else if (!wasOpening && myPartnerBid) {
             // Suis-je dans une séquence où je sais être en zone de manche (voir échange
             // avec Guillaume) ? Il faut que MA première annonce ait été une réponse en

@@ -279,6 +279,27 @@ manche dans la couleur du partenaire ; sinon il répète sa propre couleur. Logi
 aux ouvertures de barrage (palier 2+), distincte de la logique des ouvertures naturelles
 au palier 1.
 
+## Nouvelle relecture de session (voir échange avec Guillaume)
+
+Trois corrections supplémentaires, chacune trouvée en creusant au-delà du symptôme initial :
+
+- **Longue avant majeure 4ème en zone de manche** : la priorité "majeure avant tout" ne
+  vaut que pour une main limitée qui cherche un fit rapide en un seul tour. Avec 12+
+  (zone de manche connue, plusieurs tours possibles) et une couleur de 5+ cartes plus
+  longue que la majeure trouvée, on montre la longue d'abord — plus informatif qu'une
+  majeure 4ème qui ne dit rien sur la vraie forme de la main.
+- **Le fit prime sur une 2e couleur perso** : au rebid de l'ouvreur après une réponse en
+  changement de couleur, indiquer qu'on est fitté (4+ cartes chez soi pour la couleur du
+  partenaire — un simple 3 ne suffit pas, une réponse ne garantissant que 4+ chez le
+  partenaire) passe avant de chercher à montrer sa propre 2e couleur. Mêmes zones que les
+  ouvertures : 12-14H soutien simple, 15-17H invite, 18H+ manche directe.
+- **Réponse au contre malgré une intervention adverse, et suite du contreur** : comme pour
+  les enchères normales, répondre au contre d'appel du partenaire reste possible même si
+  un adversaire a reparlé depuis (ça "libère" formellement l'obligation, sans l'empêcher).
+  Ajout de la suite du CONTREUR lui-même : avec de la réserve au-delà du minimum du contre
+  (15H+) et un fit pour la couleur choisie par le partenaire, il pousse directement à la
+  manche plutôt que de laisser filer un partiel.
+
 ## Corrections issues d'une relecture de session (voir échange avec Guillaume)
 
 Après une session de test, Guillaume a exporté le fichier et relu chaque donne en détail
