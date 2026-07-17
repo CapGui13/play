@@ -2077,7 +2077,7 @@ function handlePeerData(msg, guestIndex) {
                 console.warn('Annonce reçue invalide, ignorée :', msg);
                 return;
             }
-            applyCall(msg.seat, msg.call);
+            applyCall(msg.seat, msg.call, msg.explanation);
             relayIfHost(msg, guestIndex);
             break;
         }
@@ -2641,11 +2641,19 @@ function decideRobotOpenerRebid(hand, hcp, hl, myOpeningCall, seat, history) {
     return 'PASS';
 }
 
-// Point d'entrée unique : détermine l'annonce d'un robot pour son tour actuel. Toujours
-// validée par isCallLegal juste avant d'être renvoyée (filet de sécurité ultime) — un
-// robot ne doit JAMAIS produire une annonce illégale, quitte à se rabattre sur passe si le
-// calcul ci-dessus a un trou quelque part ; un blocage de la partie serait bien pire qu'un
-// robot un peu trop passif.
+// Point d'entrée unique : détermine l'annonce d'un robot pour son tour actuel, ET une
+// courte explication lisible de pourquoi (voir échange avec Guillaume — outil de
+// diagnostic, affiché dans le relevé d'enchères au tap/survol sur les annonces jouées par
+// un robot). Toujours validée par isCallLegal juste avant d'être renvoyée (filet de
+// sécurité ultime) — un robot ne doit JAMAIS produire une annonce illégale, quitte à se
+// rabattre sur passe si le calcul ci-dessus a un trou quelque part ; un blocage de la
+// partie serait bien pire qu'un robot un peu trop passif.
+//
+// L'explication reste volontairement globale (quelle branche a été prise, H/HL calculés,
+// contexte) plutôt que de tracer précisément quel palier exact de chaque échelle interne
+// a été choisi (aurait demandé de faire remonter une raison depuis chacune des fonctions
+// internes — un chantier bien plus lourd pour un gain marginal, les chiffres H/HL affichés
+// suffisant déjà à comprendre l'essentiel d'une décision qui paraît bizarre).
 //
 // Note sur le rebid (voir échange avec Guillaume) : un ouvreur peut désormais reparler
 // UNE FOIS s'il a une main très forte (18HL+) et que le partenaire vient de répondre —
@@ -2659,8 +2667,11 @@ function decideRobotCall(seat, deal, history) {
     const hcp = computeHandHcp(hand);
     const hl = computeHandHL(hand);
     const myBids = history.filter(entry => entry.seat === seat && !isPass(entry.call));
+    const points = `${hcp}H / ${hl}HL`;
 
     let call = 'PASS';
+    let explanation = '';
+
     if (myBids.length === 0) {
         // Le partenaire vient-il de contrer (dernière annonce non-passe, passes
         // intercalés ignorés) ? Voir decideRobotResponseToDouble.
@@ -2670,10 +2681,12 @@ function decideRobotCall(seat, deal, history) {
 
         if (partnerJustDoubled) {
             call = decideRobotResponseToDouble(hand, hl, seat, history);
+            explanation = `Réponse au contre du partenaire (${points})`;
         } else {
             const lastBid = getLastActualBid(history);
             if (!lastBid) {
                 call = decideRobotOpening(hand, hcp, hl, deal.vulnerable, seat);
+                explanation = `Ouverture (${points})`;
             } else if (partnershipOf(lastBid.seat) === partnershipOf(seat)) {
                 // Voir échange avec Guillaume (règle du fit) : le partenaire a-t-il
                 // PROMIS 5+ cartes dans sa couleur ? Toujours vrai pour une ouverture à
@@ -2690,8 +2703,10 @@ function decideRobotCall(seat, deal, history) {
                     .some(e => isBidCall(e.call) && partnershipOf(e.seat) !== partnershipOf(seat));
                 const partnerPromises5Plus = isMajorSuit || wasIntervention;
                 call = decideRobotResponse(hand, hcp, hl, lastBid.call, seat, history, partnerPromises5Plus);
+                explanation = `Réponse à ${formatCallForDisplay(lastBid.call)} du partenaire (${points}, fit ${suitLengths(hand)[partnerBidInfo.strain] || 0}${partnerBidInfo.strain !== 'NT' ? ' carte(s) à ' + STRAIN_SYMBOL[partnerBidInfo.strain] : ''})`;
             } else {
                 call = decideRobotIntervention(hand, hcp, hl, seat, history, deal.vulnerable);
+                explanation = `Intervention sur ${formatCallForDisplay(lastBid.call)} adverse (${points})`;
             }
         }
     } else if (myBids.length === 1) {
@@ -2707,11 +2722,19 @@ function decideRobotCall(seat, deal, history) {
 
         if (wasOpening && partnerJustResponded) {
             call = decideRobotOpenerRebid(hand, hcp, hl, myBids[0].call, seat, history);
+            explanation = `Rebid de l'ouvreur après ${formatCallForDisplay(lastBid.call)} du partenaire (${points})`;
+        } else {
+            explanation = `A déjà annoncé — passe (règle du tour unique)`;
         }
+    } else {
+        explanation = `A déjà annoncé ${myBids.length} fois — passe (règle du tour unique)`;
     }
 
-    if (call !== 'PASS' && !isCallLegal(history, call, seat)) call = 'PASS';
-    return call;
+    if (call !== 'PASS' && !isCallLegal(history, call, seat)) {
+        explanation += ' — annonce calculée invalide, repli sur passe';
+        call = 'PASS';
+    }
+    return { call, explanation };
 }
 
 // ===== Enchères automatiques des robots (sièges non assignés) =====
@@ -2737,9 +2760,9 @@ function maybeRobotBid() {
         const stillTurnSeat = currentTurnSeat(currentDeal().dealer, auctionHistory);
         if (stillTurnSeat !== turnSeat) return;
 
-        const call = decideRobotCall(turnSeat, currentDeal(), auctionHistory);
-        applyCall(turnSeat, call);
-        peerConn.send({ type: 'call', boardIndex, seat: turnSeat, call });
+        const { call, explanation } = decideRobotCall(turnSeat, currentDeal(), auctionHistory);
+        applyCall(turnSeat, call, explanation);
+        peerConn.send({ type: 'call', boardIndex, seat: turnSeat, call, explanation });
     }, 300);
 }
 
@@ -3061,8 +3084,6 @@ function playWizzSound() {
 }
 
 // Petit bandeau temporaire en haut de l'écran, plutôt qu'une alert() bloquante — cohérent
-// avec le ton léger de la fonctionnalité.
-// Petit bandeau temporaire en haut de l'écran, plutôt qu'une alert() bloquante — cohérent
 // avec le ton léger de la fonctionnalité. Interpelle la personne wizzée par son propre
 // pseudo (voir échange avec Guillaume), pas par celui de l'expéditeur.
 function flashWizzToast() {
@@ -3081,6 +3102,30 @@ function flashWizzToast() {
     toast.classList.add('visible');
     clearTimeout(toast._hideTimer);
     toast._hideTimer = setTimeout(() => toast.classList.remove('visible'), 2200);
+}
+
+// Outil de diagnostic (voir échange avec Guillaume) : affiche pourquoi un robot a fait
+// telle annonce (H/HL calculés, branche de décision) — tap sur une case d'enchère jouée
+// par un robot dans le relevé (voir formatCallCellHtml, qui pose l'attribut
+// data-explanation). Même mécanique de bandeau que le wizz, en plus long (texte
+// explicatif, pas juste une alerte) et réutilisable sur desktop comme sur mobile — pas de
+// tooltip pur (title) seul, qui ne fonctionne pas au tap sur tactile.
+function uiShowCallExplanation(el) {
+    const text = el.getAttribute('data-explanation');
+    if (!text) return;
+    let toast = document.getElementById('callExplanationToast');
+    if (!toast) {
+        toast = document.createElement('div');
+        toast.id = 'callExplanationToast';
+        toast.className = 'call-explanation-toast';
+        document.body.appendChild(toast);
+    }
+    toast.textContent = `🤖 ${text}`;
+    toast.classList.remove('visible');
+    void toast.offsetWidth;
+    toast.classList.add('visible');
+    clearTimeout(toast._hideTimer);
+    toast._hideTimer = setTimeout(() => toast.classList.remove('visible'), 3500);
 }
 
 function renderRoomBoard() {
@@ -3185,12 +3230,21 @@ function renderMyHands() {
 // Rendu coloré d'une annonce en dehors de la boîte d'enchères (relevé, contrat final) :
 // même logique de classe de couleur que les boutons (SUIT_CLASSES), avec l'icône de
 // couleur à la place du caractère Unicode brut (voir formatStrainLabel/suitIconHtml).
-function formatCallCellHtml(call) {
+// Accepte soit une chaîne d'annonce brute (Passe/X/1SA...), soit une entrée complète de
+// l'historique ({seat, call, explanation?}) — voir échange avec Guillaume, outil de
+// diagnostic : une annonce jouée par un robot porte une explication (voir decideRobotCall)
+// affichée au tap (petit point discret ajouté à la case, voir styles.css).
+function formatCallCellHtml(entry) {
+    const call = (typeof entry === 'string') ? entry : entry.call;
+    const explanation = (typeof entry === 'string') ? null : entry.explanation;
+
     const b = parseBid(call);
-    if (!b) return escapeHtml(formatCallForDisplay(call)); // Passe / X / XX : pas de couleur de suite
-    const cls = SUIT_CLASSES[b.strain] || 'notrump';
-    const label = formatStrainLabel(b.strain);
-    return `<span class="call-suit ${cls}">${b.level}${label}</span>`;
+    const inner = !b
+        ? escapeHtml(formatCallForDisplay(call)) // Passe / X / XX : pas de couleur de suite
+        : `<span class="call-suit ${SUIT_CLASSES[b.strain] || 'notrump'}">${b.level}${formatStrainLabel(b.strain)}</span>`;
+
+    if (!explanation) return inner;
+    return `<span class="call-with-explanation" tabindex="0" data-explanation="${escapeHtml(explanation)}" onclick="uiShowCallExplanation(this)">${inner}<span class="call-explain-dot" aria-hidden="true"></span></span>`;
 }
 
 // Libellé affiché dans l'en-tête du tableau d'enchères pour un siège donné : soit
@@ -3224,7 +3278,7 @@ function renderAuctionLedger() {
 
     const dealerIdx = SEATS.indexOf(deal.dealer);
     const slots = new Array(dealerIdx).fill('');
-    auctionHistory.forEach(entry => slots.push(formatCallCellHtml(entry.call)));
+    auctionHistory.forEach(entry => slots.push(formatCallCellHtml(entry)));
     // Index de la toute dernière enchère jouée (pas juste la dernière case du tableau,
     // qui peut être vide en fin de ligne) : sert à lui appliquer un bref flash visuel à
     // chaque nouvelle annonce, pour la repérer d'un coup d'œil sans avoir à la chercher
@@ -3311,8 +3365,8 @@ function uiMakeCall(call) {
     peerConn.send({ type: 'call', boardIndex, seat: turnSeat, call });
 }
 
-function applyCall(seat, call) {
-    auctionHistory.push({ seat, call });
+function applyCall(seat, call, explanation) {
+    auctionHistory.push(explanation ? { seat, call, explanation } : { seat, call });
     renderAuctionLedger();
     renderBiddingBox();
     renderMyHands();

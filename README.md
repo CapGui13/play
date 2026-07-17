@@ -99,6 +99,11 @@ Aucune clé, aucun compte externe à configurer : tout fonctionne dès la mise e
 
 ## Enchères automatiques des robots
 
+**Outil de diagnostic** : chaque annonce jouée par un robot est tapable dans le relevé
+d'enchères (petit point discret sur la case) et affiche pourquoi elle a été choisie
+(points H/HL calculés, branche de décision, contexte) — pratique pour repérer directement
+un seuil à corriger plutôt que de décortiquer une capture d'écran.
+
 Un siège laissé sur "— (robot)" n'ouvre plus systématiquement passe : il applique un moteur
 d'enchères volontairement simplifié plutôt qu'un vrai simulateur (hors de portée
 raisonnable pour ce projet — même les logiciels commerciaux s'y cassent régulièrement les

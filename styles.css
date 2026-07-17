@@ -1910,6 +1910,55 @@ body.wizz-shake {
     transform: translateX(-50%) translateY(0);
 }
 
+/* Bandeau du même type pour l'outil de diagnostic (voir uiShowCallExplanation dans
+   app.js) — texte plus long qu'un wizz (H/HL, contexte), donc pas de nowrap : autorise le
+   retour à la ligne avec une largeur maximale raisonnable, y compris sur mobile. */
+.call-explanation-toast {
+    position: fixed;
+    top: 14px;
+    left: 50%;
+    transform: translateX(-50%) translateY(-20px);
+    background: var(--brass-bright);
+    color: var(--ink);
+    font-weight: 600;
+    font-size: 0.85rem;
+    line-height: 1.3;
+    padding: 10px 16px;
+    border-radius: 12px;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+    z-index: 500;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s ease, transform 0.2s ease;
+    max-width: min(92vw, 420px);
+    text-align: center;
+    white-space: normal;
+}
+
+.call-explanation-toast.visible {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+}
+
+/* Case d'enchère jouée par un robot (voir formatCallCellHtml dans app.js) : tapable, un
+   petit point discret signale qu'une explication est disponible sans alourdir le relevé
+   pour les annonces humaines (qui n'ont pas cet attribut). */
+.call-with-explanation {
+    position: relative;
+    cursor: pointer;
+    display: inline-block;
+}
+
+.call-explain-dot {
+    position: absolute;
+    top: -2px;
+    right: -6px;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--brass-bright);
+}
+
 .room-board-kibbitz {
     display: flex;
     align-items: center;
