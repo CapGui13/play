@@ -2333,8 +2333,10 @@ function decideRobotOpening(hand, hcp, hl, dealVulnerable, seat) {
 }
 
 // Décision de RÉPONSE à une annonce du PARTENAIRE (sa dernière annonce chiffrée est aussi
-// la dernière de toute l'enchère, sans intervention adverse entre les deux).
-function decideRobotResponse(hand, hl, partnerCall, seat, history) {
+// la dernière de toute l'enchère, sans intervention adverse entre les deux). `hcp` et
+// `partnerPromises5Plus` sont utilisés uniquement pour le soutien (voir plus bas) — voir
+// échange avec Guillaume.
+function decideRobotResponse(hand, hcp, hl, partnerCall, seat, history, partnerPromises5Plus) {
     const lengths = suitLengths(hand);
     const bid = parseBid(partnerCall);
 
@@ -2376,9 +2378,15 @@ function decideRobotResponse(hand, hl, partnerCall, seat, history) {
         }
     }
 
-    // Soutien si fit (3+ cartes dans la couleur du partenaire) : au palier 2 avec peu de
-    // points, au palier 3 (invite) avec une belle main — simplifié à ces deux paliers.
-    if (lengths[suit] >= 3 && hl >= 6) {
+    // Soutien si fit : un fit, c'est 8 cartes à eux deux (voir échange avec Guillaume —
+    // 5+3, pas 5+2), donc 3+ cartes dans TOUS les cas. Seul le seuil de points change
+    // selon ce que le partenaire a PROMIS : 6H (en H purs) quand il a garanti 5+ cartes
+    // (ouverture à la majeure, toujours 5+ dans ce système "majeure 5ème" ; ou n'importe
+    // quelle intervention, qui exige aussi 5+ cartes — voir decideRobotIntervention) ;
+    // sinon (ouverture à la mineure, qui peut n'avoir que 3 cartes dans ce même système)
+    // 6HL, plus prudent puisque le fit lui-même est moins garanti.
+    const minFitPoints = partnerPromises5Plus ? hcp : hl;
+    if (lengths[suit] >= 3 && minFitPoints >= 6) {
         const raiseLevel = bid.level + (hl >= 10 ? 2 : 1);
         const call = raiseLevel + suit;
         if (isCallLegal(history, call, seat)) return call;
@@ -2411,7 +2419,7 @@ function decideRobotResponse(hand, hl, partnerCall, seat, history) {
 // contre d'appel si la main s'y prête (voir échange avec Guillaume), sinon une couleur
 // solide (5+ cartes) et assez de points (HL, ajustés par vulnérabilité) pour un
 // contre-appel naturel, au palier minimal légal.
-function decideRobotIntervention(hand, hl, seat, history, dealVulnerable) {
+function decideRobotIntervention(hand, hcp, hl, seat, history, dealVulnerable) {
     const lengths = suitLengths(hand);
     const lastBid = getLastActualBid(history); // l'enchère adverse à laquelle on réagit
 
@@ -2440,11 +2448,22 @@ function decideRobotIntervention(hand, hl, seat, history, dealVulnerable) {
     const suit = longestSuitPreferHigh(lengths);
     if (lengths[suit] < 5) return 'PASS';
 
+    // Cherche le palier minimal légal dans cette couleur, sans encore décider si on s'y
+    // engage (voir le contrôle du palier 2+ juste après).
+    let chosenLevel = null;
     for (let level = 1; level <= 7; level++) {
         const call = level + suit;
-        if (isCallLegal(history, call, seat)) return call;
+        if (isCallLegal(history, call, seat)) { chosenLevel = level; break; }
     }
-    return 'PASS';
+    if (chosenLevel === null) return 'PASS';
+
+    // Voir échange avec Guillaume : une intervention forcée au palier 2 (ou plus, ex.
+    // après plusieurs enchères adverses) exige davantage qu'au palier 1 — 12H en H purs
+    // (pas HL) et une couleur plus longue (6+ cartes) — sinon on s'abstient plutôt que de
+    // s'engager trop haut sur une main ou une couleur insuffisante.
+    if (chosenLevel >= 2 && (hcp < 12 || lengths[suit] < 6)) return 'PASS';
+
+    return chosenLevel + suit;
 }
 
 // Décision de RÉPONSE au contre d'appel du PARTENAIRE : quasiment obligatoire (main
@@ -2523,9 +2542,23 @@ function decideRobotCall(seat, deal, history) {
             if (!lastBid) {
                 call = decideRobotOpening(hand, hcp, hl, deal.vulnerable, seat);
             } else if (partnershipOf(lastBid.seat) === partnershipOf(seat)) {
-                call = decideRobotResponse(hand, hl, lastBid.call, seat, history);
+                // Voir échange avec Guillaume (règle du fit) : le partenaire a-t-il
+                // PROMIS 5+ cartes dans sa couleur ? Toujours vrai pour une ouverture à
+                // la majeure (système "majeure 5ème") ; toujours vrai aussi pour une
+                // intervention (voir decideRobotIntervention, qui exige 5+ cartes) —
+                // jamais garanti pour une ouverture à la mineure, qui peut n'avoir que 3
+                // cartes ("meilleure mineure"). Une intervention se reconnaît au fait
+                // qu'un adversaire avait déjà annoncé quelque chose avant cette annonce du
+                // partenaire.
+                const partnerBidInfo = parseBid(lastBid.call);
+                const isMajorSuit = partnerBidInfo && (partnerBidInfo.strain === 'S' || partnerBidInfo.strain === 'H');
+                const bidIndex = history.indexOf(lastBid);
+                const wasIntervention = history.slice(0, bidIndex)
+                    .some(e => isBidCall(e.call) && partnershipOf(e.seat) !== partnershipOf(seat));
+                const partnerPromises5Plus = isMajorSuit || wasIntervention;
+                call = decideRobotResponse(hand, hcp, hl, lastBid.call, seat, history, partnerPromises5Plus);
             } else {
-                call = decideRobotIntervention(hand, hl, seat, history, deal.vulnerable);
+                call = decideRobotIntervention(hand, hcp, hl, seat, history, deal.vulnerable);
             }
         }
     }

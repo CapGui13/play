@@ -116,16 +116,22 @@ notamment sa fiche "Ouvertures", plutôt qu'une généralisation approximative :
   mineures sans majeure 5e qui ouvre toujours du ♣). Passe en dessous de 12HL.
 - **Réponse à l'ouverture du partenaire** : après une ouverture à la mineure, une majeure
   4+ cartes franche est montrée avant de soutenir la mineure (principe de base : chercher
-  un fit à la majeure d'abord). Sinon, soutien si 3+ cartes dans sa couleur (palier 2 ou 3
-  selon les points), sinon une nouvelle couleur à partir de 11HL (seuil SEF), sinon un
-  repli à SA à partir de 6HL. Réponse à 1SA/2SA : manche directe à la majeure si 5+ cartes
-  franches (repérage simple du fit, pas un vrai Stayman/Texas), sinon 3SA (jamais 4SA —
-  bug corrigé à l'audit) dès 10HL après 1SA, ou seulement 4HL après 2SA (l'ouverture promet
-  déjà beaucoup plus de points).
+  un fit à la majeure d'abord). Sinon, soutien avec 3+ cartes dans sa couleur (un fit,
+  c'est 8 cartes à eux deux) — seul le seuil de points change selon ce que le partenaire a
+  **promis** : 6H (en H purs) quand il a garanti 5+ cartes (ouverture à la majeure, ou
+  intervention — voir plus bas), sinon 6HL (ouverture à la mineure, qui peut n'avoir que 3
+  cartes). Palier 2 avec peu de points, palier 3 (invite) avec une belle main. Au-delà,
+  une nouvelle couleur à partir de 11HL (seuil SEF), sinon un repli à SA à partir de 6HL.
+  Réponse à 1SA/2SA : manche directe à la majeure si 5+ cartes franches (repérage simple
+  du fit, pas un vrai Stayman/Texas), sinon 3SA (jamais 4SA — bug corrigé à l'audit) dès
+  10HL après 1SA, ou seulement 4HL après 2SA (l'ouverture promet déjà beaucoup plus de
+  points).
 - **Intervention sur l'ouverture d'un adversaire** : **contre d'appel** si la main s'y
   prête (12HL+, courte dans la couleur adverse — 0-2 cartes —, support raisonnable dans
   les 3 autres), sinon une intervention naturelle (5+ cartes, HL ajusté par vulnérabilité —
-  voir plus bas), au palier minimal légal.
+  voir plus bas), au palier minimal légal — avec une barre plus haute (12H en H purs, 6+
+  cartes) si ce palier minimal est 2 ou plus : un contre-appel forcé au-delà du palier 1
+  exige davantage qu'un simple palier 1.
 - **Réponse au contre du partenaire** : quasi obligatoire, dans la meilleure des 3 couleurs
   non contrées, au palier minimal légal (ou 2 avec 10HL+) — pas de main "punitive" (laisser
   le contre en place), hors périmètre.
