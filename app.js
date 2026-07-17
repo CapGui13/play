@@ -2415,10 +2415,15 @@ function decideRobotCall(seat, deal, history) {
     const hand = deal.hands[seat];
     const hcp = computeHandHcp(hand);
     const hl = computeHandHL(hand);
-    const hasSpokenBefore = history.some(entry => entry.seat === seat);
+    // Bug trouvé à l'audit (voir échange avec Guillaume) : un simple passe initial (faute
+    // de points pour ouvrir) ne doit PAS compter comme "avoir déjà parlé" — sinon un
+    // joueur qui passe en position d'ouverture (très fréquent) devient muet pour le reste
+    // de la donne, incapable de répondre normalement à son partenaire plus tard. Seule une
+    // VRAIE annonce (pas un passe) épuise le tour unique de dialogue.
+    const hasBidBefore = history.some(entry => entry.seat === seat && !isPass(entry.call));
 
     let call = 'PASS';
-    if (!hasSpokenBefore) {
+    if (!hasBidBefore) {
         const lastBid = getLastActualBid(history);
         if (!lastBid) {
             call = decideRobotOpening(hand, hcp, hl);

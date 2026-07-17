@@ -133,8 +133,14 @@ notamment sa fiche "Ouvertures", plutôt qu'une généralisation approximative :
 
 Chaque annonce calculée est vérifiée par les mêmes règles de légalité que celles d'un
 joueur humain avant d'être jouée ; en cas de doute, le robot passe plutôt que de risquer
-une annonce invalide. Testé sur 1000 enchères complètes à 4 robots (donnes aléatoires) :
+une annonce invalide. Testé sur 2000 enchères complètes à 4 robots (donnes aléatoires) :
 zéro annonce illégale, zéro blocage.
+
+**Bug important corrigé** (voir échange avec Guillaume, "les séquences s'arrêtent toujours
+trop tôt") : un simple passe initial (faute de points pour ouvrir — très fréquent) comptait
+à tort comme "avoir déjà parlé", rendant ce joueur muet pour le reste de la donne, incapable
+de répondre normalement à son partenaire plus tard. Seule une vraie annonce (pas un passe)
+épuise désormais le tour unique de dialogue.
 
 ## Limites connues
 
