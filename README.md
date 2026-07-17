@@ -116,16 +116,34 @@ notamment sa fiche "Ouvertures", plutôt qu'une généralisation approximative :
   mineures sans majeure 5e qui ouvre toujours du ♣). Passe en dessous de 12HL.
 - **Réponse à l'ouverture du partenaire** : après une ouverture à la mineure, une majeure
   4+ cartes franche est montrée avant de soutenir la mineure (principe de base : chercher
-  un fit à la majeure d'abord). Sinon, soutien avec 3+ cartes dans sa couleur (un fit,
-  c'est 8 cartes à eux deux) — seul le seuil de points change selon ce que le partenaire a
-  **promis** : 6H (en H purs) quand il a garanti 5+ cartes (ouverture à la majeure, ou
-  intervention — voir plus bas), sinon 6HL (ouverture à la mineure, qui peut n'avoir que 3
-  cartes). Palier 2 avec peu de points, palier 3 (invite) avec une belle main. Au-delà,
-  une nouvelle couleur à partir de 11HL (seuil SEF), sinon un repli à SA à partir de 6HL.
-  Réponse à 1SA/2SA : manche directe à la majeure si 5+ cartes franches (repérage simple
-  du fit, pas un vrai Stayman/Texas), sinon 3SA (jamais 4SA — bug corrigé à l'audit) dès
-  10HL après 1SA, ou seulement 4HL après 2SA (l'ouverture promet déjà beaucoup plus de
-  points).
+  un fit à la majeure d'abord). **Soutien à une majeure** : échelle complète des soutiens
+  directs, reprise du document SEF "L'expression des soutiens majeurs" (Christian Maury,
+  FFB) que Guillaume a fourni :
+  - 6-10HLD, fit 3 ou 4 cartes → soutien simple au palier 2
+  - 11-12HLD, fit exactement 3 cartes → 2SA conventionnel (ne promet pas une main
+    régulière)
+  - 11-12HLD, fit 4+ cartes → soutien au palier 3, non-forcing
+  - 13-15HLD, sans aucun singleton → 3SA fitté
+  - 13-15HLD avec une courte (singleton/chicane) et 4+ atouts → splinter (saut double
+    dans la couleur courte)
+  - Barrage (5+ atouts, une courte, main faible en H) → saut direct à la manche,
+    indépendamment du seuil habituel de points (loi des levées totales)
+
+  **Soutien à une mineure** : logique plus simple (3+ cartes, un fit c'est 8 cartes à eux
+  deux) — 6H si le partenaire a promis 5+ cartes (via une intervention, jamais via une
+  ouverture à la mineure elle-même), sinon 6HL. Au-delà, une nouvelle couleur à partir de
+  11HL (seuil SEF), sinon un repli à SA à partir de 6HL. Réponse à 1SA/2SA : manche
+  directe à la majeure si 5+ cartes franches (repérage simple du fit, pas un vrai
+  Stayman/Texas), sinon 3SA (jamais 4SA — bug corrigé à l'audit) dès 10HL après 1SA, ou
+  seulement 4HL après 2SA (l'ouverture promet déjà beaucoup plus de points).
+- **Rebid de l'ouvreur** (voir échange avec Guillaume) : une main d'ouverture nettement
+  excédentaire (18HL+) peut reparler UNE FOIS après la réponse du partenaire, pour éviter
+  les partiels absurdes (22H qui passent sur une réponse minimale). Volontairement très
+  borné pour ne jamais compromettre la terminaison de l'enchère : un seul rebid par
+  donne, jamais de contrôle ni de Blackwood — juste une visée directe de la manche si un
+  fit est confirmé, ou une montée dans la couleur du partenaire si elle lui convient.
+  N'implémente pas les "vrais" soutiens différés du document (fit montré à un deuxième
+  tour) ni les enchères d'essai/de contrôle — hors de portée de ce filet ciblé.
 - **Intervention sur l'ouverture d'un adversaire** : **contre d'appel** si la main s'y
   prête (12HL+, courte dans la couleur adverse — 0-2 cartes —, support raisonnable dans
   les 3 autres), sinon une intervention naturelle (5+ cartes, HL ajusté par vulnérabilité —
@@ -137,9 +155,10 @@ notamment sa fiche "Ouvertures", plutôt qu'une généralisation approximative :
   le contre en place), hors périmètre.
 - **Vulnérabilité** : barrages et interventions naturelles resserrés (seuil relevé de 8HL à
   10HL) quand le camp du robot est vulnérable, plus agressifs sinon — comme le vrai SEF.
-- **Un seul tour de dialogue** : une fois qu'un robot a annoncé quelque chose dans une
-  donne, il passe systématiquement ensuite — pas de rebid, pas de contre-annonce après une
-  nouvelle enchère adverse.
+- **Globalement un seul tour de dialogue** : une fois qu'un robot a annoncé quelque chose
+  dans une donne, il passe systématiquement ensuite — sauf l'ouvreur avec une main très
+  forte (18HL+), qui dispose d'un unique rebid après la réponse du partenaire (voir
+  ci-dessus). Pas de contre-annonce après une nouvelle enchère adverse.
 - **Contre d'appel (takeout) seulement** — jamais de surcontre, jamais de contre de
   pénalité, jamais de convention (Stayman, Blackwood, Roudi,
   Texas...), pas de 2♣ fort indéterminé ni de 2♦ forcing de manche (une main assez forte
@@ -148,8 +167,9 @@ notamment sa fiche "Ouvertures", plutôt qu'une généralisation approximative :
 
 Chaque annonce calculée est vérifiée par les mêmes règles de légalité que celles d'un
 joueur humain avant d'être jouée ; en cas de doute, le robot passe plutôt que de risquer
-une annonce invalide. Testé sur 3000 enchères complètes à 4 robots (donnes aléatoires,
-tout le cycle donneur/vulnérabilité) : zéro annonce illégale, zéro blocage.
+une annonce invalide. Testé sur 5000 enchères complètes à 4 robots (donnes aléatoires,
+tout le cycle donneur/vulnérabilité) : zéro annonce illégale, zéro blocage — dont ~6,5%
+avec un rebid de l'ouvreur effectivement déclenché.
 
 **Bug important corrigé** (voir échange avec Guillaume, "les séquences s'arrêtent toujours
 trop tôt") : un simple passe initial (faute de points pour ouvrir — très fréquent) comptait

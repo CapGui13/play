@@ -2332,6 +2332,80 @@ function decideRobotOpening(hand, hcp, hl, dealVulnerable, seat) {
     return '1' + suit;
 }
 
+// Échelle des SOUTIENS DIRECTS à une majeure (voir échange avec Guillaume, document
+// "L'expression des soutiens majeurs" — Christian Maury, FFB) : bien plus précise que le
+// simple soutien à 2 paliers qu'on avait — distingue la longueur EXACTE du fit et la
+// distribution (courte repérable) plutôt que juste les points. Ne s'applique QUE si
+// `suit` est une majeure (S ou H) — pour une mineure, la logique plus simple plus bas
+// s'applique (voir decideRobotResponse). Renvoie null si aucun palier ne correspond
+// (main sans fit, ou fit mais hors de toutes les fourchettes ci-dessous), laissant la
+// suite de decideRobotResponse gérer (nouvelle couleur, repli SA...).
+//
+// N'implémente PAS les "vrais" soutiens différés du document (fit montré à un DEUXIÈME
+// tour d'enchères) : ceux-là supposent un rebid de l'ouvreur puis un second tour du
+// répondant, hors de portée de ce filet — voir decideRobotOpenerRebid pour le rebid de
+// l'ouvreur, qui lui existe, mais seulement pour les mains très fortes (18HL+).
+function decideRobotMajorSupport(hand, hcp, hl, bid, seat, history) {
+    const lengths = suitLengths(hand);
+    const suit = bid.strain;
+    const fitLen = lengths[suit];
+    if (fitLen < 3) return null; // pas de fit du tout, rien à faire ici
+
+    const otherSuits = ['S', 'H', 'D', 'C'].filter(s => s !== suit);
+    const shortSuit = otherSuits.find(s => lengths[s] <= 1); // singleton ou chicane
+    const hasNoSingleton = otherSuits.every(s => lengths[s] >= 2);
+
+    // Barrage (5+ atouts, une courte ailleurs, main faible en H — la distribution prime
+    // sur les points, "loi des levées totales") : indépendant du seuil habituel de 6H/6HL
+    // pour répondre, un vrai barrage peut se faire avec très peu de points d'honneurs.
+    if (fitLen >= 5 && shortSuit && hcp < 10) {
+        const call = (bid.level + 3) + suit; // saut direct à la manche (ex. 1H -> 4H)
+        if (isCallLegal(history, call, seat)) return call;
+    }
+
+    // 13-15 HLD avec une courte et 4+ atouts : splinter — saut double (2 paliers au-delà
+    // du minimum naturel) dans la couleur courte, jamais celle d'atout ni SA.
+    if (hl >= 13 && hl <= 15 && fitLen >= 4 && shortSuit) {
+        let naturalLevel = null;
+        for (let level = 1; level <= 7; level++) {
+            if (isCallLegal(history, level + shortSuit, seat)) { naturalLevel = level; break; }
+        }
+        if (naturalLevel !== null) {
+            const splinterLevel = naturalLevel + 2;
+            const call = splinterLevel + shortSuit;
+            if (splinterLevel <= 7 && isCallLegal(history, call, seat)) return call;
+        }
+    }
+
+    // 13-15 HLD sans aucun singleton : 3SA fitté (conventionnel — annonce le fit et cette
+    // fourchette de points, pas une vraie proposition de jouer à SA).
+    if (hl >= 13 && hl <= 15 && hasNoSingleton) {
+        const call = '3NT';
+        if (isCallLegal(history, call, seat)) return call;
+    }
+
+    // 11-12 HLD avec fit 4+ cartes : soutien au palier 3, non-forcing.
+    if (hl >= 11 && hl <= 12 && fitLen >= 4) {
+        const call = (bid.level + 2) + suit;
+        if (isCallLegal(history, call, seat)) return call;
+    }
+
+    // 11-12 HLD avec fit EXACTEMENT 3 cartes : 2SA conventionnel (ne promet pas une main
+    // régulière, juste ce fit précis et cette fourchette de points).
+    if (hl >= 11 && hl <= 12 && fitLen === 3) {
+        const call = '2NT';
+        if (isCallLegal(history, call, seat)) return call;
+    }
+
+    // 6-10 HLD, fit de 3 ou 4 cartes : soutien simple au palier 2.
+    if (hl >= 6 && hl <= 10 && fitLen >= 3) {
+        const call = (bid.level + 1) + suit;
+        if (isCallLegal(history, call, seat)) return call;
+    }
+
+    return null;
+}
+
 // Décision de RÉPONSE à une annonce du PARTENAIRE (sa dernière annonce chiffrée est aussi
 // la dernière de toute l'enchère, sans intervention adverse entre les deux). `hcp` et
 // `partnerPromises5Plus` sont utilisés uniquement pour le soutien (voir plus bas) — voir
@@ -2378,13 +2452,19 @@ function decideRobotResponse(hand, hcp, hl, partnerCall, seat, history, partnerP
         }
     }
 
-    // Soutien si fit : un fit, c'est 8 cartes à eux deux (voir échange avec Guillaume —
-    // 5+3, pas 5+2), donc 3+ cartes dans TOUS les cas. Seul le seuil de points change
-    // selon ce que le partenaire a PROMIS : 6H (en H purs) quand il a garanti 5+ cartes
-    // (ouverture à la majeure, toujours 5+ dans ce système "majeure 5ème" ; ou n'importe
-    // quelle intervention, qui exige aussi 5+ cartes — voir decideRobotIntervention) ;
-    // sinon (ouverture à la mineure, qui peut n'avoir que 3 cartes dans ce même système)
-    // 6HL, plus prudent puisque le fit lui-même est moins garanti.
+    // Soutien à une MAJEURE : échelle complète des soutiens directs (voir
+    // decideRobotMajorSupport) plutôt que la logique générique plus bas.
+    if (suit === 'S' || suit === 'H') {
+        const majorSupport = decideRobotMajorSupport(hand, hcp, hl, bid, seat, history);
+        if (majorSupport) return majorSupport;
+    }
+
+    // Soutien à une MINEURE : un fit, c'est 8 cartes à eux deux (voir échange avec
+    // Guillaume — 5+3, pas 5+2), donc 3+ cartes. Seul le seuil de points change selon ce
+    // que le partenaire a PROMIS : 6H (en H purs) s'il a garanti 5+ cartes (n'arrive
+    // jamais pour une ouverture à la mineure elle-même, mais possible via une
+    // intervention) ; sinon 6HL, plus prudent puisque le fit est moins garanti (mineure
+    // d'ouverture, qui peut n'avoir que 3 cartes dans ce système).
     const minFitPoints = partnerPromises5Plus ? hcp : hl;
     if (lengths[suit] >= 3 && minFitPoints >= 6) {
         const raiseLevel = bid.level + (hl >= 10 ? 2 : 1);
@@ -2501,34 +2581,87 @@ function decideRobotResponseToDouble(hand, hl, seat, history) {
     return 'PASS';
 }
 
+// Rebid de l'OUVREUR (voir échange avec Guillaume) : sans lui, un ouvreur avec une main
+// bien plus forte qu'une ouverture minimale (18HL+) reste bloqué dès que le partenaire a
+// répondu quelque chose, même s'il est évident qu'il faut reparler (ex. 22H qui passent
+// sur une réponse minimale). Volontairement TRÈS borné pour rester sûr : une seule
+// occasion de rebid par donne (voir decideRobotCall, qui ne l'autorise que si l'ouvreur
+// n'a encore parlé qu'une fois ET que la dernière annonce réelle est celle du partenaire),
+// et seulement pour les mains vraiment fortes. Ne couvre pas les enchères d'essai, de
+// contrôle, ni les séquences différées à 2 tours du document SEF fourni par Guillaume —
+// juste de quoi éviter les partiels absurdes.
+function decideRobotOpenerRebid(hand, hcp, hl, myOpeningCall, seat, history) {
+    if (hl < 18) return 'PASS'; // seule une main nettement au-dessus d'une ouverture minimale rejustifie de reparler
+
+    const myBid = parseBid(myOpeningCall);
+    if (!myBid || myBid.strain === 'NT') return 'PASS'; // 1SA/2SA déjà bien décrits, pas de rebid géré ici
+
+    const lengths = suitLengths(hand);
+    const partnerBid = getLastActualBid(history); // la réponse du partenaire
+    const partnerParsed = parseBid(partnerBid.call);
+
+    // Le partenaire a-t-il confirmé un fit pour MA couleur d'ouverture (soutien direct,
+    // ou 2SA/3SA conventionnels — voir decideRobotMajorSupport) ? Ne tente pas de
+    // reconnaître un splinter ici (saut double dans une AUTRE couleur, trop fragile à
+    // identifier à coup sûr sans risquer un faux positif) — un tel cas retombe dans la
+    // branche "nouvelle couleur" plus bas, pas idéale mais sûre.
+    const isRaiseOfMySuit = partnerParsed && partnerParsed.strain === myBid.strain;
+    const isConventionalFitShow = partnerBid.call === '2NT' || partnerBid.call === '3NT';
+
+    if (isRaiseOfMySuit || isConventionalFitShow) {
+        // Fit confirmé et main d'ouverture nettement excédentaire (18HL+) : la manche est
+        // quasiment automatique. Simplification volontaire : toujours viser la manche
+        // dans MA couleur, jamais le chelem (pas de contrôle/Blackwood, hors périmètre).
+        // Si le partenaire a déjà annoncé la manche lui-même (barrage), isCallLegal
+        // rejettera naturellement cette annonce (déjà atteinte) et on se rabat sur passe.
+        const call = (myBid.strain === 'S' || myBid.strain === 'H') ? ('4' + myBid.strain) : ('5' + myBid.strain);
+        if (isCallLegal(history, call, seat)) return call;
+        return 'PASS';
+    }
+
+    // Le partenaire a montré une NOUVELLE couleur (pas de fit direct pour la mienne) :
+    // si j'ai un fit pour SA couleur (3+ cartes), je monte pour montrer mon excédent
+    // plutôt que de rester muet. Sinon, avec une main régulière, un SA franc au palier
+    // minimal légal ; faute de mieux, passe (filet de sécurité, pas une vraie
+    // description de rebid).
+    if (partnerParsed && partnerParsed.strain !== 'NT' && partnerParsed.strain !== myBid.strain) {
+        const partnerSuit = partnerParsed.strain;
+        if (lengths[partnerSuit] >= 3) {
+            const call = (partnerParsed.level + 2) + partnerSuit; // saut, montre l'excédent
+            if (isCallLegal(history, call, seat)) return call;
+        }
+    }
+    if (isHandBalancedForNT(lengths)) {
+        for (let level = 1; level <= 7; level++) {
+            const call = level + 'NT';
+            if (isCallLegal(history, call, seat)) return call;
+        }
+    }
+
+    return 'PASS';
+}
+
 // Point d'entrée unique : détermine l'annonce d'un robot pour son tour actuel. Toujours
 // validée par isCallLegal juste avant d'être renvoyée (filet de sécurité ultime) — un
 // robot ne doit JAMAIS produire une annonce illégale, quitte à se rabattre sur passe si le
 // calcul ci-dessus a un trou quelque part ; un blocage de la partie serait bien pire qu'un
 // robot un peu trop passif.
 //
-// Note sur une main très forte mais "passée" (voir échange avec Guillaume) : une fois 3
-// passes consécutifs après une annonce, l'enchère est terminée — dans n'importe quelle
-// partie de bridge, l'ouvreur ne reparle plus, quelle que soit la force de sa main.
-// maybeRobotBid (plus bas) vérifie déjà isAuctionOver avant même de solliciter cette
-// fonction, donc il n'y a structurellement aucune occasion de "rebidder" dans ce cas
-// précis — ce n'est pas un trou de ce moteur simplifié, c'est la mécanique même du jeu.
-// Un tel risque existe même en SEF réel avec des mains fortes mais non équilibrées (12 à
-// 23-24HL, système "majeure 5ème") ; seules les mains ÉQUILIBRÉES très fortes en sont à
-// l'abri, via 1SA/2SA (voir decideRobotOpening).
+// Note sur le rebid (voir échange avec Guillaume) : un ouvreur peut désormais reparler
+// UNE FOIS s'il a une main très forte (18HL+) et que le partenaire vient de répondre —
+// voir decideRobotOpenerRebid. En dehors de ce cas précis et borné, la règle reste "un
+// seul tour de dialogue" : une fois 3 passes consécutifs après une annonce, l'enchère est
+// terminée — dans n'importe quelle partie de bridge, personne ne reparle plus à ce
+// stade, quelle que soit la force de sa main. maybeRobotBid (plus bas) vérifie déjà
+// isAuctionOver avant même de solliciter cette fonction.
 function decideRobotCall(seat, deal, history) {
     const hand = deal.hands[seat];
     const hcp = computeHandHcp(hand);
     const hl = computeHandHL(hand);
-    // Bug trouvé à l'audit (voir échange avec Guillaume) : un simple passe initial (faute
-    // de points pour ouvrir) ne doit PAS compter comme "avoir déjà parlé" — sinon un
-    // joueur qui passe en position d'ouverture (très fréquent) devient muet pour le reste
-    // de la donne, incapable de répondre normalement à son partenaire plus tard. Seule une
-    // VRAIE annonce (pas un passe) épuise le tour unique de dialogue.
-    const hasBidBefore = history.some(entry => entry.seat === seat && !isPass(entry.call));
+    const myBids = history.filter(entry => entry.seat === seat && !isPass(entry.call));
 
     let call = 'PASS';
-    if (!hasBidBefore) {
+    if (myBids.length === 0) {
         // Le partenaire vient-il de contrer (dernière annonce non-passe, passes
         // intercalés ignorés) ? Voir decideRobotResponseToDouble.
         const lastNonPass = getLastNonPassCall(history);
@@ -2560,6 +2693,20 @@ function decideRobotCall(seat, deal, history) {
             } else {
                 call = decideRobotIntervention(hand, hcp, hl, seat, history, deal.vulnerable);
             }
+        }
+    } else if (myBids.length === 1) {
+        // Un seul rebid possible, et seulement pour l'OUVREUR (son unique annonce était
+        // la toute première de l'enchère — pas une réponse ni une intervention) réagissant
+        // à la réponse de son PARTENAIRE (dernière annonce réelle de toute l'enchère, du
+        // même camp que lui) — voir decideRobotOpenerRebid.
+        const myBidIndex = history.indexOf(myBids[0]);
+        const wasOpening = history.slice(0, myBidIndex).every(entry => isPass(entry.call));
+        const lastBid = getLastActualBid(history);
+        const partnerJustResponded = lastBid && lastBid.seat !== seat
+            && partnershipOf(lastBid.seat) === partnershipOf(seat);
+
+        if (wasOpening && partnerJustResponded) {
+            call = decideRobotOpenerRebid(hand, hcp, hl, myBids[0].call, seat, history);
         }
     }
 
