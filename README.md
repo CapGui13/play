@@ -199,6 +199,25 @@ trop tôt") : un simple passe initial (faute de points pour ouvrir — très fr�
 de répondre normalement à son partenaire plus tard. Seule une vraie annonce (pas un passe)
 épuise désormais le tour unique de dialogue.
 
+**Corrections supplémentaires suite à un nouveau test de la donne 2** (voir échange avec
+Guillaume) :
+- **Routage en séquence compétitive** : quand un adversaire reparle après l'annonce du
+  partenaire (typique en séquence compétitive à 4), le moteur cherchait auparavant
+  uniquement la toute dernière annonce de l'enchère pour savoir "qui répond à qui" — donc
+  un joueur pouvait se retrouver à tort à "intervenir" sur l'adversaire au lieu de
+  répondre/soutenir son propre partenaire, ou l'ouvreur à tort privé de son rebid. Corrigé
+  en recherchant l'annonce du partenaire en remontant l'historique plutôt qu'en ne
+  regardant que la dernière.
+- **Points de soutien** : quand la longueur de la couleur du partenaire est GARANTIE (5+
+  via une majeure/intervention, 3+ par défaut à la mineure), les décisions de soutien
+  comptent maintenant les points de soutien plutôt que HL — H bruts + 2 points si le 9ème
+  atout du camp est atteint (ma longueur + le minimum garanti du partenaire) + la valeur
+  des courtes dans les AUTRES couleurs (chicane +5, singleton +3, doubleton +1). Utilisé à
+  la fois par le soutien mineur et l'échelle des soutiens majeurs.
+- **Contre d'appel exclu avec une longue couleur** : 6+ cartes dans une même couleur se
+  montrent directement plutôt que de se cacher derrière un contre, qui ne promet de
+  longueur nulle part et gâcherait une belle couleur.
+
 ## Corrections issues d'une relecture de session (voir échange avec Guillaume)
 
 Après une session de test, Guillaume a exporté le fichier et relu chaque donne en détail

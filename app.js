@@ -2287,6 +2287,36 @@ function computeHandHL(hand) {
     return computeHandHcp(hand) + lengthPoints;
 }
 
+// Points de "soutien" (voir échange avec Guillaume, donne 2 — la terminologie "HLD" du
+// SEF signifie H + Longueur OU Distribution selon le contexte, pas les deux à la fois sur
+// la même main) : quand on soutient une couleur du partenaire dont la longueur est
+// GARANTIE (5+ pour une majeure ou une intervention, 3+ par défaut pour une ouverture à
+// la mineure), on ne compte plus les points de longueur de SA propre main (comme HL) mais
+// les points de DISTRIBUTION — la valeur des courtes ailleurs, maintenant qu'on joue avec
+// l'atout du partenaire, plus les siennes propres. Deux composantes :
+//   - +2 si la longueur connue au total (la mienne dans cette couleur + le minimum promis
+//     par le partenaire) atteint 9 — le "9ème atout" du camp, une sécurité
+//     supplémentaire qui vaut la peine d'être comptée ;
+//   - la valeur habituelle des courtes dans les AUTRES couleurs (chicane +5, singleton
+//     +3, doubleton +1 — même barème que les points de longueur, mais appliqué à la
+//     distribution plutôt qu'à la longueur).
+function computeSupportPoints(hand, fitSuit, partnerGuaranteedLength) {
+    const lengths = suitLengths(hand);
+    let points = computeHandHcp(hand);
+
+    if (lengths[fitSuit] + partnerGuaranteedLength >= 9) points += 2;
+
+    for (const suit of ['S', 'H', 'D', 'C']) {
+        if (suit === fitSuit) continue;
+        const len = lengths[suit];
+        if (len === 0) points += 5;
+        else if (len === 1) points += 3;
+        else if (len === 2) points += 1;
+    }
+
+    return points;
+}
+
 // Choix de la couleur d'ouverture à la couleur (donc hors 1SA/2SA/barrages, déjà écartés
 // par decideRobotOpening avant d'en arriver là) : toujours la majeure 5+ la plus longue si
 // elle est au moins aussi longue que la meilleure mineure (le système "majeure 5ème"
@@ -2362,6 +2392,14 @@ function decideRobotMajorSupport(hand, hcp, hl, bid, seat, history) {
     const shortSuit = otherSuits.find(s => lengths[s] <= 1); // singleton ou chicane
     const hasNoSingleton = otherSuits.every(s => lengths[s] >= 2);
 
+    // Points de "soutien" (voir échange avec Guillaume, donne 2 et computeSupportPoints) :
+    // le "HLD" du document source ("L'expression des soutiens majeurs") signifie H +
+    // longueur OU distribution selon le contexte — ici on soutient une couleur du
+    // partenaire toujours connue 5+ (majeure, système "majeure 5ème") — donc on compte
+    // les points de DISTRIBUTION (courtes ailleurs + 9ème atout), pas la longueur de sa
+    // propre main.
+    const supportPoints = computeSupportPoints(hand, suit, 5);
+
     // Barrage (5+ atouts, une courte ailleurs, main faible en H — la distribution prime
     // sur les points, "loi des levées totales") : indépendant du seuil habituel de 6H/6HL
     // pour répondre, un vrai barrage peut se faire avec très peu de points d'honneurs.
@@ -2372,7 +2410,7 @@ function decideRobotMajorSupport(hand, hcp, hl, bid, seat, history) {
 
     // 13-15 HLD avec une courte et 4+ atouts : splinter — saut double (2 paliers au-delà
     // du minimum naturel) dans la couleur courte, jamais celle d'atout ni SA.
-    if (hl >= 13 && hl <= 15 && fitLen >= 4 && shortSuit) {
+    if (supportPoints >= 13 && supportPoints <= 15 && fitLen >= 4 && shortSuit) {
         let naturalLevel = null;
         for (let level = 1; level <= 7; level++) {
             if (isCallLegal(history, level + shortSuit, seat)) { naturalLevel = level; break; }
@@ -2386,26 +2424,26 @@ function decideRobotMajorSupport(hand, hcp, hl, bid, seat, history) {
 
     // 13-15 HLD sans aucun singleton : 3SA fitté (conventionnel — annonce le fit et cette
     // fourchette de points, pas une vraie proposition de jouer à SA).
-    if (hl >= 13 && hl <= 15 && hasNoSingleton) {
+    if (supportPoints >= 13 && supportPoints <= 15 && hasNoSingleton) {
         const call = '3NT';
         if (isCallLegal(history, call, seat)) return call;
     }
 
     // 11-12 HLD avec fit 4+ cartes : soutien au palier 3, non-forcing.
-    if (hl >= 11 && hl <= 12 && fitLen >= 4) {
+    if (supportPoints >= 11 && supportPoints <= 12 && fitLen >= 4) {
         const call = (bid.level + 2) + suit;
         if (isCallLegal(history, call, seat)) return call;
     }
 
     // 11-12 HLD avec fit EXACTEMENT 3 cartes : 2SA conventionnel (ne promet pas une main
     // régulière, juste ce fit précis et cette fourchette de points).
-    if (hl >= 11 && hl <= 12 && fitLen === 3) {
+    if (supportPoints >= 11 && supportPoints <= 12 && fitLen === 3) {
         const call = '2NT';
         if (isCallLegal(history, call, seat)) return call;
     }
 
     // 6-10 HLD, fit de 3 ou 4 cartes : soutien simple au palier 2.
-    if (hl >= 6 && hl <= 10 && fitLen >= 3) {
+    if (supportPoints >= 6 && supportPoints <= 10 && fitLen >= 3) {
         const call = (bid.level + 1) + suit;
         if (isCallLegal(history, call, seat)) return call;
     }
@@ -2470,11 +2508,10 @@ function decideRobotResponse(hand, hcp, hl, partnerCall, seat, history, partnerP
     }
 
     // Soutien à une MINEURE : un fit, c'est 8 cartes à eux deux (voir échange avec
-    // Guillaume — 5+3, pas 5+2), donc 3+ cartes. Seul le seuil de points change selon ce
-    // que le partenaire a PROMIS : 6H (en H purs) s'il a garanti 5+ cartes (n'arrive
-    // jamais pour une ouverture à la mineure elle-même, mais possible via une
-    // intervention) ; sinon 6HL, plus prudent puisque le fit est moins garanti (mineure
-    // d'ouverture, qui peut n'avoir que 3 cartes dans ce système).
+    // Guillaume — 5+3, pas 5+2), donc 3+ cartes. Le seuil de points utilise les points de
+    // "soutien" (voir computeSupportPoints — H + 9ème atout + distribution, pas juste HL)
+    // puisque la longueur du partenaire est désormais connue (5+ via une intervention,
+    // 3+ par défaut pour une ouverture à la mineure, qui peut ne pas en avoir plus).
     //
     // Exception "1SA poubelle" (voir échange avec Guillaume, donne 3) : avec une main
     // PLATE et un fit d'EXACTEMENT 3 cartes à une mineure qui n'a jamais promis 5+ (donc
@@ -2482,11 +2519,12 @@ function decideRobotResponse(hand, hcp, hl, partnerCall, seat, history, partnerP
     // marginal vaut moins qu'un simple 1SA naturel — surtout au palier 1, où 1SA coûte la
     // même chose. Ne s'applique pas avec 4+ cartes (fit plus solide, vaut la peine d'être
     // montré) ni sur une main irrégulière (une distribution à exploiter ailleurs).
-    const minFitPoints = partnerPromises5Plus ? hcp : hl;
+    const partnerGuaranteedLength = partnerPromises5Plus ? 5 : 3;
+    const supportPoints = computeSupportPoints(hand, suit, partnerGuaranteedLength);
     const flatWithMarginalMinorFit = !partnerPromises5Plus && lengths[suit] === 3
         && isHandBalancedForNT(lengths) && bid.level === 1;
-    if (lengths[suit] >= 3 && minFitPoints >= 6 && !flatWithMarginalMinorFit) {
-        const raiseLevel = bid.level + (hl >= 10 ? 2 : 1);
+    if (lengths[suit] >= 3 && supportPoints >= 6 && !flatWithMarginalMinorFit) {
+        const raiseLevel = bid.level + (supportPoints >= 10 ? 2 : 1);
         const call = raiseLevel + suit;
         if (isCallLegal(history, call, seat)) return call;
     }
@@ -2537,9 +2575,14 @@ function decideRobotIntervention(hand, hcp, hl, seat, history, dealVulnerable) {
     // cartes partout ailleurs, ou au moins 2 des 3 autres couleurs à 4+ cartes" plutôt que
     // d'exiger un support parfait dans les 3. Ne s'applique qu'après une ouverture à la
     // couleur (jamais après du SA adverse, un tout autre type de contre hors périmètre).
+    // Exclusion importante (voir échange avec Guillaume, donne 2) : avec une couleur
+    // longue de 6+ cartes, cette couleur se montre directement plutôt que de se cacher
+    // derrière un contre — le contre ne promet de longueur nulle part, il gâcherait une
+    // belle couleur qui vaut mieux annoncée en clair.
     if (lastBid) {
         const oppBid = parseBid(lastBid.call);
-        if (oppBid && oppBid.strain !== 'NT' && hl >= 12 && lengths[oppBid.strain] <= 2) {
+        const hasLongSuit = ['S', 'H', 'D', 'C'].some(s => lengths[s] >= 6);
+        if (oppBid && oppBid.strain !== 'NT' && hl >= 12 && lengths[oppBid.strain] <= 2 && !hasLongSuit) {
             const otherSuits = ['S', 'H', 'D', 'C'].filter(s => s !== oppBid.strain);
             const has4Count = otherSuits.filter(s => lengths[s] >= 4).length;
             const allAtLeast3 = otherSuits.every(s => lengths[s] >= 3);
@@ -2700,13 +2743,17 @@ function decideOpenerRebidAfter2over1(hand, hcp, hl, myBid, partnerParsed, seat,
 //     ouverture d'1 majeure), qui OBLIGE l'ouvreur à reparler quels que soient ses points.
 // Ne couvre pas les enchères d'essai, de contrôle, ni les séquences différées à 2 tours du
 // document SEF fourni par Guillaume — juste de quoi éviter les partiels absurdes.
-function decideRobotOpenerRebid(hand, hcp, hl, myOpeningCall, seat, history) {
+function decideRobotOpenerRebid(hand, hcp, hl, myOpeningCall, partnerCall, seat, history) {
     const myBid = parseBid(myOpeningCall);
     if (!myBid || myBid.strain === 'NT') return 'PASS'; // 1SA/2SA déjà bien décrits, pas de rebid géré ici
 
     const lengths = suitLengths(hand);
-    const partnerBid = getLastActualBid(history); // la réponse du partenaire
-    const partnerParsed = parseBid(partnerBid.call);
+    // Reçoit la réponse du partenaire en paramètre plutôt que de la redériver ici via
+    // getLastActualBid (voir échange avec Guillaume, donne 2) : si un adversaire est
+    // reparlé depuis (séquence compétitive), la dernière annonce de toute l'enchère n'est
+    // plus forcément celle du partenaire — c'est l'appelant (decideRobotCall) qui a déjà
+    // fait cette recherche correctement.
+    const partnerParsed = parseBid(partnerCall);
     const isRaiseOfMySuit = partnerParsed && partnerParsed.strain === myBid.strain;
 
     // Loi des atouts (voir échange avec Guillaume, donne 4) : 6+ cartes dans SA propre
@@ -2737,7 +2784,7 @@ function decideRobotOpenerRebid(hand, hcp, hl, myOpeningCall, seat, history) {
     // reconnaître un splinter ici (saut double dans une AUTRE couleur, trop fragile à
     // identifier à coup sûr sans risquer un faux positif) — un tel cas retombe dans la
     // branche "nouvelle couleur" plus bas, pas idéale mais sûre.
-    const isConventionalFitShow = partnerBid.call === '2NT' || partnerBid.call === '3NT';
+    const isConventionalFitShow = partnerCall === '2NT' || partnerCall === '3NT';
 
     if (isRaiseOfMySuit || isConventionalFitShow) {
         // Fit confirmé et main d'ouverture nettement excédentaire (18HL+) : la manche est
@@ -2753,7 +2800,9 @@ function decideRobotOpenerRebid(hand, hcp, hl, myOpeningCall, seat, history) {
     // Le partenaire a montré une NOUVELLE couleur (pas de fit direct pour la mienne) :
     // si j'ai un fit pour SA couleur (3+ cartes), je monte pour montrer mon excédent
     // plutôt que de rester muet. Sinon, avec une main régulière, un SA franc au palier
-    // minimal légal ; faute de mieux, passe (filet de sécurité, pas une vraie
+    // minimal légal. Sinon encore, ma PROPRE 2e couleur (4+ cartes, voir échange avec
+    // Guillaume, donne 2 : ne pas savoir la montrer laissait un ouvreur bicolore fort
+    // totalement muet) ; faute de mieux, passe (filet de sécurité, pas une vraie
     // description de rebid).
     if (partnerParsed && partnerParsed.strain !== 'NT' && partnerParsed.strain !== myBid.strain) {
         const partnerSuit = partnerParsed.strain;
@@ -2766,6 +2815,19 @@ function decideRobotOpenerRebid(hand, hcp, hl, myOpeningCall, seat, history) {
         for (let level = 1; level <= 7; level++) {
             const call = level + 'NT';
             if (isCallLegal(history, call, seat)) return call;
+        }
+    }
+    if (partnerParsed) {
+        const order = ['S', 'H', 'D', 'C'].filter(s => s !== myBid.strain && s !== partnerParsed.strain);
+        let secondSuit = null;
+        for (const s of order) {
+            if (lengths[s] >= 4 && (!secondSuit || lengths[s] > lengths[secondSuit])) secondSuit = s;
+        }
+        if (secondSuit) {
+            for (let level = partnerParsed.level; level <= 7; level++) {
+                const call = level + secondSuit;
+                if (isCallLegal(history, call, seat)) return call;
+            }
         }
     }
 
@@ -2815,26 +2877,41 @@ function decideRobotCall(seat, deal, history) {
             explanation = `Réponse au contre du partenaire (${points})`;
         } else {
             const lastBid = getLastActualBid(history);
+            // Mon propre camp a-t-il déjà annoncé quelque chose (ouverture OU
+            // intervention du partenaire) à quoi je dois répondre — même si la toute
+            // dernière annonce de l'enchère vient de l'adversaire depuis (voir échange
+            // avec Guillaume, donne 2 : Nord doit pouvoir soutenir l'intervention de Sud
+            // malgré l'intervention intercalée d'Ouest) ? Cette recherche remplace
+            // l'ancienne comparaison qui ne regardait QUE la toute dernière annonce —
+            // elle la généralise (si lastBid est déjà celle du partenaire, cette
+            // recherche la retrouve immédiatement, donc rien ne change dans ce cas).
+            const myPartnerBid = history.slice().reverse()
+                .find(e => partnershipOf(e.seat) === partnershipOf(seat) && isBidCall(e.call));
+
             if (!lastBid) {
                 call = decideRobotOpening(hand, hcp, hl, deal.vulnerable, seat);
                 explanation = `Ouverture (${points})`;
-            } else if (partnershipOf(lastBid.seat) === partnershipOf(seat)) {
+            } else if (myPartnerBid) {
                 // Voir échange avec Guillaume (règle du fit) : le partenaire a-t-il
                 // PROMIS 5+ cartes dans sa couleur ? Toujours vrai pour une ouverture à
                 // la majeure (système "majeure 5ème") ; toujours vrai aussi pour une
                 // intervention (voir decideRobotIntervention, qui exige 5+ cartes) —
                 // jamais garanti pour une ouverture à la mineure, qui peut n'avoir que 3
                 // cartes ("meilleure mineure"). Une intervention se reconnaît au fait
-                // qu'un adversaire avait déjà annoncé quelque chose avant cette annonce du
-                // partenaire.
-                const partnerBidInfo = parseBid(lastBid.call);
+                // qu'un adversaire avait déjà annoncé quelque chose avant CETTE annonce
+                // précise du partenaire (pas forcément avant la toute dernière de
+                // l'enchère, si un adversaire a reparlé depuis).
+                const partnerBidInfo = parseBid(myPartnerBid.call);
                 const isMajorSuit = partnerBidInfo && (partnerBidInfo.strain === 'S' || partnerBidInfo.strain === 'H');
-                const bidIndex = history.indexOf(lastBid);
-                const wasIntervention = history.slice(0, bidIndex)
+                const partnerBidIndex = history.indexOf(myPartnerBid);
+                const wasIntervention = history.slice(0, partnerBidIndex)
                     .some(e => isBidCall(e.call) && partnershipOf(e.seat) !== partnershipOf(seat));
                 const partnerPromises5Plus = isMajorSuit || wasIntervention;
-                call = decideRobotResponse(hand, hcp, hl, lastBid.call, seat, history, partnerPromises5Plus);
-                explanation = `Réponse à ${formatCallForDisplay(lastBid.call)} du partenaire (${points}, fit ${suitLengths(hand)[partnerBidInfo.strain] || 0}${partnerBidInfo.strain !== 'NT' ? ' carte(s) à ' + STRAIN_SYMBOL[partnerBidInfo.strain] : ''})`;
+                call = decideRobotResponse(hand, hcp, hl, myPartnerBid.call, seat, history, partnerPromises5Plus);
+                const isCompetitive = myPartnerBid !== lastBid;
+                explanation = isCompetitive
+                    ? `Soutien compétitif de ${formatCallForDisplay(myPartnerBid.call)} du partenaire malgré ${formatCallForDisplay(lastBid.call)} adverse (${points})`
+                    : `Réponse à ${formatCallForDisplay(lastBid.call)} du partenaire (${points}, fit ${suitLengths(hand)[partnerBidInfo.strain] || 0}${partnerBidInfo.strain !== 'NT' ? ' carte(s) à ' + STRAIN_SYMBOL[partnerBidInfo.strain] : ''})`;
             } else {
                 call = decideRobotIntervention(hand, hcp, hl, seat, history, deal.vulnerable);
                 explanation = `Intervention sur ${formatCallForDisplay(lastBid.call)} adverse (${points})`;
@@ -2843,18 +2920,19 @@ function decideRobotCall(seat, deal, history) {
     } else if (myBids.length === 1) {
         // Un seul rebid possible, et seulement pour l'OUVREUR (son unique annonce était
         // la toute première de l'enchère — pas une réponse ni une intervention) réagissant
-        // à la réponse de son PARTENAIRE (dernière annonce réelle de toute l'enchère, du
-        // même camp que lui) — voir decideRobotOpenerRebid.
+        // à la réponse de son PARTENAIRE — recherchée en remontant l'historique (voir
+        // échange avec Guillaume, donne 2 : si un adversaire est reparlé depuis la
+        // réponse du partenaire, ce n'est plus forcément la toute dernière annonce de
+        // l'enchère, mais elle reste valable à traiter).
         const myBidIndex = history.indexOf(myBids[0]);
         const wasOpening = history.slice(0, myBidIndex).every(entry => isPass(entry.call));
-        const lastBid = getLastActualBid(history);
-        const partnerJustResponded = lastBid && lastBid.seat !== seat
-            && partnershipOf(lastBid.seat) === partnershipOf(seat);
+        const myPartnerBid = history.slice().reverse()
+            .find(e => partnershipOf(e.seat) === partnershipOf(seat) && isBidCall(e.call) && e !== myBids[0]);
 
-        if (wasOpening && partnerJustResponded) {
-            call = decideRobotOpenerRebid(hand, hcp, hl, myBids[0].call, seat, history);
-            explanation = `Rebid de l'ouvreur après ${formatCallForDisplay(lastBid.call)} du partenaire (${points})`;
-        } else if (!wasOpening && partnerJustResponded) {
+        if (wasOpening && myPartnerBid) {
+            call = decideRobotOpenerRebid(hand, hcp, hl, myBids[0].call, myPartnerBid.call, seat, history);
+            explanation = `Rebid de l'ouvreur après ${formatCallForDisplay(myPartnerBid.call)} du partenaire (${points})`;
+        } else if (!wasOpening && myPartnerBid) {
             // Suis-je dans une séquence 2/1 forcing de manche reconnue (voir échange avec
             // Guillaume, donne 1) ? Il faut que MA première annonce ait été une réponse en
             // changement de couleur au palier 2 sur une ouverture d'1 MAJEURE du
@@ -2868,11 +2946,11 @@ function decideRobotCall(seat, deal, history) {
             const wasGF2over1 = partnerOpeningBid && myResponseBid
                 && partnerOpeningBid.level === 1 && (partnerOpeningBid.strain === 'S' || partnerOpeningBid.strain === 'H')
                 && myResponseBid.level === 2 && myResponseBid.strain !== partnerOpeningBid.strain && myResponseBid.strain !== 'NT';
-            const partnerBidsCount = history.filter(e => e.seat === lastBid.seat && !isPass(e.call)).length;
+            const partnerBidsCount = history.filter(e => e.seat === myPartnerBid.seat && !isPass(e.call)).length;
 
             if (wasGF2over1 && partnerBidsCount === 2) {
-                call = decideResponderContinuationAfter2over1(hand, hcp, hl, partnerOpeningBid, myResponseBid, lastBid.call, seat, history);
-                explanation = `Suite du 2/1 forcing de manche après ${formatCallForDisplay(lastBid.call)} du partenaire (${points})`;
+                call = decideResponderContinuationAfter2over1(hand, hcp, hl, partnerOpeningBid, myResponseBid, myPartnerBid.call, seat, history);
+                explanation = `Suite du 2/1 forcing de manche après ${formatCallForDisplay(myPartnerBid.call)} du partenaire (${points})`;
             } else {
                 explanation = `A déjà annoncé — passe (règle du tour unique)`;
             }
