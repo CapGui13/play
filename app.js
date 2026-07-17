@@ -1840,7 +1840,8 @@ function uiStartGameAsHost() {
 
         deals = orderedDeals;
         boardIndex = 0;
-        auctionHistory = [];
+        if (!deals[0].auctionHistory) deals[0].auctionHistory = [];
+        auctionHistory = deals[0].auctionHistory;
         hostPendingUndo = null;
         clearUndoUiState();
 
@@ -2047,7 +2048,8 @@ function handlePeerData(msg, guestIndex) {
             mySeats = msg.yourSeats;
             autoPassSeats = msg.botSeats || [];
             boardIndex = 0;
-            auctionHistory = [];
+            if (!deals[0].auctionHistory) deals[0].auctionHistory = [];
+            auctionHistory = deals[0].auctionHistory;
             hostPendingUndo = null;
             clearUndoUiState();
             enterGameScreen();
@@ -2063,6 +2065,7 @@ function handlePeerData(msg, guestIndex) {
             autoPassSeats = msg.botSeats || [];
             boardIndex = msg.boardIndex;
             auctionHistory = msg.auctionHistory || [];
+            deals[boardIndex].auctionHistory = auctionHistory; // voir gotoBoard : reste la référence partagée à partir de maintenant
             hostPendingUndo = null;
             clearUndoUiState();
             enterGameScreen();
@@ -2121,6 +2124,7 @@ function handlePeerData(msg, guestIndex) {
         case 'reset-auction': {
             if (!deals || msg.boardIndex !== boardIndex) return;
             auctionHistory = [];
+            deals[boardIndex].auctionHistory = auctionHistory; // reste la référence partagée
             hostPendingUndo = null;
             clearUndoUiState();
             renderAuctionLedger();
@@ -2136,7 +2140,10 @@ function handlePeerData(msg, guestIndex) {
         case 'goto-board': {
             if (!deals) return;
             boardIndex = msg.boardIndex;
-            auctionHistory = [];
+            // Voir gotoBoard (fonction miroir côté hôte) : restaure l'historique déjà
+            // vécu sur cette donne plutôt que de toujours repartir de zéro.
+            if (!deals[boardIndex].auctionHistory) deals[boardIndex].auctionHistory = [];
+            auctionHistory = deals[boardIndex].auctionHistory;
             hostPendingUndo = null;
             clearUndoUiState();
             renderBoard();
@@ -2856,6 +2863,11 @@ function renderBoard() {
 function updateBoardControlVisibility() {
     const resetBtn = document.getElementById('resetAuctionBtn');
     if (resetBtn) resetBtn.style.display = canControlBoard() ? '' : 'none';
+    // Téléchargement local pur (voir uiExportSessionPBN) : contrairement à l'export PBN
+    // d'une seule donne (qui écrit sur le repo GitHub, réservé à l'hôte), rien n'empêche
+    // n'importe quel joueur actif de récupérer sa propre vue locale de la session.
+    const exportBtn = document.getElementById('exportSessionBtn');
+    if (exportBtn) exportBtn.style.display = canControlBoard() ? '' : 'none';
 }
 
 function renderGameHeader() {
@@ -3231,20 +3243,25 @@ function renderMyHands() {
 // même logique de classe de couleur que les boutons (SUIT_CLASSES), avec l'icône de
 // couleur à la place du caractère Unicode brut (voir formatStrainLabel/suitIconHtml).
 // Accepte soit une chaîne d'annonce brute (Passe/X/1SA...), soit une entrée complète de
-// l'historique ({seat, call, explanation?}) — voir échange avec Guillaume, outil de
-// diagnostic : une annonce jouée par un robot porte une explication (voir decideRobotCall)
-// affichée au tap (petit point discret ajouté à la case, voir styles.css).
+// l'historique ({seat, call, explanation?}). L'outil de diagnostic (voir échange avec
+// Guillaume) reste en sommeil côté affichage — pas assez abouti pour l'instant — mais le
+// CALCUL de l'explication continue de tourner et d'être stocké sur chaque entrée
+// (utile ailleurs, ex. export de session), seul le petit point tapable est désactivé ici.
+// Pour le réactiver : décommenter le bloc `if (!explanation) return inner;` ci-dessous.
 function formatCallCellHtml(entry) {
     const call = (typeof entry === 'string') ? entry : entry.call;
-    const explanation = (typeof entry === 'string') ? null : entry.explanation;
 
     const b = parseBid(call);
     const inner = !b
         ? escapeHtml(formatCallForDisplay(call)) // Passe / X / XX : pas de couleur de suite
         : `<span class="call-suit ${SUIT_CLASSES[b.strain] || 'notrump'}">${b.level}${formatStrainLabel(b.strain)}</span>`;
 
-    if (!explanation) return inner;
-    return `<span class="call-with-explanation" tabindex="0" data-explanation="${escapeHtml(explanation)}" onclick="uiShowCallExplanation(this)">${inner}<span class="call-explain-dot" aria-hidden="true"></span></span>`;
+    return inner;
+
+    // Outil de diagnostic (désactivé, voir commentaire plus haut) :
+    // const explanation = (typeof entry === 'string') ? null : entry.explanation;
+    // if (!explanation) return inner;
+    // return `<span class="call-with-explanation" tabindex="0" data-explanation="${escapeHtml(explanation)}" onclick="uiShowCallExplanation(this)">${inner}<span class="call-explain-dot" aria-hidden="true"></span></span>`;
 }
 
 // Libellé affiché dans l'en-tête du tableau d'enchères pour un siège donné : soit
@@ -3645,6 +3662,61 @@ function uiExportDealPBN() {
         });
 }
 
+// Export de TOUTE la session (voir échange avec Guillaume) : combine les donnes
+// effectivement jouées (enchère terminée, quel que soit le résultat) en un seul fichier
+// PBN multi-donnes, en réutilisant tel quel buildPlayedDealPBN pour chacune — un fichier
+// PBN standard accepte naturellement plusieurs donnes à la suite, chacune avec ses propres
+// tags [Board]/[Deal]/[Auction]/etc. Contrairement à l'export d'une seule donne (qui écrit
+// sur le repo GitHub via le proxy Vercel), ici pas de serveur impliqué : téléchargement
+// direct dans le navigateur, à donner ensuite tel quel pour des retours précis
+// ("donne 2, Sud a contré mais...").
+function uiExportSessionPBN() {
+    if (!deals) return;
+    const playedDeals = deals.filter(d => d.auctionHistory && isAuctionOver(d.auctionHistory));
+    if (playedDeals.length === 0) {
+        flashSessionExportToast('Aucune donne terminée à exporter pour l\'instant.');
+        return;
+    }
+
+    const content = playedDeals.map(d => buildPlayedDealPBN(d, d.auctionHistory)).join('');
+    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}`;
+
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `session-${stamp}.pbn`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+    flashSessionExportToast(`📦 ${playedDeals.length} donne(s) exportée(s).`);
+}
+
+// Même mécanique de bandeau que flashWizzToast/uiShowCallExplanation (voir ces
+// fonctions) — un id dédié plutôt que de les réutiliser, pour ne pas se marcher dessus si
+// deux notifications se déclenchent presque en même temps (ex. wizz reçu pile pendant un
+// export).
+function flashSessionExportToast(text) {
+    let toast = document.getElementById('sessionExportToast');
+    if (!toast) {
+        toast = document.createElement('div');
+        toast.id = 'sessionExportToast';
+        toast.className = 'call-explanation-toast'; // même style que le toast de diagnostic, réutilisé tel quel
+        document.body.appendChild(toast);
+    }
+    toast.textContent = text;
+    toast.classList.remove('visible');
+    void toast.offsetWidth;
+    toast.classList.add('visible');
+    clearTimeout(toast._hideTimer);
+    toast._hideTimer = setTimeout(() => toast.classList.remove('visible'), 2800);
+}
+
 function checkAuctionEnd() {
     const resultEl = document.getElementById('contractResult');
     const nextPanel = document.getElementById('nextBoardPanel');
@@ -4019,6 +4091,7 @@ function uiAnswerUndo(approved) {
 function uiResetAuction() {
     if (!canControlBoard()) return;
     auctionHistory = [];
+    deals[boardIndex].auctionHistory = auctionHistory; // reste la référence partagée
     hostPendingUndo = null;
     clearUndoUiState();
     renderAuctionLedger();
@@ -4030,13 +4103,20 @@ function uiResetAuction() {
                       // dealer (ou tout siège en tête d'enchère après reset) est un robot
 }
 
-// Change de donne : remet l'enchère à zéro, annule toute demande d'undo en cours, et
-// diffuse le nouvel index à tout le monde. Partagé par le bouton "Donne suivante →"
-// (accessible à tout joueur actif, uniquement une fois l'enchère terminée — voir
-// checkAuctionEnd) et par les flèches ◀▶ de navigation libre, réservées à l'hôte.
+// Change de donne : restaure l'enchère déjà jouée sur cette donne si on y était déjà
+// passé (voir échange avec Guillaume — l'historique vit maintenant sur la donne
+// elle-même, deals[i].auctionHistory, pas dans une simple variable de travail écrasée à
+// chaque navigation), sinon en démarre une neuve. `auctionHistory` devient une RÉFÉRENCE
+// vers ce tableau : tout push/pop ultérieur (voir applyCall, l'undo) se répercute
+// automatiquement dessus, sans synchronisation supplémentaire à faire. Annule toute
+// demande d'undo en cours, et diffuse le nouvel index à tout le monde. Partagé par le
+// bouton "Donne suivante →" (accessible à tout joueur actif, uniquement une fois
+// l'enchère terminée — voir checkAuctionEnd) et par les flèches ◀▶ de navigation libre,
+// réservées à l'hôte.
 function gotoBoard(newIndex) {
     boardIndex = newIndex;
-    auctionHistory = [];
+    if (!deals[boardIndex].auctionHistory) deals[boardIndex].auctionHistory = [];
+    auctionHistory = deals[boardIndex].auctionHistory;
     hostPendingUndo = null;
     clearUndoUiState();
     renderBoard();

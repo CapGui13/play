@@ -97,6 +97,23 @@ Aucune clé, aucun compte externe à configurer : tout fonctionne dès la mise e
   l'enchère en cours. Seul l'hôte les voit ; les autres joueurs continuent d'utiliser le
   bouton "Donne suivante →" qui n'apparaît qu'une fois l'enchère terminée.
 
+## Navigation entre les donnes
+
+Chaque donne garde sa propre enchère (`deals[i].auctionHistory`) au lieu d'une seule
+variable de travail écrasée à chaque changement de donne : revenir sur une donne déjà
+jouée réaffiche son enchère et son contrat tels quels, plutôt que de repartir de zéro.
+
+**Export de session** (voir échange avec Guillaume) : le bouton "📦 Exporter la session"
+(en-tête de l'écran de jeu, à côté d'Undo/Recommencer) télécharge un fichier PBN
+regroupant toutes les donnes dont l'enchère est terminée — mains, enchère réellement
+menée, vulnérabilité — pour donner un retour précis sur une session ("donne 2, Sud a
+contré mais..."). Un fichier PBN standard accepte nativement plusieurs donnes à la suite,
+donc réutilise directement `buildPlayedDealPBN` (déjà utilisé par l'export d'une seule
+donne) pour chacune. Contrairement à l'export d'une seule donne, aucun serveur n'est
+impliqué ici : téléchargement direct dans le navigateur, disponible à l'hôte comme à tout
+joueur assis (à la différence de l'export unitaire, réservé à l'hôte puisque lui seul
+écrit sur le repo GitHub).
+
 ## Enchères automatiques des robots
 
 **Outil de diagnostic** : chaque annonce jouée par un robot est tapable dans le relevé
