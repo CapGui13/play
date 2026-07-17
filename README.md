@@ -218,6 +218,20 @@ Guillaume) :
   montrent directement plutôt que de se cacher derrière un contre, qui ne promet de
   longueur nulle part et gâcherait une belle couleur.
 
+**Corrections supplémentaires suite aux donnes 5 et 7** (voir échange avec Guillaume) :
+- **Réponse en changement de couleur toujours forcing** : généralisé au-delà du seul 2/1
+  (palier 2 sur majeure) — une réponse en NOUVELLE couleur, palier 1 ou 2, n'est jamais
+  limitée par nature, donc l'ouvreur reparle systématiquement, quels que soient ses
+  points (donne 5 : l'ouvreur à 13HL montre bien sa 2e couleur maintenant). Reste borné à
+  UN SEUL rebid de l'ouvreur — la suite complète du répondant (4ème couleur forcing,
+  donne 5) reste hors périmètre : généraliser aussi cette suite produisait des sous-enchères
+  incorrectes sur les mains fortes en test, signe que ça demande une vraie logique dédiée
+  plutôt qu'une simple extension.
+- **Palier de soutien manquant au-delà de 15 points** : l'échelle des soutiens directs à
+  une majeure s'arrêtait à 15HLD (3SA), laissant une main de 16+ points de soutien
+  retomber sur un repli générique invitant seulement (palier 3) — alors que la manche est
+  déjà acquise. Ajout d'un palier "16+ HLD → manche directe" (donne 7).
+
 ## Corrections issues d'une relecture de session (voir échange avec Guillaume)
 
 Après une session de test, Guillaume a exporté le fichier et relu chaque donne en détail

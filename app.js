@@ -2429,6 +2429,18 @@ function decideRobotMajorSupport(hand, hcp, hl, bid, seat, history) {
         if (isCallLegal(history, call, seat)) return call;
     }
 
+    // 16+ HLD (soutien) : voir échange avec Guillaume, donne 7 — la manche est acquise
+    // quelle que soit la main exacte du partenaire dans sa fourchette d'ouverture, inutile
+    // de s'arrêter à une simple invite (palier 3) qui sous-vendrait la main. Sans
+    // splinter/3SA ici (déjà tentés juste au-dessus s'ils s'appliquaient) : au-delà de
+    // 15HLD, on saute directement à la manche plutôt que d'ajouter un palier
+    // supplémentaire pour une exploration de chelem, hors périmètre (pas de
+    // contrôle/Blackwood).
+    if (supportPoints >= 16 && fitLen >= 3) {
+        const call = (bid.level + 3) + suit;
+        if (isCallLegal(history, call, seat)) return call;
+    }
+
     // 11-12 HLD avec fit 4+ cartes : soutien au palier 3, non-forcing.
     if (supportPoints >= 11 && supportPoints <= 12 && fitLen >= 4) {
         const call = (bid.level + 2) + suit;
@@ -2696,14 +2708,15 @@ function isExactly5332(lengths) {
     return values[0] === 5 && values[1] === 3 && values[2] === 3 && values[3] === 2;
 }
 
-// Rebid de l'ouvreur après une réponse 2/1 forcing de manche (voir échange avec Guillaume,
-// donne 1) : 15H+ avec une répartition EXACTEMENT 5332 -> 2SA ; sinon (12-14H, ou 15H+
-// mais irrégulière) -> bicolore économique (2e couleur de 4+ cartes, autre que celle déjà
-// ouverte et celle du partenaire, au palier le moins cher possible) ; à défaut, répète sa
-// couleur d'ouverture. Pas de main "monstre" séparée ici : le filet 18HL+ plus haut
-// (isRaiseOfMySuit) ne s'applique de toute façon pas dans ce cas précis, où le partenaire
-// n'a pas soutenu ma couleur mais changé de couleur.
-function decideOpenerRebidAfter2over1(hand, hcp, hl, myBid, partnerParsed, seat, history) {
+// Rebid de l'ouvreur après une réponse en changement de couleur (voir échange avec
+// Guillaume, donnes 1 et 5 : forcing quel que soit le palier, 1 ou 2 — pas seulement le
+// 2/1 sur majeure) : 15H+ avec une répartition EXACTEMENT 5332 -> 2SA ; sinon (12-14H, ou
+// 15H+ mais irrégulière) -> bicolore économique (2e couleur de 4+ cartes, autre que celle
+// déjà ouverte et celle du partenaire, au palier le moins cher possible) ; à défaut,
+// répète sa couleur d'ouverture. Pas de main "monstre" séparée ici : le filet 18HL+ plus
+// haut (isRaiseOfMySuit) ne s'applique de toute façon pas dans ce cas précis, où le
+// partenaire n'a pas soutenu ma couleur mais changé de couleur.
+function decideOpenerRebidAfterNewSuit(hand, hcp, hl, myBid, partnerParsed, seat, history) {
     const lengths = suitLengths(hand);
 
     if (hcp >= 15 && isExactly5332(lengths)) {
@@ -2767,14 +2780,15 @@ function decideRobotOpenerRebid(hand, hcp, hl, myOpeningCall, partnerCall, seat,
         if (isCallLegal(history, call, seat)) return call;
     }
 
-    // 2/1 forcing de manche (voir échange avec Guillaume, donne 1) : une réponse en
-    // changement de couleur au palier 2 sur une ouverture d'1 MAJEURE est forcing de
-    // manche dans ce système — l'ouvreur DOIT reparler quels que soient ses points,
-    // contrairement au filet général ci-dessous qui ne se déclenche qu'à 18HL+.
-    const is2over1 = (myBid.strain === 'S' || myBid.strain === 'H') && partnerParsed
-        && partnerParsed.level === 2 && partnerParsed.strain !== myBid.strain && partnerParsed.strain !== 'NT';
-    if (is2over1) {
-        return decideOpenerRebidAfter2over1(hand, hcp, hl, myBid, partnerParsed, seat, history);
+    // Réponse en changement de couleur forcing (voir échange avec Guillaume, donnes 1 et
+    // 5) : une réponse en NOUVELLE couleur — palier 1 ou 2, peu importe — n'est jamais
+    // limitée par nature (contrairement à un soutien ou une réponse à SA, qui bornent la
+    // main) : l'ouvreur DOIT reparler quels que soient ses points, jusqu'à ce que l'un des
+    // deux camps sache que la manche n'est pas jouable — contrairement au filet général
+    // plus bas, qui ne se déclenche qu'à 18HL+.
+    const isNewSuitResponse = partnerParsed && partnerParsed.strain !== myBid.strain && partnerParsed.strain !== 'NT';
+    if (isNewSuitResponse) {
+        return decideOpenerRebidAfterNewSuit(hand, hcp, hl, myBid, partnerParsed, seat, history);
     }
 
     if (hl < 18) return 'PASS'; // seule une main nettement au-dessus d'une ouverture minimale rejustifie de reparler
