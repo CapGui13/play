@@ -2451,8 +2451,11 @@ function decideRobotResponse(hand, hcp, hl, partnerCall, seat, history, partnerP
     // franche au palier 1 passe AVANT de soutenir la mineure du partenaire — le principe
     // qu'on cherche d'abord un fit à la majeure, plus rentable, avant de se rabattre sur
     // la mineure (voir échange avec Guillaume : bug trouvé en jouant, l'inverse était fait).
+    // Avec les DEUX majeures à 4 cartes, on annonce "économiquement" — Cœur (le moins
+    // cher) d'abord, pas Pique — pour garder la main de montrer Pique ensuite si besoin
+    // sans se fermer d'options (bug trouvé à l'audit, donne 6 : l'ordre était inversé).
     if (hl >= 6 && partnerOpenedMinor) {
-        const major = ['S', 'H'].find(s => lengths[s] >= 4);
+        const major = ['H', 'S'].find(s => lengths[s] >= 4);
         if (major) {
             const call = '1' + major;
             if (isCallLegal(history, call, seat)) return call;
@@ -2472,21 +2475,40 @@ function decideRobotResponse(hand, hcp, hl, partnerCall, seat, history, partnerP
     // jamais pour une ouverture à la mineure elle-même, mais possible via une
     // intervention) ; sinon 6HL, plus prudent puisque le fit est moins garanti (mineure
     // d'ouverture, qui peut n'avoir que 3 cartes dans ce système).
+    //
+    // Exception "1SA poubelle" (voir échange avec Guillaume, donne 3) : avec une main
+    // PLATE et un fit d'EXACTEMENT 3 cartes à une mineure qui n'a jamais promis 5+ (donc
+    // jamais via une intervention, seulement une ouverture), s'engager dans ce fit
+    // marginal vaut moins qu'un simple 1SA naturel — surtout au palier 1, où 1SA coûte la
+    // même chose. Ne s'applique pas avec 4+ cartes (fit plus solide, vaut la peine d'être
+    // montré) ni sur une main irrégulière (une distribution à exploiter ailleurs).
     const minFitPoints = partnerPromises5Plus ? hcp : hl;
-    if (lengths[suit] >= 3 && minFitPoints >= 6) {
+    const flatWithMarginalMinorFit = !partnerPromises5Plus && lengths[suit] === 3
+        && isHandBalancedForNT(lengths) && bid.level === 1;
+    if (lengths[suit] >= 3 && minFitPoints >= 6 && !flatWithMarginalMinorFit) {
         const raiseLevel = bid.level + (hl >= 10 ? 2 : 1);
         const call = raiseLevel + suit;
         if (isCallLegal(history, call, seat)) return call;
     }
 
     // Pas de fit : nouvelle couleur (4+ cartes), au moins 11HL (seuil SEF pour un
-    // changement de couleur), au palier minimal légal.
+    // changement de couleur), au palier minimal légal — sauf sur un barrage faible du
+    // partenaire (2 faible, voir decideRobotOpening) avec une vraie main forte (13H+,
+    // voir échange avec Guillaume, donne 8) : annoncer sa couleur au palier minimal
+    // ressemblerait trop à une main limitée alors qu'il y a un vrai excédent à montrer —
+    // saute un palier AU-DELÀ du minimum naturel plutôt que de sous-jouer la main.
     if (hl >= 11) {
         const newSuit = longestSuitPreferHigh(lengths);
         if (newSuit !== suit && lengths[newSuit] >= 4) {
+            let naturalLevel = null;
             for (let level = bid.level; level <= 7; level++) {
-                const call = level + newSuit;
-                if (isCallLegal(history, call, seat)) return call;
+                if (isCallLegal(history, level + newSuit, seat)) { naturalLevel = level; break; }
+            }
+            if (naturalLevel !== null) {
+                const shouldJump = bid.level === 2 && hcp >= 13;
+                const jumpLevel = shouldJump ? naturalLevel + 1 : naturalLevel;
+                if (jumpLevel <= 7 && isCallLegal(history, jumpLevel + newSuit, seat)) return jumpLevel + newSuit;
+                return naturalLevel + newSuit; // repli si le saut dépasse 7 (rarissime)
             }
         }
     }
@@ -2553,6 +2575,41 @@ function decideRobotIntervention(hand, hcp, hl, seat, history, dealVulnerable) {
     return chosenLevel + suit;
 }
 
+// Suite du RÉPONDANT après un 2/1 forcing de manche, une fois que le partenaire a rebiddé
+// (voir échange avec Guillaume, donne 1 : "3SA, sans fit majeur") : cherche un fit avec
+// l'OUVERTURE d'abord (3+ cartes, l'ouvreur l'a établie en premier), puis avec le rebid
+// (4+ cartes cette fois — une simple 2e couleur tout juste montrée mérite un support plus
+// exigeant qu'une couleur déjà confirmée, sans quoi on privilégierait à tort un fit
+// médiocre plutôt qu'une manche à SA bien mieux fondée sur une longue solide), sinon 3SA
+// par défaut (la zone de manche est déjà connue grâce au forcing).
+function decideResponderContinuationAfter2over1(hand, hcp, hl, openingBid, myResponseBid, partnerRebidCall, seat, history) {
+    const lengths = suitLengths(hand);
+    const rebid = parseBid(partnerRebidCall);
+    if (!rebid) return 'PASS'; // contre/passe du partenaire à ce stade : hors périmètre, filet de sécurité
+
+    if (rebid.strain !== 'NT') {
+        if (lengths[openingBid.strain] >= 3) {
+            for (let level = rebid.level; level <= 7; level++) {
+                const call = level + openingBid.strain;
+                if (isCallLegal(history, call, seat)) return call;
+            }
+        }
+        if (rebid.strain !== myResponseBid.strain && lengths[rebid.strain] >= 4) {
+            for (let level = rebid.level; level <= 7; level++) {
+                const call = level + rebid.strain;
+                if (isCallLegal(history, call, seat)) return call;
+            }
+        }
+    }
+
+    for (let level = 3; level <= 7; level++) {
+        const call = level + 'NT';
+        if (isCallLegal(history, call, seat)) return call;
+    }
+    return 'PASS';
+}
+
+
 // Décision de RÉPONSE au contre d'appel du PARTENAIRE : quasiment obligatoire (main
 // faible ou non), dans l'une des 3 couleurs non contrées — la plus longue chez soi.
 // Simplifié à un seul palier selon les points, sans vrai barème de saut ni main
@@ -2588,31 +2645,98 @@ function decideRobotResponseToDouble(hand, hl, seat, history) {
     return 'PASS';
 }
 
+// Vrai si la répartition est EXACTEMENT 5-3-3-2 (pas 4-3-3-3 ni 4-4-3-2, contrairement à
+// isHandBalancedForNT plus général) — voir échange avec Guillaume, donne 1 : c'est cette
+// répartition précise qui déclenche 2SA dans son rebid après un 2/1 forcing de manche.
+function isExactly5332(lengths) {
+    const values = ['S', 'H', 'D', 'C'].map(s => lengths[s]).sort((a, b) => b - a);
+    return values[0] === 5 && values[1] === 3 && values[2] === 3 && values[3] === 2;
+}
+
+// Rebid de l'ouvreur après une réponse 2/1 forcing de manche (voir échange avec Guillaume,
+// donne 1) : 15H+ avec une répartition EXACTEMENT 5332 -> 2SA ; sinon (12-14H, ou 15H+
+// mais irrégulière) -> bicolore économique (2e couleur de 4+ cartes, autre que celle déjà
+// ouverte et celle du partenaire, au palier le moins cher possible) ; à défaut, répète sa
+// couleur d'ouverture. Pas de main "monstre" séparée ici : le filet 18HL+ plus haut
+// (isRaiseOfMySuit) ne s'applique de toute façon pas dans ce cas précis, où le partenaire
+// n'a pas soutenu ma couleur mais changé de couleur.
+function decideOpenerRebidAfter2over1(hand, hcp, hl, myBid, partnerParsed, seat, history) {
+    const lengths = suitLengths(hand);
+
+    if (hcp >= 15 && isExactly5332(lengths)) {
+        const call = '2NT';
+        if (isCallLegal(history, call, seat)) return call;
+    }
+
+    const order = ['S', 'H', 'D', 'C'].filter(s => s !== myBid.strain);
+    let secondSuit = null;
+    for (const s of order) {
+        if (lengths[s] >= 4 && (!secondSuit || lengths[s] > lengths[secondSuit])) secondSuit = s;
+    }
+    if (secondSuit) {
+        for (let level = partnerParsed.level; level <= 7; level++) {
+            const call = level + secondSuit;
+            if (isCallLegal(history, call, seat)) return call;
+        }
+    }
+
+    for (let level = partnerParsed.level; level <= 7; level++) {
+        const call = level + myBid.strain;
+        if (isCallLegal(history, call, seat)) return call;
+    }
+    return 'PASS';
+}
+
+
 // Rebid de l'OUVREUR (voir échange avec Guillaume) : sans lui, un ouvreur avec une main
 // bien plus forte qu'une ouverture minimale (18HL+) reste bloqué dès que le partenaire a
 // répondu quelque chose, même s'il est évident qu'il faut reparler (ex. 22H qui passent
 // sur une réponse minimale). Volontairement TRÈS borné pour rester sûr : une seule
 // occasion de rebid par donne (voir decideRobotCall, qui ne l'autorise que si l'ouvreur
-// n'a encore parlé qu'une fois ET que la dernière annonce réelle est celle du partenaire),
-// et seulement pour les mains vraiment fortes. Ne couvre pas les enchères d'essai, de
-// contrôle, ni les séquences différées à 2 tours du document SEF fourni par Guillaume —
-// juste de quoi éviter les partiels absurdes.
+// n'a encore parlé qu'une fois ET que la dernière annonce réelle est celle du partenaire).
+// Deux déclencheurs INDÉPENDANTS du seuil de 18HL+ (voir échange avec Guillaume) :
+//   - loi des atouts (6+ cartes à sa couleur, fit connu grâce au soutien du partenaire) ;
+//   - 2/1 forcing de manche (réponse en changement de couleur au palier 2 sur une
+//     ouverture d'1 majeure), qui OBLIGE l'ouvreur à reparler quels que soient ses points.
+// Ne couvre pas les enchères d'essai, de contrôle, ni les séquences différées à 2 tours du
+// document SEF fourni par Guillaume — juste de quoi éviter les partiels absurdes.
 function decideRobotOpenerRebid(hand, hcp, hl, myOpeningCall, seat, history) {
-    if (hl < 18) return 'PASS'; // seule une main nettement au-dessus d'une ouverture minimale rejustifie de reparler
-
     const myBid = parseBid(myOpeningCall);
     if (!myBid || myBid.strain === 'NT') return 'PASS'; // 1SA/2SA déjà bien décrits, pas de rebid géré ici
 
     const lengths = suitLengths(hand);
     const partnerBid = getLastActualBid(history); // la réponse du partenaire
     const partnerParsed = parseBid(partnerBid.call);
+    const isRaiseOfMySuit = partnerParsed && partnerParsed.strain === myBid.strain;
+
+    // Loi des atouts (voir échange avec Guillaume, donne 4) : 6+ cartes dans SA propre
+    // couleur, soutenue par le partenaire (3+ cartes garanties par son enchère, voir
+    // decideRobotMajorSupport / le soutien mineur plus haut) → fit connu de 9+ cartes, qui
+    // suffit à repousser d'un palier indépendamment des points d'honneur (la sécurité
+    // distributionnelle prime sur le compte de points). Se déclenche AVANT tout seuil de
+    // points, y compris pour une main d'ouverture minimale.
+    if (isRaiseOfMySuit && lengths[myBid.strain] >= 6) {
+        const call = (partnerParsed.level + 1) + myBid.strain;
+        if (isCallLegal(history, call, seat)) return call;
+    }
+
+    // 2/1 forcing de manche (voir échange avec Guillaume, donne 1) : une réponse en
+    // changement de couleur au palier 2 sur une ouverture d'1 MAJEURE est forcing de
+    // manche dans ce système — l'ouvreur DOIT reparler quels que soient ses points,
+    // contrairement au filet général ci-dessous qui ne se déclenche qu'à 18HL+.
+    const is2over1 = (myBid.strain === 'S' || myBid.strain === 'H') && partnerParsed
+        && partnerParsed.level === 2 && partnerParsed.strain !== myBid.strain && partnerParsed.strain !== 'NT';
+    if (is2over1) {
+        return decideOpenerRebidAfter2over1(hand, hcp, hl, myBid, partnerParsed, seat, history);
+    }
+
+    if (hl < 18) return 'PASS'; // seule une main nettement au-dessus d'une ouverture minimale rejustifie de reparler
 
     // Le partenaire a-t-il confirmé un fit pour MA couleur d'ouverture (soutien direct,
     // ou 2SA/3SA conventionnels — voir decideRobotMajorSupport) ? Ne tente pas de
     // reconnaître un splinter ici (saut double dans une AUTRE couleur, trop fragile à
     // identifier à coup sûr sans risquer un faux positif) — un tel cas retombe dans la
     // branche "nouvelle couleur" plus bas, pas idéale mais sûre.
-    const isRaiseOfMySuit = partnerParsed && partnerParsed.strain === myBid.strain;
     const isConventionalFitShow = partnerBid.call === '2NT' || partnerBid.call === '3NT';
 
     if (isRaiseOfMySuit || isConventionalFitShow) {
@@ -2730,6 +2854,28 @@ function decideRobotCall(seat, deal, history) {
         if (wasOpening && partnerJustResponded) {
             call = decideRobotOpenerRebid(hand, hcp, hl, myBids[0].call, seat, history);
             explanation = `Rebid de l'ouvreur après ${formatCallForDisplay(lastBid.call)} du partenaire (${points})`;
+        } else if (!wasOpening && partnerJustResponded) {
+            // Suis-je dans une séquence 2/1 forcing de manche reconnue (voir échange avec
+            // Guillaume, donne 1) ? Il faut que MA première annonce ait été une réponse en
+            // changement de couleur au palier 2 sur une ouverture d'1 MAJEURE du
+            // partenaire, et que lui-même n'ait fait qu'UN SEUL rebid depuis (son 2e tour,
+            // qu'on vient d'entendre) — pas plus, sinon on sort du cas borné qu'on sait
+            // gérer. Hors de ce cas précis, pas de suite pour le répondant (voir échange
+            // avec Guillaume — 4ème couleur forcing mis de côté, chantier plus large).
+            const partnerOpeningEntry = history.slice(0, myBidIndex).find(e => isBidCall(e.call));
+            const partnerOpeningBid = partnerOpeningEntry ? parseBid(partnerOpeningEntry.call) : null;
+            const myResponseBid = parseBid(myBids[0].call);
+            const wasGF2over1 = partnerOpeningBid && myResponseBid
+                && partnerOpeningBid.level === 1 && (partnerOpeningBid.strain === 'S' || partnerOpeningBid.strain === 'H')
+                && myResponseBid.level === 2 && myResponseBid.strain !== partnerOpeningBid.strain && myResponseBid.strain !== 'NT';
+            const partnerBidsCount = history.filter(e => e.seat === lastBid.seat && !isPass(e.call)).length;
+
+            if (wasGF2over1 && partnerBidsCount === 2) {
+                call = decideResponderContinuationAfter2over1(hand, hcp, hl, partnerOpeningBid, myResponseBid, lastBid.call, seat, history);
+                explanation = `Suite du 2/1 forcing de manche après ${formatCallForDisplay(lastBid.call)} du partenaire (${points})`;
+            } else {
+                explanation = `A déjà annoncé — passe (règle du tour unique)`;
+            }
         } else {
             explanation = `A déjà annoncé — passe (règle du tour unique)`;
         }

@@ -199,6 +199,38 @@ trop tôt") : un simple passe initial (faute de points pour ouvrir — très fr�
 de répondre normalement à son partenaire plus tard. Seule une vraie annonce (pas un passe)
 épuise désormais le tour unique de dialogue.
 
+## Corrections issues d'une relecture de session (voir échange avec Guillaume)
+
+Après une session de test, Guillaume a exporté le fichier et relu chaque donne en détail
+— plusieurs corrections concrètes en ont découlé :
+
+- **Réponse "up the line"** : avec les deux majeures à 4 cartes en réponse à une ouverture
+  à la mineure, Cœur est annoncé avant Pique (le moins cher d'abord, pour garder la main
+  de montrer Pique ensuite sans se fermer d'options) — l'ordre était inversé.
+- **"1SA poubelle"** : avec une main plate et un fit d'exactement 3 cartes à une mineure
+  qui n'a jamais promis 5+ (donc via une ouverture, pas une intervention), 1SA naturel
+  est préféré à un soutien direct qui engagerait sur un fit marginal.
+- **2/1 forcing de manche** : une réponse en changement de couleur au palier 2 sur une
+  ouverture d'1 majeure est désormais reconnue comme forcing de manche — l'ouvreur
+  reparle TOUJOURS (pas seulement à 18HL+) : répète sa couleur ou montre un bicolore
+  économique (4+ cartes) en zone 1 (12-14H), ou en zone 2+ irrégulière ; 2SA avec 15H+ et
+  une répartition exactement 5332. Le répondant enchérit une deuxième fois lui aussi :
+  fit avec l'ouverture (3+ cartes) ou le rebid (4+, seuil plus exigeant qu'une couleur
+  déjà confirmée), sinon 3SA par défaut.
+- **Loi des atouts** : avec 6+ cartes dans sa couleur d'ouverture et un soutien confirmé
+  du partenaire (fit connu de 9+ cartes), l'ouvreur repousse d'un palier indépendamment
+  de ses points d'honneur — la sécurité distributionnelle prime.
+- **Réponse plus ferme face à un barrage** : avec une vraie main forte (13H+) en réponse
+  à un "2 faible" du partenaire, un saut au-delà du palier naturel montre l'excédent
+  plutôt qu'une simple couleur au minimum, qui ressemblerait à une main limitée.
+
+**Mis de côté pour l'instant**, signalés explicitement plutôt qu'ignorés silencieusement :
+4ème couleur forcing complet (exigerait plusieurs enchères par camp au-delà du cas 2/1
+borné ci-dessus, risque de casser la terminaison sans une refonte plus large), points
+Kaplan-Rubens (pas de formule fournie), contre "toute distribution" et séquences
+compétitives détaillées après contre (trop pointu pour une première passe), repli 1SA en
+quatrième position (ambigu sur les conditions exactes de déclenchement).
+
 ## Limites connues
 
 - **Connexion directe (WebRTC)** : fonctionne dans l'immense majorité des cas grâce aux
