@@ -2632,6 +2632,21 @@ function decideRobotIntervention(hand, hcp, hl, seat, history, dealVulnerable) {
     const suit = longestSuitPreferHigh(lengths);
     if (lengths[suit] < 5) return 'PASS';
 
+    // Barrage en INTERVENTION (voir échange avec Guillaume, donne 2 — précision
+    // sémantique : c'est bien une intervention sur l'adversaire, pas une réponse au
+    // partenaire) : même forme qu'un barrage d'ouverture (8-12HL, 6+ cartes dans une
+    // seule couleur, rien d'autre de significatif à montrer) — les points sont
+    // concentrés dans une seule longue sans valeur défensive ailleurs, mieux vaut sauter
+    // au palier 2 pour gêner l'adversaire plutôt qu'intervenir naturellement au palier
+    // minimal (souvent 1, qui ne gêne pas grand-chose et sous-décrit la main).
+    const hasOtherFourCardSuit = ['S', 'H', 'D', 'C'].some(s => s !== suit && lengths[s] >= 4);
+    if (hl <= 12 && lengths[suit] >= 6 && !hasOtherFourCardSuit) {
+        for (let level = 2; level <= 7; level++) {
+            const call = level + suit;
+            if (isCallLegal(history, call, seat)) return call;
+        }
+    }
+
     // Cherche le palier minimal légal dans cette couleur, sans encore décider si on s'y
     // engage (voir le contrôle du palier 2+ juste après).
     let chosenLevel = null;

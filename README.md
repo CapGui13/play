@@ -279,6 +279,13 @@ manche dans la couleur du partenaire ; sinon il répète sa propre couleur. Logi
 aux ouvertures de barrage (palier 2+), distincte de la logique des ouvertures naturelles
 au palier 1.
 
+**Barrage en intervention** (voir échange avec Guillaume, précision sémantique importante
+— c'est une intervention sur l'adversaire, pas une réponse au partenaire) : même forme
+qu'un barrage d'ouverture (8-12HL, 6+ cartes dans une seule couleur, rien d'autre à
+montrer) mais en intervention — saut direct au palier 2 plutôt qu'une intervention
+naturelle au palier minimal, qui sous-décrit une main concentrée dans une longue sans
+valeur défensive ailleurs.
+
 ## Nouvelle relecture de session (voir échange avec Guillaume)
 
 Trois corrections supplémentaires, chacune trouvée en creusant au-delà du symptôme initial :
