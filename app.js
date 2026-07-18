@@ -3757,6 +3757,14 @@ function renderAuctionLedger() {
     // chaque nouvelle annonce, pour la repérer d'un coup d'œil sans avoir à la chercher
     // dans la grille (voir .is-latest-call plus bas / styles.css).
     const lastIndex = auctionHistory.length > 0 ? slots.length - 1 : -1;
+    // Ne flashe QUE si cette annonce n'a encore jamais été flashée (voir échange avec
+    // Guillaume) : sans ce marqueur posé directement sur l'entrée elle-même (qui survit
+    // à la navigation entre donnes, voir gotoBoard), revenir sur une donne déjà terminée
+    // rejouerait l'animation sur le dernier passe à chaque re-rendu, alors que ce n'est
+    // pas une nouvelle annonce.
+    const lastEntry = auctionHistory.length > 0 ? auctionHistory[auctionHistory.length - 1] : null;
+    const shouldFlashLatest = !!(lastEntry && !lastEntry._flashed);
+    if (shouldFlashLatest) lastEntry._flashed = true;
 
     const rows = [];
     for (let i = 0; i < slots.length || rows.length === 0; i += 4) {
@@ -3768,7 +3776,7 @@ function renderAuctionLedger() {
     let flatIndex = 0;
     body.innerHTML = rows.map(row => {
         const cells = [0, 1, 2, 3].map(i => {
-            const isLatest = flatIndex === lastIndex;
+            const isLatest = flatIndex === lastIndex && shouldFlashLatest;
             flatIndex++;
             const cls = isLatest ? ' class="is-latest-call"' : '';
             return `<td${cls}>${row[i] != null ? row[i] : ''}</td>`;
