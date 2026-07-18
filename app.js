@@ -3367,15 +3367,52 @@ function updateChatUnreadBadge() {
     }
 }
 
+// Vrai seulement si le panneau de chat est à la fois OUVERT et réellement visible à
+// l'écran — pas juste "ouvert" en état (voir échange avec Guillaume) : sur mobile, le chat
+// ancré en bas de l'écran de jeu peut être ouvert sans être dans le champ de vision si on
+// a fait défiler la page vers le haut pour voir sa main ou la boîte d'enchères.
+function isChatPanelVisibleOnScreen() {
+    if (!chatPanelOpen) return false;
+    const panel = document.getElementById('chatPanel');
+    if (!panel) return false;
+    const rect = panel.getBoundingClientRect();
+    const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
+    return rect.bottom > 0 && rect.top < viewportHeight;
+}
+
+// Bandeau en haut de l'écran pour un message de chat reçu pendant que le panneau n'est
+// pas visible (voir échange avec Guillaume — même mécanique que le wizz) : même style que
+// les autres bandeaux, réutilisé tel quel.
+function flashChatMessageToast(senderName, text) {
+    let toast = document.getElementById('chatMessageToast');
+    if (!toast) {
+        toast = document.createElement('div');
+        toast.id = 'chatMessageToast';
+        toast.className = 'call-explanation-toast';
+        document.body.appendChild(toast);
+    }
+    toast.textContent = `💬 ${senderName} : ${text}`;
+    toast.classList.remove('visible');
+    void toast.offsetWidth;
+    toast.classList.add('visible');
+    clearTimeout(toast._hideTimer);
+    toast._hideTimer = setTimeout(() => toast.classList.remove('visible'), 3500);
+}
+
 // Point d'entrée UNIQUE pour tout message de chat, qu'il vienne de moi (voir
 // uiSendChatMessage) ou d'un autre participant (voir handlePeerData) : ajoute au journal,
-// met à jour l'affichage, et incrémente le badge seulement si le panneau est fermé.
+// met à jour l'affichage, et — seulement pour un message de quelqu'un d'AUTRE que moi, et
+// seulement si le panneau n'est pas visible à l'écran (voir isChatPanelVisibleOnScreen) —
+// incrémente le badge et affiche un bandeau (voir échange avec Guillaume : le badge doit
+// apparaître même si le panneau est techniquement "ouvert" mais hors du champ de vision).
 function addChatMessage(msg) {
     chatMessages.push(msg);
     renderChat();
-    if (!chatPanelOpen) {
+    const isMine = msg.senderId === myParticipantId;
+    if (!isMine && !isChatPanelVisibleOnScreen()) {
         chatUnreadCount++;
         updateChatUnreadBadge();
+        flashChatMessageToast(msg.senderName, msg.text);
     }
 }
 
@@ -3484,7 +3521,7 @@ function triggerWizzEffect() {
         document.body.classList.remove('wizz-shake'); // relance l'animation même si déjà en cours (rewizz rapide)
         void document.body.offsetWidth; // force un reflow, sinon retirer/remettre la même classe dans le même tick ne relance rien
         document.body.classList.add('wizz-shake');
-        setTimeout(() => document.body.classList.remove('wizz-shake'), 600);
+        setTimeout(() => document.body.classList.remove('wizz-shake'), 1200);
     }
     playWizzSound();
     flashWizzToast();
@@ -3532,7 +3569,7 @@ function flashWizzToast() {
     void toast.offsetWidth;
     toast.classList.add('visible');
     clearTimeout(toast._hideTimer);
-    toast._hideTimer = setTimeout(() => toast.classList.remove('visible'), 2200);
+    toast._hideTimer = setTimeout(() => toast.classList.remove('visible'), 4000);
 }
 
 // Outil de diagnostic (voir échange avec Guillaume) : affiche pourquoi un robot a fait
