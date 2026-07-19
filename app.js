@@ -1549,14 +1549,21 @@ function renderSeatAssignmentGrid() {
                 .concat(participants.map(p =>
                     `<option value="${p.id}" ${p.id === assignedId ? 'selected' : ''}>${escapeHtml(p.name)}</option>`
                 ));
-            const avatarAttrs = assignedId ? ` class="seat-occupant-handle" draggable="true" ondragstart="uiDragStartParticipant(event, '${assignedId}')"` : '';
+            // Puce identique à celles du kibbitz (voir échange avec Guillaume : logo et
+            // nom réunis, pas séparés comme avant) — même classe .kibitz-chip, réutilisée
+            // telle quelle pour l'homogénéité visuelle et parce que le glisser-déposer
+            // entre les deux zones doit se sentir comme daplacer LE MÊME genre d'objet.
+            // Le menu déroulant reste en dessous, plus petit, comme méthode de secours
+            // pour qui préfère cliquer plutôt que glisser (voir échange avec Guillaume).
+            const occupantP = assignedId ? participants.find(x => x.id === assignedId) : null;
+            const occupantDisplay = occupantP
+                ? `<span class="kibitz-chip seat-occupant-chip" draggable="true" ondragstart="uiDragStartParticipant(event, '${assignedId}')">${avatarHtml(assignedId)}<span class="kibitz-chip-name">${escapeHtml(occupantP.name)}</span></span>`
+                : `<span class="kibitz-chip seat-occupant-chip seat-occupant-chip-robot"><span class="mini-avatar mini-avatar-robot">🤖</span><span class="kibitz-chip-name">(robot)</span></span>`;
             return `
                 <div class="seat-box seat-pos-${seat}${flashClass}" ondragover="uiAllowDrop(event)" ondrop="uiDropOnSeat(event, '${seat}')">
                     <span class="seat-box-label">${SEAT_FULL_NAME[seat]}</span>
-                    <div class="seat-select-row">
-                        ${assignedId ? `<span${avatarAttrs}>${avatarHtml(assignedId)}</span>` : '<span class="mini-avatar mini-avatar-robot">🤖</span>'}
-                        <select class="seat-assign-select" onchange="uiAssignSeat('${seat}', this.value)">${options.join('')}</select>
-                    </div>
+                    <div class="seat-occupant-row">${occupantDisplay}</div>
+                    <select class="seat-assign-select seat-assign-select-fallback" onchange="uiAssignSeat('${seat}', this.value)">${options.join('')}</select>
                 </div>
             `;
         }

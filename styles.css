@@ -1151,25 +1151,32 @@ body.on-landing-screen .connection-bar {
     cursor: grabbing;
 }
 
-.seat-select-row [draggable="true"] {
+/* Rangée contenant la puce d'occupant (voir échange avec Guillaume : la puce elle-même
+   réutilise .kibitz-chip telle quelle, pour l'homogénéité avec le kibbitz). */
+.seat-occupant-row {
+    display: flex;
+    justify-content: center;
+}
+
+.seat-occupant-chip {
     cursor: grab;
 }
 
-/* Zone de préhension agrandie autour de l'avatar (voir échange avec Guillaume : à
-   l'origine, seul le petit cercle lui-même était glissable, une cible trop petite —
-   surtout au doigt). Pas de nom en texte à côté ici (le <select> le montre déjà via
-   l'option choisie), donc la marge/padding est ce qui élargit la cible plutôt qu'un
-   deuxième élément à envelopper, comme sur les puces kibbitz. */
-.seat-occupant-handle {
-    display: inline-flex;
-    align-items: center;
-    padding: 4px;
-    margin: -4px;
-    border-radius: 8px;
+.seat-occupant-chip:active {
+    cursor: grabbing;
 }
 
-.seat-occupant-handle:active {
-    cursor: grabbing;
+.seat-occupant-chip-robot {
+    cursor: default;
+}
+
+/* Menu déroulant gardé comme méthode de secours pour qui préfère cliquer plutôt que
+   glisser (voir échange avec Guillaume) — plus discret que la puce, qui porte maintenant
+   l'identité visuelle principale du siège. */
+.seat-assign-select-fallback {
+    margin-top: 4px;
+    font-size: 0.75rem;
+    opacity: 0.75;
 }
 
 .seat-assignment-grid {
@@ -1290,7 +1297,7 @@ body.on-landing-screen .connection-bar {
     font-size: 0.75rem;
 }
 
-.seat-select-row, .seat-box-name-row {
+.seat-box-name-row {
     display: flex;
     align-items: center;
     gap: 8px;
@@ -1299,10 +1306,6 @@ body.on-landing-screen .connection-bar {
 .seat-box-name-row .seat-box-name {
     flex: 1;
     text-align: left;
-}
-
-.seat-select-row .seat-assign-select {
-    flex: 1;
 }
 
 .seat-assign-select {
