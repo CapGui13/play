@@ -626,6 +626,20 @@ function uiMirrorLineHcpConstraint(sourceId) {
     if (Number.isFinite(n)) targetEl.value = String(40 - n);
 }
 
+// Prévient si les contraintes ont changé depuis la dernière génération réussie (voir
+// échange avec Guillaume) : rien ne se régénère automatiquement (comme pour les deux
+// autres sources, fichier/bibliothèque), donc sans ce rappel on pourrait croire à tort que
+// les donnes déjà générées reflètent les derniers réglages. Ne s'affiche que si une
+// génération a déjà eu lieu (lastGeneratedConstraintsJSON défini) ET que la lecture
+// actuelle des champs diffère de l'empreinte prise à ce moment-là.
+function uiCheckConstraintsStale() {
+    if (lastGeneratedConstraintsJSON === undefined) return;
+    const { constraints } = readRandomDealConstraintsFromUI();
+    if (JSON.stringify(constraints) !== lastGeneratedConstraintsJSON) {
+        setHostSetupMessage('Contraintes modifiées depuis la dernière génération — cliquez de nouveau sur "🎲 Générer" pour les appliquer.', true);
+    }
+}
+
 function uiToggleRandomDealConstraints() {
     const panel = document.getElementById('randomDealConstraintsPanel');
     const btn = document.getElementById('randomDealConstraintsToggle');
@@ -679,6 +693,12 @@ function readRandomDealConstraintsFromUI() {
     return { constraints: hasAny ? { seats, lines } : null, errors };
 }
 
+// Empreinte des contraintes utilisées à la DERNIÈRE génération réussie (voir échange avec
+// Guillaume) — sert uniquement à détecter si les champs ont changé depuis, pour prévenir
+// que les donnes déjà générées ne les reflètent plus. `undefined` tant qu'aucune génération
+// n'a eu lieu (pas d'avertissement à afficher dans ce cas).
+let lastGeneratedConstraintsJSON;
+
 function uiGenerateRandomDeals() {
     const countInput = document.getElementById('randomDealCount');
     const count = countInput ? parseInt(countInput.value, 10) : NaN;
@@ -692,6 +712,7 @@ function uiGenerateRandomDeals() {
         setHostSetupMessage(errors.join(' '), false);
         return;
     }
+    lastGeneratedConstraintsJSON = JSON.stringify(constraints);
 
     // Désélectionne les deux autres sources, comme elles se désélectionnent déjà
     // mutuellement entre elles (voir uiHandleDealFileChosen/uiHandleDealLibraryChosen) :
@@ -715,11 +736,11 @@ function uiGenerateRandomDeals() {
     // de laisser croire que toutes les donnes générées les respectent silencieusement.
     const unmetCount = generated.filter(d => d.constraintsUnmet).length;
     const unmetNote = unmetCount > 0
-        ? ` ⚠️ ${unmetCount} donne(s) n'ont pas pu satisfaire toutes les contraintes malgré ${RANDOM_DEAL_MAX_RETRIES} tentatives — essayez des fourchettes moins serrées.`
+        ? ` ${unmetCount} donne(s) n'ont pas pu satisfaire toutes les contraintes malgré ${RANDOM_DEAL_MAX_RETRIES} tentatives — essayez des fourchettes moins serrées.`
         : '';
     setHostSetupMessage(
         `${count} donne(s) générée(s) — le calcul du double mort tourne en arrière-plan, le PAR s'affichera en fin de donne dès qu'il sera prêt.${unmetNote}`,
-        unmetCount === 0
+        unmetCount > 0
     );
 
     kickOffBackgroundDD(generated);
@@ -3654,11 +3675,16 @@ function uiSendWizz(targetId) {
 // le bandeau reste pour prévenir sans désagrément visuel.
 function triggerWizzEffect() {
     const prefersReducedMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    // Anime .app-container plutôt que <body> directement (voir échange avec Guillaume) :
+    // sur iOS Safari, une animation transform posée sur <body> ne se joue pas de façon
+    // fiable (lié à sa gestion du scroll/de la barre d'URL) — un élément wrapper interne,
+    // lui, s'anime normalement sur toutes les plateformes.
+    const shakeTarget = document.querySelector('.app-container') || document.body;
     if (!prefersReducedMotion) {
-        document.body.classList.remove('wizz-shake'); // relance l'animation même si déjà en cours (rewizz rapide)
-        void document.body.offsetWidth; // force un reflow, sinon retirer/remettre la même classe dans le même tick ne relance rien
-        document.body.classList.add('wizz-shake');
-        setTimeout(() => document.body.classList.remove('wizz-shake'), 1200);
+        shakeTarget.classList.remove('wizz-shake'); // relance l'animation même si déjà en cours (rewizz rapide)
+        void shakeTarget.offsetWidth; // force un reflow, sinon retirer/remettre la même classe dans le même tick ne relance rien
+        shakeTarget.classList.add('wizz-shake');
+        setTimeout(() => shakeTarget.classList.remove('wizz-shake'), 1200);
     }
     playWizzSound();
     flashWizzToast();
@@ -4481,8 +4507,8 @@ function seatsOfParticipant(pid) {
     return SEATS.filter(seat => seatAssignment[seat] === pid);
 }
 
-// Détermine quelle entrée de l'historique une demande d'undo doit effectivement annuler.
-// Pour un invité : la dernière annonce parmi celles produites par UN des sièges qu'il
+// Détermine quelle entrée de l'historique une demande d'undo doit effectivement annuler :
+// la dernière annonce parmi celles produites par UN des sièges que ce participant
 // contrôle — pas forcément la toute dernière case du tableau, puisqu'un ou plusieurs
 // robots ont pu passer automatiquement juste après (voir maybeRobotBid) si le joueur a
 // mis un peu de temps à cliquer sur "undo". On renvoie alors l'index de SA dernière
@@ -4491,14 +4517,13 @@ function seatsOfParticipant(pid) {
 // tour de ce joueur).
 // Renvoie -1 si ce participant n'a fait aucune annonce sur cette donne (rien à annuler).
 //
-// Exception : quand c'est L'HÔTE qui demande, on garde l'ancien comportement (annuler la
-// toute dernière annonce du tableau, quel qu'en soit l'auteur) — l'hôte arbitre déjà toute
-// la table (navigation libre entre donnes, etc.), et son bouton undo reste un simple
-// "reculer d'un cran", sans distinction de siège.
+// MÊME LOGIQUE pour l'hôte et les invités (voir échange avec Guillaume) : un ancien cas
+// spécial pour 'host' renvoyait ici à tort la toute dernière case du tableau quel qu'en
+// soit l'auteur — si un robot passait automatiquement juste après l'annonce de l'hôte
+// (avant qu'il ait le temps de cliquer "undo"), l'hôte annulait alors CE PASSE ROBOT au
+// lieu de sa propre annonce, ce qui faussait ensuite le calcul de qui doit valider
+// (voir humanOpponentsFor) — l'inverse de ce qui devait se produire.
 function findUndoTargetIndex(requesterId, history) {
-    if (requesterId === 'host') {
-        return history.length - 1;
-    }
     const seats = seatsOfParticipant(requesterId);
     for (let i = history.length - 1; i >= 0; i--) {
         if (seats.includes(history[i].seat)) return i;

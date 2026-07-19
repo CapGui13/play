@@ -201,7 +201,7 @@
                      uiToggleRandomDealConstraints. Toujours cumulée avec la contrainte fixe
                      existante (12H+ dans toute ligne à 2 humains, voir
                      dealSatisfiesHumanLineConstraint dans app.js). -->
-                <div id="randomDealConstraintsPanel" class="random-deal-constraints" style="display:none;">
+                <div id="randomDealConstraintsPanel" class="random-deal-constraints" style="display:none;" oninput="uiCheckConstraintsStale()" onchange="uiCheckConstraintsStale()">
                     <table class="constraints-table">
                         <thead>
                             <tr><th></th><th>H min</th><th>H max</th><th>Couleur</th><th>Long. min</th></tr>

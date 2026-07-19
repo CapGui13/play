@@ -97,6 +97,23 @@ Aucune clé, aucun compte externe à configurer : tout fonctionne dès la mise e
   l'enchère en cours. Seul l'hôte les voit ; les autres joueurs continuent d'utiliser le
   bouton "Donne suivante →" qui n'apparaît qu'une fois l'enchère terminée.
 
+## Corrections diverses (voir échange avec Guillaume)
+
+- **Avertissement contraintes obsolètes** : modifier un champ de contraintes après avoir
+  généré affiche un rappel ("cliquez de nouveau sur Générer") plutôt que de laisser croire
+  que les donnes déjà générées reflètent les derniers réglages — rien ne se régénère
+  automatiquement, comme pour les deux autres sources (fichier, bibliothèque).
+- **Wizz sur iPhone** : le tremblement anime maintenant `.app-container` plutôt que
+  `<body>` directement — iOS Safari n'applique pas de façon fiable une animation
+  `transform` posée sur `<body>` (lié à sa gestion du scroll/de la barre d'URL).
+- **Rôles d'undo inversés** : un ancien cas spécial pour l'hôte annulait toujours la toute
+  dernière case du tableau d'enchères, quel qu'en soit l'auteur — si un robot passait
+  automatiquement juste après l'annonce de l'hôte (avant qu'il clique "undo"), l'hôte
+  annulait ce passe robot au lieu de sa propre annonce, ce qui faussait le calcul de qui
+  doit valider (parfois personne, parfois la mauvaise personne). Retiré ce cas spécial :
+  hôte et invités suivent maintenant exactement la même logique (retrouver la dernière
+  annonce parmi les sièges qu'on contrôle soi-même, pas juste la dernière case du tableau).
+
 ## Contraintes optionnelles pour les donnes aléatoires
 
 Le bouton "⚙️ Contraintes avancées" (repliable, sous le générateur de donnes aléatoires)

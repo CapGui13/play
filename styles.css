@@ -1937,7 +1937,7 @@ table.dd-table td.dd-secondary-contract {
     90% { transform: translate(-2px, 1px); }
 }
 
-body.wizz-shake {
+.app-container.wizz-shake {
     animation: wizzShake 1.2s ease-in-out;
 }
 
