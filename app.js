@@ -3683,16 +3683,11 @@ function uiSendWizz(targetId) {
 // le bandeau reste pour prévenir sans désagrément visuel.
 function triggerWizzEffect() {
     const prefersReducedMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    // Anime .app-container plutôt que <body> directement (voir échange avec Guillaume) :
-    // sur iOS Safari, une animation transform posée sur <body> ne se joue pas de façon
-    // fiable (lié à sa gestion du scroll/de la barre d'URL) — un élément wrapper interne,
-    // lui, s'anime normalement sur toutes les plateformes.
-    const shakeTarget = document.querySelector('.app-container') || document.body;
     if (!prefersReducedMotion) {
-        shakeTarget.classList.remove('wizz-shake'); // relance l'animation même si déjà en cours (rewizz rapide)
-        void shakeTarget.offsetWidth; // force un reflow, sinon retirer/remettre la même classe dans le même tick ne relance rien
-        shakeTarget.classList.add('wizz-shake');
-        setTimeout(() => shakeTarget.classList.remove('wizz-shake'), 1200);
+        document.body.classList.remove('wizz-shake'); // relance l'animation même si déjà en cours (rewizz rapide)
+        void document.body.offsetWidth; // force un reflow, sinon retirer/remettre la même classe dans le même tick ne relance rien
+        document.body.classList.add('wizz-shake');
+        setTimeout(() => document.body.classList.remove('wizz-shake'), 1200);
     }
     playWizzSound();
     flashWizzToast();

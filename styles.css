@@ -1949,7 +1949,7 @@ table.dd-table td.dd-secondary-contract {
     90% { transform: translate(-2px, 1px); }
 }
 
-.app-container.wizz-shake {
+body.wizz-shake {
     animation: wizzShake 1.2s ease-in-out;
 }
 
