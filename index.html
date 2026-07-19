@@ -298,6 +298,12 @@
             <div class="game-actions">
                 <button id="requestUndoBtn" class="btn btn-secondary btn-small" onclick="uiRequestUndo()"><span class="btn-label-full">↩️ Demander un undo</span><span class="btn-label-short">↩️ Undo</span></button>
                 <button id="resetAuctionBtn" class="btn btn-secondary btn-small" onclick="uiResetAuction()"><span class="btn-label-full">↺ Recommencer l'enchère</span><span class="btn-label-short">↺ Recommencer</span></button>
+                <!-- Réservé à l'hôte (voir updateBoardControlVisibility) : voir échange avec
+                     Guillaume — rotation des sièges à 90° dans le sens horaire (N->E->S->O->N),
+                     utilisable à tout moment y compris en pleine enchère. Les mains restent
+                     fixées par position (N/E/S/O), donc ça change qui joue quelle main à cet
+                     instant précis, pas les cartes elles-mêmes ni l'historique déjà enchéri. -->
+                <button id="rotateSeatsBtn" type="button" class="btn btn-secondary btn-small" style="display:none;" onclick="uiRotateSeatsClockwise()"><span class="btn-label-full">🔄 Rotation 90°</span><span class="btn-label-short">🔄 Rotation</span></button>
                 <!-- Visibilité gérée par updateBoardControlVisibility (host ou joueur assis) :
                      voir échange avec Guillaume — récupérer les donnes jouées de toute la session
                      (mains + enchère réelle + vulnérabilité) pour lui permettre de me faire des

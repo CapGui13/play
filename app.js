@@ -1633,6 +1633,59 @@ function uiAssignSeat(seat, participantId) {
     renderLobby();
 }
 
+const SEAT_CLOCKWISE_NEXT = { N: 'E', E: 'S', S: 'W', W: 'N' };
+
+// Fait tourner l'assignation des sièges de 90° dans le sens horaire (voir échange avec
+// Guillaume) : qui était à N se retrouve à E, qui était à E se retrouve à S, etc. Les
+// mains restent fixées par position (N/E/S/O) — donc ça change qui joue quelle main à cet
+// instant précis, pas les cartes elles-mêmes ni l'historique déjà enchéri (qui reste
+// attaché aux sièges, comme au bridge réel). Volontairement utilisable à tout moment, y
+// compris en pleine enchère (voir échange avec Guillaume, qui l'a explicitement demandé
+// malgré le côté déroutant que ça peut avoir mi-enchère) — d'où le petit bandeau
+// d'avertissement envoyé à tout le monde (voir flashSeatsRotatedToast), pour que personne
+// ne découvre le changement de main en silence en plein réflexion.
+function rotatedSeatAssignment(current) {
+    const next = {};
+    for (const seat of SEATS) {
+        next[SEAT_CLOCKWISE_NEXT[seat]] = current[seat];
+    }
+    return next;
+}
+
+// Réservé à l'hôte (voir updateBoardControlVisibility) : applique la rotation localement,
+// recalcule mySeats/autoPassSeats en conséquence, diffuse le nouvel état à tout le monde,
+// puis rafraîchit l'écran actuellement affiché (jeu ou salon selon le moment).
+function uiRotateSeatsClockwise() {
+    if (myRole !== 'host') return;
+    seatAssignment = rotatedSeatAssignment(seatAssignment);
+    autoPassSeats = SEATS.filter(seat => !seatAssignment[seat]);
+    mySeats = SEATS.filter(seat => seatAssignment[seat] === 'host');
+
+    peerConn.send({ type: 'seats-rotated', seatAssignment, autoPassSeats });
+    flashSeatsRotatedToast();
+
+    if (deals) { renderBoard(); } else { renderLobby(); }
+}
+
+// Même mécanique de bandeau que les autres (voir flashWizzToast, uiShowCallExplanation) —
+// prévient TOUT LE MONDE (hôte y compris) qu'une rotation vient d'avoir lieu, pour ne pas
+// découvrir en silence qu'on joue soudain une autre main en pleine réflexion.
+function flashSeatsRotatedToast() {
+    let toast = document.getElementById('seatsRotatedToast');
+    if (!toast) {
+        toast = document.createElement('div');
+        toast.id = 'seatsRotatedToast';
+        toast.className = 'call-explanation-toast';
+        document.body.appendChild(toast);
+    }
+    toast.textContent = '🔄 Les sièges ont tourné !';
+    toast.classList.remove('visible');
+    void toast.offsetWidth;
+    toast.classList.add('visible');
+    clearTimeout(toast._hideTimer);
+    toast._hideTimer = setTimeout(() => toast.classList.remove('visible'), 3000);
+}
+
 function broadcastLobbyState() {
     peerConn.send({ type: 'lobby-state', participants, seatAssignment });
 }
@@ -2222,6 +2275,18 @@ function handlePeerData(msg, guestIndex) {
             // resteraient figés jusqu'à la prochaine annonce.
             if (myRole === 'guest' && !deals) enterLobbyScreen();
             else if (deals) renderBoard();
+            break;
+        }
+
+        // Diffusé par l'hôte (voir uiRotateSeatsClockwise) : recalcule ma propre place à
+        // la table à partir de la nouvelle assignation, puis rafraîchit l'écran actuel.
+        case 'seats-rotated': {
+            seatAssignment = msg.seatAssignment;
+            autoPassSeats = msg.autoPassSeats || [];
+            mySeats = SEATS.filter(seat => seatAssignment[seat] === myParticipantId);
+            flashSeatsRotatedToast();
+            if (deals) renderBoard();
+            else if (myRole === 'guest') enterLobbyScreen();
             break;
         }
 
@@ -3464,6 +3529,11 @@ function renderBoard() {
 function updateBoardControlVisibility() {
     const resetBtn = document.getElementById('resetAuctionBtn');
     if (resetBtn) resetBtn.style.display = canControlBoard() ? '' : 'none';
+    // Réservé à l'hôte (voir échange avec Guillaume) : changer qui est assis où reste une
+    // décision d'organisation de la table, pas quelque chose qu'un simple joueur assis
+    // devrait pouvoir déclencher pour tout le monde.
+    const rotateBtn = document.getElementById('rotateSeatsBtn');
+    if (rotateBtn) rotateBtn.style.display = myRole === 'host' ? '' : 'none';
     // Téléchargement local pur (voir uiExportSessionPBN) : contrairement à l'export PBN
     // d'une seule donne (qui écrit sur le repo GitHub, réservé à l'hôte), rien n'empêche
     // n'importe quel joueur actif de récupérer sa propre vue locale de la session.
