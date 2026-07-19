@@ -1580,17 +1580,29 @@ function renderSeatAssignmentGrid() {
 // Liste des participants sans siège (voir échange avec Guillaume) : juste sous la grille
 // des 4 sièges, là où la question "qui n'est PAS assis" se pose naturellement — pas besoin
 // de la faire chercher dans la liste "Participants" à gauche, qui mélange tout le monde
-// sans distinction claire entre "vient d'arriver" et "kibbitz assumé".
+// sans distinction claire entre "vient d'arriver" et "kibbitz assumé". Chaque personne est
+// un petit "bouton" (avatar + nom), avec la même apparence que les cases de siège — pas de
+// simple liste de texte — en préparation d'un futur cliquer-glisser entre kibbitz et
+// sièges (voir échange avec Guillaume) : l'homogénéité visuelle doit déjà être là avant
+// que le glisser-déposer lui-même n'arrive.
 function renderKibitzList() {
     const el = document.getElementById('lobbyKibitzList');
     if (!el) return;
     const kibitzers = participants.filter(p => !participantHasAPlace(p.id));
     if (kibitzers.length === 0) {
+        el.innerHTML = '';
         el.style.display = 'none';
         return;
     }
     el.style.display = '';
-    el.innerHTML = `👁 Kibbitz : ${kibitzers.map(p => escapeHtml(p.name)).join(', ')}`;
+    el.innerHTML = `
+        <span class="lobby-kibitz-label">👁 Kibbitz</span>
+        <div class="lobby-kibitz-chips">
+            ${kibitzers.map(p => `
+                <span class="kibitz-chip">${avatarHtml(p.id)}<span class="kibitz-chip-name">${escapeHtml(p.name)}</span></span>
+            `).join('')}
+        </div>
+    `;
 }
 
 let nameUpdateDebounceTimer = null;

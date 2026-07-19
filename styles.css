@@ -1111,13 +1111,39 @@ body.on-landing-screen .connection-bar {
    côtés. Ouest et Est chevauchent les colonnes centrales (occupées par Nord/Sud) pour
    se rapprocher l'un de l'autre, plutôt que de rester plaqués tout à gauche/droite. */
 /* Liste des participants sans siège, juste sous la grille (voir échange avec Guillaume et
-   renderKibitzList dans app.js) — texte discret, cohérent avec les autres labels
-   secondaires du salon plutôt qu'un bloc qui attire trop l'œil. */
+   renderKibitzList dans app.js) — chaque personne est un petit "bouton" (avatar + nom),
+   pas une simple liste de texte : même apparence que les cases de siège
+   (background/border/radius), en préparation d'un futur cliquer-glisser entre kibbitz et
+   sièges — l'homogénéité visuelle doit déjà être là avant le glisser-déposer lui-même. */
 .lobby-kibitz-list {
-    margin-top: 10px;
-    font-size: 0.85rem;
-    color: var(--text-muted);
+    margin-top: 12px;
     text-align: center;
+}
+
+.lobby-kibitz-label {
+    display: block;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    margin-bottom: 6px;
+}
+
+.lobby-kibitz-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    justify-content: center;
+}
+
+.kibitz-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 5px 12px 5px 5px;
+    font-size: 0.85rem;
+    color: var(--text);
 }
 
 .seat-assignment-grid {
