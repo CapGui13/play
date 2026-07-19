@@ -1041,6 +1041,10 @@ body.on-landing-screen .connection-bar {
     border-radius: 8px;
     border: 1px solid transparent;
     transition: border-color 0.15s ease, background-color 0.15s ease;
+    /* Voir échange avec Guillaume : zone de dépose plus haute, plus facile à viser en
+       glisser-déposer — surtout utile quand la liste est vide ou ne contient qu'une
+       seule personne, où elle serait sinon minuscule. */
+    min-height: 140px;
 }
 
 .participant-item {
@@ -1055,6 +1059,11 @@ body.on-landing-screen .connection-bar {
     padding: 6px 10px;
     font-size: 0.88rem;
     cursor: grab;
+}
+
+.avatar-color-trigger {
+    cursor: pointer;
+    line-height: 0;
 }
 
 .participant-item:active {

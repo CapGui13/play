@@ -954,6 +954,12 @@ const AVATAR_COLOR_PALETTE = [
 ];
 
 function avatarColorForId(id) {
+    // Surcharge manuelle (voir échange avec Guillaume, uiRandomizeAvatarColor) : si ce
+    // participant a choisi une couleur au clic sur son avatar, elle prime sur le calcul
+    // déterministe ci-dessous.
+    const p = participants.find(x => x.id === id);
+    if (p && p.avatarColor) return p.avatarColor;
+
     // Mélange le code de salon dans le hash (pas l'id seul) : une couleur différente à
     // chaque nouvelle partie plutôt qu'une "couleur de signature" fixe pour toujours sur
     // cet appareil — mais stable pendant toute la durée d'UNE partie, y compris après une
@@ -1465,6 +1471,24 @@ function participantHasAPlace(participantId) {
     return SEATS.some(seat => seatAssignment[seat] === participantId);
 }
 
+// Changement de couleur d'avatar au clic (voir échange avec Guillaume) : l'hôte peut le
+// faire pour n'importe qui, les autres seulement pour eux-mêmes. Exclut la couleur
+// actuelle du tirage pour garantir un changement visible à chaque clic (un tirage
+// purement aléatoire pourrait sinon retomber sur la même par hasard, donnant l'impression
+// que le clic n'a rien fait).
+function uiRandomizeAvatarColor(event, participantId) {
+    event.stopPropagation();
+    const canChange = myRole === 'host' || participantId === myParticipantId;
+    if (!canChange) return;
+    const p = participants.find(x => x.id === participantId);
+    if (!p) return;
+    const current = avatarColorForId(participantId);
+    const choices = AVATAR_COLOR_PALETTE.filter(c => c !== current);
+    p.avatarColor = choices[Math.floor(Math.random() * choices.length)];
+    broadcastLobbyState();
+    renderLobby();
+}
+
 function renderParticipantsList() {
     const list = document.getElementById('participantsList');
     // Si l'hôte est en train de renommer quelqu'un, on ne reconstruit pas la liste
@@ -1491,9 +1515,16 @@ function renderParticipantsList() {
         // Glissable vers une case de siège (voir uiDropOnSeat) — seulement pour l'hôte,
         // seul à pouvoir réorganiser qui est où (voir uiDragStartParticipant).
         const dragAttrs = isHost ? ` draggable="true" ondragstart="uiDragStartParticipant(event, '${p.id}')"` : '';
+        // Clic sur l'avatar pour changer de couleur au hasard (voir échange avec
+        // Guillaume, uiRandomizeAvatarColor) : l'hôte peut le faire pour n'importe qui,
+        // les autres seulement pour eux-mêmes.
+        const canChangeColor = isHost || p.id === myParticipantId;
+        const avatarHtmlBlock = canChangeColor
+            ? `<span class="avatar-color-trigger" onclick="uiRandomizeAvatarColor(event, '${p.id}')" title="Changer de couleur">${avatarHtml(p.id)}</span>`
+            : avatarHtml(p.id);
         return `
         <li class="participant-item ${p.id === myParticipantId ? 'is-me' : ''}"${dragAttrs}>
-            ${avatarHtml(p.id)}
+            ${avatarHtmlBlock}
             ${nameHtml}
             ${p.id === 'host' ? ' <span class="host-tag">(hôte)</span>' : ''}
             ${p.id === myParticipantId ? ' <span class="me-tag">(vous)</span>' : ''}
