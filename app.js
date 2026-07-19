@@ -1507,11 +1507,14 @@ function renderParticipantsList() {
     const kibitzers = participants.filter(p => !participantHasAPlace(p.id));
     list.innerHTML = kibitzers.map(p => {
         const canRename = isHost && p.id !== myParticipantId;
+        // Nom en texte simple par défaut, converti en champ éditable seulement au CLIC
+        // explicite (voir échange avec Guillaume et uiStartRenamingParticipant) : un
+        // <input> toujours présent capte le focus au moindre appui, y compris un
+        // appui-maintenu qui visait en fait à démarrer un glisser-déposer — ce qui
+        // basculait à tort en mode "renommer" au lieu de laisser le glisser s'amorcer.
         const nameHtml = canRename
-            ? `<input type="text" class="participant-rename-input" maxlength="20" value="${escapeHtml(p.name)}"
-                   oninput="uiRenameParticipant('${p.id}', this.value)"
-                   onblur="uiRenameParticipantBlur('${p.id}', this)">`
-            : escapeHtml(p.name);
+            ? `<span class="participant-name participant-name-editable" onclick="uiStartRenamingParticipant(event, '${p.id}')">${escapeHtml(p.name)}</span>`
+            : `<span class="participant-name">${escapeHtml(p.name)}</span>`;
         // Glissable vers une case de siège (voir uiDropOnSeat) — seulement pour l'hôte,
         // seul à pouvoir réorganiser qui est où (voir uiDragStartParticipant).
         const dragAttrs = isHost ? ` draggable="true" ondragstart="uiDragStartParticipant(event, '${p.id}')"` : '';
@@ -1532,6 +1535,25 @@ function renderParticipantsList() {
         </li>
     `;
     }).join('');
+}
+
+// Convertit le nom (affiché en texte simple, voir renderParticipantsList) en champ
+// éditable au clic explicite — voir échange avec Guillaume : un <input> permanent aurait
+// capté le focus dès un simple appui-maintenu voulant démarrer un glisser-déposer.
+// stopPropagation évite que ce clic ne déclenche autre chose sur le <li> parent.
+function uiStartRenamingParticipant(event, participantId) {
+    event.stopPropagation();
+    const span = event.currentTarget;
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'participant-rename-input';
+    input.maxLength = 20;
+    input.value = span.textContent;
+    input.oninput = () => uiRenameParticipant(participantId, input.value);
+    input.onblur = () => uiRenameParticipantBlur(participantId, input);
+    span.replaceWith(input);
+    input.focus();
+    input.select();
 }
 
 let participantRenameDebounceTimers = {};
@@ -1580,9 +1602,17 @@ function renderSeatAssignmentGrid() {
         return !!assignedId && assignedId !== prevSeatAssignmentSnapshot[seat];
     };
 
+    // Symétrique de justAssigned (voir échange avec Guillaume) : un siège "vient d'être
+    // libéré" s'il était occupé au rendu précédent et ne l'est plus maintenant — même
+    // effet visuel que l'arrivée, pour signaler tout autant le départ.
+    const justVacated = seat => {
+        if (prevSeatAssignmentSnapshot === null) return false;
+        return !!prevSeatAssignmentSnapshot[seat] && !seatAssignment[seat];
+    };
+
     const seatBoxes = SEATS.map(seat => {
         const assignedId = seatAssignment[seat];
-        const flashClass = justAssigned(seat) ? ' just-assigned' : '';
+        const flashClass = justAssigned(seat) ? ' just-assigned' : (justVacated(seat) ? ' just-vacated' : '');
         if (isHost) {
             // Menu déroulant personnalisé (voir échange avec Guillaume) plutôt qu'un
             // <select> natif : un <option> ne peut pas contenir d'avatar coloré, alors
@@ -1615,7 +1645,7 @@ function renderSeatAssignmentGrid() {
                 <div class="seat-box seat-pos-${seat}${flashClass}" ondragover="uiAllowDrop(event)" ondragenter="uiDragEnterTarget(event)" ondragleave="uiDragLeaveTarget(event)" ondrop="uiDropOnSeat(event, '${seat}')">
                     <span class="seat-box-label">${SEAT_FULL_NAME[seat]}</span>
                     <div class="seat-occupant-dropdown">
-                        <button type="button" class="kibitz-chip seat-occupant-chip"${triggerAttrs} onclick="uiToggleSeatDropdown(event, '${seat}')">
+                        <button type="button" class="kibitz-chip seat-occupant-chip${occupantP ? '' : ' seat-occupant-chip-robot'}"${triggerAttrs} onclick="uiToggleSeatDropdown(event, '${seat}')">
                             ${triggerContent}
                             <span class="seat-dropdown-chevron">▾</span>
                         </button>
@@ -1694,17 +1724,27 @@ function uiMyNameBlur() {
 // Menu déroulant personnalisé des sièges (voir échange avec Guillaume) : un seul ouvert à
 // la fois. stopPropagation empêche le clic d'atteindre le gestionnaire global qui ferme
 // tout au clic ailleurs (voir plus bas) — sans ça, ouvrir un menu le refermerait aussitôt.
+// Élève aussi le z-index de LA CASE ENTIÈRE (pas seulement le menu) tant qu'il est ouvert
+// (voir échange avec Guillaume, menu de Nord/Est passant derrière une case voisine) : les
+// cases de siège partagent toutes le même z-index de base, donc celle qui vient après dans
+// le DOM peint par-dessus — augmenter le seul z-index du menu ne suffit pas, puisqu'il
+// reste enfermé dans le contexte d'empilement (plus bas) de sa propre case.
 function uiToggleSeatDropdown(event, seat) {
     event.stopPropagation();
     const menu = document.getElementById(`seatDropdownMenu-${seat}`);
     if (!menu) return;
     const wasOpen = menu.style.display !== 'none';
     uiCloseSeatDropdowns();
-    if (!wasOpen) menu.style.display = 'block';
+    if (!wasOpen) {
+        menu.style.display = 'block';
+        const seatBox = menu.closest('.seat-box');
+        if (seatBox) seatBox.classList.add('dropdown-open');
+    }
 }
 
 function uiCloseSeatDropdowns() {
     document.querySelectorAll('.seat-dropdown-menu').forEach(m => { m.style.display = 'none'; });
+    document.querySelectorAll('.seat-box.dropdown-open').forEach(b => { b.classList.remove('dropdown-open'); });
 }
 
 // Ferme tout menu de siège ouvert dès qu'on clique n'importe où ailleurs sur la page (voir

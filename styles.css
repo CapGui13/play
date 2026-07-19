@@ -1091,6 +1091,10 @@ body.on-landing-screen .connection-bar {
     margin-bottom: 10px;
 }
 
+.participant-name-editable {
+    cursor: pointer;
+}
+
 .participant-rename-input {
     flex: 1 1 60px;
     min-width: 40px;
@@ -1159,6 +1163,14 @@ button.kibitz-chip {
 
 .seat-occupant-chip:active {
     cursor: grabbing;
+}
+
+/* Voir échange avec Guillaume : un robot n'est pas glissable (rien à déplacer), donc pas
+   de curseur "main qui attrape" — reste cliquable (pour ouvrir le menu et assigner
+   quelqu'un), juste pas draggable. */
+.seat-occupant-chip-robot,
+.seat-occupant-chip-robot:active {
+    cursor: pointer;
 }
 
 .seat-dropdown-chevron {
@@ -1248,6 +1260,15 @@ button.kibitz-chip {
     background: color-mix(in srgb, var(--card) 85%, transparent);
 }
 
+/* Voir échange avec Guillaume : le menu déroulant de Nord/Est passait derrière une case
+   voisine (Ouest/Est se chevauchent volontairement dans la disposition en croix, voir
+   plus haut) — élever le z-index de la case ENTIÈRE pendant que son menu est ouvert (voir
+   uiToggleSeatDropdown) plutôt que celui du seul menu, qui resterait sinon enfermé dans le
+   contexte d'empilement plus bas de sa case. */
+.seat-assignment-grid .seat-box.dropdown-open {
+    z-index: 10;
+}
+
 .seat-box {
     display: flex;
     flex-direction: column;
@@ -1292,6 +1313,13 @@ button.kibitz-chip {
 }
 
 .seat-box.just-assigned {
+    animation: seatJustAssigned 1s ease-out;
+}
+
+/* Même effet, symétrique, pour un siège qui vient d'être libéré (voir échange avec
+   Guillaume) — la même animation suffit, le message ("quelque chose vient de changer
+   ici") reste pertinent dans les deux sens. */
+.seat-box.just-vacated {
     animation: seatJustAssigned 1s ease-out;
 }
 
