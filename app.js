@@ -1473,18 +1473,26 @@ function renderParticipantsList() {
         return;
     }
     const isHost = myRole === 'host';
-    list.innerHTML = participants.map(p => {
+    // Cette liste EST la liste kibbitz (voir échange avec Guillaume) : quelqu'un qui
+    // arrive est kibbitz par défaut, et le reste tant que l'hôte ne lui a pas assigné de
+    // siège — il n'y a donc plus besoin de distinguer "assis"/"pas assis" ici comme
+    // avant (voir l'ancien placementClass), puisque tout le monde affiché ici est de
+    // toute façon sans siège par construction. Une fois assis, quelqu'un disparaît d'ici
+    // et apparaît dans sa case de siège à la place (voir renderSeatAssignmentGrid) — d'où
+    // la fusion avec l'ancien bloc kibbitz séparé sous la grille, devenu redondant.
+    const kibitzers = participants.filter(p => !participantHasAPlace(p.id));
+    list.innerHTML = kibitzers.map(p => {
         const canRename = isHost && p.id !== myParticipantId;
         const nameHtml = canRename
             ? `<input type="text" class="participant-rename-input" maxlength="20" value="${escapeHtml(p.name)}"
                    oninput="uiRenameParticipant('${p.id}', this.value)"
                    onblur="uiRenameParticipantBlur('${p.id}', this)">`
             : escapeHtml(p.name);
-        // Bleu si assis à un siège (voir participantHasAPlace), rouge sinon — sans siège,
-        // devient kibbitz automatiquement, ce n'est pas un problème à corriger.
-        const placementClass = participantHasAPlace(p.id) ? 'is-assigned' : 'is-unassigned';
+        // Glissable vers une case de siège (voir uiDropOnSeat) — seulement pour l'hôte,
+        // seul à pouvoir réorganiser qui est où (voir uiDragStartParticipant).
+        const dragAttrs = isHost ? ` draggable="true" ondragstart="uiDragStartParticipant(event, '${p.id}')"` : '';
         return `
-        <li class="participant-item ${placementClass} ${p.id === myParticipantId ? 'is-me' : ''}">
+        <li class="participant-item ${p.id === myParticipantId ? 'is-me' : ''}"${dragAttrs}>
             ${avatarHtml(p.id)}
             ${nameHtml}
             ${p.id === 'host' ? ' <span class="host-tag">(hôte)</span>' : ''}
@@ -1600,35 +1608,6 @@ function renderSeatAssignmentGrid() {
 
     container.innerHTML = seatBoxes;
     prevSeatAssignmentSnapshot = { ...seatAssignment };
-    renderKibitzList();
-}
-
-// Liste des participants sans siège (voir échange avec Guillaume) : juste sous la grille
-// des 4 sièges, là où la question "qui n'est PAS assis" se pose naturellement — pas besoin
-// de la faire chercher dans la liste "Participants" à gauche, qui mélange tout le monde
-// sans distinction claire entre "vient d'arriver" et "kibbitz assumé". Chaque personne est
-// un petit "bouton" (avatar + nom), avec la même apparence que les cases de siège — pas de
-// simple liste de texte — en préparation d'un futur cliquer-glisser entre kibbitz et
-// sièges (voir échange avec Guillaume) : l'homogénéité visuelle doit déjà être là avant
-// que le glisser-déposer lui-même n'arrive.
-function renderKibitzList() {
-    const el = document.getElementById('lobbyKibitzList');
-    if (!el) return;
-    const kibitzers = participants.filter(p => !participantHasAPlace(p.id));
-    const isHost = myRole === 'host';
-    // Reste visible même vide (voir échange avec Guillaume) : la grille des 4 sièges,
-    // elle, ne disparaît jamais quand personne n'est assis — la liste kibbitz doit se
-    // comporter pareil, en zone de dépose systématiquement disponible pour le
-    // cliquer-glisser (voir uiDropOnKibitz), pas seulement quand elle contient déjà
-    // quelqu'un.
-    el.innerHTML = `
-        <span class="lobby-kibitz-label">👁 Kibbitz</span>
-        <div class="lobby-kibitz-chips"${isHost ? ' ondragover="uiAllowDrop(event)" ondragenter="uiDragEnterTarget(event)" ondragleave="uiDragLeaveTarget(event)" ondrop="uiDropOnKibitz(event)"' : ''}>
-            ${kibitzers.map(p => `
-                <span class="kibitz-chip"${isHost ? ` draggable="true" ondragstart="uiDragStartParticipant(event, '${p.id}')"` : ''}>${avatarHtml(p.id)}<span class="kibitz-chip-name">${escapeHtml(p.name)}</span></span>
-            `).join('')}
-        </div>
-    `;
 }
 
 let nameUpdateDebounceTimer = null;

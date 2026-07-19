@@ -149,15 +149,22 @@
 
         <div class="lobby-body">
             <div class="lobby-participants">
-                <h3>Participants</h3>
-                <ul id="participantsList" class="participants-list"></ul>
+                <h3>👁 Kibbitz</h3>
+                <!-- Voir échange avec Guillaume : cette liste EST la liste kibbitz — qui
+                     arrive est kibbitz par défaut, et le reste jusqu'à ce que l'hôte lui
+                     assigne un siège (voir renderParticipantsList dans app.js, qui filtre
+                     désormais aux seuls participants sans siège). Glissable vers une case
+                     de siège (voir uiDragStartParticipant sur chaque <li>), et zone de
+                     dépôt réciproque pour en faire redescendre quelqu'un de la table
+                     (voir uiDropOnKibitz) — même mécanique que le glisser-déposer déjà en
+                     place sur la grille des sièges. -->
+                <ul id="participantsList" class="participants-list" ondragover="uiAllowDrop(event)" ondragenter="uiDragEnterTarget(event)" ondragleave="uiDragLeaveTarget(event)" ondrop="uiDropOnKibitz(event)"></ul>
                 <!-- Statut du transfert d'hôte (voir uiTransferHost/showHostTransferStatus dans
                      app.js) : masqué par défaut, affiché seulement pendant/après une tentative. -->
                 <div id="hostTransferStatus" class="error-banner" style="display:none;"></div>
             </div>
             <div class="lobby-table">
                 <div id="seatAssignmentGrid" class="seat-assignment-grid"></div>
-                <div id="lobbyKibitzList" class="lobby-kibitz-list"></div>
             </div>
         </div>
 
