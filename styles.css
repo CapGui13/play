@@ -1110,6 +1110,16 @@ body.on-landing-screen .connection-bar {
 /* Disposition en croix façon vraie table : Nord en haut, Sud en bas, Ouest/Est sur les
    côtés. Ouest et Est chevauchent les colonnes centrales (occupées par Nord/Sud) pour
    se rapprocher l'un de l'autre, plutôt que de rester plaqués tout à gauche/droite. */
+/* Liste des participants sans siège, juste sous la grille (voir échange avec Guillaume et
+   renderKibitzList dans app.js) — texte discret, cohérent avec les autres labels
+   secondaires du salon plutôt qu'un bloc qui attire trop l'œil. */
+.lobby-kibitz-list {
+    margin-top: 10px;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    text-align: center;
+}
+
 .seat-assignment-grid {
     position: relative;
     display: grid;

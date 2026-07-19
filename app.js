@@ -1574,6 +1574,23 @@ function renderSeatAssignmentGrid() {
 
     container.innerHTML = seatBoxes;
     prevSeatAssignmentSnapshot = { ...seatAssignment };
+    renderKibitzList();
+}
+
+// Liste des participants sans siège (voir échange avec Guillaume) : juste sous la grille
+// des 4 sièges, là où la question "qui n'est PAS assis" se pose naturellement — pas besoin
+// de la faire chercher dans la liste "Participants" à gauche, qui mélange tout le monde
+// sans distinction claire entre "vient d'arriver" et "kibbitz assumé".
+function renderKibitzList() {
+    const el = document.getElementById('lobbyKibitzList');
+    if (!el) return;
+    const kibitzers = participants.filter(p => !participantHasAPlace(p.id));
+    if (kibitzers.length === 0) {
+        el.style.display = 'none';
+        return;
+    }
+    el.style.display = '';
+    el.innerHTML = `👁 Kibbitz : ${kibitzers.map(p => escapeHtml(p.name)).join(', ')}`;
 }
 
 let nameUpdateDebounceTimer = null;
