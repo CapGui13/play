@@ -154,10 +154,9 @@ function testTurnConnectivity() {
 }
 
 function makeRoomCode() {
-    const letters = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // sans caractères ambigus (0/O, 1/I)
     let code = '';
     for (let i = 0; i < 4; i++) {
-        code += letters[Math.floor(Math.random() * letters.length)];
+        code += Math.floor(Math.random() * 10);
     }
     return code;
 }

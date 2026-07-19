@@ -1339,9 +1339,9 @@ function uiJoinCodeInputKeydown(event) {
 
 function uiJoinRoom() {
     document.getElementById('landingError').style.display = 'none';
-    const code = document.getElementById('joinCodeInput').value.trim().toUpperCase();
-    if (code.length !== 4) {
-        showLandingError('Entrez un code à 4 lettres.');
+    const code = document.getElementById('joinCodeInput').value.trim();
+    if (!/^\d{4}$/.test(code)) {
+        showLandingError('Entrez un code à 4 chiffres.');
         return;
     }
     chatMessages = [];

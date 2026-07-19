@@ -99,8 +99,8 @@
             </div>
             <div class="landing-card">
                 <h2>Rejoindre une partie</h2>
-                <p>Entrez le code à 4 lettres partagé par l'autre joueur.</p>
-                <input type="text" id="joinCodeInput" class="code-input" placeholder="EX: BQXK" maxlength="4" autocapitalize="characters" autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="go" onkeydown="uiJoinCodeInputKeydown(event)">
+                <p>Entrez le code à 4 chiffres partagé par l'autre joueur.</p>
+                <input type="text" id="joinCodeInput" class="code-input" placeholder="EX: 4728" maxlength="4" inputmode="numeric" pattern="[0-9]*" autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="go" onkeydown="uiJoinCodeInputKeydown(event)">
                 <!-- ontouchstart : ferme le clavier virtuel DÈS le début du tap sur ce bouton plutôt
                      qu'au clic — sur mobile, avec le clavier encore ouvert, le premier tap sert
                      souvent juste à le fermer (le navigateur avale le clic), d'où le "il faut
