@@ -1549,11 +1549,12 @@ function renderSeatAssignmentGrid() {
                 .concat(participants.map(p =>
                     `<option value="${p.id}" ${p.id === assignedId ? 'selected' : ''}>${escapeHtml(p.name)}</option>`
                 ));
+            const avatarAttrs = assignedId ? ` class="seat-occupant-handle" draggable="true" ondragstart="uiDragStartParticipant(event, '${assignedId}')"` : '';
             return `
-                <div class="seat-box seat-pos-${seat}${flashClass}">
+                <div class="seat-box seat-pos-${seat}${flashClass}" ondragover="uiAllowDrop(event)" ondrop="uiDropOnSeat(event, '${seat}')">
                     <span class="seat-box-label">${SEAT_FULL_NAME[seat]}</span>
                     <div class="seat-select-row">
-                        ${assignedId ? avatarHtml(assignedId) : '<span class="mini-avatar mini-avatar-robot">🤖</span>'}
+                        ${assignedId ? `<span${avatarAttrs}>${avatarHtml(assignedId)}</span>` : '<span class="mini-avatar mini-avatar-robot">🤖</span>'}
                         <select class="seat-assign-select" onchange="uiAssignSeat('${seat}', this.value)">${options.join('')}</select>
                     </div>
                 </div>
@@ -1589,17 +1590,17 @@ function renderKibitzList() {
     const el = document.getElementById('lobbyKibitzList');
     if (!el) return;
     const kibitzers = participants.filter(p => !participantHasAPlace(p.id));
-    if (kibitzers.length === 0) {
-        el.innerHTML = '';
-        el.style.display = 'none';
-        return;
-    }
-    el.style.display = '';
+    const isHost = myRole === 'host';
+    // Reste visible même vide (voir échange avec Guillaume) : la grille des 4 sièges,
+    // elle, ne disparaît jamais quand personne n'est assis — la liste kibbitz doit se
+    // comporter pareil, en zone de dépose systématiquement disponible pour le
+    // cliquer-glisser (voir uiDropOnKibitz), pas seulement quand elle contient déjà
+    // quelqu'un.
     el.innerHTML = `
         <span class="lobby-kibitz-label">👁 Kibbitz</span>
-        <div class="lobby-kibitz-chips">
+        <div class="lobby-kibitz-chips"${isHost ? ' ondragover="uiAllowDrop(event)" ondrop="uiDropOnKibitz(event)"' : ''}>
             ${kibitzers.map(p => `
-                <span class="kibitz-chip">${avatarHtml(p.id)}<span class="kibitz-chip-name">${escapeHtml(p.name)}</span></span>
+                <span class="kibitz-chip"${isHost ? ` draggable="true" ondragstart="uiDragStartParticipant(event, '${p.id}')"` : ''}>${avatarHtml(p.id)}<span class="kibitz-chip-name">${escapeHtml(p.name)}</span></span>
             `).join('')}
         </div>
     `;
@@ -1658,6 +1659,52 @@ function uiMyNameBlur() {
 function uiAssignSeat(seat, participantId) {
     if (myRole !== 'host') return;
     seatAssignment[seat] = participantId || null;
+    broadcastLobbyState();
+    renderLobby();
+}
+
+// Cliquer-glisser pour réorganiser les sièges (voir échange avec Guillaume) : glisser un
+// "bouton" (chip kibbitz ou occupant d'un siège) sur une case de siège l'y assigne ; sur
+// la zone kibbitz, ça le libère. Si la cible était déjà occupée, on ÉCHANGE les deux
+// places plutôt que d'écraser l'occupant précédent (qui redevient sinon kibbitz
+// silencieusement) — sauf si la source vient déjà du kibbitz, auquel cas rien à échanger,
+// l'ancien occupant de la case cible devient simplement kibbitz à son tour. Réservé à
+// l'hôte (seul à pouvoir réorganiser les sièges) — voir les gardes `myRole !== 'host'`.
+let draggedParticipantId = null;
+
+function uiDragStartParticipant(event, participantId) {
+    if (myRole !== 'host') { event.preventDefault(); return; }
+    draggedParticipantId = participantId;
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', participantId);
+}
+
+function uiAllowDrop(event) {
+    if (myRole !== 'host') return;
+    event.preventDefault(); // requis par l'API HTML5 drag-and-drop pour autoriser un drop ici
+}
+
+function uiDropOnSeat(event, targetSeat) {
+    event.preventDefault();
+    if (myRole !== 'host' || !draggedParticipantId) return;
+    const sourceSeat = SEATS.find(s => seatAssignment[s] === draggedParticipantId);
+    if (sourceSeat === targetSeat) { draggedParticipantId = null; return; } // déposé sur sa propre case, rien à faire
+
+    const targetOccupant = seatAssignment[targetSeat];
+    seatAssignment[targetSeat] = draggedParticipantId;
+    if (sourceSeat) seatAssignment[sourceSeat] = targetOccupant || null; // échange ; sinon (venait du kibbitz) l'ancien occupant cible devient kibbitz de lui-même, rien à écrire
+
+    draggedParticipantId = null;
+    broadcastLobbyState();
+    renderLobby();
+}
+
+function uiDropOnKibitz(event) {
+    event.preventDefault();
+    if (myRole !== 'host' || !draggedParticipantId) return;
+    const sourceSeat = SEATS.find(s => seatAssignment[s] === draggedParticipantId);
+    if (sourceSeat) seatAssignment[sourceSeat] = null;
+    draggedParticipantId = null;
     broadcastLobbyState();
     renderLobby();
 }

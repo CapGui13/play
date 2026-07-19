@@ -1144,6 +1144,32 @@ body.on-landing-screen .connection-bar {
     padding: 5px 12px 5px 5px;
     font-size: 0.85rem;
     color: var(--text);
+    cursor: grab;
+}
+
+.kibitz-chip:active {
+    cursor: grabbing;
+}
+
+.seat-select-row [draggable="true"] {
+    cursor: grab;
+}
+
+/* Zone de préhension agrandie autour de l'avatar (voir échange avec Guillaume : à
+   l'origine, seul le petit cercle lui-même était glissable, une cible trop petite —
+   surtout au doigt). Pas de nom en texte à côté ici (le <select> le montre déjà via
+   l'option choisie), donc la marge/padding est ce qui élargit la cible plutôt qu'un
+   deuxième élément à envelopper, comme sur les puces kibbitz. */
+.seat-occupant-handle {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px;
+    margin: -4px;
+    border-radius: 8px;
+}
+
+.seat-occupant-handle:active {
+    cursor: grabbing;
 }
 
 .seat-assignment-grid {
