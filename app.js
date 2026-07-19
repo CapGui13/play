@@ -1573,7 +1573,7 @@ function renderSeatAssignmentGrid() {
             }));
 
             return `
-                <div class="seat-box seat-pos-${seat}${flashClass}" ondragover="uiAllowDrop(event)" ondrop="uiDropOnSeat(event, '${seat}')">
+                <div class="seat-box seat-pos-${seat}${flashClass}" ondragover="uiAllowDrop(event)" ondragenter="uiDragEnterTarget(event)" ondragleave="uiDragLeaveTarget(event)" ondrop="uiDropOnSeat(event, '${seat}')">
                     <span class="seat-box-label">${SEAT_FULL_NAME[seat]}</span>
                     <div class="seat-occupant-dropdown">
                         <button type="button" class="kibitz-chip seat-occupant-chip"${triggerAttrs} onclick="uiToggleSeatDropdown(event, '${seat}')">
@@ -1623,7 +1623,7 @@ function renderKibitzList() {
     // quelqu'un.
     el.innerHTML = `
         <span class="lobby-kibitz-label">👁 Kibbitz</span>
-        <div class="lobby-kibitz-chips"${isHost ? ' ondragover="uiAllowDrop(event)" ondrop="uiDropOnKibitz(event)"' : ''}>
+        <div class="lobby-kibitz-chips"${isHost ? ' ondragover="uiAllowDrop(event)" ondragenter="uiDragEnterTarget(event)" ondragleave="uiDragLeaveTarget(event)" ondrop="uiDropOnKibitz(event)"' : ''}>
             ${kibitzers.map(p => `
                 <span class="kibitz-chip"${isHost ? ` draggable="true" ondragstart="uiDragStartParticipant(event, '${p.id}')"` : ''}>${avatarHtml(p.id)}<span class="kibitz-chip-name">${escapeHtml(p.name)}</span></span>
             `).join('')}
@@ -1725,6 +1725,26 @@ function uiAssignSeat(seat, participantId) {
 // silencieusement) — sauf si la source vient déjà du kibbitz, auquel cas rien à échanger,
 // l'ancien occupant de la case cible devient simplement kibbitz à son tour. Réservé à
 // l'hôte (seul à pouvoir réorganiser les sièges) — voir les gardes `myRole !== 'host'`.
+// Retour visuel sur la zone de dépôt survolée (voir échange avec Guillaume) : dragenter/
+// dragleave plutôt que dragover pour basculer la classe — dragover se redéclenche en
+// continu tant qu'on survole, alors qu'on ne veut ajouter/retirer la classe qu'une seule
+// fois, à l'entrée et à la sortie de la zone.
+function uiDragEnterTarget(event) {
+    if (myRole !== 'host') return;
+    event.currentTarget.classList.add('drag-over-target');
+}
+
+function uiDragLeaveTarget(event) {
+    event.currentTarget.classList.remove('drag-over-target');
+}
+
+// Filet de sécurité : si le glisser se termine autrement que par un dépôt valide (touche
+// Échap, relâché hors de toute zone reconnue...), retire toute surbrillance encore
+// affichée plutôt que de la laisser collée jusqu'au prochain rendu.
+document.addEventListener('dragend', () => {
+    document.querySelectorAll('.drag-over-target').forEach(el => el.classList.remove('drag-over-target'));
+});
+
 let draggedParticipantId = null;
 
 function uiDragStartParticipant(event, participantId) {
@@ -1743,7 +1763,11 @@ function uiDropOnSeat(event, targetSeat) {
     event.preventDefault();
     if (myRole !== 'host' || !draggedParticipantId) return;
     const sourceSeat = SEATS.find(s => seatAssignment[s] === draggedParticipantId);
-    if (sourceSeat === targetSeat) { draggedParticipantId = null; return; } // déposé sur sa propre case, rien à faire
+    if (sourceSeat === targetSeat) {
+        draggedParticipantId = null;
+        event.currentTarget.classList.remove('drag-over-target');
+        return; // déposé sur sa propre case, rien à faire
+    }
 
     const targetOccupant = seatAssignment[targetSeat];
     seatAssignment[targetSeat] = draggedParticipantId;

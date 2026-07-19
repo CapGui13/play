@@ -1132,6 +1132,10 @@ body.on-landing-screen .connection-bar {
     flex-wrap: wrap;
     gap: 8px;
     justify-content: center;
+    padding: 8px;
+    border-radius: 8px;
+    border: 1px solid transparent;
+    transition: border-color 0.15s ease, background-color 0.15s ease;
 }
 
 .kibitz-chip {
@@ -1279,7 +1283,16 @@ button.kibitz-chip {
     border: 1px solid var(--line);
     border-radius: 8px;
     padding: 9px 12px;
-    transition: border-color 0.15s ease;
+    transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+/* Retour visuel pendant le survol d'une zone de dépôt en glisser-déposer (voir échange
+   avec Guillaume) : posée/retirée par uiDragEnterTarget/uiDragLeaveTarget. Fonctionne
+   aussi bien sur une case de siège que sur la zone kibbitz (voir .lobby-kibitz-chips plus
+   bas), même déclencheur visuel pour les deux. */
+.drag-over-target {
+    border-color: var(--brass-bright) !important;
+    background: rgba(201, 162, 39, 0.14) !important;
 }
 
 .seat-box:has(select):hover {
