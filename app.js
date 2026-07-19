@@ -3477,6 +3477,11 @@ function renderGameHeader() {
     const mySeatsLabel = mySeats && mySeats.length > 0 ? mySeats.map(seatFullName).join(' + ') : 'kibbitz';
     document.getElementById('dealerVulnLabel').textContent =
         `Donneur : ${seatFullName(deal.dealer)} · ${VULN_LABEL[deal.vulnerable]} · Vous jouez : ${mySeatsLabel}`;
+    // Voir échange avec Guillaume : le code de salle n'était visible que dans le salon
+    // d'attente, plus du tout une fois la partie lancée — utile pourtant en cours de
+    // route (inviter quelqu'un en plein milieu, ou simplement s'en souvenir).
+    const roomCodeEl = document.getElementById('gameRoomCodeLabel');
+    if (roomCodeEl) roomCodeEl.textContent = currentRoomCode ? `Salle : ${currentRoomCode}` : '';
 }
 
 // ===== Chat =====

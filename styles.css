@@ -1319,6 +1319,15 @@ body.on-landing-screen .connection-bar {
     color: var(--text-muted);
 }
 
+.game-room-code-label {
+    display: block;
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    margin-top: 2px;
+    font-family: var(--font-mono);
+    letter-spacing: 0.03em;
+}
+
 .game-body {
     display: grid;
     grid-template-columns: 260px 1fr;
