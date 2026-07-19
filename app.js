@@ -3681,13 +3681,33 @@ function uiSendWizz(targetId) {
 // @keyframes wizzShake dans styles.css) et un petit bip généré à la volée (pas de fichier
 // audio à charger). Respecte prefers-reduced-motion : le tremblement est alors sauté, seul
 // le bandeau reste pour prévenir sans désagrément visuel.
+// Effet visuel + sonore reçu quand on se fait wizzer : tremblement bref de l'écran et un
+// petit bip généré à la volée (pas de fichier audio à charger). Respecte
+// prefers-reduced-motion : le tremblement est alors sauté, seul le bandeau reste pour
+// prévenir sans désagrément visuel.
+//
+// Web Animations API (element.animate()) plutôt qu'une classe CSS + @keyframes (voir
+// échange avec Guillaume) : le bandeau et le son fonctionnaient déjà correctement sur son
+// iPhone, mais le tremblement ne s'affichait jamais, quelle que soit la cible CSS essayée
+// (body, .app-container) — signe que le souci n'était pas la cible mais le mécanisme
+// d'animation CSS lui-même. .animate() ne dépend pas du cycle de vie des animations CSS
+// (classes, reflow forcé) et a un historique de compatibilité plus fiable sur Safari.
 function triggerWizzEffect() {
     const prefersReducedMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    if (!prefersReducedMotion) {
-        document.body.classList.remove('wizz-shake'); // relance l'animation même si déjà en cours (rewizz rapide)
-        void document.body.offsetWidth; // force un reflow, sinon retirer/remettre la même classe dans le même tick ne relance rien
-        document.body.classList.add('wizz-shake');
-        setTimeout(() => document.body.classList.remove('wizz-shake'), 1200);
+    if (!prefersReducedMotion && document.body.animate) {
+        document.body.animate([
+            { transform: 'translate(0, 0)' },
+            { transform: 'translate(-6px, 2px)' },
+            { transform: 'translate(5px, -3px)' },
+            { transform: 'translate(-5px, -2px)' },
+            { transform: 'translate(6px, 3px)' },
+            { transform: 'translate(-4px, 2px)' },
+            { transform: 'translate(4px, -2px)' },
+            { transform: 'translate(-3px, 1px)' },
+            { transform: 'translate(3px, -1px)' },
+            { transform: 'translate(-2px, 1px)' },
+            { transform: 'translate(0, 0)' }
+        ], { duration: 1200, easing: 'ease-in-out' });
     }
     playWizzSound();
     flashWizzToast();
