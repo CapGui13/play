@@ -519,17 +519,61 @@ function dealSatisfiesHumanLineConstraint(hands, seatAssignment) {
     return true;
 }
 
-// Génère une seule donne (numéro de board donné), en retentant tant que la contrainte
-// n'est pas respectée. `seatAssignment` figé au moment de la génération (voir
-// uiGenerateRandomDeals) : un changement de composition de table après coup ne redéclenche
-// pas une nouvelle génération, comme pour n'importe quel autre outil de génération.
-function generateRandomDeal(boardNumber, seatAssignment) {
+// Contraintes optionnelles demandées par Guillaume pour la génération aléatoire :
+// fourchette de points H par siège, fourchette de points H combinés par ligne (NS/EO), et
+// longueur minimale dans une couleur par siège. `constraints` a la forme :
+// { seats: { N: {hcpMin, hcpMax, suit, suitMinLength}, E: {...}, S: {...}, W: {...} },
+//   lines: { NS: {hcpMin, hcpMax}, EW: {hcpMin, hcpMax} } }
+// N'importe quel champ omis/null n'est simplement pas vérifié — un objet vide ou absent
+// équivaut à "aucune contrainte". Toujours vérifiée EN PLUS de
+// dealSatisfiesHumanLineConstraint (voir generateRandomDeal), jamais à sa place.
+function dealSatisfiesCustomConstraints(hands, constraints) {
+    if (!constraints) return true;
+
+    if (constraints.seats) {
+        for (const seat of ['N', 'E', 'S', 'W']) {
+            const c = constraints.seats[seat];
+            if (!c) continue;
+            const hcp = computeHandHcp(hands[seat]);
+            if (c.hcpMin != null && hcp < c.hcpMin) return false;
+            if (c.hcpMax != null && hcp > c.hcpMax) return false;
+            if (c.suit && c.suitMinLength != null && hands[seat][c.suit].length < c.suitMinLength) return false;
+        }
+    }
+
+    if (constraints.lines) {
+        const lineSeats = { NS: ['N', 'S'], EW: ['E', 'W'] };
+        for (const line of ['NS', 'EW']) {
+            const c = constraints.lines[line];
+            if (!c) continue;
+            const [seatA, seatB] = lineSeats[line];
+            const combined = computeHandHcp(hands[seatA]) + computeHandHcp(hands[seatB]);
+            if (c.hcpMin != null && combined < c.hcpMin) return false;
+            if (c.hcpMax != null && combined > c.hcpMax) return false;
+        }
+    }
+
+    return true;
+}
+
+// Génère une seule donne (numéro de board donné), en retentant tant que les contraintes
+// ne sont pas respectées (la fixe + les optionnelles éventuelles). `seatAssignment` figé au
+// moment de la génération (voir uiGenerateRandomDeals) : un changement de composition de
+// table après coup ne redéclenche pas une nouvelle génération, comme pour n'importe quel
+// autre outil de génération. Si RANDOM_DEAL_MAX_RETRIES est atteint sans satisfaire les
+// contraintes optionnelles (des fourchettes trop serrées simultanément, par exemple), la
+// dernière donne tentée est renvoyée telle quelle plutôt que de bloquer indéfiniment —
+// signalé à l'appelant via `constraintsUnmet` pour qu'il prévienne l'utilisateur.
+function generateRandomDeal(boardNumber, seatAssignment, constraints) {
     let hands;
     let attempts = 0;
+    let satisfied = false;
     do {
         hands = dealFromDeck(shuffledDeck());
         attempts++;
-    } while (!dealSatisfiesHumanLineConstraint(hands, seatAssignment) && attempts < RANDOM_DEAL_MAX_RETRIES);
+        satisfied = dealSatisfiesHumanLineConstraint(hands, seatAssignment)
+            && dealSatisfiesCustomConstraints(hands, constraints);
+    } while (!satisfied && attempts < RANDOM_DEAL_MAX_RETRIES);
 
     const cycle = RANDOM_DEAL_BRIDGE_CYCLE[(boardNumber - 1) % 16];
     return {
@@ -540,14 +584,15 @@ function generateRandomDeal(boardNumber, seatAssignment) {
         par: null,   // pas de résumé PAR préformaté (spécifique à l'import PBN) ; le
                      // double mort complet (ddTable) suffit à afficher le PAR en fin de
                      // donne, voir kickOffBackgroundDD et renderDDTable existant.
-        ddTable: null
+        ddTable: null,
+        constraintsUnmet: !satisfied
     };
 }
 
-function generateRandomDeals(count, seatAssignment) {
+function generateRandomDeals(count, seatAssignment, constraints) {
     const deals = [];
     for (let i = 1; i <= count; i++) {
-        deals.push(generateRandomDeal(i, seatAssignment));
+        deals.push(generateRandomDeal(i, seatAssignment, constraints));
     }
     return deals;
 }
@@ -556,11 +601,95 @@ function generateRandomDeals(count, seatAssignment) {
 // EXACTEMENT le même circuit que l'import d'un fichier ou de la bibliothèque
 // (pendingParsedSource/pendingParsedDeals/pendingOrderedDeals, voir uiStartGameAsHost) —
 // aucune des deux ne connaît de traitement spécial, "random" n'est qu'une source de plus.
+// Miroir automatique entre les fourchettes de ligne (voir échange avec Guillaume) : NS et
+// EO se partagent TOUJOURS les 40 points H du jeu entier, donc "NS a au moins 24" équivaut
+// mathématiquement à "EO a au plus 16" — remplir l'un remplit donc automatiquement l'autre
+// (min d'une ligne <-> max de l'autre). Ne se déclenche que sur une vraie saisie
+// utilisateur (oninput) : modifier .value par JS ne redéclenche pas cet événement, donc
+// aucun risque de boucle infinie entre les deux champs.
+function uiMirrorLineHcpConstraint(sourceId) {
+    const mirrorOf = {
+        'rdc-NS-hcpMin': 'rdc-EW-hcpMax',
+        'rdc-NS-hcpMax': 'rdc-EW-hcpMin',
+        'rdc-EW-hcpMin': 'rdc-NS-hcpMax',
+        'rdc-EW-hcpMax': 'rdc-NS-hcpMin'
+    };
+    const targetId = mirrorOf[sourceId];
+    const sourceEl = document.getElementById(sourceId);
+    const targetEl = document.getElementById(targetId);
+    if (!sourceEl || !targetEl) return;
+    if (sourceEl.value === '') {
+        targetEl.value = '';
+        return;
+    }
+    const n = parseInt(sourceEl.value, 10);
+    if (Number.isFinite(n)) targetEl.value = String(40 - n);
+}
+
+function uiToggleRandomDealConstraints() {
+    const panel = document.getElementById('randomDealConstraintsPanel');
+    const btn = document.getElementById('randomDealConstraintsToggle');
+    if (!panel) return;
+    const isOpen = panel.style.display !== 'none';
+    panel.style.display = isOpen ? 'none' : 'block';
+    if (btn) btn.classList.toggle('is-active', !isOpen);
+}
+
+// Lit les champs du panneau de contraintes optionnelles (voir échange avec Guillaume) et
+// construit l'objet attendu par dealSatisfiesCustomConstraints. Un champ vide est traité
+// comme "pas de contrainte" (null), jamais comme 0 — un input number vide renvoie une
+// chaîne vide, pas NaN, donc on teste explicitement sur '' plutôt que sur isNaN. Renvoie
+// aussi une liste d'erreurs de validation (min > max) à afficher avant de lancer la
+// génération, plutôt que de la découvrir seulement après 500 tentatives infructueuses.
+function readRandomDealConstraintsFromUI() {
+    const errors = [];
+    const readNum = (id) => {
+        const el = document.getElementById(id);
+        if (!el || el.value === '') return null;
+        const n = parseInt(el.value, 10);
+        return Number.isFinite(n) ? n : null;
+    };
+
+    const seats = {};
+    for (const [seat, label] of [['N', 'Nord'], ['E', 'Est'], ['S', 'Sud'], ['W', 'Ouest']]) {
+        const hcpMin = readNum(`rdc-${seat}-hcpMin`);
+        const hcpMax = readNum(`rdc-${seat}-hcpMax`);
+        const suitEl = document.getElementById(`rdc-${seat}-suit`);
+        const suit = suitEl && suitEl.value ? suitEl.value : null;
+        const suitMinLength = readNum(`rdc-${seat}-suitLen`);
+        if (hcpMin != null && hcpMax != null && hcpMin > hcpMax) {
+            errors.push(`${label} : le H minimum dépasse le H maximum.`);
+        }
+        if (hcpMin != null || hcpMax != null || (suit && suitMinLength != null)) {
+            seats[seat] = { hcpMin, hcpMax, suit, suitMinLength };
+        }
+    }
+
+    const lines = {};
+    for (const [line, label] of [['NS', 'Nord-Sud'], ['EW', 'Est-Ouest']]) {
+        const hcpMin = readNum(`rdc-${line}-hcpMin`);
+        const hcpMax = readNum(`rdc-${line}-hcpMax`);
+        if (hcpMin != null && hcpMax != null && hcpMin > hcpMax) {
+            errors.push(`${label} : le H minimum dépasse le H maximum.`);
+        }
+        if (hcpMin != null || hcpMax != null) lines[line] = { hcpMin, hcpMax };
+    }
+
+    const hasAny = Object.keys(seats).length > 0 || Object.keys(lines).length > 0;
+    return { constraints: hasAny ? { seats, lines } : null, errors };
+}
+
 function uiGenerateRandomDeals() {
     const countInput = document.getElementById('randomDealCount');
     const count = countInput ? parseInt(countInput.value, 10) : NaN;
     if (!Number.isFinite(count) || count < 1 || count > 40) {
         setHostSetupMessage('Choisissez un nombre de donnes entre 1 et 40.', false);
+        return;
+    }
+
+    const { constraints, errors } = readRandomDealConstraintsFromUI();
+    if (errors.length > 0) {
+        setHostSetupMessage(errors.join(' '), false);
         return;
     }
 
@@ -575,14 +704,22 @@ function uiGenerateRandomDeals() {
     if (librarySelect) librarySelect.value = '';
     document.getElementById('dealFileInfo').style.display = 'none'; // rien à prévisualiser pour du random
 
-    const generated = generateRandomDeals(count, seatAssignment);
+    const generated = generateRandomDeals(count, seatAssignment, constraints);
     pendingParsedSource = 'random';
     pendingParsedDeals = generated;
     refreshPendingOrderedDeals();
 
+    // Voir échange avec Guillaume : avec des contraintes très serrées (plusieurs fourchettes
+    // étroites simultanées), certaines donnes peuvent ne pas les satisfaire même après
+    // RANDOM_DEAL_MAX_RETRIES tentatives (voir generateRandomDeal) — mieux vaut prévenir que
+    // de laisser croire que toutes les donnes générées les respectent silencieusement.
+    const unmetCount = generated.filter(d => d.constraintsUnmet).length;
+    const unmetNote = unmetCount > 0
+        ? ` ⚠️ ${unmetCount} donne(s) n'ont pas pu satisfaire toutes les contraintes malgré ${RANDOM_DEAL_MAX_RETRIES} tentatives — essayez des fourchettes moins serrées.`
+        : '';
     setHostSetupMessage(
-        `${count} donne(s) générée(s) — le calcul du double mort tourne en arrière-plan, le PAR s'affichera en fin de donne dès qu'il sera prêt.`,
-        true
+        `${count} donne(s) générée(s) — le calcul du double mort tourne en arrière-plan, le PAR s'affichera en fin de donne dès qu'il sera prêt.${unmetNote}`,
+        unmetCount === 0
     );
 
     kickOffBackgroundDD(generated);

@@ -97,6 +97,23 @@ Aucune clé, aucun compte externe à configurer : tout fonctionne dès la mise e
   l'enchère en cours. Seul l'hôte les voit ; les autres joueurs continuent d'utiliser le
   bouton "Donne suivante →" qui n'apparaît qu'une fois l'enchère terminée.
 
+## Contraintes optionnelles pour les donnes aléatoires
+
+Le bouton "⚙️ Contraintes avancées" (repliable, sous le générateur de donnes aléatoires)
+permet de régler, pour chacun des 4 sièges indépendamment (voir échange avec Guillaume) :
+- une fourchette de points H (min et/ou max) ;
+- une longueur minimale dans une couleur choisie (ex. "Sud a 5+ cartes à Pique").
+
+Et pour chaque ligne (Nord-Sud, Est-Ouest) :
+- une fourchette de points H combinés (ex. "NS a 24+ à eux deux").
+
+Toutes ces contraintes sont optionnelles et cumulables (un champ vide = pas de contrainte
+sur ce point) ; elles s'ajoutent à la contrainte fixe déjà existante (12H+ dans toute
+ligne occupée par 2 humains). Si des fourchettes trop serrées empêchent de satisfaire
+toutes les contraintes simultanément après 500 tentatives, la donne est générée quand même
+(mieux vaut ça qu'un blocage) et un avertissement s'affiche précisant combien de donnes
+n'ont pas pu toutes les respecter.
+
 ## Navigation entre les donnes
 
 Chaque donne garde sa propre enchère (`deals[i].auctionHistory`) au lieu d'une seule

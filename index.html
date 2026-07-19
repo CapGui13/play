@@ -190,6 +190,78 @@
                 <div class="file-picker">
                     <input type="number" id="randomDealCount" class="random-deal-count-input" min="1" max="40" value="8">
                     <button type="button" class="btn btn-secondary btn-small" onclick="uiGenerateRandomDeals()">🎲 Générer</button>
+                    <button type="button" class="btn btn-secondary btn-small random-deal-constraints-toggle" onclick="uiToggleRandomDealConstraints()" id="randomDealConstraintsToggle">
+                        ⚙️ Contraintes avancées
+                    </button>
+                </div>
+                <!-- Contraintes optionnelles (voir échange avec Guillaume) : fourchette de
+                     points H par siège, fourchette de points combinés par ligne (NS/EO), et
+                     longueur minimale dans une couleur par siège. Repliée par défaut pour ne
+                     pas alourdir le cas courant (aucune contrainte) — voir
+                     uiToggleRandomDealConstraints. Toujours cumulée avec la contrainte fixe
+                     existante (12H+ dans toute ligne à 2 humains, voir
+                     dealSatisfiesHumanLineConstraint dans app.js). -->
+                <div id="randomDealConstraintsPanel" class="random-deal-constraints" style="display:none;">
+                    <table class="constraints-table">
+                        <thead>
+                            <tr><th></th><th>H min</th><th>H max</th><th>Couleur</th><th>Long. min</th></tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>Nord</td>
+                                <td><input type="number" id="rdc-N-hcpMin" min="0" max="40" placeholder="—"></td>
+                                <td><input type="number" id="rdc-N-hcpMax" min="0" max="40" placeholder="—"></td>
+                                <td>
+                                    <select id="rdc-N-suit"><option value="">—</option><option value="S">♠</option><option value="H">♥</option><option value="D">♦</option><option value="C">♣</option></select>
+                                </td>
+                                <td><input type="number" id="rdc-N-suitLen" min="0" max="13" placeholder="—"></td>
+                            </tr>
+                            <tr>
+                                <td>Est</td>
+                                <td><input type="number" id="rdc-E-hcpMin" min="0" max="40" placeholder="—"></td>
+                                <td><input type="number" id="rdc-E-hcpMax" min="0" max="40" placeholder="—"></td>
+                                <td>
+                                    <select id="rdc-E-suit"><option value="">—</option><option value="S">♠</option><option value="H">♥</option><option value="D">♦</option><option value="C">♣</option></select>
+                                </td>
+                                <td><input type="number" id="rdc-E-suitLen" min="0" max="13" placeholder="—"></td>
+                            </tr>
+                            <tr>
+                                <td>Sud</td>
+                                <td><input type="number" id="rdc-S-hcpMin" min="0" max="40" placeholder="—"></td>
+                                <td><input type="number" id="rdc-S-hcpMax" min="0" max="40" placeholder="—"></td>
+                                <td>
+                                    <select id="rdc-S-suit"><option value="">—</option><option value="S">♠</option><option value="H">♥</option><option value="D">♦</option><option value="C">♣</option></select>
+                                </td>
+                                <td><input type="number" id="rdc-S-suitLen" min="0" max="13" placeholder="—"></td>
+                            </tr>
+                            <tr>
+                                <td>Ouest</td>
+                                <td><input type="number" id="rdc-W-hcpMin" min="0" max="40" placeholder="—"></td>
+                                <td><input type="number" id="rdc-W-hcpMax" min="0" max="40" placeholder="—"></td>
+                                <td>
+                                    <select id="rdc-W-suit"><option value="">—</option><option value="S">♠</option><option value="H">♥</option><option value="D">♦</option><option value="C">♣</option></select>
+                                </td>
+                                <td><input type="number" id="rdc-W-suitLen" min="0" max="13" placeholder="—"></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                    <table class="constraints-table">
+                        <thead>
+                            <tr><th></th><th>H min (ligne)</th><th>H max (ligne)</th></tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>Nord-Sud</td>
+                                <td><input type="number" id="rdc-NS-hcpMin" min="0" max="40" placeholder="—" oninput="uiMirrorLineHcpConstraint('rdc-NS-hcpMin')"></td>
+                                <td><input type="number" id="rdc-NS-hcpMax" min="0" max="40" placeholder="—" oninput="uiMirrorLineHcpConstraint('rdc-NS-hcpMax')"></td>
+                            </tr>
+                            <tr>
+                                <td>Est-Ouest</td>
+                                <td><input type="number" id="rdc-EW-hcpMin" min="0" max="40" placeholder="—" oninput="uiMirrorLineHcpConstraint('rdc-EW-hcpMin')"></td>
+                                <td><input type="number" id="rdc-EW-hcpMax" min="0" max="40" placeholder="—" oninput="uiMirrorLineHcpConstraint('rdc-EW-hcpMax')"></td>
+                            </tr>
+                        </tbody>
+                    </table>
                 </div>
             </div>
             <div class="form-group form-group-checkbox">
