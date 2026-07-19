@@ -1158,6 +1158,22 @@ function buildHostHandlers(onOpenExtra) {
             // déjà connu, c'est un retour (reconnexion), pas un nouvel arrivant. Repli sur un
             // id à l'ancienne pour un client qui n'enverrait pas de jeton (compat).
             const token = (metadata && metadata.reconnectToken) || ('guest' + guestIndex);
+
+            // Voir échange avec Guillaume : si ce jeton avait déjà une connexion active à un
+            // AUTRE index (retour après une coupure que le WebRTC n'a pas encore détectée
+            // côté hôte — fréquent sur mobile, en arrière-plan ou en changeant de réseau),
+            // on la ferme explicitement plutôt que de la laisser traîner en double à côté de
+            // la nouvelle. Sans ça, l'ancienne connexion "fantôme" continuait d'exister
+            // silencieusement, avec un risque de messages envoyés au mauvais endroit.
+            const previousGuestIndex = guestIndexByToken[token];
+            if (previousGuestIndex !== undefined && previousGuestIndex !== guestIndex) {
+                const staleConn = peerConn.conns[previousGuestIndex];
+                if (staleConn) {
+                    pushDebugLog(`Jeton ${token.slice(0, 10)}… déjà connecté à l'ancien index #${previousGuestIndex} — fermeture de cette connexion fantôme.`);
+                    try { staleConn.close(); } catch (e) { /* déjà fermée, sans importance */ }
+                    peerConn.conns[previousGuestIndex] = null;
+                }
+            }
             guestIndexByToken[token] = guestIndex;
 
             let p = participants.find(x => x.id === token);
