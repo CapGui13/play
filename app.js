@@ -1754,15 +1754,12 @@ document.addEventListener('click', uiCloseSeatDropdowns);
 
 function uiAssignSeat(seat, participantId) {
     if (myRole !== 'host') return;
-    // Si cette personne occupait déjà un AUTRE siège, on l'en retire d'abord (voir échange
-    // avec Guillaume, bug trouvé en testant le nouveau menu déroulant) — sinon elle se
-    // retrouverait affectée à deux sièges à la fois, ce que le glisser-déposer évite déjà
-    // correctement (voir uiDropOnSeat) mais que cette voie-ci (sélection au clic) ne
-    // vérifiait pas.
-    if (participantId) {
-        const previousSeat = SEATS.find(s => s !== seat && seatAssignment[s] === participantId);
-        if (previousSeat) seatAssignment[previousSeat] = null;
-    }
+    // PAS de retrait automatique de l'ancien siège de cette personne (voir échange avec
+    // Guillaume) : contrôler plusieurs sièges à la fois est une fonctionnalité voulue
+    // depuis le début (mySeats est un tableau, pas une valeur unique — voir
+    // renderMyHands, showActiveState) — un ancien correctif avait traité ça à tort comme
+    // un bug de duplication, alors que c'est exactement ce que cette assignation doit
+    // pouvoir faire.
     seatAssignment[seat] = participantId || null;
     broadcastLobbyState();
     renderLobby();
