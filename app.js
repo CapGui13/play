@@ -1728,14 +1728,22 @@ function uiAssignSeat(seat, participantId) {
 // Retour visuel sur la zone de dépôt survolée (voir échange avec Guillaume) : dragenter/
 // dragleave plutôt que dragover pour basculer la classe — dragover se redéclenche en
 // continu tant qu'on survole, alors qu'on ne veut ajouter/retirer la classe qu'une seule
-// fois, à l'entrée et à la sortie de la zone.
+// fois. `relatedTarget` (l'élément vers lequel le curseur va) sert à distinguer une
+// VRAIE sortie de la zone d'un simple passage sur l'un de ses propres enfants (le bouton,
+// le menu déroulant) — sans cette vérification, la surbrillance clignoterait en
+// traversant ces enfants alors qu'on est toujours au-dessus de la même case (voir échange
+// avec Guillaume : elle doit rester allumée tant qu'un dépôt y placerait effectivement la
+// personne). Plus fiable qu'un simple compteur d'entrées/sorties, dont l'ordre de
+// déclenchement entre navigateurs n'est pas garanti dans ce cas précis.
 function uiDragEnterTarget(event) {
     if (myRole !== 'host') return;
     event.currentTarget.classList.add('drag-over-target');
 }
 
 function uiDragLeaveTarget(event) {
-    event.currentTarget.classList.remove('drag-over-target');
+    const el = event.currentTarget;
+    if (event.relatedTarget && el.contains(event.relatedTarget)) return; // reste dans la même zone, juste passé sur un enfant
+    el.classList.remove('drag-over-target');
 }
 
 // Filet de sécurité : si le glisser se termine autrement que par un dépôt valide (touche
