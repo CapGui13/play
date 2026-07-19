@@ -4078,6 +4078,14 @@ function applyCall(seat, call, explanation) {
 // seul s'il active "Voir les 4 mains" en cours d'enchère, et en continu à un kibbitz
 // (voir checkAuctionEnd).
 function buildAllHandsHtml(deal) {
+    // Même halo doré que renderMyHands pour repérer le tour en cours (voir échange avec
+    // Guillaume : absent jusqu'ici de cette vue-là) — plus de "seulement si on contrôle
+    // plusieurs sièges" ici, puisque les 4 mains sont de toute façon toujours affichées
+    // ensemble dans cette vue. Rien à distinguer une fois l'enchère terminée (plus de
+    // "tour" à signaler).
+    const showActiveState = !isAuctionOver(auctionHistory);
+    const turnSeat = showActiveState ? currentTurnSeat(deal.dealer, auctionHistory) : null;
+
     return SEATS.map(seat => {
         const hand = deal.hands[seat];
         const lines = ['S', 'H', 'D', 'C'].map(suit => `
@@ -4090,9 +4098,10 @@ function buildAllHandsHtml(deal) {
         const hcpBadge = showHcp ? `<span class="hand-hcp-badge">${computeHandHcp(hand)} HCP</span>` : '';
         const krBadge = showKr ? `<span class="hand-hcp-badge">K&R ${computeKaplanRubens(hand).toFixed(2)}</span>` : '';
         const vulnClass = handCardVulnClass(seat, deal.vulnerable);
+        const stateClass = showActiveState ? (seat === turnSeat ? 'hand-card-active' : 'hand-card-inactive') : '';
 
         return `
-            <div class="hand-card hand-${seat} ${vulnClass}">
+            <div class="hand-card hand-${seat} ${vulnClass} ${stateClass}">
                 <div class="hand-card-title">
                     <span class="hand-card-title-name">${seatFullName(seat)}</span>
                     <span class="hand-card-badges">${hcpBadge}${krBadge}</span>
