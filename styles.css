@@ -1346,11 +1346,23 @@ body.on-landing-screen .connection-bar {
     background: var(--card);
     color: var(--text);
     border-radius: 10px;
+    border: 2px solid transparent;
     padding: 14px 16px;
     box-shadow: 0 3px 10px rgba(0,0,0,0.25);
     position: relative;
     overflow: hidden;
-    transition: opacity 0.3s ease, filter 0.3s ease, box-shadow 0.3s ease, background-color 0.2s ease, color 0.2s ease;
+    transition: opacity 0.3s ease, filter 0.3s ease, box-shadow 0.3s ease, background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+}
+
+/* Bordure colorée selon la vulnérabilité (voir échange avec Guillaume — même convention
+   que .vuln-bar dans le relevé d'enchères) : repérable d'un coup d'œil, aussi bien sur sa
+   propre main que sur "Voir les 4 mains". */
+.hand-card-safe {
+    border-color: #22c55e;
+}
+
+.hand-card-vuln {
+    border-color: #ef4444;
 }
 
 /* Quand un joueur contrôle plusieurs mains, celle dont c'est le tour est mise en valeur

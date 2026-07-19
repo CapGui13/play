@@ -3856,6 +3856,15 @@ function renderRoomBoard() {
     el.innerHTML = `<div class="room-board-seats">${seatRows}</div>${kibbitzHtml}`;
 }
 
+// Bordure colorée selon la vulnérabilité (voir échange avec Guillaume) : même convention
+// que .vuln-bar dans le relevé d'enchères (vert = non vulnérable, rouge = vulnérable),
+// appliquée directement sur la carte de main plutôt que sur une simple barre, pour la
+// repérer d'un coup d'œil aussi bien sur sa propre main que sur "Voir les 4 mains".
+function handCardVulnClass(seat, dealVulnerable) {
+    const isVuln = dealVulnerable === 'Both' || dealVulnerable === partnershipOf(seat);
+    return isVuln ? 'hand-card-vuln' : 'hand-card-safe';
+}
+
 function renderMyHands() {
     const deal = currentDeal();
     const container = document.getElementById('myHandsContainer');
@@ -3889,9 +3898,10 @@ function renderMyHands() {
         const hcpBadge = showHcp ? `<span class="hand-hcp-badge">${computeHandHcp(hand)} HCP</span>` : '';
         const krBadge = showKr ? `<span class="hand-hcp-badge">K&R ${computeKaplanRubens(hand).toFixed(2)}</span>` : '';
         const stateClass = showActiveState ? (seat === turnSeat ? 'hand-card-active' : 'hand-card-inactive') : '';
+        const vulnClass = handCardVulnClass(seat, deal.vulnerable);
 
         return `
-            <div class="hand-card ${stateClass}">
+            <div class="hand-card ${vulnClass} ${stateClass}">
                 <div class="hand-card-title">
                     <span class="hand-card-title-name">${seatFullName(seat)}</span>
                     <span class="hand-card-badges">${hcpBadge}${krBadge}</span>
@@ -4079,9 +4089,10 @@ function buildAllHandsHtml(deal) {
 
         const hcpBadge = showHcp ? `<span class="hand-hcp-badge">${computeHandHcp(hand)} HCP</span>` : '';
         const krBadge = showKr ? `<span class="hand-hcp-badge">K&R ${computeKaplanRubens(hand).toFixed(2)}</span>` : '';
+        const vulnClass = handCardVulnClass(seat, deal.vulnerable);
 
         return `
-            <div class="hand-card hand-${seat}">
+            <div class="hand-card hand-${seat} ${vulnClass}">
                 <div class="hand-card-title">
                     <span class="hand-card-title-name">${seatFullName(seat)}</span>
                     <span class="hand-card-badges">${hcpBadge}${krBadge}</span>
