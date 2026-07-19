@@ -623,6 +623,18 @@ body.on-landing-screen .connection-bar {
     color: color-mix(in srgb, var(--warn-amber) 75%, var(--text));
 }
 
+/* Confirmation non ambiguë (ex : génération de donnes réussie sans réserve) — voir
+   échange avec Guillaume, qui voulait un vert distinct du jaune (contraintes à
+   reconsidérer) et du rouge (erreur bloquante) plutôt que de réutiliser l'un des deux. */
+.error-banner.is-success {
+    background: #1f3d2a;
+    background: color-mix(in srgb, #2f8f5b 20%, var(--card));
+    border-color: #2f8f5b;
+    border-color: color-mix(in srgb, #2f8f5b 45%, var(--card));
+    color: #6fc492;
+    color: color-mix(in srgb, #2f8f5b 70%, var(--text));
+}
+
 .deal-file-info {
     margin-top: 18px;
     display: flex;

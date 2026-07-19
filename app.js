@@ -740,7 +740,7 @@ function uiGenerateRandomDeals() {
         : '';
     setHostSetupMessage(
         `${count} donne(s) générée(s) — le calcul du double mort tourne en arrière-plan, le PAR s'affichera en fin de donne dès qu'il sera prêt.${unmetNote}`,
-        unmetCount > 0
+        unmetCount > 0 ? 'warning' : 'success'
     );
 
     kickOffBackgroundDD(generated);
@@ -1751,10 +1751,18 @@ function uiTransferHost(targetId) {
 // avertissement non bloquant — la partie peut démarrer quand même (PARs absents, format
 // de fichier ambigu) — d'une vraie erreur qui empêche de continuer (fichier illisible,
 // aucun fichier choisi).
-function setHostSetupMessage(text, isWarning) {
+// Accepte soit un booléen (ancien usage, rétro-compatible : true=warning, false=error),
+// soit une chaîne 'error'/'warning'/'success' — voir échange avec Guillaume, qui voulait
+// un état "succès" en vert distinct du jaune (contraintes à revoir) et du rouge (erreur
+// bloquante), pour la confirmation de génération de donnes.
+function setHostSetupMessage(text, type) {
     const errorEl = document.getElementById('hostSetupError');
-    errorEl.textContent = (isWarning ? '⚠️ ' : '') + text;
-    errorEl.classList.toggle('is-warning', !!isWarning);
+    const kind = type === true ? 'warning' : type === false ? 'error' : (type || 'error');
+    const prefix = kind === 'warning' ? '⚠️ ' : kind === 'success' ? '✅ ' : '';
+    errorEl.textContent = prefix + text;
+    errorEl.classList.remove('is-warning', 'is-success');
+    if (kind === 'warning') errorEl.classList.add('is-warning');
+    if (kind === 'success') errorEl.classList.add('is-success');
     errorEl.style.display = 'block';
 }
 
