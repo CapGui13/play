@@ -1147,36 +1147,85 @@ body.on-landing-screen .connection-bar {
     cursor: grab;
 }
 
+/* Remise à zéro des styles par défaut d'un <button> (voir échange avec Guillaume : le
+   déclencheur du menu de siège est un vrai <button>, pas un <span>, pour rester
+   cliquable/accessible au clavier) — sans ça, le navigateur ajoute sa propre apparence de
+   bouton par-dessus .kibitz-chip. */
+button.kibitz-chip {
+    font-family: inherit;
+    -webkit-appearance: none;
+    appearance: none;
+}
+
 .kibitz-chip:active {
     cursor: grabbing;
 }
 
-/* Rangée contenant la puce d'occupant (voir échange avec Guillaume : la puce elle-même
-   réutilise .kibitz-chip telle quelle, pour l'homogénéité avec le kibbitz). */
-.seat-occupant-row {
+/* Menu déroulant personnalisé des sièges (voir échange avec Guillaume) : le déclencheur
+   réutilise .kibitz-chip (même identité visuelle que le kibbitz, homogénéité voulue pour
+   le glisser-déposer), transformé en <button> pour rester cliquable ET glissable. Le menu
+   lui-même reprend le style de .transfer-menu (même sensation qu'un menu déroulant déjà
+   présent ailleurs dans l'appli) mais avec un avatar par option, ce qu'un <select> natif
+   ne permet pas. */
+.seat-occupant-dropdown {
+    position: relative;
     display: flex;
     justify-content: center;
 }
 
 .seat-occupant-chip {
     cursor: grab;
+    font-family: var(--font-body);
+    gap: 8px;
 }
 
 .seat-occupant-chip:active {
     cursor: grabbing;
 }
 
-.seat-occupant-chip-robot {
-    cursor: default;
+.seat-dropdown-chevron {
+    font-size: 0.7rem;
+    color: var(--text-muted);
 }
 
-/* Menu déroulant gardé comme méthode de secours pour qui préfère cliquer plutôt que
-   glisser (voir échange avec Guillaume) — plus discret que la puce, qui porte maintenant
-   l'identité visuelle principale du siège. */
-.seat-assign-select-fallback {
-    margin-top: 4px;
-    font-size: 0.75rem;
-    opacity: 0.75;
+.seat-dropdown-menu {
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    margin-top: 6px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+    min-width: 180px;
+    max-width: 240px;
+    z-index: 50;
+    overflow: hidden;
+}
+
+.seat-dropdown-option {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    text-align: left;
+    padding: 9px 12px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text);
+    font-size: 0.85rem;
+    cursor: pointer;
+}
+
+.seat-dropdown-option:last-child { border-bottom: none; }
+
+.seat-dropdown-option:hover {
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.seat-dropdown-option.is-current {
+    background: rgba(201, 162, 39, 0.12);
+    font-weight: 600;
 }
 
 .seat-assignment-grid {

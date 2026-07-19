@@ -1545,25 +1545,43 @@ function renderSeatAssignmentGrid() {
         const assignedId = seatAssignment[seat];
         const flashClass = justAssigned(seat) ? ' just-assigned' : '';
         if (isHost) {
-            const options = ['<option value="">— (robot)</option>']
-                .concat(participants.map(p =>
-                    `<option value="${p.id}" ${p.id === assignedId ? 'selected' : ''}>${escapeHtml(p.name)}</option>`
-                ));
-            // Puce identique à celles du kibbitz (voir échange avec Guillaume : logo et
-            // nom réunis, pas séparés comme avant) — même classe .kibitz-chip, réutilisée
-            // telle quelle pour l'homogénéité visuelle et parce que le glisser-déposer
-            // entre les deux zones doit se sentir comme daplacer LE MÊME genre d'objet.
-            // Le menu déroulant reste en dessous, plus petit, comme méthode de secours
-            // pour qui préfère cliquer plutôt que glisser (voir échange avec Guillaume).
+            // Menu déroulant personnalisé (voir échange avec Guillaume) plutôt qu'un
+            // <select> natif : un <option> ne peut pas contenir d'avatar coloré, alors
+            // qu'ici on veut que le déclencheur ET chaque option montrent avatar + nom.
+            // Le déclencheur est à la fois : cliquable (ouvre la liste, voir
+            // uiToggleSeatDropdown), glissable (ondragstart, pour déplacer CET occupant
+            // ailleurs) et zone de dépôt (ondragover/ondrop sur la case entière, voir
+            // plus bas — plus grande cible que le seul déclencheur).
             const occupantP = assignedId ? participants.find(x => x.id === assignedId) : null;
-            const occupantDisplay = occupantP
-                ? `<span class="kibitz-chip seat-occupant-chip" draggable="true" ondragstart="uiDragStartParticipant(event, '${assignedId}')">${avatarHtml(assignedId)}<span class="kibitz-chip-name">${escapeHtml(occupantP.name)}</span></span>`
-                : `<span class="kibitz-chip seat-occupant-chip seat-occupant-chip-robot"><span class="mini-avatar mini-avatar-robot">🤖</span><span class="kibitz-chip-name">(robot)</span></span>`;
+            const triggerAttrs = occupantP ? ` draggable="true" ondragstart="uiDragStartParticipant(event, '${assignedId}')"` : '';
+            const triggerContent = occupantP
+                ? `${avatarHtml(assignedId)}<span class="kibitz-chip-name">${escapeHtml(occupantP.name)}</span>`
+                : `<span class="mini-avatar mini-avatar-robot">🤖</span><span class="kibitz-chip-name">(robot)</span>`;
+
+            const robotOptionClass = assignedId ? '' : ' is-current';
+            const optionsHtml = [`
+                <div class="seat-dropdown-option${robotOptionClass}" onclick="uiAssignSeat('${seat}', ''); uiCloseSeatDropdowns();">
+                    <span class="mini-avatar mini-avatar-robot">🤖</span><span>(robot)</span>
+                </div>
+            `].concat(participants.map(p => {
+                const currentClass = p.id === assignedId ? ' is-current' : '';
+                return `
+                    <div class="seat-dropdown-option${currentClass}" onclick="uiAssignSeat('${seat}', '${p.id}'); uiCloseSeatDropdowns();">
+                        ${avatarHtml(p.id)}<span>${escapeHtml(p.name)}</span>
+                    </div>
+                `;
+            }));
+
             return `
                 <div class="seat-box seat-pos-${seat}${flashClass}" ondragover="uiAllowDrop(event)" ondrop="uiDropOnSeat(event, '${seat}')">
                     <span class="seat-box-label">${SEAT_FULL_NAME[seat]}</span>
-                    <div class="seat-occupant-row">${occupantDisplay}</div>
-                    <select class="seat-assign-select seat-assign-select-fallback" onchange="uiAssignSeat('${seat}', this.value)">${options.join('')}</select>
+                    <div class="seat-occupant-dropdown">
+                        <button type="button" class="kibitz-chip seat-occupant-chip"${triggerAttrs} onclick="uiToggleSeatDropdown(event, '${seat}')">
+                            ${triggerContent}
+                            <span class="seat-dropdown-chevron">▾</span>
+                        </button>
+                        <div class="seat-dropdown-menu" id="seatDropdownMenu-${seat}" style="display:none;">${optionsHtml.join('')}</div>
+                    </div>
                 </div>
             `;
         }
@@ -1663,8 +1681,38 @@ function uiMyNameBlur() {
     }
 }
 
+// Menu déroulant personnalisé des sièges (voir échange avec Guillaume) : un seul ouvert à
+// la fois. stopPropagation empêche le clic d'atteindre le gestionnaire global qui ferme
+// tout au clic ailleurs (voir plus bas) — sans ça, ouvrir un menu le refermerait aussitôt.
+function uiToggleSeatDropdown(event, seat) {
+    event.stopPropagation();
+    const menu = document.getElementById(`seatDropdownMenu-${seat}`);
+    if (!menu) return;
+    const wasOpen = menu.style.display !== 'none';
+    uiCloseSeatDropdowns();
+    if (!wasOpen) menu.style.display = 'block';
+}
+
+function uiCloseSeatDropdowns() {
+    document.querySelectorAll('.seat-dropdown-menu').forEach(m => { m.style.display = 'none'; });
+}
+
+// Ferme tout menu de siège ouvert dès qu'on clique n'importe où ailleurs sur la page (voir
+// échange avec Guillaume) — posé une seule fois au chargement, pas à chaque rendu de la
+// grille (sinon les écouteurs s'empileraient à chaque re-rendu du salon).
+document.addEventListener('click', uiCloseSeatDropdowns);
+
 function uiAssignSeat(seat, participantId) {
     if (myRole !== 'host') return;
+    // Si cette personne occupait déjà un AUTRE siège, on l'en retire d'abord (voir échange
+    // avec Guillaume, bug trouvé en testant le nouveau menu déroulant) — sinon elle se
+    // retrouverait affectée à deux sièges à la fois, ce que le glisser-déposer évite déjà
+    // correctement (voir uiDropOnSeat) mais que cette voie-ci (sélection au clic) ne
+    // vérifiait pas.
+    if (participantId) {
+        const previousSeat = SEATS.find(s => s !== seat && seatAssignment[s] === participantId);
+        if (previousSeat) seatAssignment[previousSeat] = null;
+    }
     seatAssignment[seat] = participantId || null;
     broadcastLobbyState();
     renderLobby();
