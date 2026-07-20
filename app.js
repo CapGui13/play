@@ -127,9 +127,11 @@ let mySeats = null;         // sièges contrôlés par ce joueur pendant la part
 let autoPassSeats = [];     // sièges non assignés (robot "passe") — décidé par l'hôte au lancement
 // Mode d'enchère des robots (voir échange avec Guillaume) : 'smart' = système appris (le
 // moteur habituel, decideRobotCall), 'passOnly' = passe en boucle sans réfléchir, quel que
-// soit le jeu. Décision purement locale à l'hôte : seul lui déclenche les décisions des
-// robots (voir maybeRobotBid, gardé par `myRole !== 'host'`), donc pas besoin de la
-// diffuser aux invités, qui n'en ont jamais l'usage.
+// soit le jeu. Configurable UNIQUEMENT dans le salon, avant de lancer la session (voir
+// index.html) — pas modifiable une fois la partie démarrée. Décision purement locale à
+// l'hôte : seul lui déclenche les décisions des robots (voir maybeRobotBid, gardé par
+// `myRole !== 'host'`), donc pas besoin de la diffuser aux invités, qui n'en ont jamais
+// l'usage.
 let robotBiddingMode = 'smart';
 
 // Plus de statut kibbitz suivi séparément (source de bug : oublié pour un joueur qui
@@ -3779,10 +3781,6 @@ function updateBoardControlVisibility() {
     // devrait pouvoir déclencher pour tout le monde.
     const rotateBtn = document.getElementById('rotateSeatsBtn');
     if (rotateBtn) rotateBtn.style.display = myRole === 'host' ? '' : 'none';
-    // Réservé à l'hôte aussi (voir robotBiddingMode) — purement local, seul l'hôte
-    // déclenche les décisions des robots.
-    const robotModeToggle = document.getElementById('robotBiddingModeToggle');
-    if (robotModeToggle) robotModeToggle.style.display = myRole === 'host' ? '' : 'none';
     // Téléchargement local pur (voir uiExportSessionPBN) : contrairement à l'export PBN
     // d'une seule donne (qui écrit sur le repo GitHub, réservé à l'hôte), rien n'empêche
     // n'importe quel joueur actif de récupérer sa propre vue locale de la session.
