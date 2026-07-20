@@ -341,6 +341,40 @@ Trois corrections supplémentaires, chacune trouvée en creusant au-delà du sym
   (15H+) et un fit pour la couleur choisie par le partenaire, il pousse directement à la
   manche plutôt que de laisser filer un partiel.
 
+## Corrections issues de la session du 20 juillet (voir échange avec Guillaume)
+
+Trois retours après relecture d'une nouvelle session, chacun corrigé après une analyse
+précise (donne 3 en particulier a d'abord été mal comprise — confusion entre intervention
+et réponse au sein d'un même camp, corrigée après clarification) :
+
+- **Contre d'appel exclu avec une majeure 5ème** : comme pour une couleur de 6+ cartes
+  (correction précédente), une majeure de 5 cartes suffit à préférer une intervention
+  naturelle à un contre d'appel — assez descriptive en elle-même pour ne pas se cacher
+  derrière un contre.
+- **Contre adverse = intervention pour la règle du rebid forcé** : un contre de la couleur
+  du partenaire (pas seulement une vraie annonce) libère maintenant l'ouvreur de
+  l'obligation de reparler après une réponse en changement de couleur — la situation est
+  tout aussi compétitive qu'une nouvelle enchère adverse.
+- **Répéter une mineure au palier 2+ doit rester honnête** : ça ne montre plus une simple
+  main de 4 cartes minimum — seulement 6+ cartes, ou 5 cartes avec une chicane/singleton
+  ailleurs (cas moins fréquent). Sans ces conditions, et sans autre option, l'ouvreur passe
+  plutôt que de sur-décrire sa main. Ne s'applique pas à une majeure, qui promet déjà 5+
+  dès l'ouverture.
+- **2♣ fort artificiel (22-23HL équilibrée)** : un "super 2SA" annoncé en deux temps —
+  2♣ (forcing), le répondant relaie systématiquement en 2♦ (pas de réponse positive par
+  couleur, volontairement hors périmètre), puis l'ouvreur précise 22-23 en rebiddant 2SA.
+  Le répondant, dont le relais initial ne disait rien de sa main, l'évalue alors pour la
+  première fois (même logique de seuil qu'une réponse à une ouverture de 2SA normale) —
+  avec une majeure 5+ franche, la manche s'y joue directement plutôt qu'à SA.
+- **Seuil de réponse à un barrage relevé (donne 3)** : le seuil de 11HL pour montrer une
+  nouvelle couleur était le même qu'après une ouverture normale (qui promet déjà 12+) —
+  mais un barrage plafonne le partenaire à 8-12HL, donc 11HL n'offre "aucun espoir de
+  manche" même dans le meilleur des cas. Relevé à 13HL (pour la nouvelle couleur ET le
+  repli SA) spécifiquement en réponse à un barrage — pile de quoi espérer la manche même
+  si le partenaire n'a que le minimum de sa fourchette. Le soutien direct du barrage
+  lui-même (sans nouvelle couleur) n'est pas concerné : soutenir reste une action
+  compétitive raisonnable même avec des points modestes.
+
 ## Corrections issues d'une relecture de session (voir échange avec Guillaume)
 
 Après une session de test, Guillaume a exporté le fichier et relu chaque donne en détail
