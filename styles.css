@@ -1715,6 +1715,10 @@ button.kibitz-chip {
     font-family: Arial, "Helvetica Neue", Helvetica, sans-serif;
     font-style: normal;
     display: inline-block;
+    /* Voir échange avec Guillaume : léger espace pour compenser le contour net
+       (text-shadow à 8 directions, voir .call-btn) qui déborde visuellement vers le
+       chiffre précédent et réduit l'espace perçu entre les deux. */
+    margin-left: 1px;
     /* Force le rendu "texte" plutôt que "émoji" des caractères ♠♥♦♣ sur les systèmes qui
        proposent les deux présentations pour ces glyphes (notamment mobile) — complément
        à font-family, qui seul ne suffit pas toujours à empêcher la substitution par une
