@@ -1419,6 +1419,22 @@ button.kibitz-chip {
     flex-wrap: wrap;
 }
 
+/* Voir échange avec Guillaume : même apparence que les boutons voisins (padding, bordure,
+   coins arrondis) pour rester cohérent dans la barre, même si c'est une case à cocher et
+   non un bouton. */
+.robot-bidding-mode-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 14px;
+    border-radius: 8px;
+    border: 1px solid var(--line);
+    background: var(--surface-2);
+    color: var(--text);
+    font-size: 0.85rem;
+    cursor: pointer;
+}
+
 .board-nav-row {
     display: flex;
     align-items: center;

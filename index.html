@@ -312,6 +312,14 @@
                      fixées par position (N/E/S/O), donc ça change qui joue quelle main à cet
                      instant précis, pas les cartes elles-mêmes ni l'historique déjà enchéri. -->
                 <button id="rotateSeatsBtn" type="button" class="btn btn-secondary btn-small" style="display:none;" onclick="uiRotateSeatsClockwise()"><span class="btn-label-full">🔄 Rotation 90°</span><span class="btn-label-short">🔄 Rotation</span></button>
+                <!-- Réservé à l'hôte, purement local (voir robotBiddingMode dans app.js —
+                     voir échange avec Guillaume) : choisir si les robots enchérissent selon
+                     leur système appris (decideRobotCall) ou passent en boucle sans réfléchir,
+                     quel que soit le jeu. Modifiable à tout moment, y compris en pleine partie. -->
+                <label id="robotBiddingModeToggle" class="robot-bidding-mode-toggle" style="display:none;">
+                    <input type="checkbox" onchange="uiSetRobotBiddingMode(this.checked)">
+                    <span class="btn-label-full">🤖 Robots passent en boucle</span><span class="btn-label-short">🤖 Passe en boucle</span>
+                </label>
                 <!-- Visibilité gérée par updateBoardControlVisibility (host ou joueur assis) :
                      voir échange avec Guillaume — récupérer les donnes jouées de toute la session
                      (mains + enchère réelle + vulnérabilité) pour lui permettre de me faire des

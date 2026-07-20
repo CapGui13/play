@@ -125,6 +125,12 @@ function getReconnectToken() {
 
 let mySeats = null;         // sièges contrôlés par ce joueur pendant la partie
 let autoPassSeats = [];     // sièges non assignés (robot "passe") — décidé par l'hôte au lancement
+// Mode d'enchère des robots (voir échange avec Guillaume) : 'smart' = système appris (le
+// moteur habituel, decideRobotCall), 'passOnly' = passe en boucle sans réfléchir, quel que
+// soit le jeu. Décision purement locale à l'hôte : seul lui déclenche les décisions des
+// robots (voir maybeRobotBid, gardé par `myRole !== 'host'`), donc pas besoin de la
+// diffuser aux invités, qui n'en ont jamais l'usage.
+let robotBiddingMode = 'smart';
 
 // Plus de statut kibbitz suivi séparément (source de bug : oublié pour un joueur qui
 // rejoint après le lancement de la partie, resté "spectateur" sans les mains) — un
@@ -1625,12 +1631,12 @@ function renderSeatAssignmentGrid() {
             const triggerAttrs = occupantP ? ` draggable="true" ondragstart="uiDragStartParticipant(event, '${assignedId}', '${seat}')"` : '';
             const triggerContent = occupantP
                 ? `${avatarHtml(assignedId)}<span class="kibitz-chip-name">${escapeHtml(occupantP.name)}</span>`
-                : `<span class="mini-avatar mini-avatar-robot">🤖</span><span class="kibitz-chip-name">(robot)</span>`;
+                : `<span class="mini-avatar mini-avatar-robot">🤖</span><span class="kibitz-chip-name">Robot</span>`;
 
             const robotOptionClass = assignedId ? '' : ' is-current';
             const optionsHtml = [`
                 <div class="seat-dropdown-option${robotOptionClass}" onclick="uiAssignSeat('${seat}', ''); uiCloseSeatDropdowns();">
-                    <span class="mini-avatar mini-avatar-robot">🤖</span><span>(robot)</span>
+                    <span class="mini-avatar mini-avatar-robot">🤖</span><span>Robot</span>
                 </div>
             `].concat(participants.map(p => {
                 const currentClass = p.id === assignedId ? ' is-current' : '';
@@ -1655,7 +1661,7 @@ function renderSeatAssignmentGrid() {
             `;
         }
         const p = participants.find(x => x.id === assignedId);
-        const name = p ? escapeHtml(p.name) : '— (robot)';
+        const name = p ? escapeHtml(p.name) : 'Robot';
         return `
             <div class="seat-box seat-pos-${seat}${flashClass}">
                 <span class="seat-box-label">${SEAT_FULL_NAME[seat]}</span>
@@ -1879,6 +1885,13 @@ function rotatedSeatAssignment(current) {
 // Réservé à l'hôte (voir updateBoardControlVisibility) : applique la rotation localement,
 // recalcule mySeats/autoPassSeats en conséquence, diffuse le nouvel état à tout le monde,
 // puis rafraîchit l'écran actuellement affiché (jeu ou salon selon le moment).
+// Voir échange avec Guillaume : bascule le mode d'enchère des robots. Purement local à
+// l'hôte (voir robotBiddingMode) — pas de diffusion réseau nécessaire.
+function uiSetRobotBiddingMode(passOnly) {
+    if (myRole !== 'host') return;
+    robotBiddingMode = passOnly ? 'passOnly' : 'smart';
+}
+
 function uiRotateSeatsClockwise() {
     if (myRole !== 'host') return;
     seatAssignment = rotatedSeatAssignment(seatAssignment);
@@ -3657,7 +3670,15 @@ function maybeRobotBid() {
         const stillTurnSeat = currentTurnSeat(currentDeal().dealer, auctionHistory);
         if (stillTurnSeat !== turnSeat) return;
 
-        const { call, explanation } = decideRobotCall(turnSeat, currentDeal(), auctionHistory);
+        // Mode "passe en boucle" (voir échange avec Guillaume, robotBiddingMode) : saute
+        // complètement decideRobotCall, aucune analyse de la main, toujours passe.
+        let call, explanation;
+        if (robotBiddingMode === 'passOnly') {
+            call = 'PASS';
+            explanation = 'Mode « passe en boucle » activé';
+        } else {
+            ({ call, explanation } = decideRobotCall(turnSeat, currentDeal(), auctionHistory));
+        }
         applyCall(turnSeat, call, explanation);
         peerConn.send({ type: 'call', boardIndex, seat: turnSeat, call, explanation });
     }, 300);
@@ -3758,6 +3779,10 @@ function updateBoardControlVisibility() {
     // devrait pouvoir déclencher pour tout le monde.
     const rotateBtn = document.getElementById('rotateSeatsBtn');
     if (rotateBtn) rotateBtn.style.display = myRole === 'host' ? '' : 'none';
+    // Réservé à l'hôte aussi (voir robotBiddingMode) — purement local, seul l'hôte
+    // déclenche les décisions des robots.
+    const robotModeToggle = document.getElementById('robotBiddingModeToggle');
+    if (robotModeToggle) robotModeToggle.style.display = myRole === 'host' ? '' : 'none';
     // Téléchargement local pur (voir uiExportSessionPBN) : contrairement à l'export PBN
     // d'une seule donne (qui écrit sur le repo GitHub, réservé à l'hôte), rien n'empêche
     // n'importe quel joueur actif de récupérer sa propre vue locale de la session.
