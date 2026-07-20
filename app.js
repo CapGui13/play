@@ -1622,7 +1622,7 @@ function renderSeatAssignmentGrid() {
             // ailleurs) et zone de dépôt (ondragover/ondrop sur la case entière, voir
             // plus bas — plus grande cible que le seul déclencheur).
             const occupantP = assignedId ? participants.find(x => x.id === assignedId) : null;
-            const triggerAttrs = occupantP ? ` draggable="true" ondragstart="uiDragStartParticipant(event, '${assignedId}')"` : '';
+            const triggerAttrs = occupantP ? ` draggable="true" ondragstart="uiDragStartParticipant(event, '${assignedId}', '${seat}')"` : '';
             const triggerContent = occupantP
                 ? `${avatarHtml(assignedId)}<span class="kibitz-chip-name">${escapeHtml(occupantP.name)}</span>`
                 : `<span class="mini-avatar mini-avatar-robot">🤖</span><span class="kibitz-chip-name">(robot)</span>`;
@@ -1798,13 +1798,25 @@ function uiDragLeaveTarget(event) {
 // affichée plutôt que de la laisser collée jusqu'au prochain rendu.
 document.addEventListener('dragend', () => {
     document.querySelectorAll('.drag-over-target').forEach(el => el.classList.remove('drag-over-target'));
+    draggedParticipantId = null;
+    draggedFromSeat = null;
 });
 
 let draggedParticipantId = null;
+// Siège d'ORIGINE précis du glissé, mémorisé explicitement au démarrage (voir échange
+// avec Guillaume) — plutôt que de le retrouver après coup via SEATS.find(seatAssignment
+// === draggedParticipantId), qui tombe toujours sur le PREMIER siège occupé par cette
+// personne, peu importe lequel a réellement été glissé. Ça cassait le retrait d'un siège
+// précis quand la même personne en occupe deux à la fois (voir uiAssignSeat, qui autorise
+// maintenant cette situation) : glisser sa case Sud vers le kibbitz libérait Nord à la
+// place, puisque Nord était trouvé en premier dans SEATS. `null` si le glissé vient du
+// kibbitz (pas de siège d'origine).
+let draggedFromSeat = null;
 
-function uiDragStartParticipant(event, participantId) {
+function uiDragStartParticipant(event, participantId, fromSeat) {
     if (myRole !== 'host') { event.preventDefault(); return; }
     draggedParticipantId = participantId;
+    draggedFromSeat = fromSeat || null;
     event.dataTransfer.effectAllowed = 'move';
     event.dataTransfer.setData('text/plain', participantId);
 }
@@ -1817,9 +1829,10 @@ function uiAllowDrop(event) {
 function uiDropOnSeat(event, targetSeat) {
     event.preventDefault();
     if (myRole !== 'host' || !draggedParticipantId) return;
-    const sourceSeat = SEATS.find(s => seatAssignment[s] === draggedParticipantId);
+    const sourceSeat = draggedFromSeat;
     if (sourceSeat === targetSeat) {
         draggedParticipantId = null;
+        draggedFromSeat = null;
         event.currentTarget.classList.remove('drag-over-target');
         return; // déposé sur sa propre case, rien à faire
     }
@@ -1829,6 +1842,7 @@ function uiDropOnSeat(event, targetSeat) {
     if (sourceSeat) seatAssignment[sourceSeat] = targetOccupant || null; // échange ; sinon (venait du kibbitz) l'ancien occupant cible devient kibbitz de lui-même, rien à écrire
 
     draggedParticipantId = null;
+    draggedFromSeat = null;
     broadcastLobbyState();
     renderLobby();
 }
@@ -1836,9 +1850,9 @@ function uiDropOnSeat(event, targetSeat) {
 function uiDropOnKibitz(event) {
     event.preventDefault();
     if (myRole !== 'host' || !draggedParticipantId) return;
-    const sourceSeat = SEATS.find(s => seatAssignment[s] === draggedParticipantId);
-    if (sourceSeat) seatAssignment[sourceSeat] = null;
+    if (draggedFromSeat) seatAssignment[draggedFromSeat] = null;
     draggedParticipantId = null;
+    draggedFromSeat = null;
     broadcastLobbyState();
     renderLobby();
 }
