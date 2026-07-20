@@ -1960,6 +1960,7 @@ table.dd-table td.dd-secondary-contract {
     grid-template-columns: repeat(5, 1fr);
     gap: 6px;
     margin-bottom: 10px;
+    position: relative; /* nécessaire pour le positionnement absolu de .call-btn-pass */
 }
 
 /* Voir échange avec Guillaume : hauteur fixe pour tous les boutons d'enchère (au lieu de
@@ -1969,8 +1970,18 @@ table.dd-table td.dd-secondary-contract {
     height: 40px;
 }
 
+/* Voir échange avec Guillaume : largeur restaurée à ~1/3 de la ligne entière (sa
+   proportion d'origine, avant que X/XX ne soient calés sur des colonnes précises) — pas
+   possible avec un simple grid-column (qui la limiterait à 1/5), d'où un positionnement
+   absolu avec largeur et décalage calculés explicitement. Le bord gauche tombe pile au
+   milieu de la colonne 1 (même calcul que la largeur d'une colonne : (100% - 4 gaps)/5,
+   divisé par 2), soit le milieu du bouton juste en dessous (1SA). */
 .call-btn-pass {
-    transform: translateX(50%);
+    position: absolute;
+    top: 0;
+    left: calc((100% - 24px) / 10); /* milieu de la colonne 1 : (100% - 4 gaps de 6px)/5, divisé par 2 */
+    width: calc(100% / 3);
+    height: 100%;
 }
 
 .bid-grid { display: flex; flex-direction: column; gap: 6px; }
