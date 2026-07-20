@@ -1722,7 +1722,7 @@ button.kibitz-chip {
        comme un filet supplémentaire, pas une garantie à 100 %. */
     font-variant-emoji: text;
 }
-.suit-icon.spades { color: var(--text); }
+.suit-icon.spades { color: #fff; }
 .suit-icon.hearts { color: var(--suit-red); }
 .suit-icon.diamonds { color: var(--suit-orange); }
 .suit-icon.clubs { color: var(--suit-blue); }
@@ -1816,7 +1816,7 @@ button.kibitz-chip {
     100% { background: var(--card); }
 }
 
-.auction-ledger .call-suit.spades { color: var(--text); }
+.auction-ledger .call-suit.spades { color: #fff; }
 .auction-ledger .call-suit.hearts { color: #d06464; color: color-mix(in srgb, #c0272d 70%, var(--text)); }
 .auction-ledger .call-suit.diamonds { color: #f2b879; color: color-mix(in srgb, var(--suit-orange) 70%, var(--text)); }
 .auction-ledger .call-suit.clubs { color: #81abe1; color: color-mix(in srgb, var(--suit-blue) 70%, var(--text)); }
@@ -2057,7 +2057,7 @@ table.dd-table td.dd-secondary-contract {
     cursor: not-allowed;
 }
 
-.call-btn.spades { color: var(--text); }
+.call-btn.spades { color: #000; }
 .call-btn.hearts { color: var(--suit-red); }
 .call-btn.diamonds { color: var(--suit-orange); }
 .call-btn.clubs { color: var(--suit-blue); }
