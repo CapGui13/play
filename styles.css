@@ -1970,7 +1970,7 @@ table.dd-table td.dd-secondary-contract {
 }
 
 .call-btn-pass {
-    transform: translateY(50%);
+    transform: translateX(50%);
 }
 
 .bid-grid { display: flex; flex-direction: column; gap: 6px; }
