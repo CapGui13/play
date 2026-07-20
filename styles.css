@@ -1715,10 +1715,6 @@ button.kibitz-chip {
     font-family: Arial, "Helvetica Neue", Helvetica, sans-serif;
     font-style: normal;
     display: inline-block;
-    /* Voir échange avec Guillaume : léger espace pour compenser le contour net
-       (text-shadow à 8 directions, voir .call-btn) qui déborde visuellement vers le
-       chiffre précédent et réduit l'espace perçu entre les deux. */
-    margin-left: 1px;
     /* Force le rendu "texte" plutôt que "émoji" des caractères ♠♥♦♣ sur les systèmes qui
        proposent les deux présentations pour ces glyphes (notamment mobile) — complément
        à font-family, qui seul ne suffit pas toujours à empêcher la substitution par une
@@ -2045,17 +2041,6 @@ table.dd-table td.dd-secondary-contract {
     color: var(--text);
     cursor: pointer;
     transition: background 0.15s, transform 0.1s;
-}
-
-/* Voir échange avec Guillaume : contour net (pas un flou) qui trace le pourtour du
-   chiffre+symbole — 8 ombres décalées sans flou plutôt qu'un text-shadow flouté ou un
-   -webkit-text-stroke (qui épaississait trop la forme à cette taille de police). Pas sur
-   Passe/X/XX/SA, qui n'ont pas ce format chiffre+couleur. Validé après plusieurs essais
-   comparatifs (voir échange avec Guillaume, option "G2"). */
-.call-btn:not(.call-btn-special):not(.notrump) {
-    text-shadow:
-        0.6px 0 0 #fff, -0.6px 0 0 #fff, 0 0.6px 0 #fff, 0 -0.6px 0 #fff,
-        0.45px 0.45px 0 #fff, -0.45px 0.45px 0 #fff, 0.45px -0.45px 0 #fff, -0.45px -0.45px 0 #fff;
 }
 
 .call-btn:not(:disabled):hover {
