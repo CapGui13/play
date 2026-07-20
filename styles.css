@@ -1973,13 +1973,14 @@ table.dd-table td.dd-secondary-contract {
 /* Voir échange avec Guillaume : largeur restaurée à ~1/3 de la ligne entière (sa
    proportion d'origine, avant que X/XX ne soient calés sur des colonnes précises) — pas
    possible avec un simple grid-column (qui la limiterait à 1/5), d'où un positionnement
-   absolu avec largeur et décalage calculés explicitement. Le bord gauche tombe pile au
-   milieu de la colonne 1 (même calcul que la largeur d'une colonne : (100% - 4 gaps)/5,
-   divisé par 2), soit le milieu du bouton juste en dessous (1SA). */
+   absolu avec largeur et décalage calculés explicitement. Le CENTRE du bouton tombe pile
+   sur le centre de la colonne 2 (1♠), pas le bord gauche sur le milieu de la colonne 1 —
+   calcul : centre colonne 2 = 1.5 × largeur-colonne + 1 gap, largeur-colonne =
+   (100% - 4 gaps)/5 ; bord gauche de Passe = centre colonne 2 − largeur-Passe/2. */
 .call-btn-pass {
     position: absolute;
     top: 0;
-    left: calc((100% - 24px) / 10); /* milieu de la colonne 1 : (100% - 4 gaps de 6px)/5, divisé par 2 */
+    left: calc(100% * 2 / 15 - 1.2px);
     width: calc(100% / 3);
     height: 100%;
 }
