@@ -2043,18 +2043,14 @@ table.dd-table td.dd-secondary-contract {
     transition: background 0.15s, transform 0.1s;
 }
 
-/* Voir échange avec Guillaume : fin liseré blanc autour du chiffre ET du symbole (pas sur
-   Passe/X/XX, qui n'ont pas ce format chiffre+couleur) — fait mieux ressortir chaque
-   association quelle que soit la couleur de fond derrière. -webkit-text-stroke plutôt
-   qu'un text-shadow multi-directions : plus net à cette taille de police, et largement
-   supporté (Chrome/Edge/Safari/Firefox). */
-/* Voir échange avec Guillaume : halo blanc doux (pas un contour dur) autour du chiffre ET
-   du symbole (pas sur Passe/X/XX/SA, qui n'ont pas ce format chiffre+couleur) — fait mieux
-   ressortir chaque association quelle que soit la couleur de fond derrière, sans
-   l'épaisseur disgracieuse d'un vrai contour (-webkit-text-stroke) à cette taille de
-   police. */
+/* Voir échange avec Guillaume : fin contour blanc net autour du chiffre ET du symbole (pas
+   sur Passe/X/XX/SA, qui n'ont pas ce format chiffre+couleur) — fait ressortir chaque
+   association quelle que soit la couleur de fond derrière. -webkit-text-stroke à 0.7px,
+   opacité pleine : tracé net et discret, sans écraser la forme des caractères, et sans le
+   flou/l'effet d'ombre portée du halo (text-shadow) précédemment utilisé ici. */
 .call-btn:not(.call-btn-special):not(.notrump) {
-    text-shadow: 0 0 2px #fff, 0 0 2px #fff;
+    -webkit-text-stroke: 0.7px #FFFFFF;
+    text-stroke: 0.7px #FFFFFF;
 }
 
 .call-btn:not(:disabled):hover {
