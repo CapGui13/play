@@ -1128,8 +1128,31 @@ function tokenForGuestIndex(guestIndex) {
     return Object.keys(guestIndexByToken).find(t => guestIndexByToken[t] === guestIndex) || null;
 }
 
+// Voir échange avec Guillaume : bandeau plein écran affiché dès le clic sur "Créer" ou
+// "Rejoindre", masqué une fois la connexion établie ou en cas d'erreur explicite. Un filet
+// de sécurité (connectingOverlayTimeout) le masque de toute façon après 15s si aucun des
+// deux ne s'est produit — pour ne pas laisser le joueur bloqué indéfiniment derrière un
+// écran de chargement si la connexion traîne sans jamais aboutir ni échouer clairement.
+let connectingOverlayTimeout = null;
+
+function showConnectingOverlay(message) {
+    const overlay = document.getElementById('connectingOverlay');
+    if (!overlay) return;
+    document.getElementById('connectingOverlayText').textContent = message;
+    overlay.style.display = 'flex';
+    clearTimeout(connectingOverlayTimeout);
+    connectingOverlayTimeout = setTimeout(hideConnectingOverlay, 50000); // au-delà du timeout de connexion existant (45s, voir onTimeout), pur filet de sécurité
+}
+
+function hideConnectingOverlay() {
+    clearTimeout(connectingOverlayTimeout);
+    const overlay = document.getElementById('connectingOverlay');
+    if (overlay) overlay.style.display = 'none';
+}
+
 function uiCreateRoom() {
     document.getElementById('landingError').style.display = 'none';
+    showConnectingOverlay('Création de la partie…');
     if (peerConn) peerConn.destroy();
 
     myRole = 'host';
@@ -1160,6 +1183,7 @@ function uiCreateRoom() {
 function buildHostHandlers(onOpenExtra) {
     return {
         onOpen: (role, roomCode) => {
+            hideConnectingOverlay();
             currentRoomCode = roomCode;
             const url = new URL(window.location.href);
             url.searchParams.set('room', roomCode);
@@ -1271,6 +1295,7 @@ function buildHostHandlers(onOpenExtra) {
             setConnectionStatus(false);
         },
         onError: (err) => {
+            hideConnectingOverlay();
             showLandingError('Erreur de connexion : ' + ((err && (err.message || err.type)) || err));
         }
     };
@@ -1284,6 +1309,7 @@ function buildGuestHandlers() {
             document.getElementById('lobbyRoomCodeInline').textContent = `(code ${roomCode})`;
         },
         onGuestConnected: () => {
+            hideConnectingOverlay();
             everConnectedAsGuest = true;
             setConnectionStatus(true);
             renderReconnectButton();
@@ -1301,9 +1327,14 @@ function buildGuestHandlers() {
             renderReconnectButton();
         },
         onSlowConnection: () => {
+            // Masque l'overlay ici (voir échange avec Guillaume) : sinon le message
+            // "ça prend plus de temps..." resterait caché derrière l'écran de chargement
+            // plein écran, invisible pour le joueur.
+            hideConnectingOverlay();
             showLandingError("⏳ Ça prend plus de temps que d'habitude... Vérifie que le code est correct.");
         },
         onTimeout: () => {
+            hideConnectingOverlay();
             if (deals) {
                 // On était déjà en jeu : pas de retour à l'écran d'accueil, on laisse le
                 // bouton "Se reconnecter" de la barre de connexion (renderReconnectButton).
@@ -1317,6 +1348,7 @@ function buildGuestHandlers() {
         },
         onData: handlePeerData,
         onError: (err) => {
+            hideConnectingOverlay();
             // Voir échange avec Guillaume ("je suis ressorti du salon, puis 'Lost connection
             // to server' en retapant un code") : une erreur peut désormais survenir bien
             // après un premier join réussi — notamment quand la tentative de reconnexion
@@ -1363,6 +1395,7 @@ function uiJoinRoom() {
     chatMessages = [];
     chatUnreadCount = 0;
     updateChatUnreadBadge();
+    showConnectingOverlay('Connexion en cours…');
     connectAsGuest(code, getReconnectToken(), savedNickname);
 }
 
@@ -1634,13 +1667,12 @@ function renderSeatAssignmentGrid() {
         if (isHost) {
             // Menu déroulant personnalisé (voir échange avec Guillaume) plutôt qu'un
             // <select> natif : un <option> ne peut pas contenir d'avatar coloré, alors
-            // qu'ici on veut que le déclencheur ET chaque option montrent avatar + nom.
-            // Le déclencheur est à la fois : cliquable (ouvre la liste, voir
-            // uiToggleSeatDropdown), glissable (ondragstart, pour déplacer CET occupant
-            // ailleurs) et zone de dépôt (ondragover/ondrop sur la case entière, voir
-            // plus bas — plus grande cible que le seul déclencheur).
+            // Glissable depuis TOUTE la case, pas seulement le petit déclencheur (voir
+            // échange avec Guillaume) — même surface que la zone de dépôt (déjà sur la
+            // case entière, voir ondragover/ondrop plus bas), pour une prise en main
+            // cohérente dans les deux sens.
             const occupantP = assignedId ? participants.find(x => x.id === assignedId) : null;
-            const triggerAttrs = occupantP ? ` draggable="true" ondragstart="uiDragStartParticipant(event, '${assignedId}', '${seat}')"` : '';
+            const boxDragAttrs = occupantP ? ` draggable="true" ondragstart="uiDragStartParticipant(event, '${assignedId}', '${seat}')"` : '';
             const triggerContent = occupantP
                 ? `${avatarHtml(assignedId)}<span class="kibitz-chip-name">${escapeHtml(occupantP.name)}</span>`
                 : `<span class="mini-avatar mini-avatar-robot">🤖</span><span class="kibitz-chip-name">Robot</span>`;
@@ -1660,10 +1692,10 @@ function renderSeatAssignmentGrid() {
             }));
 
             return `
-                <div class="seat-box seat-pos-${seat}${flashClass}" ondragover="uiAllowDrop(event)" ondragenter="uiDragEnterTarget(event)" ondragleave="uiDragLeaveTarget(event)" ondrop="uiDropOnSeat(event, '${seat}')">
+                <div class="seat-box seat-pos-${seat}${flashClass}"${boxDragAttrs} ondragover="uiAllowDrop(event)" ondragenter="uiDragEnterTarget(event)" ondragleave="uiDragLeaveTarget(event)" ondrop="uiDropOnSeat(event, '${seat}')">
                     <span class="seat-box-label">${SEAT_FULL_NAME[seat]}</span>
                     <div class="seat-occupant-dropdown">
-                        <button type="button" class="kibitz-chip seat-occupant-chip${occupantP ? '' : ' seat-occupant-chip-robot'}"${triggerAttrs} onclick="uiToggleSeatDropdown(event, '${seat}')">
+                        <button type="button" class="kibitz-chip seat-occupant-chip${occupantP ? '' : ' seat-occupant-chip-robot'}" onclick="uiToggleSeatDropdown(event, '${seat}')">
                             ${triggerContent}
                             <span class="seat-dropdown-chevron">▾</span>
                         </button>
@@ -3791,7 +3823,14 @@ function updateBoardControlVisibility() {
     // décision d'organisation de la table, pas quelque chose qu'un simple joueur assis
     // devrait pouvoir déclencher pour tout le monde.
     const rotateBtn = document.getElementById('rotateSeatsBtn');
-    if (rotateBtn) rotateBtn.style.display = myRole === 'host' ? '' : 'none';
+    // visibility (pas display:none) pour que l'espace du bouton reste réservé même masqué
+    // (voir échange avec Guillaume) : sinon .game-actions (flex-wrap) n'a pas le même
+    // nombre de boutons visibles selon le rôle, et la ligne se coupe différemment pour
+    // l'hôte que pour les autres.
+    if (rotateBtn) {
+        rotateBtn.style.visibility = myRole === 'host' ? '' : 'hidden';
+        rotateBtn.style.pointerEvents = myRole === 'host' ? '' : 'none';
+    }
     // Téléchargement local pur (voir uiExportSessionPBN) : contrairement à l'export PBN
     // d'une seule donne (qui écrit sur le repo GitHub, réservé à l'hôte), rien n'empêche
     // n'importe quel joueur actif de récupérer sa propre vue locale de la session.
@@ -5032,6 +5071,14 @@ function hostHandleUndoRequest(msg) {
         return;
     }
     const targetSeat = auctionHistory[targetIndex].seat;
+
+    // L'hôte peut annuler unilatéralement, sans validation du camp d'en face (voir échange
+    // avec Guillaume) — l'hôte arbitre déjà toute la table (undo d'un simple joueur assis
+    // reste soumis à l'accord de l'adversaire humain, lui, via humanOpponentsFor plus bas).
+    if (msg.requesterId === 'host') {
+        applyUndoAsHost({ boardIndex: msg.boardIndex, requesterId: msg.requesterId, historyLengthAtRequest: msg.historyLengthAtRequest, targetIndex });
+        return;
+    }
 
     const opponents = humanOpponentsFor(msg.requesterId, targetSeat);
     if (opponents.length === 0) {

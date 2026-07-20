@@ -82,6 +82,14 @@
 </div>
 
 <div class="app-container">
+    <!-- Voir échange avec Guillaume : affiché dès qu'on clique "Créer" ou "Rejoindre",
+         pour que le joueur comprenne que ça travaille et évite de cliquer partout en
+         attendant — masqué dès la connexion établie (ou en cas d'erreur, voir
+         showConnectingOverlay/hideConnectingOverlay dans app.js). -->
+    <div id="connectingOverlay" class="connecting-overlay" style="display:none;">
+        <div class="connecting-spinner"></div>
+        <p id="connectingOverlayText">Connexion en cours…</p>
+    </div>
 
     <!-- Écran d'accueil -->
     <section id="screen-landing" class="screen">
@@ -324,7 +332,7 @@
                      utilisable à tout moment y compris en pleine enchère. Les mains restent
                      fixées par position (N/E/S/O), donc ça change qui joue quelle main à cet
                      instant précis, pas les cartes elles-mêmes ni l'historique déjà enchéri. -->
-                <button id="rotateSeatsBtn" type="button" class="btn btn-secondary btn-small" style="display:none;" onclick="uiRotateSeatsClockwise()"><span class="btn-label-full">🔄 Rotation 90°</span><span class="btn-label-short">🔄 Rotation</span></button>
+                <button id="rotateSeatsBtn" type="button" class="btn btn-secondary btn-small" style="visibility:hidden; pointer-events:none;" onclick="uiRotateSeatsClockwise()"><span class="btn-label-full">🔄 Rotation 90°</span><span class="btn-label-short">🔄 Rotation</span></button>
                 <!-- Visibilité gérée par updateBoardControlVisibility (host ou joueur assis) :
                      voir échange avec Guillaume — récupérer les donnes jouées de toute la session
                      (mains + enchère réelle + vulnérabilité) pour lui permettre de me faire des

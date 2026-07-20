@@ -80,6 +80,37 @@ body {
     margin: 0 auto;
 }
 
+/* Voir échange avec Guillaume : recouvre tout l'écran (position:fixed, pas relatif à
+   .app-container) dès qu'on clique "Créer" ou "Rejoindre", le temps que la connexion
+   s'établisse — empêche de cliquer ailleurs pendant ce court laps de temps
+   (pointer-events sur le fond) et rassure que quelque chose se passe bien. */
+.connecting-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 500;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    background: rgba(10, 20, 15, 0.85);
+    color: var(--text);
+    font-size: 1rem;
+}
+
+.connecting-spinner {
+    width: 40px;
+    height: 40px;
+    border: 4px solid rgba(246, 241, 227, 0.2);
+    border-top-color: var(--brass-bright);
+    border-radius: 50%;
+    animation: connectingSpin 0.8s linear infinite;
+}
+
+@keyframes connectingSpin {
+    to { transform: rotate(360deg); }
+}
+
 /* Contour de focus clavier — accessibilité (tabulation) — plutôt que le contour bleu par
    défaut du navigateur, souvent invisible sur les fonds sombres de l'appli. `:focus-
    visible` (pas `:focus`) : ne s'affiche qu'à la navigation clavier, pas au clic/tap, qui
@@ -1160,12 +1191,22 @@ button.kibitz-chip {
 }
 
 .seat-occupant-chip {
-    cursor: grab;
     font-family: var(--font-body);
     gap: 8px;
+    cursor: pointer;
 }
 
-.seat-occupant-chip:active {
+/* Voir échange avec Guillaume : curseur "attraper" sur TOUTE la case (via l'attribut
+   draggable, présent uniquement quand un vrai occupant y est assigné — voir
+   renderSeatAssignmentGrid), pas seulement sur le petit déclencheur — cohérent avec la
+   surface de glisser désormais étendue à la case entière. Le bouton lui-même reste en
+   curseur "clic" (pointer), pour ne pas laisser croire qu'on ne peut QUE le glisser depuis
+   là alors que toute la case fonctionne. */
+.seat-box[draggable="true"] {
+    cursor: grab;
+}
+
+.seat-box[draggable="true"]:active {
     cursor: grabbing;
 }
 
