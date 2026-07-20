@@ -3058,6 +3058,24 @@ function decideRobotResponse(hand, hcp, hl, partnerCall, seat, history, partnerP
     const suit = bid.strain;
     const partnerOpenedMinor = (suit === 'C' || suit === 'D');
 
+    // "Passe de pénalité" en avance après un contre adverse de l'ouverture du partenaire
+    // (voir échange avec Guillaume, donne 7) : situation différente de
+    // decideRobotResponseToDouble (qui répond au PROPRE contre du joueur), ici c'est
+    // l'ouverture du PARTENAIRE qui vient d'être contrée par un adversaire. Avec du jeu
+    // (13H+) et un misfit net avec la couleur du partenaire (0-1 carte), mieux vaut
+    // laisser le contre adverse s'exposer en défense plutôt que forcer une nouvelle
+    // couleur juste pour ne pas passer — même principe que la passe de pénalité en
+    // réponse à un contre, appliqué ici à l'avance après un contre du partenaire ouvreur.
+    // Cherche le contre n'importe où dans l'historique, pas seulement en dernière position
+    // (voir échange avec Guillaume) : un passe ne "consomme" pas de tour dans ce moteur —
+    // sans cette recherche plus large, un premier passe correct pouvait être annulé à un
+    // tour ultérieur, une fois l'enchère développée depuis (le contre n'étant alors plus
+    // la toute dernière annonce).
+    const partnerJustGotDoubled = history.some(e => isDouble(e.call) && partnershipOf(e.seat) !== partnershipOf(seat));
+    if (partnerJustGotDoubled && hcp >= 13 && lengths[suit] <= 1) {
+        return 'PASS';
+    }
+
     // Priorité de base : après une ouverture à la MINEURE, montrer une majeure 4+ cartes
     // franche au palier 1 passe AVANT de soutenir la mineure du partenaire — le principe
     // qu'on cherche d'abord un fit à la majeure, plus rentable, avant de se rabattre sur
@@ -3087,10 +3105,21 @@ function decideRobotResponse(hand, hcp, hl, partnerCall, seat, history, partnerP
     }
 
     // Soutien à une MAJEURE : échelle complète des soutiens directs (voir
-    // decideRobotMajorSupport) plutôt que la logique générique plus bas.
-    if (suit === 'S' || suit === 'H') {
+    // decideRobotMajorSupport) — mais seulement pour une ouverture NORMALE au palier 1,
+    // dont toute l'échelle de paliers est solidaire (voir échange avec Guillaume, donne
+    // 8) : appliquée telle quelle à un BARRAGE (palier 2+), elle produirait par exemple
+    // "3SA fitté" pour 13-15 points de soutien sans singleton — un non-sens, puisqu'un
+    // barrage plafonne déjà le partenaire à 8-12HL, rien à voir avec une main d'ouverture
+    // normale. Sur un barrage, la LOI DES ATOUTS prime : avec un fit (3+ cartes, déjà
+    // 9+ cartes à eux deux vu que le barrage promet 6+), on prolonge d'un palier — sans
+    // fit, on laisse la suite de cette fonction (nouvelle couleur / repli SA, avec son
+    // propre seuil relevé pour un barrage, voir plus bas) décider.
+    if ((suit === 'S' || suit === 'H') && bid.level === 1) {
         const majorSupport = decideRobotMajorSupport(hand, hcp, hl, bid, seat, history);
         if (majorSupport) return majorSupport;
+    } else if ((suit === 'S' || suit === 'H') && bid.level >= 2 && lengths[suit] >= 3) {
+        const call = (bid.level + 1) + suit;
+        if (isCallLegal(history, call, seat)) return call;
     }
 
     // Soutien à une MINEURE : un fit, c'est 8 cartes à eux deux (voir échange avec
@@ -3321,6 +3350,16 @@ function decideRobotResponseToDouble(hand, hcp, hl, doubleIndex, seat, history) 
     const candidates = ['S', 'H', 'D', 'C'].filter(s => s !== doubledSuit);
     const bestSuit = candidates.reduce((best, s) => (lengths[s] > lengths[best] ? s : best), candidates[0]);
 
+    // "Passe de pénalité" avec du jeu (voir échange avec Guillaume, donne 7) : avec une
+    // main de force d'ouverture (13H+), mieux vaut souvent laisser le contre du
+    // partenaire filer pour la défense que de forcer une nouvelle couleur médiocre juste
+    // pour "faire quelque chose" — surtout en misfit avec la couleur adverse contrée
+    // (le partenaire a probablement de la brièveté là, donc de bonnes chances en
+    // défense). Reste une simplification volontaire (pas de vrai jugement sur la
+    // QUALITÉ des couleurs disponibles, juste le seuil de points) — voir la note
+    // ci-dessous sur les limites de cette fonction.
+    if (hcp >= 13) return 'PASS';
+
     // Points de soutien (voir échange avec Guillaume, donne 4 : main de 8H comptée à 10
     // avec la courte) plutôt que HL brut — le contre du partenaire ne garantit pas de
     // longueur précise dans la couleur choisie, on prend 3 cartes comme minimum par
@@ -3537,16 +3576,34 @@ function decideRobotOpenerRebid(hand, hcp, hl, myOpeningCall, partnerCall, seat,
         return decideOpenerRebidAfterNewSuit(hand, hcp, hl, myBid, partnerParsed, seat, history);
     }
 
+    // Réponse conventionnelle au soutien direct (voir decideRobotMajorSupport) : "2SA"
+    // montre 11-12HLD avec un fit d'EXACTEMENT 3 cartes, "3SA" montre 13-15HLD sans
+    // singleton — dans les deux cas l'ouvreur DOIT reparler (voir échange avec Guillaume,
+    // donnes 1 et 2), ce n'est pas une main limitée qu'on peut laisser filer comme un
+    // simple soutien naturel (isRaiseOfMySuit, resté gardé par le seuil 18HL+ plus bas —
+    // un soutien naturel n'a pas la même valeur de fit garantie).
+    if (myBid.strain === 'S' || myBid.strain === 'H') {
+        if (partnerCall === '2NT') {
+            // 12-13H (mini) : accepte le fit au palier minimal (3) sans viser plus haut ;
+            // 14H+ : la manche est acquise (12+ garanti côté partenaire, 14+12=26+).
+            const call = (hcp >= 14 ? '4' : '3') + myBid.strain;
+            if (isCallLegal(history, call, seat)) return call;
+        }
+        if (partnerCall === '3NT') {
+            // Toujours la manche ici, quelle que soit la force de l'ouvreur : même une
+            // ouverture minimale (12H) + 13H du partenaire totalisent déjà 25+, la manche
+            // est acquise dans tous les cas.
+            const call = '4' + myBid.strain;
+            if (isCallLegal(history, call, seat)) return call;
+        }
+    }
+
     if (hl < 18) return 'PASS'; // seule une main nettement au-dessus d'une ouverture minimale rejustifie de reparler
 
-    // Le partenaire a-t-il confirmé un fit pour MA couleur d'ouverture (soutien direct,
-    // ou 2SA/3SA conventionnels — voir decideRobotMajorSupport) ? Ne tente pas de
-    // reconnaître un splinter ici (saut double dans une AUTRE couleur, trop fragile à
-    // identifier à coup sûr sans risquer un faux positif) — un tel cas retombe dans la
-    // branche "nouvelle couleur" plus bas, pas idéale mais sûre.
-    const isConventionalFitShow = partnerCall === '2NT' || partnerCall === '3NT';
-
-    if (isRaiseOfMySuit || isConventionalFitShow) {
+    // Le partenaire a-t-il confirmé un fit pour MA couleur d'ouverture par un soutien
+    // NATUREL (pas conventionnel — les cas 2SA/3SA sont désormais traités plus haut,
+    // avant ce seuil) ?
+    if (isRaiseOfMySuit) {
         // Fit confirmé et main d'ouverture nettement excédentaire (18HL+) : la manche est
         // quasiment automatique. Simplification volontaire : toujours viser la manche
         // dans MA couleur, jamais le chelem (pas de contrôle/Blackwood, hors périmètre).

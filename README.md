@@ -341,6 +341,32 @@ Trois corrections supplémentaires, chacune trouvée en creusant au-delà du sym
   (15H+) et un fit pour la couleur choisie par le partenaire, il pousse directement à la
   manche plutôt que de laisser filer un partiel.
 
+## Corrections issues de la session du 20 juillet, deuxième relecture (voir échange avec Guillaume)
+
+- **Suite obligatoire de l'ouvreur après un soutien conventionnel** : "2SA" (11-12 points de
+  soutien, fit exactement 3 cartes) et "3SA" (13-15, sans singleton) étaient déjà reconnus
+  comme des enchères conventionnelles montrant un fit — mais seulement traités si l'ouvreur
+  avait 18HL+ (seuil pensé pour "rien d'autre à ajouter"), ce qui laissait filer un
+  partiel après "2SA" dans les mains normales. Corrigé : l'ouvreur reparle désormais
+  TOUJOURS après ces deux enchères, indépendamment de ses points — 12-13H (mini) → accepte
+  le fit au palier 3, 14H+ → manche directe (pour "3SA", toujours la manche, même avec une
+  ouverture minimale : 12+13 dépasse déjà 25).
+- **Passe de pénalité avec du jeu et un misfit** (deux formes du même principe) :
+  - En réponse au PROPRE contre d'appel du joueur (`decideRobotResponseToDouble`) : à partir
+    de 13H, passe plutôt que de forcer mécaniquement la plus longue couleur restante — une
+    main de cette force vaut souvent mieux en défense.
+  - En avance après qu'un ADVERSAIRE a contré l'ouverture du PARTENAIRE : même seuil (13H+)
+    combiné à un misfit net (0-1 carte) avec la couleur du partenaire → passe. Recherche le
+    contre n'importe où dans l'historique (pas seulement en dernière position), car un passe
+    ne "consomme" pas de tour dans ce moteur — sans ça, un premier passe correct pouvait être
+    annulé à un tour ultérieur une fois l'enchère développée.
+- **Loi des atouts en réponse à un barrage majeur du partenaire** : l'échelle de soutien
+  direct (2SA/3SA conventionnels, splinters...) est conçue pour une ouverture NORMALE au
+  palier 1 — appliquée telle quelle à un barrage (palier 2+), elle produisait des non-sens
+  comme "3SA fitté" avec un partenaire plafonné à 8-12HL. Sur un barrage, avec un fit (3+
+  cartes, déjà 9+ cartes à eux deux), on prolonge simplement d'un palier plutôt que
+  d'utiliser l'échelle de soutien normale.
+
 ## Corrections issues de la session du 20 juillet (voir échange avec Guillaume)
 
 Trois retours après relecture d'une nouvelle session, chacun corrigé après une analyse
