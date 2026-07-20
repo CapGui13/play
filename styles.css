@@ -2043,6 +2043,15 @@ table.dd-table td.dd-secondary-contract {
     transition: background 0.15s, transform 0.1s;
 }
 
+/* Voir échange avec Guillaume : fin liseré blanc autour du chiffre ET du symbole (pas sur
+   Passe/X/XX, qui n'ont pas ce format chiffre+couleur) — fait mieux ressortir chaque
+   association quelle que soit la couleur de fond derrière. -webkit-text-stroke plutôt
+   qu'un text-shadow multi-directions : plus net à cette taille de police, et largement
+   supporté (Chrome/Edge/Safari/Firefox). */
+.call-btn:not(.call-btn-special):not(.notrump) {
+    -webkit-text-stroke: 0.15px #fff;
+}
+
 .call-btn:not(:disabled):hover {
     background: rgba(201, 162, 39, 0.25);
     transform: translateY(-1px);
