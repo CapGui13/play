@@ -2058,6 +2058,13 @@ table.dd-table td.dd-secondary-contract {
 }
 
 .call-btn.spades { color: #000; }
+
+/* Voir échange avec Guillaume : le symbole lui-même est un <span class="suit-icon spades">
+   imbriqué dans le bouton (voir suitIconHtml/formatStrainLabel dans app.js) — sans cette
+   règle plus précise, .suit-icon.spades (blanc, pour le contexte des mains sur fond
+   quasi noir) prenait le dessus sur le noir du bouton, laissant le chiffre en noir mais
+   le symbole en blanc dans la même case. */
+.call-btn.spades .suit-icon.spades { color: #000; }
 .call-btn.hearts { color: var(--suit-red); }
 .call-btn.diamonds { color: var(--suit-orange); }
 .call-btn.clubs { color: var(--suit-blue); }
