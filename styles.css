@@ -1956,9 +1956,21 @@ table.dd-table td.dd-secondary-contract {
 .bidding-box { margin-bottom: 12px; }
 
 .special-calls-row {
-    display: flex;
-    gap: 8px;
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 6px;
     margin-bottom: 10px;
+}
+
+/* Voir échange avec Guillaume : hauteur fixe pour tous les boutons d'enchère (au lieu de
+   dépendre du padding+contenu) — nécessaire pour un décalage vertical précis et fiable
+   sur .call-btn-pass ci-dessous. */
+.call-btn, .call-btn-special {
+    height: 40px;
+}
+
+.call-btn-pass {
+    transform: translateY(50%);
 }
 
 .bid-grid { display: flex; flex-direction: column; gap: 6px; }
@@ -2008,7 +2020,6 @@ table.dd-table td.dd-secondary-contract {
 .call-suit.notrump { color: var(--text); }
 
 .call-btn-special {
-    flex: 1;
     background: rgba(246, 241, 227, 0.12);
     background: color-mix(in srgb, var(--text) 12%, transparent);
 }

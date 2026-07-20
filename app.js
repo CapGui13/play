@@ -4347,10 +4347,19 @@ function renderBiddingBox() {
     turnPanel.className = 'turn-indicator ' + (myTurn ? 'my-turn' : (ownerDisconnected ? 'disconnected-turn' : 'their-turn'));
 
     const specialLabels = { PASS: 'Passe', X: 'X', XX: 'XX' };
-    const specialClasses = { PASS: '', X: 'call-btn-double', XX: 'call-btn-redouble' };
+    // Voir échange avec Guillaume : ligne spéciale calée sur la même grille à 5 colonnes
+    // que les rangées d'enchères — X sur la colonne 4 (1♦) et XX sur la colonne 5 (1♣),
+    // pour un alignement précis avec la rangée du dessous. Passe décalé verticalement
+    // (voir .call-btn-pass dans styles.css) pour démarrer au milieu du bouton en dessous.
+    const specialSpec = {
+        PASS: { col: 1, extraClass: 'call-btn-pass' },
+        X: { col: 4, extraClass: 'call-btn-double' },
+        XX: { col: 5, extraClass: 'call-btn-redouble' }
+    };
     const specialRow = ['PASS', 'X', 'XX'].map(call => {
         const legal = myTurn && isCallLegal(auctionHistory, call, turnSeat);
-        return `<button class="call-btn call-btn-special ${specialClasses[call]}" ${legal ? '' : 'disabled'} onclick="uiMakeCall('${call}')">${specialLabels[call]}</button>`;
+        const { col, extraClass } = specialSpec[call];
+        return `<button class="call-btn call-btn-special ${extraClass}" style="grid-column: ${col};" ${legal ? '' : 'disabled'} onclick="uiMakeCall('${call}')">${specialLabels[call]}</button>`;
     }).join('');
 
     const bidRows = [];
