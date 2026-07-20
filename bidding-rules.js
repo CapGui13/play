@@ -5,7 +5,7 @@
 // L'historique (history) est un tableau de { seat, call }, seat ∈ {N,E,S,W}.
 
 const SEATS = ['N', 'E', 'S', 'W'];
-const STRAINS = ['C', 'D', 'H', 'S', 'NT'];
+const STRAINS = ['NT', 'S', 'H', 'D', 'C']; // ordre d'affichage (voir échange avec Guillaume) — inversé par rapport à l'ordre de classement des enchères (voir STRAIN_RANK, indépendant)
 const STRAIN_RANK = { C: 0, D: 1, H: 2, S: 3, NT: 4 };
 const STRAIN_SYMBOL = { C: '♣', D: '♦', H: '♥', S: '♠', NT: 'SA' };
 

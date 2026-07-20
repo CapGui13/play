@@ -1579,10 +1579,9 @@ button.kibitz-chip {
     filter: grayscale(65%);
 }
 
-.hand-card-active {
-    box-shadow: 0 0 0 2px var(--brass-bright), 0 6px 20px rgba(0, 0, 0, 0.35);
-}
-
+/* Voir échange avec Guillaume : plus de halo doré sur la main active — le fond assombri/
+   grisé des mains inactives suffit déjà à faire la distinction, un halo en plus était
+   redondant. */
 @media (prefers-reduced-motion: reduce) {
     .turn-indicator.my-turn { animation: none; }
     .auction-ledger td.is-latest-call { animation: none; }
@@ -2012,6 +2011,20 @@ table.dd-table td.dd-secondary-contract {
     flex: 1;
     background: rgba(246, 241, 227, 0.12);
     background: color-mix(in srgb, var(--text) 12%, transparent);
+}
+
+/* Voir échange avec Guillaume : rouge vif pour X (contre), bleu vif pour XX (surcontre) —
+   couleurs franches, pas les teintes plus douces (--suit-red/--suit-blue) utilisées
+   ailleurs pour les couleurs de cartes, afin que ces deux boutons se distinguent
+   nettement du reste du panneau. */
+.call-btn-double {
+    background: #dc2626;
+    color: #fff;
+}
+
+.call-btn-redouble {
+    background: #2563eb;
+    color: #fff;
 }
 
 .turn-indicator {

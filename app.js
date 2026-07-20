@@ -4347,9 +4347,10 @@ function renderBiddingBox() {
     turnPanel.className = 'turn-indicator ' + (myTurn ? 'my-turn' : (ownerDisconnected ? 'disconnected-turn' : 'their-turn'));
 
     const specialLabels = { PASS: 'Passe', X: 'X', XX: 'XX' };
+    const specialClasses = { PASS: '', X: 'call-btn-double', XX: 'call-btn-redouble' };
     const specialRow = ['PASS', 'X', 'XX'].map(call => {
         const legal = myTurn && isCallLegal(auctionHistory, call, turnSeat);
-        return `<button class="call-btn call-btn-special" ${legal ? '' : 'disabled'} onclick="uiMakeCall('${call}')">${specialLabels[call]}</button>`;
+        return `<button class="call-btn call-btn-special ${specialClasses[call]}" ${legal ? '' : 'disabled'} onclick="uiMakeCall('${call}')">${specialLabels[call]}</button>`;
     }).join('');
 
     const bidRows = [];
