@@ -131,8 +131,10 @@ let autoPassSeats = [];     // sièges non assignés (robot "passe") — décid�
 // index.html) — pas modifiable une fois la partie démarrée. Décision purement locale à
 // l'hôte : seul lui déclenche les décisions des robots (voir maybeRobotBid, gardé par
 // `myRole !== 'host'`), donc pas besoin de la diffuser aux invités, qui n'en ont jamais
-// l'usage.
-let robotBiddingMode = 'smart';
+// l'usage. Persisté (voir échange avec Guillaume) comme les autres préférences locales —
+// voir loadBoolPref/saveBoolPref, la case du salon reprend cette valeur au chargement
+// (voir enterLobbyScreen).
+let robotBiddingMode = loadBoolPref('bridgeBidRobotPassOnly', false) ? 'passOnly' : 'smart';
 
 // Plus de statut kibbitz suivi séparément (source de bug : oublié pour un joueur qui
 // rejoint après le lancement de la partie, resté "spectateur" sans les mains) — un
@@ -1441,6 +1443,14 @@ function enterLobbyScreen() {
     document.getElementById('hostSetupPanel').style.display = myRole === 'host' ? 'block' : 'none';
     document.getElementById('guestWaitingNote').style.display = myRole === 'host' ? 'none' : 'block';
 
+    // Voir échange avec Guillaume : reprend la préférence persistée (voir
+    // robotBiddingMode/loadBoolPref) — sans ça, la case reviendrait toujours décochée par
+    // défaut au rechargement, même si l'hôte l'avait activée la dernière fois.
+    if (myRole === 'host') {
+        const robotModeCheckbox = document.getElementById('robotBiddingModeCheckbox');
+        if (robotModeCheckbox) robotModeCheckbox.checked = robotBiddingMode === 'passOnly';
+    }
+
     const nameInput = document.getElementById('myNameInput');
     // On ne touche jamais au champ pendant que l'utilisateur est en train d'y taper
     // (sinon un lobby-state reçu pile pendant l'effacement du nom réécrase ce qu'il
@@ -1892,6 +1902,7 @@ function rotatedSeatAssignment(current) {
 function uiSetRobotBiddingMode(passOnly) {
     if (myRole !== 'host') return;
     robotBiddingMode = passOnly ? 'passOnly' : 'smart';
+    saveBoolPref('bridgeBidRobotPassOnly', passOnly);
 }
 
 function uiRotateSeatsClockwise() {
