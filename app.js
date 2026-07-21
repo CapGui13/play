@@ -3321,6 +3321,18 @@ function decideResponderContinuationAfterNewSuit(hand, hcp, hl, openingBid, myRe
     const rebid = parseBid(partnerRebidCall);
     if (!rebid) return 'PASS'; // contre/passe du partenaire à ce stade : hors périmètre, filet de sécurité
 
+    // Chelem par simple compte de points (voir échange avec Guillaume, donne 6) : pas de
+    // véritable enchère de contrôle (cue-bids, Blackwood — hors périmètre, voir le
+    // README), mais un déclenchement borné et sûr — si MES points (HL) combinés au
+    // MINIMUM garanti par l'ouverture du partenaire (12, quelle que soit la couleur
+    // ouverte) atteignent 33+ (zone de petit chelem), on saute directement à 6SA plutôt
+    // que de s'arrêter à la manche. Un excès de matériel aussi manifeste ne doit pas
+    // rester ignoré juste parce qu'on ne fait pas de vraie enchère de contrôle.
+    if (hl + 12 >= 33) {
+        const call = '6NT';
+        if (isCallLegal(history, call, seat)) return call;
+    }
+
     if (rebid.strain !== 'NT') {
         const openingIsMajor = openingBid.strain === 'S' || openingBid.strain === 'H';
         const rebidIsMajor = rebid.strain === 'S' || rebid.strain === 'H';
