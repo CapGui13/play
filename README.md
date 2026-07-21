@@ -341,6 +341,25 @@ Trois corrections supplémentaires, chacune trouvée en creusant au-delà du sym
   (15H+) et un fit pour la couleur choisie par le partenaire, il pousse directement à la
   manche plutôt que de laisser filer un partiel.
 
+## Groupe D — Stayman et transferts (Jacoby/Texas) après SA (voir échange avec Guillaume)
+
+Convention complète, implémentée à la suite des groupes A/B/C ci-dessous (même session) :
+
+- **Stayman** (2♣ sur 1SA, 3♣ sur 2SA) : demande une majeure 4ème, avec assez de points
+  pour vouloir explorer. L'ouvreur montre une majeure s'il en a une (cœur en priorité si
+  les deux sont 4ème, laissant le répondant "corriger" à pique au même palier), sinon dénie
+  en carreau. Le répondant, dont la 1ère annonce ne disait rien de sa main, l'évalue
+  ensuite pour la première fois : fit trouvé + 25H à eux deux → manche ; sinon reste au
+  palier atteint. Sans fit, repli à 3SA si assez de points, sinon reste sur le déni.
+- **Transfert Jacoby** (2♦/2♥ sur 1SA, 3♦/3♥ sur 2SA) : 5 cartes à une majeure sans 6ème.
+  L'ouvreur complète mécaniquement vers la majeure suivante (pas de sur-acceptation, hors
+  périmètre) ; le répondant décide ensuite manche ou repos selon ses propres points combinés
+  à la fourchette connue de l'ouvreur.
+- **Transfert Texas** (4♦/4♥, toujours au palier 4 quel que soit le palier d'ouverture) :
+  6+ cartes à une majeure, vise la manche directement — cache en plus la main forte de
+  l'ouvreur comme déclarant, protégée de l'entame adverse. L'ouvreur complète sans
+  condition ; pas de suite nécessaire pour le répondant, la manche est déjà atteinte.
+
 ## Corrections issues de la session du 21 juillet (voir échange avec Guillaume)
 
 Trois chantiers menés en parallèle, un quatrième (Stayman/Texas après SA) volontairement
