@@ -4173,12 +4173,27 @@ function uiSendChatMessage() {
 const WIZZ_COOLDOWN_MS = 4000; // évite le spam frénétique entre amis, sans l'interdire
 const wizzCooldownUntil = {}; // targetId -> timestamp, purement local (pas besoin de sync réseau)
 
-// Nom cliquable pour envoyer un wizz — sauf le sien (se faire trembler soi-même n'a pas de
-// sens) et celui de quelqu'un de déconnecté (personne pour le recevoir).
+// Nom cliquable pour envoyer un wizz — y compris le sien (voir échange avec Guillaume :
+// utile pour tester l'effet sans avoir besoin d'un second appareil/participant) et sauf
+// celui de quelqu'un de déconnecté (personne pour le recevoir). Sur son propre nom,
+// déclenche l'effet directement en local (voir uiSelfWizz) plutôt que de faire un
+// aller-retour réseau inutile.
 function wizzableNameHtml(p) {
     const name = `<span class="room-board-name">${escapeHtml(p.name)}</span>`;
-    if (p.id === myParticipantId || p.disconnected) return name;
+    if (p.disconnected) return name;
+    if (p.id === myParticipantId) {
+        return `<span class="room-board-name wizzable" onclick="uiSelfWizz()" title="Tester l'effet wizz sur soi-même">${escapeHtml(p.name)} 🔔</span>`;
+    }
     return `<span class="room-board-name wizzable" onclick="uiSendWizz('${p.id}')" title="Faire trembler l'écran de ${escapeHtml(p.name)}">${escapeHtml(p.name)} 🔔</span>`;
+}
+
+// Voir échange avec Guillaume : déclenche l'effet wizz directement en local, sans passer
+// par le réseau — pour pouvoir tester le rendu (tremblement, son, bandeau) sans avoir
+// besoin d'un second appareil ou d'un autre participant connecté. Pas de cooldown ici non
+// plus (contrairement à uiSendWizz) : en test, pouvoir redéclencher immédiatement est plus
+// utile qu'une protection anti-spam qui n'a pas de sens quand on se cible soi-même.
+function uiSelfWizz() {
+    triggerWizzEffect();
 }
 
 function uiSendWizz(targetId) {
@@ -5052,10 +5067,20 @@ function renderUndoControls() {
     // Deux <span> (voir index.html) plutôt qu'un textContent direct : .btn-label-full/
     // .btn-label-short sont affichés en alternance en CSS selon la largeur d'écran
     // (bouton complet sur desktop, abrégé sur mobile où la place manque).
+    // Libellé différent pour l'hôte (voir échange avec Guillaume) : son undo s'applique
+    // immédiatement, sans validation du camp d'en face (voir hostHandleUndoRequest) — "Faire
+    // un undo" plutôt que "Demander", et jamais l'état intermédiaire "Demande envoyée..."
+    // qui n'a pas de sens quand ça s'applique tout de suite.
+    const isHost = myRole === 'host';
     const fullEl = btn.querySelector('.btn-label-full');
     const shortEl = btn.querySelector('.btn-label-short');
-    if (fullEl) fullEl.textContent = undoRequestPending ? '⏳ Demande envoyée...' : '↩️ Demander un undo';
-    if (shortEl) shortEl.textContent = undoRequestPending ? '⏳ Envoyée...' : '↩️ Undo';
+    if (isHost) {
+        if (fullEl) fullEl.textContent = '↩️ Faire un undo';
+        if (shortEl) shortEl.textContent = '↩️ Undo';
+    } else {
+        if (fullEl) fullEl.textContent = undoRequestPending ? '⏳ Demande envoyée...' : '↩️ Demander un undo';
+        if (shortEl) shortEl.textContent = undoRequestPending ? '⏳ Envoyée...' : '↩️ Undo';
+    }
 }
 
 function renderUndoAskBanner() {
