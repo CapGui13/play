@@ -360,6 +360,40 @@ Convention complète, implémentée à la suite des groupes A/B/C ci-dessous (m�
   l'ouvreur comme déclarant, protégée de l'entame adverse. L'ouvreur complète sans
   condition ; pas de suite nécessaire pour le répondant, la manche est déjà atteinte.
 
+## Corrections issues de la session du 21 juillet, deuxième relecture (voir échange avec Guillaume)
+
+**Révision majeure du système Stayman/transferts** : le système construit lors de la
+première passe (Jacoby au palier 2 pour 5 cartes, "Texas" séparé sautant au palier 4 pour
+6+ cartes) ne correspondait pas à ce que voulait Guillaume — chez lui, tout transfère
+TOUJOURS au palier ouverture+1, quelle que soit la longueur (5 ou 6+) : "ça n'existe pas"
+de sauter au palier 4. Cycle unifié sur toutes les couleurs : ♣=Stayman, ♦→♥, ♥→♠, ♠→♣
+(mineure, 6+ cartes), SA=naturel, puis ♣ au palier suivant→♦ (l'autre mineure, faute de
+place plus tôt).
+
+**Transfert mineur avec annonce de la courte (donne 8)** : avec 6+ cartes à une mineure ET
+une vraie courte (0-1 carte) ailleurs, on transfère systématiquement, même pour "juste" la
+manche, afin d'indiquer où est la courte. Sans courte (main régulière, donc forcément
+6322), seulement en zone de chelem — sinon conclusion directe à 3SA/la manche naturelle,
+sans passer par le mécanisme. Après la complétion du transfert, la 3ème annonce du
+répondant indique la courte : directement si son rang est SUPÉRIEUR à la mineure montrée,
+sinon (seul cas possible : courte à ♣ quand ♦ est la mineure montrée, qui rang en dessous
+et n'est plus nommable) via SA. Un bug d'inversion trèfle/carreau dans le déclenchement
+initial (mais pas dans la réponse de l'ouvreur ni cette suite, qui étaient déjà correctes)
+a été trouvé et corrigé avant livraison, en comparant directement à l'exemple donné.
+
+**Avance d'une intervention du partenaire, pas une vraie ouverture (donne 4)** : le
+"repli SA" (utilisé quand rien de mieux à dire) supposait à tort que le partenaire avait
+toujours au moins 12H garantis — vrai pour une ouverture, pas pour une intervention
+naturelle (aussi peu que 8-10H selon le contexte). Désormais désactivé entièrement quand
+on avance l'intervention du partenaire plutôt que de répondre à sa propre ouverture : sans
+fit ni jeu réel, il n'y a "aucune raison" de fabriquer un repli SA, passer est la seule
+enchère honnête.
+
+**Chelem par simple compte de points (donne 6)** : pas de véritable enchère de contrôle
+(cue-bids, Blackwood — toujours hors périmètre), mais un déclenchement borné et sûr — si
+mes points combinés au minimum garanti par l'ouverture du partenaire (12) atteignent 33+
+(zone de petit chelem), saut direct à 6SA plutôt que de s'arrêter à la manche.
+
 ## Corrections issues de la session du 21 juillet (voir échange avec Guillaume)
 
 Trois chantiers menés en parallèle, un quatrième (Stayman/Texas après SA) volontairement

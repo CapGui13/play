@@ -3016,7 +3016,7 @@ function decideRobotMajorSupport(hand, hcp, hl, bid, seat, history) {
 // la dernière de toute l'enchère, sans intervention adverse entre les deux). `hcp` et
 // `partnerPromises5Plus` sont utilisés uniquement pour le soutien (voir plus bas) — voir
 // échange avec Guillaume.
-function decideRobotResponse(hand, hcp, hl, partnerCall, seat, history, partnerPromises5Plus) {
+function decideRobotResponse(hand, hcp, hl, partnerCall, seat, history, partnerPromises5Plus, partnerWasIntervening) {
     const lengths = suitLengths(hand);
     const bid = parseBid(partnerCall);
 
@@ -3033,41 +3033,55 @@ function decideRobotResponse(hand, hcp, hl, partnerCall, seat, history, partnerP
     }
 
     if (bid.strain === 'NT') {
-        // Voir échange avec Guillaume : Stayman et transferts (Jacoby au palier 2,
-        // Texas au palier 4) remplacent l'ancien repérage direct d'une majeure 5+ (qui
-        // sautait directement à la manche sans passer par le partenaire) — les
-        // transferts cachent en plus la main forte de l'ouvreur comme déclarant,
-        // protégée de l'entame adverse.
+        // Voir échange avec Guillaume : système unifié — Stayman et transferts vers
+        // TOUTES les couleurs (pas seulement les majeures) au palier ouverture+1,
+        // toujours. Pas de saut direct au palier 4 pour une majeure 6ème ("ça n'existe
+        // pas") — la longueur ne change jamais le palier du transfert, seule la suite du
+        // répondant en tient compte pour viser la manche ou non. Cycle des annonces :
+        // ♣=Stayman, ♦→♥, ♥→♠, ♠→♣ (mineure, 6+ cartes), SA=naturel, puis ♣ au palier
+        // suivant→♦ (l'autre mineure, 6+ cartes elle aussi, décalée d'un cran de plus
+        // faute de place au palier précédent).
         const neededHL = (bid.level === 1) ? 10 : 4;
+        const lv1 = bid.level + 1;
 
-        // Texas (6+ cartes à une majeure) : vise la manche directement, quel que soit
-        // son propre nombre de points — toujours au palier 4, quel que soit le palier
-        // d'ouverture (1SA ou 2SA), contrairement au Stayman/Jacoby qui eux en dépendent.
-        const sixCardMajor = ['S', 'H'].find(s => lengths[s] >= 6);
-        if (sixCardMajor) {
-            const transferSuit = sixCardMajor === 'H' ? 'D' : 'H';
-            const call = '4' + transferSuit;
+        // Transfert MAJEUR (5+ cartes) : ♦→♥, ♥→♠. Toujours au palier ouverture+1, quelle
+        // que soit la longueur exacte (5 ou 6+, voir échange avec Guillaume : "ça
+        // n'existe pas" de sauter plus haut) — c'est la suite du répondant après la
+        // complétion (déclenchée depuis decideRobotCall) qui juge ensuite s'il y a assez
+        // pour la manche.
+        const fiveCardMajor = ['S', 'H'].find(s => lengths[s] >= 5);
+        if (fiveCardMajor) {
+            const transferAsk = fiveCardMajor === 'H' ? 'D' : 'H';
+            const call = lv1 + transferAsk;
             if (isCallLegal(history, call, seat)) return call;
         }
 
-        // Transfert Jacoby (5 cartes à une majeure, sans 6ème) : même principe que Texas
-        // mais un palier plus bas, laissant la place d'explorer ensuite (voir la suite du
-        // répondant après complètement du transfert, déclenchée depuis decideRobotCall).
-        // Un palier au-dessus de l'ouverture : 2♦/2♥ sur 1SA, 3♦/3♥ sur 2SA.
-        const fiveCardMajor = ['S', 'H'].find(s => lengths[s] >= 5);
-        if (fiveCardMajor) {
-            const transferSuit = fiveCardMajor === 'H' ? 'D' : 'H';
-            const call = (bid.level + 1) + transferSuit;
-            if (isCallLegal(history, call, seat)) return call;
+        // Transfert MINEUR (6+ cartes, voir échange avec Guillaume, donne 8) : ♠→♣ (au
+        // palier ouverture+1), ♣→♦ (palier ouverture+2, faute de place plus tôt — ♠ est
+        // déjà utilisé pour le transfert trèfle). Avec une vraie courte (0-1 carte)
+        // ailleurs, toujours utilisé pour indiquer où elle est, même "juste" pour la
+        // manche. SANS courte (main régulière, donc forcément 6322), seulement en zone de
+        // chelem — sinon on va direct à 3SA/manche naturelle (voir plus bas), inutile de
+        // complexifier l'enchère pour une main qui n'a que la manche à proposer.
+        const sixCardMinor = ['C', 'D'].find(s => lengths[s] >= 6);
+        if (sixCardMinor) {
+            const hasShortness = ['S', 'H', 'D', 'C'].some(s => s !== sixCardMinor && lengths[s] <= 1);
+            const slamZone = hl + (bid.level === 1 ? 15 : 20) >= 33; // même heuristique bornée que decideResponderContinuationAfterNewSuit
+            if (hasShortness || slamZone) {
+                const transferAsk = sixCardMinor === 'C' ? 'S' : 'C';
+                const transferLevel = sixCardMinor === 'C' ? lv1 : lv1 + 1;
+                const call = transferLevel + transferAsk;
+                if (isCallLegal(history, call, seat)) return call;
+            }
         }
 
         // Stayman (une majeure exactement 4 cartes, pas 5+ sinon un transfert
         // s'appliquerait déjà) : demande si l'ouvreur a 4+ cartes dans une majeure, avant
         // de se rabattre sur SA — seulement avec assez de points pour vouloir explorer
-        // (même seuil que pour parler du tout, voir neededHL). 2♣ sur 1SA, 3♣ sur 2SA.
+        // (même seuil que pour parler du tout, voir neededHL).
         const fourCardMajor = ['S', 'H'].some(s => lengths[s] === 4);
         if (fourCardMajor && hl >= neededHL) {
-            const call = (bid.level + 1) + 'C';
+            const call = lv1 + 'C';
             if (isCallLegal(history, call, seat)) return call;
         }
 
@@ -3181,7 +3195,7 @@ function decideRobotResponse(hand, hcp, hl, partnerCall, seat, history, partnerP
     // 23, sous la zone de manche) : ça force le partenaire à reparler pour rien. Seuil
     // relevé à 13HL dans ce cas — pile de quoi espérer la manche même si le partenaire
     // n'a que le minimum de sa fourchette de barrage (13+12=25).
-    const newSuitThreshold = bid.level >= 2 ? 13 : 11;
+    const newSuitThreshold = (bid.level >= 2 || partnerWasIntervening) ? 13 : 11;
     if (hl >= newSuitThreshold) {
         const newSuit = longestSuitPreferHigh(lengths);
         if (newSuit !== suit && lengths[newSuit] >= 4) {
@@ -3193,13 +3207,17 @@ function decideRobotResponse(hand, hcp, hl, partnerCall, seat, history, partnerP
     }
 
     // Repli : SA au palier minimal légal si un peu de points mais rien de mieux à dire.
-    // Repli : SA au palier minimal légal si un peu de points mais rien de mieux à dire.
     // Même relèvement du seuil sur un barrage du partenaire (voir échange avec Guillaume,
     // donne 3, et newSuitThreshold plus haut) : sans assez pour espérer la manche, mieux
     // vaut passer que de parler pour parler — un repli SA ici décrirait mal une main sans
     // grand rapport avec un jeu régulier de toute façon.
+    // DÉSACTIVÉ ENTIÈREMENT en avance d'une INTERVENTION du partenaire (voir échange avec
+    // Guillaume, donne 4 de la session suivante) : la force de l'intervenant est bien
+    // plus incertaine/basse qu'une vraie ouverture (voir decideRobotIntervention), donc
+    // sans fit ni jeu réel, il n'y a "aucune raison" de fabriquer un repli SA — passer
+    // reste la seule enchère honnête.
     const saFallbackThreshold = bid.level >= 2 ? 13 : 6;
-    if (hl >= saFallbackThreshold) {
+    if (!partnerWasIntervening && hl >= saFallbackThreshold) {
         for (let level = bid.level; level <= 7; level++) {
             const call = level + 'NT';
             if (isCallLegal(history, call, seat)) return call;
@@ -3617,46 +3635,47 @@ function decideRobotOpenerRebid(hand, hcp, hl, myOpeningCall, partnerCall, seat,
     const myBid = parseBid(myOpeningCall);
     if (!myBid) return 'PASS';
 
-    // Réponse à Stayman/transfert (voir échange avec Guillaume, donne 4) : purement
-    // mécanique, ne dépend jamais de ma propre main pour un transfert (pas de
-    // sur-acceptation, hors périmètre) — seul Stayman regarde ma main, pour savoir
-    // laquelle des majeures montrer (ou les dénier en carreau).
+    // Réponse à Stayman/transfert (voir échange avec Guillaume, donne 4 et donne 8) :
+    // purement mécanique pour un transfert (majeur OU mineur, pas de sur-acceptation,
+    // hors périmètre) — seul Stayman regarde ma main, pour savoir laquelle des majeures
+    // montrer (ou les dénier en carreau). Système unifié : ♦→♥, ♥→♠, ♠→♣ (mineure), et ♣
+    // au palier suivant→♦ (l'autre mineure) — jamais de saut, toujours le palier
+    // immédiatement supérieur à la demande.
     if (myBid.strain === 'NT') {
         const partnerBid = parseBid(partnerCall);
         if (!partnerBid) return 'PASS'; // partenaire a conclu directement (3SA, etc.) : rien à ajouter
-
-        // Texas : toujours au palier 4, quel que soit le palier d'ouverture (voir
-        // decideRobotResponse).
-        if (partnerCall === '4D') {
-            const call = '4H';
-            if (isCallLegal(history, call, seat)) return call;
-        }
-        if (partnerCall === '4H') {
-            const call = '4S';
-            if (isCallLegal(history, call, seat)) return call;
-        }
+        const lv1 = myBid.level + 1;
 
         // Stayman (palier ouverture+1, en trèfle) : nomme une majeure si 4+ cartes —
         // priorité aux cœurs si les deux majeures sont 4+ (convention standard, laisse
         // le répondant "corriger" à pique au même palier s'il n'a que 4 piques), sinon
         // dénie en carreau (pas de majeure 4+).
-        if (partnerBid.strain === 'C' && partnerBid.level === myBid.level + 1) {
+        if (partnerBid.strain === 'C' && partnerBid.level === lv1) {
             const lengths = suitLengths(hand);
             let call;
-            if (lengths['H'] >= 4) call = (myBid.level + 1) + 'H';
-            else if (lengths['S'] >= 4) call = (myBid.level + 1) + 'S';
-            else call = (myBid.level + 1) + 'D';
+            if (lengths['H'] >= 4) call = lv1 + 'H';
+            else if (lengths['S'] >= 4) call = lv1 + 'S';
+            else call = lv1 + 'D';
             if (isCallLegal(history, call, seat)) return call;
         }
 
-        // Transfert Jacoby (palier ouverture+1, en carreau/cœur) : complète vers la
-        // majeure suivante sans condition.
-        if (partnerBid.strain === 'D' && partnerBid.level === myBid.level + 1) {
-            const call = (myBid.level + 1) + 'H';
+        // Transferts (palier ouverture+1, sauf ♣→♦ qui doit aller au palier suivant faute
+        // de place — ♣ au palier +1 est déjà pris par Stayman) : complète vers la couleur
+        // suivante sans condition.
+        if (partnerBid.strain === 'D' && partnerBid.level === lv1) {
+            const call = lv1 + 'H';
             if (isCallLegal(history, call, seat)) return call;
         }
-        if (partnerBid.strain === 'H' && partnerBid.level === myBid.level + 1) {
-            const call = (myBid.level + 1) + 'S';
+        if (partnerBid.strain === 'H' && partnerBid.level === lv1) {
+            const call = lv1 + 'S';
+            if (isCallLegal(history, call, seat)) return call;
+        }
+        if (partnerBid.strain === 'S' && partnerBid.level === lv1) {
+            const call = (lv1 + 1) + 'C'; // transfert mineur trèfle : palier supérieur, faute de place
+            if (isCallLegal(history, call, seat)) return call;
+        }
+        if (partnerBid.strain === 'C' && partnerBid.level === lv1 + 1) {
+            const call = (lv1 + 1) + 'D'; // transfert mineur carreau (l'autre mineure)
             if (isCallLegal(history, call, seat)) return call;
         }
 
@@ -3878,7 +3897,7 @@ function decideRobotCall(seat, deal, history) {
                 const wasIntervention = history.slice(0, partnerBidIndex)
                     .some(e => isBidCall(e.call) && partnershipOf(e.seat) !== partnershipOf(seat));
                 const partnerPromises5Plus = isMajorSuit || wasIntervention;
-                call = decideRobotResponse(hand, hcp, hl, myPartnerBid.call, seat, history, partnerPromises5Plus);
+                call = decideRobotResponse(hand, hcp, hl, myPartnerBid.call, seat, history, partnerPromises5Plus, wasIntervention);
                 const isCompetitive = myPartnerBid !== lastBid;
                 explanation = isCompetitive
                     ? `Soutien compétitif de ${formatCallForDisplay(myPartnerBid.call)} du partenaire malgré ${formatCallForDisplay(lastBid.call)} adverse (${points})`
@@ -3961,10 +3980,38 @@ function decideRobotCall(seat, deal, history) {
             const wasStaymanAsk = wasNTOpening && myAskBid.strain === 'C' && myAskBid.level === partnerOpeningBid.level + 1;
             const wasJacobyTransferAsk = wasNTOpening && (myAskBid.strain === 'D' || myAskBid.strain === 'H')
                 && myAskBid.level === partnerOpeningBid.level + 1;
+            // Suite après transfert MINEUR (voir échange avec Guillaume, donne 8) :
+            // ma 1ère annonce transférait vers ♣ (via ♠ au palier +1) ou vers ♦ (via ♣ au
+            // palier +2, faute de place plus tôt). Ma 3ème annonce indique où est ma
+            // courte : directement si elle est de rang SUPÉRIEUR à la mineure montrée,
+            // sinon (seulement possible pour ♣ quand ♦ est la mineure montrée, qui rang
+            // en dessous et n'est donc plus nommable) via SA.
+            const wasMinorTransferAsk = wasNTOpening && (
+                (myAskBid.strain === 'S' && myAskBid.level === partnerOpeningBid.level + 1) ||
+                (myAskBid.strain === 'C' && myAskBid.level === partnerOpeningBid.level + 2)
+            );
 
             if (wasStrongTwoClubsRelay && myPartnerBid.call === '2NT') {
                 call = decideRobotResponse(hand, hcp, hl, '2NT', seat, history, false);
                 explanation = `Réponse au 2SA (22-23HL) après relais 2♦ sur 2♣ fort (${points})`;
+            } else if (wasMinorTransferAsk) {
+                const lengths = suitLengths(hand);
+                const shownMinor = myAskBid.strain === 'S' ? 'C' : 'D';
+                const otherSuits = ['S', 'H', 'D', 'C'].filter(s => s !== shownMinor);
+                const shortSuit = otherSuits.find(s => lengths[s] <= 1);
+                const replyLevel = parseBid(myPartnerBid.call).level;
+                let targetCall;
+                if (shortSuit && STRAIN_RANK[shortSuit] > STRAIN_RANK[shownMinor]) {
+                    targetCall = replyLevel + shortSuit;
+                } else {
+                    targetCall = replyLevel + 'NT';
+                }
+                if (isCallLegal(history, targetCall, seat)) {
+                    call = targetCall;
+                    explanation = shortSuit
+                        ? `Texas mineur complété, courte à ${STRAIN_SYMBOL[shortSuit]} (${points})`
+                        : `Texas mineur complété, main régulière en zone de chelem (${points})`;
+                }
             } else if (wasStaymanAsk) {
                 const openerMinHcp = partnerOpeningBid.level === 1 ? 15 : 20;
                 const partnerReplyBid = parseBid(myPartnerBid.call);
