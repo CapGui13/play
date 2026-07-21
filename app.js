@@ -3194,6 +3194,21 @@ function decideRobotIntervention(hand, hcp, hl, seat, history, dealVulnerable) {
     const lengths = suitLengths(hand);
     const lastBid = getLastActualBid(history); // l'enchère adverse à laquelle on réagit
 
+    // "Contre toute distribution" (voir échange avec Guillaume, donne 2) : à partir de
+    // 19HL+, on contre d'abord, quelle que soit la distribution — même avec une belle
+    // couleur personnelle qu'on aurait pu montrer directement — pour annoncer une force
+    // que ni un contre d'appel normal ni une intervention naturelle directe ne
+    // représenteraient correctement. La vraie couleur se montre ensuite, au tour suivant
+    // (voir decideDoublerFollowUp), une fois cette force acquise pour le partenaire.
+    // Priorité absolue, avant même le contre d'appel normal ci-dessous.
+    if (lastBid) {
+        const strongDoubleOppBid = parseBid(lastBid.call);
+        if (strongDoubleOppBid && strongDoubleOppBid.strain !== 'NT' && hl >= 19) {
+            const call = 'X';
+            if (isCallLegal(history, call, seat)) return call;
+        }
+    }
+
     // Contre d'appel ("takeout") : main d'ouverture (12HL+), courte dans la couleur
     // adverse (0-2 cartes), un support raisonnable dans les 3 autres — simplifié à "3
     // cartes partout ailleurs, ou au moins 2 des 3 autres couleurs à 4+ cartes" plutôt que
@@ -3236,8 +3251,14 @@ function decideRobotIntervention(hand, hcp, hl, seat, history, dealVulnerable) {
     // concentrés dans une seule longue sans valeur défensive ailleurs, mieux vaut sauter
     // au palier 2 pour gêner l'adversaire plutôt qu'intervenir naturellement au palier
     // minimal (souvent 1, qui ne gêne pas grand-chose et sous-décrit la main).
+    // RÉSERVÉ AUX MAJEURES (voir échange avec Guillaume, donne 1) : "les barrages
+    // n'existent qu'à partir de 2♥" — un "2♣" ou "2♦" n'est JAMAIS un vrai barrage
+    // volontaire (le palier 1 y est presque toujours disponible ; s'il ne l'est pas,
+    // c'est subi, pas choisi pour gêner l'adversaire). Une intervention à la mineure
+    // forcée au palier 2+ passe systématiquement par le seuil normal plus bas (12H+,
+    // 6 cartes) — plus exigeant que la fourchette de barrage (8-12HL).
     const hasOtherFourCardSuit = ['S', 'H', 'D', 'C'].some(s => s !== suit && lengths[s] >= 4);
-    if (hl <= 12 && lengths[suit] >= 6 && !hasOtherFourCardSuit) {
+    if ((suit === 'S' || suit === 'H') && hl <= 12 && lengths[suit] >= 6 && !hasOtherFourCardSuit) {
         for (let level = 2; level <= 7; level++) {
             const call = level + suit;
             if (isCallLegal(history, call, seat)) return call;
@@ -3328,6 +3349,21 @@ function decideDoublerFollowUp(hand, hcp, hl, partnerResponseCall, seat, history
     const responseBid = parseBid(partnerResponseCall);
     if (!responseBid) return 'PASS'; // partenaire qui a lui-même contré/passé à ce stade : hors périmètre, filet de sécurité
 
+    // Suite du "contre toute distribution" (voir échange avec Guillaume, donne 2, et
+    // decideRobotIntervention) : avec 19HL+, mon contre initial n'était pas un simple
+    // contre d'appel classique mais une annonce de force — je montre maintenant ma vraie
+    // couleur naturellement (au palier minimal légal, pas de saut — la force est déjà
+    // annoncée par la séquence elle-même), plutôt que de pousser la couleur choisie par
+    // le partenaire, qui ne connaît pas encore ma vraie main. Priorité sur la logique
+    // normale ci-dessous, pensée pour un contre d'appel standard (12-18HL).
+    if (hl >= 19) {
+        const suit = longestSuitPreferHigh(lengths);
+        for (let level = responseBid.level; level <= 7; level++) {
+            const call = level + suit;
+            if (isCallLegal(history, call, seat)) return call;
+        }
+    }
+
     if (hcp >= 15 && lengths[responseBid.strain] >= 3) {
         const isMajor = responseBid.strain === 'S' || responseBid.strain === 'H';
         const gameLevel = isMajor ? 4 : 5;
@@ -3389,6 +3425,19 @@ function isExactly5332(lengths) {
     return values[0] === 5 && values[1] === 3 && values[2] === 3 && values[3] === 2;
 }
 
+// Main "régulière" au sens large (voir échange avec Guillaume, donnes 3/5/7/8) : les 3
+// répartitions classiques 4333/4432/5332 précisément — pas juste "pas de chicane ni de
+// 6+" (bug trouvé en testant : ça laissait passer un 5422, qui n'est PAS une main
+// régulière et mérite un vrai bicolore, pas un repli SA). Sert de garde-fou pour la
+// redemande de l'ouvreur : une main régulière ne doit jamais prétendre avoir un vrai
+// bicolore (voir la recherche de 2ème couleur plus bas), et doit plutôt se décrire via
+// 1SA/2SA selon sa force.
+function isBalanced(lengths) {
+    const values = ['S', 'H', 'D', 'C'].map(s => lengths[s]).sort((a, b) => b - a);
+    const pattern = values.join('');
+    return pattern === '4333' || pattern === '4432' || pattern === '5332';
+}
+
 // Rebid de l'ouvreur après une réponse en changement de couleur (voir échange avec
 // Guillaume, donnes 1 et 5 : forcing quel que soit le palier, 1 ou 2 — pas seulement le
 // 2/1 sur majeure) : 15H+ avec une répartition EXACTEMENT 5332 -> 2SA ; sinon (12-14H, ou
@@ -3428,14 +3477,35 @@ function decideOpenerRebidAfterNewSuit(hand, hcp, hl, myBid, partnerParsed, seat
         if (isCallLegal(history, call, seat)) return call;
     }
 
+    // Main régulière (voir échange avec Guillaume, donnes 3/5/7/8) : au-delà du cas
+    // précis ci-dessus (15H+ exactement 5332), toute main régulière (4333/4432/5332,
+    // voir isBalanced) doit se décrire par 1SA ou 2SA plutôt que de chercher un bicolore
+    // qu'elle n'a pas vraiment (donne 7 : une main 4432 n'a que 4 cartes dans sa 2e
+    // couleur, ce n'est pas un vrai bicolore) — priorité sur la recherche de 2e couleur
+    // plus bas. En pratique, dans ce contexte précis (une couleur déjà ouverte, donc pas
+    // 1SA/2SA directs), seules deux fourchettes de points sont possibles : sous 15H
+    // (n'aurait pas ouvert 1SA/2SA directement) ou 18H+ (trop fort pour 1SA 15-17, pas
+    // encore 20-21 pour 2SA direct) — 15-17H régulière aurait déjà ouvert 1SA.
+    if (isBalanced(lengths)) {
+        if (hcp >= 18) {
+            const call = '2NT';
+            if (isCallLegal(history, call, seat)) return call;
+        } else {
+            const call = '1NT';
+            if (isCallLegal(history, call, seat)) return call;
+        }
+    }
+
     // Bicolore : cherche le palier minimal légal pour chaque couleur candidate (4+
     // cartes, autre que l'ouverture et celle du partenaire), puis écarte celles qui
     // exigeraient un "reverse" — rang SUPÉRIEUR à l'ouverture ET palier 2+ pour l'annoncer
     // (donc le partenaire devrait monter d'un cran pour revenir à ma 1ère couleur) — tant
-    // que la main n'a pas 17HL+ (voir échange avec Guillaume, donnes 5 et 6 : la
-    // distinction n'est pas juste "couleur plus chère", mais bien "faut-il le palier 2
-    // pour la montrer" — un bicolore économique au palier 1, comme 1♣ puis 1♠, n'est
-    // JAMAIS un reverse, quel que soit le rang des couleurs).
+    // que la main n'a pas 17HL+ ET au moins 5 cartes dans SA PROPRE couleur d'ouverture
+    // (voir échange avec Guillaume, donne 8 : un "bicolore cher" sans vraie 5ème dans la
+    // 1ère couleur — ex. une mineure ouverte à 3 cartes par défaut — ne doit jamais
+    // renverser, la main est en réalité régulière et déjà traitée ci-dessus). Un bicolore
+    // économique au palier 1, comme 1♣ puis 1♠, n'est JAMAIS un reverse, quel que soit le
+    // rang des couleurs (voir échange avec Guillaume, donnes 5 et 6).
     const candidates = ['S', 'H', 'D', 'C'].filter(s => s !== myBid.strain && s !== partnerParsed.strain && lengths[s] >= 4);
     let secondSuit = null;
     let secondSuitLevel = null;
@@ -3446,7 +3516,7 @@ function decideOpenerRebidAfterNewSuit(hand, hcp, hl, myBid, partnerParsed, seat
         }
         if (naturalLevel === null) continue;
         const isReverse = STRAIN_RANK[s] > STRAIN_RANK[myBid.strain] && naturalLevel >= 2;
-        if (isReverse && hl < 17) continue; // pas les moyens de le montrer, on l'écarte
+        if (isReverse && (hl < 17 || lengths[myBid.strain] < 5)) continue; // pas les moyens de le montrer, ou pas une vraie 5ème dans la 1ère couleur
         if (!secondSuit || lengths[s] > lengths[secondSuit]) {
             secondSuit = s;
             secondSuitLevel = naturalLevel;
@@ -3457,24 +3527,18 @@ function decideOpenerRebidAfterNewSuit(hand, hcp, hl, myBid, partnerParsed, seat
         if (isCallLegal(history, call, seat)) return call;
     }
 
-    // Répéter sa couleur au palier 2+ n'est un message honnête que dans certains cas
-    // précis pour une MINEURE (voir échange avec Guillaume, donne 7) : ça montre SOIT 6+
-    // cartes, SOIT 5 cartes avec une chicane/singleton ailleurs (cas moins fréquent) —
-    // jamais juste 4 cartes (le minimum d'ouverture normal), qui décrirait la main à
-    // tort. Une MAJEURE, elle, promet déjà 5+ dès l'ouverture (voir decideRobotOpening),
-    // donc ce garde-fou ne change rien pour elle. Sans autre option (ni fit, ni bicolore,
-    // ni 2NT plus haut dans cette fonction), et la répétition non justifiée : passe plutôt
-    // que de sur-décrire une main de 4 cartes minimum.
-    const isMinorRebid = myBid.strain === 'D' || myBid.strain === 'C';
-    const hasShortnessElsewhere = ['S', 'H', 'D', 'C'].some(s => s !== myBid.strain && lengths[s] <= 1);
-    const repeatIsHonest = !isMinorRebid || lengths[myBid.strain] >= 6 || (lengths[myBid.strain] === 5 && hasShortnessElsewhere);
-    if (repeatIsHonest) {
-        for (let level = partnerParsed.level; level <= 7; level++) {
-            const call = level + myBid.strain;
-            if (isCallLegal(history, call, seat)) return call;
-        }
+    // "Moins mauvaise enchère" (voir échange avec Guillaume) : une réponse en changement
+    // de couleur est forcing — on ne doit JAMAIS passer ici, même sans option
+    // pleinement satisfaisante. Répéter sa couleur (même sans remplir le garde-fou
+    // "honnête" habituel — 6+ cartes, ou 5 avec une chicane, voir échange avec Guillaume,
+    // donne 7 de la session précédente) reste la moins mauvaise option s'il ne reste
+    // vraiment rien d'autre : mieux vaut sur-décrire légèrement une main que laisser
+    // passer une enchère forcing, ce qui serait une erreur bien plus grave.
+    for (let level = partnerParsed.level; level <= 7; level++) {
+        const call = level + myBid.strain;
+        if (isCallLegal(history, call, seat)) return call;
     }
-    return 'PASS';
+    return 'PASS'; // filet de sécurité ultime, ne devrait normalement jamais être atteint
 }
 
 
@@ -3545,7 +3609,11 @@ function decideRobotOpenerRebid(hand, hcp, hl, myOpeningCall, partnerCall, seat,
     // distributionnelle prime sur le compte de points). Se déclenche AVANT tout seuil de
     // points, y compris pour une main d'ouverture minimale — et reste valable même si un
     // adversaire est intervenu depuis (la sécurité distributionnelle ne dépend pas de ça).
-    if (isRaiseOfMySuit && lengths[myBid.strain] >= 6) {
+    // EXCLU si MA PROPRE ouverture était déjà un barrage (palier 2+, voir échange avec
+    // Guillaume, donne 2) : l'ouvreur de barrage a déjà tout dit à son premier tour — même
+    // avec un fit connu et un soutien du partenaire, il ne reparle plus jamais de son
+    // propre chef, quelle que soit la suite de l'enchère (relance adverse comprise).
+    if (isRaiseOfMySuit && lengths[myBid.strain] >= 6 && myBid.level === 1) {
         const call = (partnerParsed.level + 1) + myBid.strain;
         if (isCallLegal(history, call, seat)) return call;
     }

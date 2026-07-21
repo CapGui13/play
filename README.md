@@ -341,6 +341,46 @@ Trois corrections supplémentaires, chacune trouvée en creusant au-delà du sym
   (15H+) et un fit pour la couleur choisie par le partenaire, il pousse directement à la
   manche plutôt que de laisser filer un partiel.
 
+## Corrections issues de la session du 21 juillet (voir échange avec Guillaume)
+
+Trois chantiers menés en parallèle, un quatrième (Stayman/Texas après SA) volontairement
+laissé de côté pour l'instant — ampleur comparable au 2♣ fort, mérite sa propre passe
+dédiée plutôt que d'être ajouté à la hâte ici.
+
+**Groupe A — Seuil d'intervention forcée au palier 2 (donne 1)** : le "barrage en
+intervention" (8-12HL, 6+ cartes) ne s'applique désormais qu'aux MAJEURES — "les barrages
+n'existent qu'à partir de 2♥" (voir échange avec Guillaume). Une intervention à la mineure
+forcée au palier 2+ (le palier 1 n'étant pas disponible) passe systématiquement par le
+seuil plus exigeant déjà existant (12H+, 6 cartes), qui était jusque-là court-circuité par
+le barrage.
+
+**Groupe B — Contre "toute distribution" et silence de l'ouvreur de barrage (donne 2)** :
+- À partir de 19HL+ (précision de Guillaume : "plus de 18" = 19+), on contre TOUJOURS
+  d'abord en intervention, quelle que soit la distribution — même avec une belle couleur
+  personnelle — puis on montre sa vraie couleur au tour suivant (voir
+  decideDoublerFollowUp, désormais capable de distinguer ce cas d'un contre d'appel
+  classique 12-18HL).
+- Un ouvreur de barrage ne reparle plus jamais de son propre chef après son ouverture,
+  même si le partenaire le soutient et même si la loi des atouts suggérerait de pousser
+  encore — il a déjà tout dit à son premier tour.
+
+**Groupe C — Redemande de l'ouvreur toujours forcing (donnes 3, 5, 7, 8)** : le principe
+central (voir échange avec Guillaume) — une réponse en changement de couleur reste forcing
+tant que la zone de manche (25H à eux deux) est encore atteignable, donc l'ouvreur DOIT
+toujours produire une enchère, "la moins mauvaise" s'il n'en existe pas d'évidente. Mis en
+œuvre par :
+- Nouvel utilitaire `isBalanced` (4333/4432/5332 précisément — un bug de première version,
+  trop permissif, laissait à tort passer un 5422, corrigé avant livraison) pour reconnaître
+  une main régulière et lui faire dire 1SA (sous 15H) ou 2SA (18H+) plutôt que d'inventer un
+  bicolore qu'elle n'a pas — ces deux fourchettes sont les seules possibles ici, puisqu'une
+  main régulière de 15-17H aurait déjà ouvert 1SA directement.
+- Un "bicolore cher" (renverse) exige désormais aussi 5+ cartes dans la couleur
+  d'ouverture elle-même, pas seulement 17HL+ — une mineure ouverte à 3 cartes par défaut
+  ne peut pas prétendre avoir un vrai bicolore 5-4.
+- Le filet final ne passe plus jamais : à défaut de toute autre option, répéter sa couleur
+  (même sans satisfaire pleinement le garde-fou "honnête" habituel) reste la moins mauvaise
+  enchère plutôt qu'un passe sur une séquence forcing.
+
 ## Corrections issues de la session du 20 juillet, deuxième relecture (voir échange avec Guillaume)
 
 - **Suite obligatoire de l'ouvreur après un soutien conventionnel** : "2SA" (11-12 points de
