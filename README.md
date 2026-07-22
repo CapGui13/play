@@ -360,6 +360,28 @@ Convention complète, implémentée à la suite des groupes A/B/C ci-dessous (m�
   l'ouvreur comme déclarant, protégée de l'entame adverse. L'ouvreur complète sans
   condition ; pas de suite nécessaire pour le répondant, la manche est déjà atteinte.
 
+## Corrections issues de la session du 21 juillet, troisième relecture (voir échange avec Guillaume)
+
+- **Priorité à une belle couleur personnelle sur un soutien mineur marginal (donne 4)** :
+  bug trouvé — sans majeure 4ème ni 12H+, le garde-fou existant ("longerSuit") ne se
+  déclenchait jamais (il en dépend entièrement), laissant une main avec un fit minimal
+  (3 cartes) pour la mineure du partenaire "soutenir" cette mineure plutôt que de montrer
+  sa propre couleur de 6+ cartes, bien plus descriptive. Nouveau garde-fou indépendant :
+  avec 6+ cartes dans une couleur à soi (plus longue que le fit pour la mineure du
+  partenaire), on la montre — question de longueur de couleur, pas de points.
+- **Contre protecteur / de "quatrième main" (donne 1)** : nouveau mécanisme — quand le
+  partenaire est intervenu et qu'un adversaire a ensuite renchéri sur SA propre couleur,
+  avec 8H+ et 4+ cartes dans CHACUNE des deux couleurs pas encore montrées par quiconque,
+  un contre (normes assouplies : 8H suffit, pas besoin de brièveté dans la couleur adverse)
+  vaut mieux qu'un simple soutien ou passe.
+- **4SA quantitatif (donne 2)** : nouveau mécanisme — quand l'ouvreur découvre une main
+  énorme (22HL+) après une réponse simple du partenaire (pas de fit trouvé), "4SA" pose la
+  question sans s'engager : le partenaire dit 6SA avec 9H+ (le haut de sa fourchette
+  habituelle), reste à 4SA sinon. Pas une vraie enchère de contrôle (Blackwood, toujours
+  hors périmètre) — juste une question bornée sur l'étendue des points, comme le chelem
+  direct de la donne 6 d'une session précédente, mais posée plutôt qu'auto-décidée quand
+  l'incertitude sur la main du partenaire est trop large pour trancher seul.
+
 ## Corrections issues de la session du 21 juillet, deuxième relecture (voir échange avec Guillaume)
 
 **Révision majeure du système Stayman/transferts** : le système construit lors de la

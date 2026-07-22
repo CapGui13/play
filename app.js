@@ -3151,6 +3151,24 @@ function decideRobotResponse(hand, hcp, hl, partnerCall, seat, history, partnerP
         }
     }
 
+    // Voir échange avec Guillaume, donne 4 (session du 21 juillet) : bug trouvé — sans
+    // majeure 4ème (donc "longerSuit" ci-dessus ne se déclenchait jamais, il en dépend
+    // entièrement) ET sans 12H+, une main pouvait quand même se retrouver à "soutenir"
+    // la mineure du partenaire avec un simple fit de 3 cartes alors qu'elle a une bien
+    // meilleure couleur à elle (6+ cartes, plus longue que ce fit) — ex. 3 cartes à la
+    // mineure du partenaire mais 6 cartes dans une autre couleur. Ici la priorité vient
+    // de la LONGUEUR de la couleur, pas des points (une belle couleur de 6+ se montre,
+    // qu'on ait 8H ou 15H) — pas de seuil de points comme pour "longerSuit" plus haut.
+    const ownLongSuit = partnerOpenedMinor
+        ? ['S', 'H', 'D', 'C'].find(s => s !== suit && lengths[s] >= 6 && lengths[s] > lengths[suit])
+        : null;
+    if (ownLongSuit) {
+        for (let level = bid.level; level <= 7; level++) {
+            const call = level + ownLongSuit;
+            if (isCallLegal(history, call, seat)) return call;
+        }
+    }
+
     // Soutien à une MAJEURE : échelle complète des soutiens directs (voir
     // decideRobotMajorSupport) — mais seulement pour une ouverture NORMALE au palier 1,
     // dont toute l'échelle de paliers est solidaire (voir échange avec Guillaume, donne
@@ -3349,6 +3367,21 @@ function decideResponderContinuationAfterNewSuit(hand, hcp, hl, openingBid, myRe
     const rebid = parseBid(partnerRebidCall);
     if (!rebid) return 'PASS'; // contre/passe du partenaire à ce stade : hors périmètre, filet de sécurité
 
+    // Réponse au 4SA quantitatif (voir échange avec Guillaume, donne 2, session du 21
+    // juillet) : le partenaire a une main énorme (22HL+, voir
+    // decideOpenerRebidAfterNewSuit) et demande si j'ai un peu plus que le minimum promis
+    // par ma réponse — avec 9H+ (le haut de la fourchette habituelle d'une réponse simple,
+    // 6-11H), je dis 6SA ; sinon je reste sur 4SA. Traité à part de l'heuristique de
+    // chelem générique plus bas (qui suppose une ouverture normale à 12H minimum) : ici
+    // c'est une vraie question du partenaire, pas un simple compte de points de ma part.
+    if (partnerRebidCall === '4NT') {
+        if (hcp >= 9) {
+            const call = '6NT';
+            if (isCallLegal(history, call, seat)) return call;
+        }
+        return 'PASS';
+    }
+
     // Chelem par simple compte de points (voir échange avec Guillaume, donne 6) : pas de
     // véritable enchère de contrôle (cue-bids, Blackwood — hors périmètre, voir le
     // README), mais un déclenchement borné et sûr — si MES points (HL) combinés au
@@ -3533,6 +3566,20 @@ function decideOpenerRebidAfterNewSuit(hand, hcp, hl, myBid, partnerParsed, seat
             const call = level + fitSuit;
             if (isCallLegal(history, call, seat)) return call;
         }
+    }
+
+    // 4SA quantitatif (voir échange avec Guillaume, donne 2, session du 21 juillet) : pas
+    // de fit trouvé ci-dessus, mais une main tellement excédentaire (22HL+) qu'elle
+    // dépasse toutes les autres enchères de cette fonction (1SA/2SA de repli, bicolore,
+    // répétition) — même dans le pire des cas (partenaire minimal, 6H pour sa réponse),
+    // 22+6=28 justifie déjà la manche ; dans le meilleur des cas (partenaire avec un peu
+    // plus, ex. 11H), 22+11=33 est en zone de petit chelem. "4SA" pose la question sans
+    // s'engager : le partenaire dit 6SA avec un maximum, reste à 4SA avec un minimum
+    // (voir la suite du répondant, décidée ailleurs). Pas une vraie enchère de contrôle
+    // (Blackwood) — juste un compte de points, comme le chelem direct de la donne 6.
+    if (hl >= 22) {
+        const call = '4NT';
+        if (isCallLegal(history, call, seat)) return call;
     }
 
     if (hcp >= 15 && isExactly5332(lengths)) {
@@ -3892,6 +3939,33 @@ function decideRobotCall(seat, deal, history) {
                 call = decideRobotOpening(hand, hcp, hl, deal.vulnerable, seat);
                 explanation = `Ouverture (${points})`;
             } else if (myPartnerBid) {
+                const partnerBidInfo = parseBid(myPartnerBid.call);
+                const partnerBidIndexForProtect = history.indexOf(myPartnerBid);
+                const wasInterventionForProtect = history.slice(0, partnerBidIndexForProtect)
+                    .some(e => isBidCall(e.call) && partnershipOf(e.seat) !== partnershipOf(seat));
+
+                // Contre protecteur / de "quatrième main" (voir échange avec Guillaume,
+                // donne 1, session du 21 juillet) : maintenant que le partenaire a montré
+                // de la valeur (son intervention) et qu'un adversaire a renchéri sur SA
+                // propre couleur, avec 8H+ et 4+ cartes dans CHACUNE des deux couleurs pas
+                // encore montrées par quiconque, un contre vaut mieux qu'un passe qui
+                // laisserait filer — normes assouplies par rapport à un contre d'appel
+                // direct (8H suffit, pas besoin de brièveté dans la couleur adverse).
+                if (wasInterventionForProtect && hl >= 8 && isCallLegal(history, 'X', seat)) {
+                    const lastBidForProtect = getLastActualBid(history);
+                    const lengths = suitLengths(hand);
+                    const shownSuits = new Set([
+                        partnerBidInfo.strain,
+                        lastBidForProtect ? parseBid(lastBidForProtect.call).strain : null
+                    ]);
+                    const unshownSuits = ['S', 'H', 'D', 'C'].filter(s => !shownSuits.has(s));
+                    if (unshownSuits.length === 2 && unshownSuits.every(s => lengths[s] >= 4)) {
+                        call = 'X';
+                        explanation = `Contre protecteur (4ème main) : 8H+ et 4+ cartes dans les 2 couleurs restantes (${points})`;
+                    }
+                }
+
+                if (call !== 'X') {
                 // Voir échange avec Guillaume (règle du fit) : le partenaire a-t-il
                 // PROMIS 5+ cartes dans sa couleur ? Toujours vrai pour une ouverture à
                 // la majeure (système "majeure 5ème") ; toujours vrai aussi pour une
@@ -3901,7 +3975,6 @@ function decideRobotCall(seat, deal, history) {
                 // qu'un adversaire avait déjà annoncé quelque chose avant CETTE annonce
                 // précise du partenaire (pas forcément avant la toute dernière de
                 // l'enchère, si un adversaire a reparlé depuis).
-                const partnerBidInfo = parseBid(myPartnerBid.call);
                 const isMajorSuit = partnerBidInfo && (partnerBidInfo.strain === 'S' || partnerBidInfo.strain === 'H');
                 const partnerBidIndex = history.indexOf(myPartnerBid);
                 const wasIntervention = history.slice(0, partnerBidIndex)
@@ -3912,6 +3985,7 @@ function decideRobotCall(seat, deal, history) {
                 explanation = isCompetitive
                     ? `Soutien compétitif de ${formatCallForDisplay(myPartnerBid.call)} du partenaire malgré ${formatCallForDisplay(lastBid.call)} adverse (${points})`
                     : `Réponse à ${formatCallForDisplay(lastBid.call)} du partenaire (${points}, fit ${suitLengths(hand)[partnerBidInfo.strain] || 0}${partnerBidInfo.strain !== 'NT' ? ' carte(s) à ' + STRAIN_SYMBOL[partnerBidInfo.strain] : ''})`;
+                } // fin du if (call !== 'X') — voir le contre protecteur plus haut
             } else {
                 call = decideRobotIntervention(hand, hcp, hl, seat, history, deal.vulnerable);
                 explanation = `Intervention sur ${formatCallForDisplay(lastBid.call)} adverse (${points})`;
@@ -4053,8 +4127,14 @@ function decideRobotCall(seat, deal, history) {
                 && partnerOpeningBid.level === 1 && myResponseBid.strain !== partnerOpeningBid.strain
                 && myResponseBid.strain !== 'NT' && hcp >= 12;
             const partnerBidsCount = history.filter(e => e.seat === myPartnerBid.seat && !isPass(e.call)).length;
+            // Voir échange avec Guillaume, donne 2 : le 4SA quantitatif (voir
+            // decideOpenerRebidAfterNewSuit) doit toujours obtenir une réponse, même avec
+            // peu de points — c'est le partenaire qui a déjà signalé une force écrasante et
+            // pose une vraie question, pas un simple "j'ai assez pour continuer" du côté
+            // du répondant comme le sous-entend knowsGameZone.
+            const mustAnswerQuantitative = myPartnerBid.call === '4NT';
 
-            if (knowsGameZone && partnerBidsCount === 2) {
+            if ((knowsGameZone || mustAnswerQuantitative) && partnerBidsCount === 2) {
                 call = decideResponderContinuationAfterNewSuit(hand, hcp, hl, partnerOpeningBid, myResponseBid, myPartnerBid.call, seat, history);
                 explanation = `Suite en zone de manche après ${formatCallForDisplay(myPartnerBid.call)} du partenaire (${points})`;
             } else {
