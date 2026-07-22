@@ -3151,17 +3151,19 @@ function decideRobotResponse(hand, hcp, hl, partnerCall, seat, history, partnerP
         }
     }
 
-    // Voir échange avec Guillaume, donne 4 (session du 21 juillet) : bug trouvé — sans
-    // majeure 4ème (donc "longerSuit" ci-dessus ne se déclenchait jamais, il en dépend
-    // entièrement) ET sans 12H+, une main pouvait quand même se retrouver à "soutenir"
-    // la mineure du partenaire avec un simple fit de 3 cartes alors qu'elle a une bien
-    // meilleure couleur à elle (6+ cartes, plus longue que ce fit) — ex. 3 cartes à la
-    // mineure du partenaire mais 6 cartes dans une autre couleur. Ici la priorité vient
-    // de la LONGUEUR de la couleur, pas des points (une belle couleur de 6+ se montre,
-    // qu'on ait 8H ou 15H) — pas de seuil de points comme pour "longerSuit" plus haut.
-    const ownLongSuit = partnerOpenedMinor
-        ? ['S', 'H', 'D', 'C'].find(s => s !== suit && lengths[s] >= 6 && lengths[s] > lengths[suit])
-        : null;
+    // Voir échange avec Guillaume, donne 4 (session du 21 juillet), généralisé donne 6
+    // (session du 22 juillet) : bug trouvé — sans majeure 4ème (donc "longerSuit" ci-dessus
+    // ne se déclenchait jamais, il en dépend entièrement) ET sans 12H+, une main pouvait
+    // quand même se retrouver à "soutenir" la couleur du partenaire (majeure OU mineure,
+    // ouverte OU montrée par intervention) avec un simple fit de 3 cartes alors qu'elle a
+    // une bien meilleure couleur à elle. Plus restreint aux mineures (donne 6 : même bug
+    // avec une majeure — 3 cartes de "soutien" à un cœur adverse-intervenu de 7 cartes
+    // plutôt que montrer 5 trèfles à soi). Seuil à 5+ (pas 6+, revu à la baisse après la
+    // donne 6 où la couleur en question ne fait que 5 cartes) avec un écart d'au moins 2
+    // cartes par rapport au fit — pour ne pas préférer une couleur juste "un peu plus
+    // longue" mais bien NETTEMENT meilleure. Priorité de LONGUEUR, pas de points (qu'on
+    // ait 8H ou 15H) — pas de seuil de points comme "longerSuit".
+    const ownLongSuit = ['S', 'H', 'D', 'C'].find(s => s !== suit && lengths[s] >= 5 && lengths[s] >= lengths[suit] + 2);
     if (ownLongSuit) {
         for (let level = bid.level; level <= 7; level++) {
             const call = level + ownLongSuit;
@@ -3187,6 +3189,20 @@ function decideRobotResponse(hand, hcp, hl, partnerCall, seat, history, partnerP
         if (isCallLegal(history, call, seat)) return call;
     }
 
+    // Voir échange avec Guillaume, donne 3 (session du 22 juillet) : la même idée
+    // "montrer sa couleur avant de se rabattre sur autre chose" vaut aussi quand le
+    // partenaire a ouvert une MAJEURE et que j'ai 4+ cartes dans l'AUTRE majeure, plus
+    // chère — seul ♠ peut être "plus cher" que ♥ (aucune couleur n'est plus chère que ♠).
+    // Placé APRÈS le soutien majeur ci-dessus : un vrai fit pour la couleur du partenaire
+    // prime toujours sur l'idée de montrer une autre couleur. Seuil bas (même hl>=6 que
+    // pour une mineure) : réponse bon marché, sans saut, qui mérite le seuil minimal de
+    // n'importe quelle réponse simple — pas le seuil plus exigeant d'un changement de
+    // couleur, qui engage davantage (voir newSuitThreshold plus bas).
+    if (suit === 'H' && lengths['S'] >= 4 && hl >= 6) {
+        const call = bid.level + 'S';
+        if (isCallLegal(history, call, seat)) return call;
+    }
+
     // Soutien à une MINEURE : un fit, c'est 8 cartes à eux deux (voir échange avec
     // Guillaume — 5+3, pas 5+2), donc 3+ cartes. Le seuil de points utilise les points de
     // "soutien" (voir computeSupportPoints — H + 9ème atout + distribution, pas juste HL)
@@ -3205,8 +3221,15 @@ function decideRobotResponse(hand, hcp, hl, partnerCall, seat, history, partnerP
         && isHandBalancedForNT(lengths) && bid.level === 1;
     if (lengths[suit] >= 3 && supportPoints >= 6 && !flatWithMarginalMinorFit) {
         const raiseLevel = bid.level + (supportPoints >= 10 ? 2 : 1);
-        const call = raiseLevel + suit;
-        if (isCallLegal(history, call, seat)) return call;
+        // Voir échange avec Guillaume, donne 8 (session du 22 juillet) : cherche le
+        // palier légal le plus proche à PARTIR de raiseLevel, plutôt qu'un seul essai
+        // précis — une intervention adverse (ex. un barrage) peut avoir rendu ce palier
+        // exact illégal, et ce soutien pourtant justifié ne se faisait alors pas du tout
+        // (tombait en silence dans les vérifications suivantes, new suit / repli SA).
+        for (let level = raiseLevel; level <= 7; level++) {
+            const call = level + suit;
+            if (isCallLegal(history, call, seat)) return call;
+        }
     }
 
     // Pas de fit : nouvelle couleur (4+ cartes), au palier minimal légal — y compris sur
@@ -3244,11 +3267,26 @@ function decideRobotResponse(hand, hcp, hl, partnerCall, seat, history, partnerP
     // plus incertaine/basse qu'une vraie ouverture (voir decideRobotIntervention), donc
     // sans fit ni jeu réel, il n'y a "aucune raison" de fabriquer un repli SA — passer
     // reste la seule enchère honnête.
+    // Voir échange avec Guillaume, donnes 2 et 8 (session du 22 juillet) : quand un
+    // ADVERSAIRE (pas le partenaire) est intervenu, un repli SA exige en plus un vrai
+    // arrêt (2+ honneurs) dans SA couleur — sans ça, "2SA" pouvait s'annoncer avec un seul
+    // valet en main dans la couleur adverse, ce qui ne protège rien à l'entame. La
+    // fourchette de points précise (10-11H, sans HL) pour 2SA vient directement de
+    // Guillaume ; gardé au seuil HL existant pour les autres paliers, non précisés.
     const saFallbackThreshold = bid.level >= 2 ? 13 : 6;
-    if (!partnerWasIntervening && hl >= saFallbackThreshold) {
+    if (!partnerWasIntervening) {
         for (let level = bid.level; level <= 7; level++) {
             const call = level + 'NT';
-            if (isCallLegal(history, call, seat)) return call;
+            if (!isCallLegal(history, call, seat)) continue;
+            const lastBidForStopper = getLastActualBid(history);
+            const opponentSuit = (lastBidForStopper && isBidCall(lastBidForStopper.call)
+                && partnershipOf(lastBidForStopper.seat) !== partnershipOf(seat))
+                ? parseBid(lastBidForStopper.call).strain : null;
+            const hasStopper = !opponentSuit || opponentSuit === 'NT'
+                || ['A', 'K', 'Q', 'J', 'T'].filter(r => (hand[opponentSuit] || '').includes(r)).length >= 2;
+            const pointsOk = level === 2 ? (hcp >= 10 && hcp <= 11) : hl >= saFallbackThreshold;
+            if (pointsOk && hasStopper) return call;
+            break; // le palier légal le plus bas ne convient pas (points ou arrêt) : les paliers suivants seraient encore plus exigeants, inutile de continuer
         }
     }
 
@@ -3542,7 +3580,7 @@ function isBalanced(lengths) {
 // répète sa couleur d'ouverture. Pas de main "monstre" séparée ici : le filet 18HL+ plus
 // haut (isRaiseOfMySuit) ne s'applique de toute façon pas dans ce cas précis, où le
 // partenaire n'a pas soutenu ma couleur mais changé de couleur.
-function decideOpenerRebidAfterNewSuit(hand, hcp, hl, myBid, partnerParsed, seat, history) {
+function decideOpenerRebidAfterNewSuit(hand, hcp, hl, myBid, partnerParsed, seat, history, opponentIntervened) {
     const lengths = suitLengths(hand);
 
     // Fit pour la couleur du partenaire (voir échange avec Guillaume, donnes 5 et 7) :
@@ -3637,16 +3675,24 @@ function decideOpenerRebidAfterNewSuit(hand, hcp, hl, myBid, partnerParsed, seat
         if (isCallLegal(history, call, seat)) return call;
     }
 
-    // "Moins mauvaise enchère" (voir échange avec Guillaume) : une réponse en changement
-    // de couleur est forcing — on ne doit JAMAIS passer ici, même sans option
-    // pleinement satisfaisante. Répéter sa couleur (même sans remplir le garde-fou
-    // "honnête" habituel — 6+ cartes, ou 5 avec une chicane, voir échange avec Guillaume,
-    // donne 7 de la session précédente) reste la moins mauvaise option s'il ne reste
-    // vraiment rien d'autre : mieux vaut sur-décrire légèrement une main que laisser
-    // passer une enchère forcing, ce qui serait une erreur bien plus grave.
-    for (let level = partnerParsed.level; level <= 7; level++) {
-        const call = level + myBid.strain;
-        if (isCallLegal(history, call, seat)) return call;
+    // "Moins mauvaise enchère" (voir échange avec Guillaume) : tant que personne d'autre
+    // n'est intervenu, une réponse en changement de couleur est forcing — on ne doit
+    // JAMAIS passer ici, même sans option pleinement satisfaisante. Répéter sa couleur
+    // (même sans remplir le garde-fou "honnête" habituel — 6+ cartes, ou 5 avec une
+    // chicane, voir échange avec Guillaume, donne 7 de la session précédente) reste la
+    // moins mauvaise option s'il ne reste vraiment rien d'autre : mieux vaut sur-décrire
+    // légèrement une main que laisser passer une enchère forcing, ce qui serait une
+    // erreur bien plus grave.
+    // Ce filet-ci (contrairement à la vérification de fit et au reste de la fonction,
+    // toujours actifs) ne s'applique QUE si aucun adversaire n'est intervenu depuis
+    // (voir échange avec Guillaume, donne 5) : une fois la concurrence entrée en jeu, ce
+    // n'est plus vraiment forcing — passer redevient une sortie légitime si rien de mieux
+    // n'a été trouvé plus haut dans cette fonction.
+    if (!opponentIntervened) {
+        for (let level = partnerParsed.level; level <= 7; level++) {
+            const call = level + myBid.strain;
+            if (isCallLegal(history, call, seat)) return call;
+        }
     }
     return 'PASS'; // filet de sécurité ultime, ne devrait normalement jamais être atteint
 }
@@ -3791,14 +3837,20 @@ function decideRobotOpenerRebid(hand, hcp, hl, myOpeningCall, partnerCall, seat,
     // limitée par nature (contrairement à un soutien ou une réponse à SA, qui bornent la
     // main) : l'ouvreur DOIT reparler quels que soient ses points, jusqu'à ce que l'un des
     // deux camps sache que la manche n'est pas jouable — contrairement au filet général
-    // plus bas, qui ne se déclenche qu'à 18HL+. Uniquement si personne d'autre n'est
-    // reparlé depuis (voir échange avec Guillaume, donne 6) : une fois un adversaire
-    // intervenu, ce n'est plus vraiment forcing — l'ouvreur peut légitimement passer s'il
-    // n'a rien de plus à ajouter, la concurrence lui offre une sortie légitime.
-    const isNewSuitResponse = !opponentIntervened && partnerParsed
-        && partnerParsed.strain !== myBid.strain && partnerParsed.strain !== 'NT';
+    // plus bas, qui ne se déclenche qu'à 18HL+.
+    // Voir échange avec Guillaume, donne 5 (session du 22 juillet) : bug trouvé — la
+    // vérification de FIT (4+ cartes pour la couleur du partenaire, y compris quand cette
+    // couleur vient d'une réponse au contre plutôt qu'une réponse directe) vit à
+    // l'intérieur de decideOpenerRebidAfterNewSuit, mais routait seulement si "personne
+    // d'autre n'est reparlé depuis" — un contre adverse suivi d'une relance bloquait donc
+    // TOTALEMENT cette vérification, alors qu'un vrai fit se soutient "comme dans le
+    // silence adverse" (ses mots), que ce soit forcing ou non par ailleurs. Route
+    // maintenant TOUJOURS vers cette fonction (le fit se vérifie toujours), et lui passe
+    // opponentIntervened pour que SEUL son filet final ("ne jamais passer") en tienne
+    // compte, pas la vérification de fit elle-même.
+    const isNewSuitResponse = partnerParsed && partnerParsed.strain !== myBid.strain && partnerParsed.strain !== 'NT';
     if (isNewSuitResponse) {
-        return decideOpenerRebidAfterNewSuit(hand, hcp, hl, myBid, partnerParsed, seat, history);
+        return decideOpenerRebidAfterNewSuit(hand, hcp, hl, myBid, partnerParsed, seat, history, opponentIntervened);
     }
 
     // Réponse conventionnelle au soutien direct (voir decideRobotMajorSupport) : "2SA"
@@ -4134,9 +4186,29 @@ function decideRobotCall(seat, deal, history) {
             // du répondant comme le sous-entend knowsGameZone.
             const mustAnswerQuantitative = myPartnerBid.call === '4NT';
 
+            // Voir échange avec Guillaume, donne 1 (session du 22 juillet) : en zone basse
+            // du répondant (6-10H, sous le seuil de knowsGameZone), avec une main plate et
+            // sans 6+ cartes dans sa propre couleur pour l'imposer (le partenaire n'a rien
+            // promis dans cette couleur en redemandant autre chose que SA), "1SA" reste la
+            // meilleure description — mieux qu'un passe qui n'exprime rien sur la main.
+            const responseLengths = myResponseBid ? suitLengths(hand) : null;
+            const lowZoneFlatNoInsist = partnerOpeningBid && myResponseBid && !knowsGameZone
+                && myResponseBid.strain !== partnerOpeningBid.strain && myResponseBid.strain !== 'NT'
+                && hcp >= 6 && hcp <= 10
+                && responseLengths[myResponseBid.strain] < 6
+                && isHandBalancedForNT(responseLengths);
+
             if ((knowsGameZone || mustAnswerQuantitative) && partnerBidsCount === 2) {
                 call = decideResponderContinuationAfterNewSuit(hand, hcp, hl, partnerOpeningBid, myResponseBid, myPartnerBid.call, seat, history);
                 explanation = `Suite en zone de manche après ${formatCallForDisplay(myPartnerBid.call)} du partenaire (${points})`;
+            } else if (lowZoneFlatNoInsist && partnerBidsCount === 2) {
+                const ntCall = parseBid(myPartnerBid.call).level + 'NT';
+                if (isCallLegal(history, ntCall, seat)) {
+                    call = ntCall;
+                    explanation = `Zone basse (6-10H), main plate, pas de 6ème pour imposer sa couleur — repli SA (${points})`;
+                } else {
+                    explanation = `A déjà annoncé — passe (règle du tour unique)`;
+                }
             } else {
                 explanation = `A déjà annoncé — passe (règle du tour unique)`;
             }

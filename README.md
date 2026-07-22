@@ -360,6 +360,46 @@ Convention complète, implémentée à la suite des groupes A/B/C ci-dessous (m�
   l'ouvreur comme déclarant, protégée de l'entame adverse. L'ouvreur complète sans
   condition ; pas de suite nécessaire pour le répondant, la manche est déjà atteinte.
 
+## Corrections issues de la session du 22 juillet (voir échange avec Guillaume)
+
+Six points corrigés, tous vérifiés sur les donnes exactes fournies, sans régression sur
+l'historique complet (20 000 enchères de robustesse) :
+
+- **Priorité à une belle couleur personnelle, généralisée (donnes 4 et 6)** : le correctif
+  de la session précédente (montrer sa propre couleur de 6+ plutôt qu'un soutien marginal)
+  ne s'appliquait qu'après une ouverture du partenaire à la MINEURE. Généralisé à toute
+  situation (majeure ou mineure, ouverte ou montrée par intervention) — donne 6 : Nord
+  soutenait 3 cartes à un cœur adverse-intervenu de 7 cartes plutôt que montrer ses 5
+  trèfles. Seuil ajusté à 5+ cartes (pas 6+) avec un écart d'au moins 2 cartes par rapport
+  au fit, pour ne préférer sa couleur que si elle est NETTEMENT meilleure.
+- **Repli SA après intervention adverse, deux bugs distincts (donnes 2 et 8)** :
+  - Le soutien à une mineure calculait un palier de soutien précis mais ne vérifiait
+    jamais s'il était légal — une intervention adverse pouvait le rendre illégal, et le
+    soutien pourtant justifié ne se faisait alors pas du tout (donne 8 : Est avec un fit de
+    5 cartes garanti disait "2SA" au lieu de "3♦"). Cherche maintenant le palier légal le
+    plus proche à partir du palier calculé.
+  - Le repli SA lui-même ne vérifiait ni un vrai arrêt (2+ honneurs) dans la couleur
+    adverse, ni la bonne fourchette de points pour le palier annoncé (donne 2 : "2SA"
+    annoncé avec 8H et un seul valet dans la couleur adverse, alors que 2SA promet
+    précisément 10-11H et un bon arrêt). Ajouté les deux vérifications.
+- **Réponse "en montant" à bon marché (donne 3)** : répondre par une couleur plus chère que
+  celle du partenaire (seul ♠ après ♥ est possible) utilisait le seuil du changement de
+  couleur général (11HL) au lieu du seuil bas d'une réponse simple, bloquant Nord (10HL)
+  de montrer sa majeure 5ème. Nouveau seuil bas (hl≥6, comme pour une mineure), placé après
+  la vérification de fit pour ne jamais la court-circuiter.
+- **Fit de l'ouvreur bloqué après un contre adverse (donne 5)** : bug trouvé — le drapeau
+  `opponentIntervened` (censé seulement libérer l'ouvreur de l'obligation de TOUJOURS
+  reparler) bloquait en réalité l'accès à TOUTE la fonction de rebid, y compris la
+  vérification de fit elle-même. Un contre adverse suivi d'une relance empêchait donc
+  totalement l'ouvreur de soutenir la réponse de son partenaire au contre, même avec un
+  vrai fit de 4 cartes. Séparé : la vérification de fit s'applique désormais toujours, seul
+  le filet final ("ne jamais passer") tient compte de l'intervention adverse.
+- **Repli SA du répondant en zone basse (donne 1)** : avec 6-10H, une main plate et sans
+  6+ cartes pour imposer sa propre couleur (le partenaire n'a rien promis en redemandant
+  autre chose que SA), le répondant passait silencieusement faute d'atteindre le seuil de
+  "zone de manche connue" (12H+). Nouvelle branche dédiée à cette zone basse, concluant à
+  un repli SA plutôt qu'un passe qui n'exprime rien sur la main.
+
 ## Corrections issues de la session du 21 juillet, troisième relecture (voir échange avec Guillaume)
 
 - **Priorité à une belle couleur personnelle sur un soutien mineur marginal (donne 4)** :
