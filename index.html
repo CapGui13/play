@@ -343,39 +343,59 @@
 
         <div id="reconnectionBanner" class="reconnection-banner" style="display:none;"></div>
 
-        <div class="game-body">
-            <div class="hands-panel">
-                <div class="hand-display-options">
-                    <button id="frenchRanksToggleBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" onclick="uiToggleFrenchRanks()"><span class="btn-label-full">Notation FR (R D V X)</span><span class="btn-label-short">FR</span></button>
-                    <button id="hcpToggleBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" onclick="uiToggleShowHcp()"><span class="btn-label-full">Afficher HCP</span><span class="btn-label-short">HCP</span></button>
-                    <button id="krToggleBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" onclick="uiToggleShowKr()"><span class="btn-label-full">Afficher Kaplan-Rubens</span><span class="btn-label-short">K&amp;R</span></button>
-                    <button id="hostSeeAllHandsBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" style="display:none;" onclick="uiToggleHostSeeAllHands()" title="Réservé à vous : ne change rien pour les autres joueurs"><span class="btn-label-full">👁 Voir les 4 mains</span><span class="btn-label-short">👁 4 mains</span></button>
-                </div>
-                <div id="myHandsContainer" class="my-hands-container"></div>
+        <!-- Voir échange avec Guillaume : la refonte "plein espace + colonne latérale" n'a
+             pas convaincu, revenue à la disposition d'origine. game-content-row englobe
+             game-body ET le panneau de chat quand il est ancré (voir dockChatIntoScreen
+             dans app.js) — le chat rejoint alors une 3ème colonne à droite plutôt que de
+             s'empiler en dessous. -->
+
+        <!-- Voir échange avec Guillaume : bascule des options (Notation FR/HCP/K&R/Voir les
+             4 mains) d'une colonne à gauche vers une ligne horizontale au-dessus — libère le
+             panneau de gauche pour la disposition en croix des 4 mains, qui a besoin de
+             largeur plutôt que de hauteur. -->
+        <div class="hand-display-options">
+            <div class="hand-display-options-left">
+                <button id="frenchRanksToggleBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" onclick="uiToggleFrenchRanks()"><span class="btn-label-full">Notation FR (R D V X)</span><span class="btn-label-short">FR</span></button>
+                <button id="hcpToggleBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" onclick="uiToggleShowHcp()"><span class="btn-label-full">Afficher HCP</span><span class="btn-label-short">HCP</span></button>
+                <button id="krToggleBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" onclick="uiToggleShowKr()"><span class="btn-label-full">Afficher Kaplan-Rubens</span><span class="btn-label-short">K&amp;R</span></button>
+                <button id="hostSeeAllHandsBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" style="display:none;" onclick="uiToggleHostSeeAllHands()" title="Réservé à vous : ne change rien pour les autres joueurs"><span class="btn-label-full">👁 Voir les 4 mains</span><span class="btn-label-short">👁 4 mains</span></button>
             </div>
+            <!-- Voir échange avec Guillaume : déplacé depuis l'intérieur du panneau central
+                 (auction-panel) vers cette même ligne — la largeur fixe de
+                 hand-display-options-left (identique à celle du panneau des mains) fait que ce
+                 bouton commence exactement où commence le panneau central en dessous. -->
+            <button id="ledgerNamesToggleBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" onclick="uiToggleLedgerNames()">Noms des joueurs</button>
+        </div>
 
-            <div class="auction-panel">
-                <div class="auction-scroll-area">
-                    <div class="ledger-display-options">
-                        <button id="ledgerNamesToggleBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" onclick="uiToggleLedgerNames()">Noms des joueurs</button>
-                    </div>
-                    <table class="auction-ledger">
-                        <thead>
-                            <tr id="auctionLedgerHeader"></tr>
-                        </thead>
-                        <tbody id="auctionLedgerBody"></tbody>
-                    </table>
-
-                    <div id="undoAskBanner" class="undo-ask-banner" style="display:none;"></div>
-
-                    <div id="contractResult" class="contract-result" style="display:none;"></div>
-
+        <div class="game-content-row">
+            <div class="game-body">
+                <div class="hands-panel">
+                    <div id="myHandsContainer" class="my-hands-container"></div>
+                    <!-- Voir échange avec Guillaume : déplacé depuis le panneau central (auction-panel)
+                         vers ici — remplace myHandsContainer plutôt que de cohabiter avec la boîte
+                         d'enchères, qui garde ainsi toujours la même taille. -->
                     <div id="allHandsDiagram" class="all-hands-diagram" style="display:none;"></div>
                 </div>
 
-                <div id="biddingBox" class="bidding-box"></div>
+                <div class="auction-panel">
+                    <div class="auction-scroll-area">
+                        <table class="auction-ledger">
+                            <thead>
+                                <tr id="auctionLedgerHeader"></tr>
+                            </thead>
+                            <tbody id="auctionLedgerBody"></tbody>
 
-                <div id="turnIndicator" class="turn-indicator"></div>
+                        </table>
+
+                        <div id="undoAskBanner" class="undo-ask-banner" style="display:none;"></div>
+
+                        <div id="contractResult" class="contract-result" style="display:none;"></div>
+                    </div>
+
+                    <div id="biddingBox" class="bidding-box"></div>
+
+                    <div id="turnIndicator" class="turn-indicator"></div>
+                </div>
             </div>
         </div>
 
@@ -385,6 +405,7 @@
     </section>
 
 </div>
+
 
 <div id="dealPreviewModal" class="modal-overlay" style="display:none;" onclick="uiCloseDealPreviewOnBackdrop(event)">
     <div class="modal-panel">

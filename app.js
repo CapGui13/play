@@ -356,7 +356,11 @@ function uiToggleFrenchRanks() {
     renderHandDisplayOptionButtons();
     if (deals) {
         renderMyHands();
-        if (isAuctionOver(auctionHistory)) renderAllHandsDiagram();
+        // Voir échange avec Guillaume : le diagramme peut déjà être affiché avant la fin
+        // de l'enchère (bascule manuelle de l'hôte, ou kibitz — voir checkAuctionEnd) —
+        // sans ce même critère ici, ces boutons semblaient "sans effet" dans ce cas,
+        // puisqu'ils ne rafraîchissaient que myHandsContainer, invisible à ce moment-là.
+        if (isAuctionOver(auctionHistory) || (myRole === 'host' && hostSeeAllHands) || isKibbitz()) renderAllHandsDiagram();
     }
 }
 
@@ -366,7 +370,7 @@ function uiToggleShowHcp() {
     renderHandDisplayOptionButtons();
     if (deals) {
         renderMyHands();
-        if (isAuctionOver(auctionHistory)) renderAllHandsDiagram();
+        if (isAuctionOver(auctionHistory) || (myRole === 'host' && hostSeeAllHands) || isKibbitz()) renderAllHandsDiagram();
     }
 }
 
@@ -376,7 +380,7 @@ function uiToggleShowKr() {
     renderHandDisplayOptionButtons();
     if (deals) {
         renderMyHands();
-        if (isAuctionOver(auctionHistory)) renderAllHandsDiagram();
+        if (isAuctionOver(auctionHistory) || (myRole === 'host' && hostSeeAllHands) || isKibbitz()) renderAllHandsDiagram();
     }
 }
 
@@ -1033,6 +1037,12 @@ function showScreen(id) {
     // classique. Laisser vide restaure le display défini par la feuille de style (block
     // par défaut pour un <section>, flex pour #screen-game sous 768px).
     document.getElementById(id).style.display = '';
+
+    // Voir échange avec Guillaume : seul l'écran de jeu élargit .app-container (pour que
+    // le panneau central garde sa taille, chat ouvert ou fermé) — les autres écrans
+    // (accueil, salon) restent centrés et étroits comme avant.
+    const appContainer = document.querySelector('.app-container');
+    if (appContainer) appContainer.classList.toggle('wide-layout', id === 'screen-game');
 
     // Voir échange avec Guillaume (chat qui recouvrait la boîte d'enchères sur mobile,
     // mesuré : le panneau flottant, à 555-834px, chevauchait la boîte à 547-945px) : dans
@@ -4248,9 +4258,15 @@ let chatUnreadCount = 0;
 // ça : ouvrir le chat pousse le contenu, il ne le recouvre plus jamais. Idempotent (rien
 // ne se passe si déjà à sa place) : peut être appelé à chaque changement d'écran sans
 // souci, y compris en boucle sur le même écran.
+// Sur l'écran de jeu spécifiquement (voir échange avec Guillaume) : ancré DANS
+// .game-content-row, comme 3ème colonne à côté de .game-body (voir styles.css), plutôt
+// qu'à la toute fin de l'écran — sinon il s'empilerait sous nextBoardPanel, pas à droite
+// du contenu de jeu. Le salon, lui, n'a pas cette structure en colonnes : comportement
+// inchangé, ancré à la fin de l'écran.
 function dockChatIntoScreen(screenId) {
     const panel = document.getElementById('chatPanel');
-    const targetScreen = document.getElementById(screenId);
+    const gameContentRow = screenId === 'screen-game' ? document.querySelector('.game-content-row') : null;
+    const targetScreen = gameContentRow || document.getElementById(screenId);
     if (!panel || !targetScreen) return;
     if (panel.parentElement !== targetScreen) targetScreen.appendChild(panel);
     panel.classList.add('chat-panel-docked');
@@ -4272,7 +4288,23 @@ function undockChatFromScreen() {
 function uiToggleChat() {
     chatPanelOpen = !chatPanelOpen;
     const panel = document.getElementById('chatPanel');
-    if (panel) panel.style.display = chatPanelOpen ? 'flex' : 'none';
+    // Voir échange avec Guillaume : fondu rapide plutôt qu'un affichage/masquage instantané
+    // — display ne peut pas être transitionné directement en CSS, donc on joue sur
+    // l'opacité (voir .chat-panel/.chat-panel-visible dans styles.css) et on ne retire
+    // display:none qu'après la fin du fondu de sortie (sinon le panneau resterait cliquable
+    // et visible-mais-transparent pendant la transition).
+    if (panel) {
+        if (chatPanelOpen) {
+            panel.style.display = 'flex';
+            void panel.offsetWidth; // force le navigateur à appliquer display:flex avant d'ajouter la classe, sinon pas de transition depuis opacity:0
+            panel.classList.add('chat-panel-visible');
+        } else {
+            panel.classList.remove('chat-panel-visible');
+            setTimeout(() => {
+                if (!chatPanelOpen) panel.style.display = 'none';
+            }, 180);
+        }
+    }
     if (chatPanelOpen) {
         chatUnreadCount = 0;
         updateChatUnreadBadge();
@@ -4471,7 +4503,15 @@ function uiSendWizz(targetId) {
 function triggerWizzEffect() {
     const prefersReducedMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     if (!prefersReducedMotion && document.body.animate) {
-        document.body.animate([
+        // Voir échange avec Guillaume : masque temporairement le débordement pendant le
+        // tremblement — animer document.body en transform peut faire apparaître des
+        // barres de défilement (à droite/en bas) le temps de l'animation, selon le
+        // navigateur, puisque body est déplacé au-delà de sa position normale. Restauré
+        // dès l'animation terminée (overflow d'origine, pas juste '' — au cas où une autre
+        // partie du code l'aurait déjà réglé à quelque chose de spécifique).
+        const previousOverflow = document.documentElement.style.overflow;
+        document.documentElement.style.overflow = 'hidden';
+        const animation = document.body.animate([
             { transform: 'translate(0, 0)' },
             { transform: 'translate(-6px, 2px)' },
             { transform: 'translate(5px, -3px)' },
@@ -4484,6 +4524,11 @@ function triggerWizzEffect() {
             { transform: 'translate(-2px, 1px)' },
             { transform: 'translate(0, 0)' }
         ], { duration: 1200, easing: 'ease-in-out' });
+        animation.finished.then(() => {
+            document.documentElement.style.overflow = previousOverflow;
+        }).catch(() => {
+            document.documentElement.style.overflow = previousOverflow;
+        });
     }
     playWizzSound();
     flashWizzToast();
@@ -4650,8 +4695,13 @@ function renderMyHands() {
             </div>
         `).join('');
 
-        const hcpBadge = showHcp ? `<span class="hand-hcp-badge">${computeHandHcp(hand)} HCP</span>` : '';
-        const krBadge = showKr ? `<span class="hand-hcp-badge">K&R ${computeKaplanRubens(hand).toFixed(2)}</span>` : '';
+        // Voir échange avec Guillaume : les deux badges sont TOUJOURS générés (visibility
+        // plutôt que display/absence), pour que la structure du titre reste rigoureusement
+        // identique qu'ils soient affichés ou non — sans ça, la carte changeait très
+        // légèrement de hauteur en bascule (alignement "baseline" du titre, voir
+        // .hand-card-title), ce qui décalait la main centrée verticalement dans son module.
+        const hcpBadge = `<span class="hand-hcp-badge"${showHcp ? '' : ' style="visibility:hidden;"'}>${computeHandHcp(hand)} HCP</span>`;
+        const krBadge = `<span class="hand-hcp-badge"${showKr ? '' : ' style="visibility:hidden;"'}>K&R ${computeKaplanRubens(hand).toFixed(2)}</span>`;
         const stateClass = showActiveState ? (seat === turnSeat ? 'hand-card-active' : 'hand-card-inactive') : '';
         const vulnClass = handCardVulnClass(seat, deal.vulnerable);
 
@@ -4862,8 +4912,8 @@ function buildAllHandsHtml(deal) {
             </div>
         `).join('');
 
-        const hcpBadge = showHcp ? `<span class="hand-hcp-badge">${computeHandHcp(hand)} HCP</span>` : '';
-        const krBadge = showKr ? `<span class="hand-hcp-badge">K&R ${computeKaplanRubens(hand).toFixed(2)}</span>` : '';
+        const hcpBadge = `<span class="hand-hcp-badge"${showHcp ? '' : ' style="visibility:hidden;"'}>${computeHandHcp(hand)} HCP</span>`;
+        const krBadge = `<span class="hand-hcp-badge"${showKr ? '' : ' style="visibility:hidden;"'}>K&R ${computeKaplanRubens(hand).toFixed(2)}</span>`;
         const vulnClass = handCardVulnClass(seat, deal.vulnerable);
         const stateClass = showActiveState ? (seat === turnSeat ? 'hand-card-active' : 'hand-card-inactive') : '';
 
@@ -5193,11 +5243,16 @@ function checkAuctionEnd() {
     if (!auctionOver) {
         resultEl.style.display = 'none';
         nextPanel.style.display = 'none';
+        const myHandsEl = document.getElementById('myHandsContainer');
         if (showAllHandsEarly) {
             renderAllHandsDiagram();
             diagramEl.style.display = 'grid';
+            // Voir échange avec Guillaume : les 4 mains REMPLACENT la main du joueur dans
+            // ce même panneau de gauche, pas de cohabitation des deux à la fois.
+            if (myHandsEl) myHandsEl.style.display = 'none';
         } else {
             diagramEl.style.display = 'none';
+            if (myHandsEl) myHandsEl.style.display = '';
         }
         return;
     }
@@ -5246,6 +5301,10 @@ function checkAuctionEnd() {
 
     renderAllHandsDiagram();
     diagramEl.style.display = 'grid';
+    {
+        const myHandsEl = document.getElementById('myHandsContainer');
+        if (myHandsEl) myHandsEl.style.display = 'none';
+    }
 
     const isLastBoard = boardIndex >= deals.length - 1;
     const iCanNavigate = canControlBoard();

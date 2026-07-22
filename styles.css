@@ -80,6 +80,24 @@ body {
     margin: 0 auto;
 }
 
+/* Voir échange avec Guillaume : élargi spécifiquement pour l'écran de jeu, pour que le
+   panneau central (enchère/boîte d'enchères) garde la même taille que le chat soit ouvert
+   ou fermé — sans ça, le chat ancré à droite grignotait sa largeur (260px main + 24px +
+   ~700px enchère + 24px + 340px chat ≈ 1350px, au-delà des 980px d'origine). */
+.app-container.wide-layout {
+    /* Voir échange avec Guillaume : précisément 620px (mains) + 24px + 700px (centre) +
+       24px + 340px (chat) = 1708px de contenu, + 32px de marge de chaque côté = 1772px.
+       Sans jeu résiduel : .game-header (qui n'a pas de largeur propre, voir plus bas)
+       s'étire jusqu'au bord disponible du conteneur — s'il était plus large que
+       nécessaire, son bord droit ne tomberait pas exactement sur celui du chat. */
+    max-width: 1772px;
+    padding: 0 32px;
+}
+
+@media (max-width: 1500px) {
+    .app-container.wide-layout { padding: 0 16px; }
+}
+
 /* Voir échange avec Guillaume : recouvre tout l'écran (position:fixed, pas relatif à
    .app-container) dès qu'on clique "Créer" ou "Rejoindre", le temps que la connexion
    s'établisse — empêche de cliquer ailleurs pendant ce court laps de temps
@@ -261,6 +279,15 @@ body.on-landing-screen .connection-bar {
     flex-direction: column;
     overflow: hidden;
     box-shadow: 0 -6px 20px rgba(0, 0, 0, 0.35);
+    /* Voir échange avec Guillaume : fondu rapide à l'ouverture/fermeture (voir
+       uiToggleChat) plutôt qu'un affichage/masquage instantané — opacity:0 par défaut,
+       .chat-panel-visible bascule à 1. */
+    opacity: 0;
+    transition: opacity 0.18s ease;
+}
+
+.chat-panel.chat-panel-visible {
+    opacity: 1;
 }
 
 @media (min-width: 600px) {
@@ -1448,13 +1475,28 @@ button.kibitz-chip {
 /* ===== Écran de jeu ===== */
 .game-header {
     display: flex;
-    justify-content: space-between;
+    justify-content: flex-start;
     align-items: center;
     margin-bottom: 18px;
     padding-bottom: 14px;
     border-bottom: 1px solid var(--line);
     flex-wrap: wrap;
-    gap: 12px;
+    gap: 24px;
+    /* Voir échange avec Guillaume : la ligne de séparation (border-bottom) doit aller du
+       bord gauche du panneau des mains au bord droit du chat — plus de max-width ici (un
+       essai précédent la réduisait à tort). flex-start (pas space-between) : sinon
+       .game-actions serait poussé tout à droite du conteneur élargi plutôt que de suivre
+       juste après .board-info. L'alignement précis du bouton "Faire un undo" avec le bord
+       gauche du panneau central vient de .board-info ci-dessous (largeur fixe égale à
+       celle du panneau des mains). */
+}
+
+.board-info {
+    /* Voir échange avec Guillaume : largeur fixe = celle du panneau des mains (620px) +
+       le même espacement (24px, voir .game-header gap) — ainsi .game-actions qui suit
+       commence exactement où commence le panneau central en dessous. */
+    width: 620px;
+    flex-shrink: 0;
 }
 
 .game-actions {
@@ -1574,9 +1616,54 @@ button.kibitz-chip {
     letter-spacing: 0.03em;
 }
 
+/* Voir échange avec Guillaume : la refonte "plein espace + colonne latérale" n'a pas
+   convaincu, revert à la disposition d'origine (voir game-body plus bas). Seul changement
+   conservé : quand le chat est ancré (voir dockChatIntoScreen dans app.js), il rejoint une
+   3ème colonne à droite de game-body plutôt que de s'empiler en dessous — game-content-row
+   englobe les deux pour ça. */
+.game-content-row {
+    display: flex;
+    /* Voir échange avec Guillaume : "stretch" (était flex-start) — les 3 modules (mains,
+       enchère, chat) doivent avoir la même hauteur, bordures hautes ET basses alignées. */
+    align-items: stretch;
+    gap: 24px;
+}
+
+.game-content-row .game-body {
+    /* Voir échange avec Guillaume : ne s'étire plus (était flex:1) — avec des colonnes de
+       grille toutes deux fixes (620px 700px), laisser flex:1 grandir au-delà de leur somme
+       ajoutait un espace mort invisible APRÈS le panneau central, avant même l'espacement
+       vers le chat. flex:none + width:auto = exactement la somme des colonnes, ni plus. */
+    flex: none;
+    width: auto;
+}
+
+.game-content-row .chat-panel.chat-panel-docked {
+    width: 340px;
+    flex-shrink: 0;
+    max-height: none;
+    /* Voir échange avec Guillaume : annule le margin-top de .chat-panel-docked (pensé pour
+       l'ancien empilement en bas d'écran) — ici le chat est un module côte à côte, ce
+       retrait décalait son bord haut par rapport aux deux autres modules. */
+    margin-top: 0;
+    /* Voir échange avec Guillaume : bordure uniforme (1px, comme les deux autres modules)
+       plutôt que l'accent doré du chat flottant/lobby, qui n'a plus lieu d'être ici. */
+    border: 1px solid var(--line);
+}
+
+@media (max-width: 1100px) {
+    .game-content-row { flex-direction: column; }
+    .game-content-row .chat-panel.chat-panel-docked { width: 100%; }
+}
+
 .game-body {
     display: grid;
-    grid-template-columns: 260px 1fr;
+    /* Voir échange avec Guillaume : les DEUX colonnes en largeur fixe (était 620px 1fr) —
+       le "1fr" calculait une piste plus large que les 700px réels du panneau central
+       (voir .auction-panel), laissant un espace mort invisible avant le chat. Fixer les
+       deux élimine ça : l'écart visuel vers le chat correspond enfin exactement au même
+       espacement (24px) que celui entre les mains et le panneau central. */
+    grid-template-columns: 620px 700px;
     gap: 24px;
 }
 
@@ -1584,9 +1671,59 @@ button.kibitz-chip {
     .game-body { grid-template-columns: 1fr; }
 }
 
-.hands-panel { display: flex; flex-direction: column; gap: 14px; }
+.hands-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    /* Voir échange avec Guillaume : même habillage que .auction-panel et le chat, pour que
+       les 3 se lisent comme des modules jumeaux (bordures hautes/basses alignées, voir
+       .game-content-row). */
+    background: var(--bg-table);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 18px;
+    /* Voir échange avec Guillaume : hauteur minimale = celle du mode "4 mains" (mesurée),
+       réservée en permanence — sans ça, passer d'une main à quatre (ou l'inverse)
+       changeait la hauteur de tous les modules (voir .game-content-row, qui les étire
+       tous à la même hauteur que le plus grand). Avec ce plancher toujours actif, la
+       bascule ne change plus jamais rien à la taille. */
+    min-height: 586px;
+}
 
-#myHandsContainer { display: flex; flex-direction: column; gap: 14px; }
+/* Voir échange avec Guillaume : le panneau (.hands-panel) est large pour la disposition en
+   croix des 4 mains (voir .all-hands-diagram plus bas), mais l'affichage d'UNE seule main
+   n'a pas besoin de cette largeur — la garde raisonnablement étroite plutôt que de
+   l'étirer sur toute la colonne. */
+#myHandsContainer {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    /* Voir échange avec Guillaume : occupe toute la hauteur du panneau (qui, lui, est
+       étiré à la même hauteur que le panneau central et le chat — voir
+       .game-content-row) pour pouvoir centrer verticalement une main seule dedans. */
+    flex: 1;
+}
+
+#myHandsContainer .hand-card {
+    width: 100%;
+    /* Voir échange avec Guillaume : agrandi (était 280px) — une main seule, bien centrée,
+       peut se permettre d'être plus grande et lisible dans cet espace dédié. */
+    max-width: 380px;
+    padding: 22px 26px;
+}
+
+#myHandsContainer .hand-cards {
+    /* .hand-cards a sa propre taille de police explicite ailleurs (voir plus bas dans ce
+       fichier) qui écraserait un simple agrandissement posé sur .hand-card — ciblée
+       directement ici pour que l'agrandissement demandé par Guillaume ait un effet réel. */
+    font-size: 1.15rem;
+}
+
+#myHandsContainer .suit-symbol .suit-icon {
+    font-size: 1.3rem;
+}
 
 .hand-card {
     background: var(--card);
@@ -1649,6 +1786,11 @@ button.kibitz-chip {
     gap: 6px;
     flex-wrap: wrap;
     justify-content: flex-end;
+    /* Voir échange avec Guillaume : réserve la hauteur d'un badge même quand aucun n'est
+       affiché (HCP/K&R masqués) — sans ça, la carte change de hauteur en bascule/masquant
+       les badges, ce qui décalait la main affichée (centrée verticalement dans son
+       module, voir #myHandsContainer) à chaque bascule. */
+    min-height: 20px;
 }
 
 /* Compte de points d'honneur (HCP), affichable/masquable par joueur — voir
@@ -1675,14 +1817,20 @@ button.kibitz-chip {
 .hand-display-options {
     display: flex;
     flex-wrap: wrap;
-    gap: 8px;
-    margin-bottom: 12px;
+    align-items: center;
+    gap: 24px;
+    margin-bottom: 20px;
 }
 
-.ledger-display-options {
+.hand-display-options-left {
     display: flex;
-    justify-content: flex-end;
-    margin-bottom: 8px;
+    flex-wrap: wrap;
+    gap: 8px;
+    /* Voir échange avec Guillaume : largeur fixe = celle du panneau des mains (620px), pour
+       que le bouton "Noms des joueurs" qui suit commence exactement où commence le panneau
+       central en dessous (même principe que .board-info dans le header). */
+    width: 620px;
+    flex-shrink: 0;
 }
 
 .hand-option-btn {
@@ -1737,6 +1885,10 @@ button.kibitz-chip {
     border-radius: 12px;
     padding: 18px;
 }
+
+/* Voir échange avec Guillaume : la largeur stable vient maintenant directement de la
+   grille (game-body : 620px 700px, toutes deux fixes) — plus besoin de forcer une largeur
+   ici en plus, ça ne ferait que dupliquer ce que la grille garantit déjà. */
 
 .auction-ledger {
     width: 100%;
@@ -1962,19 +2114,21 @@ table.dd-table td.dd-secondary-contract {
     font-weight: 600;
 }
 
+/* Voir échange avec Guillaume : disposition en croix restaurée (N en haut, O/E de part et
+   d'autre, S en bas) — le panneau de gauche est maintenant assez large (620px, voir
+   game-body) pour ça, depuis que les boutons d'options n'y vivent plus. */
 .all-hands-diagram {
     display: grid;
     grid-template-columns: 1fr 1fr 1fr;
     grid-template-rows: auto auto auto;
     gap: 10px;
-    margin-bottom: 18px;
     justify-items: center;
     align-items: start;
 }
 
 .all-hands-diagram .hand-card {
     width: 100%;
-    max-width: 170px;
+    max-width: 190px;
 }
 
 .all-hands-diagram .hand-N { grid-column: 2; grid-row: 1; }
