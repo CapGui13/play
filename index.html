@@ -358,13 +358,13 @@
                 <button id="frenchRanksToggleBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" onclick="uiToggleFrenchRanks()"><span class="btn-label-full">Notation FR (R D V X)</span><span class="btn-label-short">FR</span></button>
                 <button id="hcpToggleBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" onclick="uiToggleShowHcp()"><span class="btn-label-full">Afficher HCP</span><span class="btn-label-short">HCP</span></button>
                 <button id="krToggleBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" onclick="uiToggleShowKr()"><span class="btn-label-full">Afficher Kaplan-Rubens</span><span class="btn-label-short">K&amp;R</span></button>
+                <!-- Voir échange avec Guillaume (session du 23 juillet) : rejoint ce groupe
+                     plutôt que de rester seul à droite de la ligne — sur mobile, où
+                     hand-display-options-left passe à 100% de largeur (voir styles.css), le
+                     laisser à part le faisait déborder hors de l'écran. -->
+                <button id="ledgerNamesToggleBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" onclick="uiToggleLedgerNames()"><span class="btn-label-full">Noms des joueurs</span><span class="btn-label-short">Noms</span></button>
                 <button id="hostSeeAllHandsBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" style="display:none;" onclick="uiToggleHostSeeAllHands()" title="Réservé à vous : ne change rien pour les autres joueurs"><span class="btn-label-full">👁 Voir les 4 mains</span><span class="btn-label-short">👁 4 mains</span></button>
             </div>
-            <!-- Voir échange avec Guillaume : déplacé depuis l'intérieur du panneau central
-                 (auction-panel) vers cette même ligne — la largeur fixe de
-                 hand-display-options-left (identique à celle du panneau des mains) fait que ce
-                 bouton commence exactement où commence le panneau central en dessous. -->
-            <button id="ledgerNamesToggleBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" onclick="uiToggleLedgerNames()">Noms des joueurs</button>
         </div>
 
         <div class="game-content-row">

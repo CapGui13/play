@@ -1832,8 +1832,8 @@ button.kibitz-chip {
     flex-wrap: wrap;
     gap: 8px;
     /* Voir échange avec Guillaume : largeur fixe = celle du panneau des mains (620px), pour
-       que le bouton "Noms des joueurs" qui suit commence exactement où commence le panneau
-       central en dessous (même principe que .board-info dans le header). */
+       que ce groupe de boutons commence et s'aligne exactement avec le panneau central en
+       dessous (même principe que .board-info dans le header). */
     width: 620px;
     flex-shrink: 0;
 }
@@ -2642,6 +2642,35 @@ table.dd-table td.dd-secondary-contract {
     .call-btn, .call-btn-special {
         min-height: 44px;
         font-size: 16px;
+    }
+
+    /* Voir échange avec Guillaume (session du 23 juillet) : quand on joue 2 sièges,
+       affiche les 2 mains côte à côte plutôt qu'empilées — l'espace horizontal d'un
+       téléphone suffit largement pour 2 cartes réduites. #myHandsContainer.hand-card
+       garde son style "main seule" (agrandi, max-width 380px) tant qu'une seule main est
+       affichée ; my-hands-multi le remplace uniquement dans ce cas précis. Pas de contrainte
+       explicite sur .hand-card-badges : son flex-wrap existant suffit à faire passer K&R
+       sous HCP quand la carte devient trop étroite pour les deux côte à côte, exactement
+       comme dans la disposition en croix des 4 mains en desktop. */
+    #myHandsContainer.my-hands-multi {
+        flex-direction: row;
+        flex-wrap: wrap;
+        justify-content: center;
+        align-items: stretch;
+    }
+
+    #myHandsContainer.my-hands-multi .hand-card {
+        width: calc(50% - 7px);
+        max-width: none;
+        padding: 12px 10px;
+    }
+
+    #myHandsContainer.my-hands-multi .hand-cards {
+        font-size: 0.85rem;
+    }
+
+    #myHandsContainer.my-hands-multi .suit-symbol .suit-icon {
+        font-size: 1rem;
     }
 }
 

@@ -4815,10 +4815,18 @@ function renderMyHands() {
         // le même emplacement central, en grille N/E/S/O, que celui utilisé quand l'hôte
         // active "Voir les 4 mains". Les construire ici, dans le panneau latéral étroit
         // des mains, les aurait affichées à l'étroit et mal calibrées plutôt qu'au centre.
+        container.classList.remove('my-hands-multi');
         container.innerHTML =
             '<div class="info-text kibbitz-note">👁 Vous suivez la partie en kibbitz : vous voyez les 4 mains ci-dessous.</div>';
         return;
     }
+
+    // Voir échange avec Guillaume (session du 23 juillet) : classe posée quand plusieurs
+    // sièges sont joués, pour permettre un affichage côte à côte sur mobile plutôt qu'empilé
+    // (voir la règle #myHandsContainer.my-hands-multi dans styles.css) — avant, jouer 2
+    // mains les empilait verticalement même sur mobile, où l'espace horizontal disponible
+    // suffit largement pour les mettre côte à côte.
+    container.classList.toggle('my-hands-multi', mySeats.length > 1);
 
     // Distinction main active / inactive : seulement utile quand on contrôle plusieurs
     // sièges, et seulement pendant l'enchère (une fois terminée, plus de "tour" à signaler).
