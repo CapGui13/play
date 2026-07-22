@@ -73,6 +73,12 @@ body {
     color: var(--text);
     min-height: 100vh;
     padding: calc(56px + var(--safe-top)) 20px 20px;
+    /* Garde-fou (voir échange avec Guillaume, session du 23 juillet) : un débordement
+       horizontal d'un composant (ex. le bug .game-actions découvert en test réel sur
+       iPhone) faisait défiler toute la page sur le côté plutôt que rester contenu. Aucun
+       écran de l'appli n'a besoin de scroll horizontal volontaire, donc ce garde-fou ne
+       coûte rien mais évite que ce genre de bug redevienne aussi visible/cassant. */
+    overflow-x: hidden;
 }
 
 .app-container {
@@ -2591,9 +2597,16 @@ table.dd-table td.dd-secondary-contract {
         width: 100%;
     }
 
+    /* Voir échange avec Guillaume (session du 23 juillet) : flex-wrap: nowrap forçait
+       les 4 boutons (Undo, Recommencer, Rotation — invisible mais qui réserve sa place,
+       voir updateBoardControlVisibility — et Session) sur une seule ligne, quel que soit
+       l'espace disponible. Avec 4 boutons ça ne rentre plus sur un écran de téléphone :
+       ils débordaient hors du viewport et faisaient défiler TOUTE la page horizontalement
+       (constaté en test réel). wrap : les boutons en trop repartent sur une 2e ligne
+       plutôt que de déborder. */
     .game-actions {
         gap: 6px;
-        flex-wrap: nowrap;
+        flex-wrap: wrap;
     }
 
     .game-actions .btn {
