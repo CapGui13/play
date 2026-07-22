@@ -5087,6 +5087,19 @@ function syncHandsPanelMinHeight() {
     const diagram = document.getElementById('allHandsDiagram');
     if (!panel || !diagram) return;
 
+    // Voir échange avec Guillaume (session du 23 juillet) : cette réservation de hauteur
+    // n'a de sens qu'en desktop, où .game-body affiche les mains et le panneau d'enchères
+    // côte à côte (voir .game-body, breakpoint 760px) — aligner leurs hauteurs évite un
+    // décalage visuel entre les deux colonnes. Sur mobile, game-body passe en une seule
+    // colonne empilée : il n'y a plus rien à aligner, et cette hauteur réservée pour le
+    // mode "4 mains" ne faisait que pousser la boîte d'enchères hors écran avec un grand
+    // vide en dessous de la main affichée (constaté en test réel — avant, mains et
+    // enchères tenaient sur le même écran).
+    if (window.innerWidth <= 760) {
+        panel.style.minHeight = '';
+        return;
+    }
+
     const panelStyles = getComputedStyle(panel);
     const paddingTop = parseFloat(panelStyles.paddingTop) || 0;
     const paddingBottom = parseFloat(panelStyles.paddingBottom) || 0;
