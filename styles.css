@@ -2582,6 +2582,15 @@ table.dd-table td.dd-secondary-contract {
     .board-number-label { font-size: 1.05rem; }
     .dealer-vuln-label { font-size: 0.75rem; }
 
+    /* .board-info et .hand-display-options-left sont figés à 620px (largeur du panneau
+       des mains) pour s'aligner avec lui en desktop (voir leurs règles plus haut) — sans
+       ce correctif, ils forçaient cette même largeur sur mobile et faisaient déborder
+       toute la page horizontalement. */
+    .board-info,
+    .hand-display-options-left {
+        width: 100%;
+    }
+
     .game-actions {
         gap: 6px;
         flex-wrap: nowrap;
