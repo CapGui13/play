@@ -1682,12 +1682,11 @@ button.kibitz-chip {
     border: 1px solid var(--line);
     border-radius: 12px;
     padding: 18px;
-    /* Voir échange avec Guillaume : hauteur minimale = celle du mode "4 mains" (mesurée),
-       réservée en permanence — sans ça, passer d'une main à quatre (ou l'inverse)
-       changeait la hauteur de tous les modules (voir .game-content-row, qui les étire
-       tous à la même hauteur que le plus grand). Avec ce plancher toujours actif, la
-       bascule ne change plus jamais rien à la taille. */
-    min-height: 586px;
+    /* Voir échange avec Guillaume : la hauteur minimale (mode "4 mains") est désormais
+       calculée dynamiquement en JS (voir syncHandsPanelMinHeight dans app.js) plutôt que
+       fixée ici en dur — une valeur figée ne correspondait qu'à un cas de test précis et
+       pouvait être dépassée selon les options actives (HCP+K&R affichés ensemble, par
+       exemple) ou le contenu réel des mains. */
 }
 
 /* Voir échange avec Guillaume : le panneau (.hands-panel) est large pour la disposition en

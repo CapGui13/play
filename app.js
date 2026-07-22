@@ -360,7 +360,7 @@ function uiToggleFrenchRanks() {
         // de l'enchère (bascule manuelle de l'hôte, ou kibitz — voir checkAuctionEnd) —
         // sans ce même critère ici, ces boutons semblaient "sans effet" dans ce cas,
         // puisqu'ils ne rafraîchissaient que myHandsContainer, invisible à ce moment-là.
-        if (isAuctionOver(auctionHistory) || (myRole === 'host' && hostSeeAllHands) || isKibbitz()) renderAllHandsDiagram();
+        renderAllHandsDiagram(); // toujours, même masqué (voir échange avec Guillaume) : garde la hauteur réservée synchronisée quoi qu'il arrive
     }
 }
 
@@ -370,7 +370,7 @@ function uiToggleShowHcp() {
     renderHandDisplayOptionButtons();
     if (deals) {
         renderMyHands();
-        if (isAuctionOver(auctionHistory) || (myRole === 'host' && hostSeeAllHands) || isKibbitz()) renderAllHandsDiagram();
+        renderAllHandsDiagram(); // toujours, même masqué (voir échange avec Guillaume) : garde la hauteur réservée synchronisée quoi qu'il arrive
     }
 }
 
@@ -380,7 +380,7 @@ function uiToggleShowKr() {
     renderHandDisplayOptionButtons();
     if (deals) {
         renderMyHands();
-        if (isAuctionOver(auctionHistory) || (myRole === 'host' && hostSeeAllHands) || isKibbitz()) renderAllHandsDiagram();
+        renderAllHandsDiagram(); // toujours, même masqué (voir échange avec Guillaume) : garde la hauteur réservée synchronisée quoi qu'il arrive
     }
 }
 
@@ -4932,6 +4932,59 @@ function buildAllHandsHtml(deal) {
 function renderAllHandsDiagram() {
     const container = document.getElementById('allHandsDiagram');
     container.innerHTML = buildAllHandsHtml(currentDeal());
+    syncHandsPanelMinHeight();
+}
+
+// Voir échange avec Guillaume : mesure dynamiquement la hauteur réellement nécessaire au
+// mode "4 mains" (qui varie selon les options actives — HCP et K&R affichés ensemble
+// rendent chaque carte plus haute que dans un cas plus simple — et selon le contenu des
+// mains) et la réserve en permanence sur .hands-panel, plutôt qu'une valeur fixe en dur
+// qui ne correspondait qu'à un cas de test précis et pouvait être dépassée en vrai jeu.
+// Fonctionne même quand le diagramme n'est pas actuellement affiché : le rend
+// temporairement mesurable (hors flux, invisible) le temps de la mesure, sans jamais
+// l'exposer visuellement ni perturber la mise en page pendant ce court instant.
+function syncHandsPanelMinHeight() {
+    const panel = document.querySelector('.hands-panel');
+    const diagram = document.getElementById('allHandsDiagram');
+    if (!panel || !diagram) return;
+
+    const panelStyles = getComputedStyle(panel);
+    const paddingTop = parseFloat(panelStyles.paddingTop) || 0;
+    const paddingBottom = parseFloat(panelStyles.paddingBottom) || 0;
+    const paddingLeft = parseFloat(panelStyles.paddingLeft) || 0;
+    const paddingRight = parseFloat(panelStyles.paddingRight) || 0;
+
+    const wasHidden = getComputedStyle(diagram).display === 'none';
+    let previousPosition, previousVisibility, previousDisplay, previousWidth;
+    if (wasHidden) {
+        previousPosition = diagram.style.position;
+        previousVisibility = diagram.style.visibility;
+        previousDisplay = diagram.style.display;
+        previousWidth = diagram.style.width;
+        diagram.style.position = 'absolute';
+        diagram.style.visibility = 'hidden';
+        diagram.style.display = 'grid';
+        // Voir échange avec Guillaume : largeur explicitement contrainte à celle du
+        // panneau (moins son padding) — position:absolute seul ne préserve pas la largeur
+        // du flux normal (il se réduit à son contenu par défaut), ce qui pouvait changer
+        // légèrement le retour à la ligne du texte, donc la hauteur mesurée, par rapport
+        // à l'affichage réel en flux normal (petit résidu de 1-2px observé sans ça).
+        diagram.style.width = (panel.getBoundingClientRect().width - paddingLeft - paddingRight) + 'px';
+    }
+
+    const diagramHeight = diagram.getBoundingClientRect().height;
+    // Voir échange avec Guillaume : +4px de marge de sécurité — un écart résiduel de
+    // 1-2px subsiste entre cette mesure (temporairement hors flux) et le rendu réel une
+    // fois véritablement affiché et étiré par .game-content-row (arrondi sous-pixel),
+    // mieux vaut réserver très légèrement plus que pas assez.
+    panel.style.minHeight = Math.ceil(diagramHeight + paddingTop + paddingBottom + 4) + 'px';
+
+    if (wasHidden) {
+        diagram.style.position = previousPosition;
+        diagram.style.visibility = previousVisibility;
+        diagram.style.display = previousDisplay;
+        diagram.style.width = previousWidth;
+    }
 }
 
 const STRAIN_ORDER = ['N', 'S', 'H', 'D', 'C']; // N = sans-atout (SA), pas Nord
@@ -5253,6 +5306,10 @@ function checkAuctionEnd() {
         } else {
             diagramEl.style.display = 'none';
             if (myHandsEl) myHandsEl.style.display = '';
+            // Voir échange avec Guillaume : rendu (masqué) et hauteur synchronisée même ici
+            // — sans ça, la réservation de hauteur ne se mettait à jour qu'après la
+            // toute première bascule sur "voir les 4 mains", pas dès le début d'une donne.
+            renderAllHandsDiagram();
         }
         return;
     }
