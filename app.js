@@ -3105,23 +3105,13 @@ function decideRobotResponse(hand, hcp, hl, partnerCall, seat, history, partnerP
     const suit = bid.strain;
     const partnerOpenedMinor = (suit === 'C' || suit === 'D');
 
-    // "Passe de pénalité" en avance après un contre adverse de l'ouverture du partenaire
-    // (voir échange avec Guillaume, donne 7) : situation différente de
-    // decideRobotResponseToDouble (qui répond au PROPRE contre du joueur), ici c'est
-    // l'ouverture du PARTENAIRE qui vient d'être contrée par un adversaire. Avec du jeu
-    // (13H+) et un misfit net avec la couleur du partenaire (0-1 carte), mieux vaut
-    // laisser le contre adverse s'exposer en défense plutôt que forcer une nouvelle
-    // couleur juste pour ne pas passer — même principe que la passe de pénalité en
-    // réponse à un contre, appliqué ici à l'avance après un contre du partenaire ouvreur.
-    // Cherche le contre n'importe où dans l'historique, pas seulement en dernière position
-    // (voir échange avec Guillaume) : un passe ne "consomme" pas de tour dans ce moteur —
-    // sans cette recherche plus large, un premier passe correct pouvait être annulé à un
-    // tour ultérieur, une fois l'enchère développée depuis (le contre n'étant alors plus
-    // la toute dernière annonce).
-    const partnerJustGotDoubled = history.some(e => isDouble(e.call) && partnershipOf(e.seat) !== partnershipOf(seat));
-    if (partnerJustGotDoubled && hcp >= 13 && lengths[suit] <= 1) {
-        return 'PASS';
-    }
+    // Voir échange avec Guillaume (donne 2, session du 23 juillet) : les bots traitent
+    // TOUS les contres comme des contres d'appel, jamais de contre punitif — trop subtil
+    // à modéliser correctement. Donc pas de "passe de pénalité" en avance après un contre
+    // adverse de l'ouverture du partenaire non plus (l'ancienne règle ici, 13H+ et misfit
+    // 0-1 carte, laissait filer le contre pour la défense — supprimée, cohérence oblige) :
+    // on répond toujours, exactement comme decideRobotResponseToDouble répond toujours au
+    // PROPRE contre du joueur.
 
     // Priorité de base : après une ouverture à la MINEURE, montrer une majeure 4+ cartes
     // franche au palier 1 passe AVANT de soutenir la mineure du partenaire — le principe
@@ -3520,15 +3510,12 @@ function decideRobotResponseToDouble(hand, hcp, hl, doubleIndex, seat, history) 
     const candidates = ['S', 'H', 'D', 'C'].filter(s => s !== doubledSuit);
     const bestSuit = candidates.reduce((best, s) => (lengths[s] > lengths[best] ? s : best), candidates[0]);
 
-    // "Passe de pénalité" avec du jeu (voir échange avec Guillaume, donne 7) : avec une
-    // main de force d'ouverture (13H+), mieux vaut souvent laisser le contre du
-    // partenaire filer pour la défense que de forcer une nouvelle couleur médiocre juste
-    // pour "faire quelque chose" — surtout en misfit avec la couleur adverse contrée
-    // (le partenaire a probablement de la brièveté là, donc de bonnes chances en
-    // défense). Reste une simplification volontaire (pas de vrai jugement sur la
-    // QUALITÉ des couleurs disponibles, juste le seuil de points) — voir la note
-    // ci-dessous sur les limites de cette fonction.
-    if (hcp >= 13) return 'PASS';
+    // Voir échange avec Guillaume (donne 2, session du 23 juillet) : plus de "passe de
+    // pénalité" ici. Les bots traitent tous les contres comme des contres d'appel — jamais
+    // punitifs, trop subtil à modéliser correctement — donc on ne laisse jamais filer le
+    // contre du partenaire, quel que soit le nombre de points : on répond toujours dans
+    // l'une des couleurs non contrées (ancienne règle : 13H+ passait pour la défense,
+    // supprimée par cohérence).
 
     // Points de soutien (voir échange avec Guillaume, donne 4 : main de 8H comptée à 10
     // avec la courte) plutôt que HL brut — le contre du partenaire ne garantit pas de
