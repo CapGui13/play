@@ -426,10 +426,10 @@ let boardIndex = 0;
 let auctionHistory = [];    // historique de la donne en cours : [{seat, call}, ...]
 
 // (Hôte) Résultat du fichier de donnes déjà lu et parsé au moment où il a été choisi (voir
-// uiHandleDealFileChosen), pour afficher tout de suite une éventuelle erreur ou
-// l'avertissement "PARs non disponibles" — pendant que l'hôte compose encore la table,
-// PAS au moment de cliquer sur "Commencer la partie", puisqu'à cet instant l'écran du
-// salon (et donc le message) disparaît immédiatement avec le passage à l'écran de jeu.
+// uiHandleDealFileChosen), pour afficher tout de suite une éventuelle erreur — pendant que
+// l'hôte compose encore la table, PAS au moment de cliquer sur "Commencer la partie",
+// puisqu'à cet instant l'écran du salon (et donc le message) disparaît immédiatement avec
+// le passage à l'écran de jeu.
 let pendingParsedDeals = null;
 // Identifie la source dont pendingParsedDeals est le résultat, pour savoir si le cache
 // est encore valable sans avoir à relire/re-fetch : soit l'objet File choisi via l'input
@@ -737,25 +737,32 @@ function uiGenerateRandomDeals() {
     updateDealFileNameDisplay();
     const librarySelect = document.getElementById('dealLibrarySelect');
     if (librarySelect) librarySelect.value = '';
-    document.getElementById('dealFileInfo').style.display = 'none'; // rien à prévisualiser pour du random
 
     const generated = generateRandomDeals(count, seatAssignment, constraints);
     pendingParsedSource = 'random';
     pendingParsedDeals = generated;
     refreshPendingOrderedDeals();
 
+    // rien à prévisualiser pour du random (voir uiPreviewDeals) : bandeau vert sans son
+    // bouton Prévisualiser.
+    setDealStatusReady(`✅ ${count} donne${count > 1 ? 's' : ''} générée${count > 1 ? 's' : ''}`, false);
+
     // Voir échange avec Guillaume : avec des contraintes très serrées (plusieurs fourchettes
     // étroites simultanées), certaines donnes peuvent ne pas les satisfaire même après
     // RANDOM_DEAL_MAX_RETRIES tentatives (voir generateRandomDeal) — mieux vaut prévenir que
-    // de laisser croire que toutes les donnes générées les respectent silencieusement.
+    // de laisser croire que toutes les donnes générées les respectent silencieusement. Voir
+    // échange avec Guillaume (session du 23 juillet) : plus de mention du PAR ici — le
+    // calcul du double mort en arrière-plan (voir kickOffBackgroundDD) tourne
+    // systématiquement, plus la peine de le signaler.
     const unmetCount = generated.filter(d => d.constraintsUnmet).length;
-    const unmetNote = unmetCount > 0
-        ? ` ${unmetCount} donne(s) n'ont pas pu satisfaire toutes les contraintes malgré ${RANDOM_DEAL_MAX_RETRIES} tentatives — essayez des fourchettes moins serrées.`
-        : '';
-    setHostSetupMessage(
-        `${count} donne(s) générée(s) — le calcul du double mort tourne en arrière-plan, le PAR s'affichera en fin de donne dès qu'il sera prêt.${unmetNote}`,
-        unmetCount > 0 ? 'warning' : 'success'
-    );
+    if (unmetCount > 0) {
+        setHostSetupMessage(
+            `${unmetCount} donne(s) n'ont pas pu satisfaire toutes les contraintes malgré ${RANDOM_DEAL_MAX_RETRIES} tentatives — essayez des fourchettes moins serrées.`,
+            true
+        );
+    } else {
+        clearHostSetupMessage();
+    }
 
     kickOffBackgroundDD(generated);
 }
@@ -1179,6 +1186,8 @@ function uiCreateRoom() {
     pendingParsedDeals = null;
     pendingParsedSource = null;
     pendingOrderedDeals = null;
+    clearHostSetupMessage();
+    setDealStatusEmpty();
 
     peerConn = new BridgePeerConnection(buildHostHandlers());
     peerConn.createRoom();
@@ -1484,6 +1493,10 @@ function enterLobbyScreen() {
     showScreen('screen-lobby');
     document.getElementById('lobbyRoomCodeBlock').style.display = myRole === 'host' ? 'block' : 'none';
     document.getElementById('hostSetupPanel').style.display = myRole === 'host' ? 'block' : 'none';
+    // Voir échange avec Guillaume (session du 23 juillet) : déplacé hors de hostSetupPanel
+    // (voir index.html), donc sa visibilité host-only doit être pilotée séparément ici,
+    // avec la même condition.
+    document.getElementById('hostRobotModeGroup').style.display = myRole === 'host' ? 'flex' : 'none';
     document.getElementById('guestWaitingNote').style.display = myRole === 'host' ? 'none' : 'block';
 
     // Voir échange avec Guillaume : reprend la préférence persistée (voir
@@ -2131,16 +2144,41 @@ function clearHostSetupMessage() {
     document.getElementById('hostSetupError').style.display = 'none';
 }
 
+// Voir échange avec Guillaume (session du 23 juillet) : bandeau de statut des donnes
+// (#dealFileInfo), désormais TOUJOURS visible au même endroit plutôt qu'affiché seulement
+// une fois des donnes prêtes. Ces deux fonctions pilotent son contenu (texte + couleur
+// rouge/verte via la classe is-empty) ET l'état activé/grisé de "Commencer la partie" —
+// les deux vont toujours de pair, pas la peine de les répéter à chaque appelant.
+function setDealStatusEmpty() {
+    const infoEl = document.getElementById('dealFileInfo');
+    const textEl = document.getElementById('dealFileInfoText');
+    const previewBtn = document.getElementById('dealPreviewBtn');
+    const startBtn = document.getElementById('startGameBtn');
+    infoEl.classList.add('is-empty');
+    textEl.textContent = 'Veuillez charger ou générer des donnes';
+    if (previewBtn) previewBtn.style.display = 'none';
+    if (startBtn) startBtn.disabled = true;
+}
+
+function setDealStatusReady(text, showPreview = true) {
+    const infoEl = document.getElementById('dealFileInfo');
+    const textEl = document.getElementById('dealFileInfoText');
+    const previewBtn = document.getElementById('dealPreviewBtn');
+    const startBtn = document.getElementById('startGameBtn');
+    infoEl.classList.remove('is-empty');
+    textEl.textContent = text;
+    if (previewBtn) previewBtn.style.display = showPreview ? '' : 'none';
+    if (startBtn) startBtn.disabled = false;
+}
+
 // Parse et valide un texte de donnes déjà en main (peu importe sa provenance — fichier
 // local lu via FileReader, ou donne de la bibliothèque récupérée via fetch, voir
 // readAndValidateDealFile / readAndValidateDealFromLibrary), affichant tout de suite
-// l'erreur ou l'avertissement "PARs non disponibles" s'il y a lieu. `onDone` reçoit le
-// tableau de donnes parsées, ou `null` si le parsing a échoué (l'erreur est alors déjà
-// affichée).
+// l'éventuelle erreur. `onDone` reçoit le tableau de donnes parsées, ou `null` si le
+// parsing a échoué (l'erreur est alors déjà affichée).
 function validateAndUseDealText(text, filename, onDone) {
     clearHostSetupMessage();
-    const infoEl = document.getElementById('dealFileInfo');
-    infoEl.style.display = 'none';
+    setDealStatusEmpty();
 
     let parsedDeals;
     try {
@@ -2152,32 +2190,18 @@ function validateAndUseDealText(text, filename, onDone) {
     }
 
     const n = parsedDeals.length;
-    document.getElementById('dealFileInfoText').textContent =
-        `✅ ${n} donne${n > 1 ? 's' : ''} chargée${n > 1 ? 's' : ''}`;
-    infoEl.style.display = 'flex';
+    setDealStatusReady(`✅ ${n} donne${n > 1 ? 's' : ''} chargée${n > 1 ? 's' : ''}`);
 
-    // Avertissements non bloquants (la partie peut démarrer quand même) : format de
-    // fichier ambigu (voir parseDealFile) et/ou absence de toute info de contrat optimal.
-    // Deux sources indépendantes dans le PBN peuvent la fournir (voir deal-parser.js) :
-    // [OptimumScore]/[OptimumContract] (résumé rapide "Par : 4♠ S (NS +420)" affiché dans
-    // LA PRÉVISUALISATION uniquement — voir dealPreviewParText) et [OptimumResultTable]
-    // (la table complète du double mort, affichée PENDANT LA PARTIE avec mise en évidence
-    // du meilleur contrat — voir renderDDTable). Un fichier peut avoir l'un sans l'autre :
-    // n'avertir que si aucun des deux n'est disponible, sinon le message serait faux pour
-    // un fichier qui a la table complète mais pas le résumé rapide.
-    const warnings = [];
-    if (parsedDeals._formatWarning) warnings.push(parsedDeals._formatWarning);
-    if (!parsedDeals.some(d => d.par || d.ddTable)) {
-        warnings.push('PARs non disponibles dans ce fichier — calcul du double mort en arrière-plan, les contrats optimaux s\'afficheront en fin de donne dès qu\'ils seront prêts.');
-        // Voir échange avec Guillaume : même mécanisme que pour les donnes aléatoires
-        // (uiGenerateRandomDeals) — un fichier importé sans aucune info de contrat
-        // optimal profite du même calcul en arrière-plan plutôt que de rester sans PAR
-        // pour toute la partie. Rien à faire si le fichier a DÉJÀ cette info (le .some()
-        // ci-dessus l'aurait empêché d'entrer dans cette branche).
-        kickOffBackgroundDD(parsedDeals);
+    // Avertissement non bloquant restant : format de fichier ambigu (voir parseDealFile).
+    // Voir échange avec Guillaume (session du 23 juillet) : l'avertissement "PARs non
+    // disponibles" a été retiré — le calcul du double mort en arrière-plan (voir
+    // kickOffBackgroundDD ci-dessous) tourne désormais systématiquement et silencieusement
+    // pour tout fichier sans PAR/table déjà fournie, plus la peine de le signaler.
+    if (parsedDeals._formatWarning) {
+        setHostSetupMessage(parsedDeals._formatWarning, true);
     }
-    if (warnings.length > 0) {
-        setHostSetupMessage(warnings.join('\n⚠️ '), true);
+    if (!parsedDeals.some(d => d.par || d.ddTable)) {
+        kickOffBackgroundDD(parsedDeals);
     }
 
     onDone(parsedDeals);
@@ -2189,6 +2213,7 @@ function readAndValidateDealFile(file, onDone) {
     reader.onload = () => validateAndUseDealText(reader.result, file.name, onDone);
     reader.onerror = () => {
         clearHostSetupMessage();
+        setDealStatusEmpty();
         setHostSetupMessage('Impossible de lire ce fichier.', false);
         onDone(null);
     };
@@ -2207,6 +2232,7 @@ function readAndValidateDealFromLibrary(filename, onDone) {
         .then(text => validateAndUseDealText(text, filename, onDone))
         .catch(err => {
             clearHostSetupMessage();
+            setDealStatusEmpty();
             setHostSetupMessage(err.message || 'Impossible de charger cette donne depuis la bibliothèque.', false);
             onDone(null);
         });
@@ -2237,7 +2263,7 @@ function uiHandleDealFileChosen() {
 
     if (!fileInput.files || fileInput.files.length === 0) {
         clearHostSetupMessage();
-        document.getElementById('dealFileInfo').style.display = 'none';
+        setDealStatusEmpty();
         return;
     }
 
@@ -2266,7 +2292,7 @@ function uiHandleDealLibraryChosen() {
 
     if (!filename) {
         clearHostSetupMessage();
-        document.getElementById('dealFileInfo').style.display = 'none';
+        setDealStatusEmpty();
         return;
     }
 
@@ -2396,8 +2422,7 @@ function uiStartGameAsHost() {
 
     // Cas normal : la source a déjà été lue et parsée au moment où elle a été choisie
     // (voir uiHandleDealFileChosen / uiHandleDealLibraryChosen / uiGenerateRandomDeals) —
-    // pas besoin de la relire, et le message éventuel (erreur ou avertissement PAR) est
-    // déjà affiché depuis ce moment-là.
+    // pas besoin de la relire, le bandeau de statut est déjà à jour depuis ce moment-là.
     if (pendingParsedSource === activeSource) {
         proceedWithDeals(pendingOrderedDeals);
         return;

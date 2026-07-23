@@ -529,6 +529,16 @@ body.on-landing-screen .connection-bar {
 .btn:hover { transform: translateY(-1px); }
 .btn:active { transform: translateY(0) scale(0.97); }
 
+/* Voir échange avec Guillaume (session du 23 juillet) : "Commencer la partie" reste grisé
+   tant qu'aucune donne n'est prête (voir setDealStatusEmpty/setDealStatusReady dans
+   app.js) — évite un clic qui ne mènerait qu'à un message d'erreur. */
+.btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.btn:disabled:hover { transform: none; }
+
 .btn-primary {
     background: linear-gradient(180deg, var(--brass-bright), var(--brass));
     color: var(--ink);
@@ -604,6 +614,18 @@ body.on-landing-screen .connection-bar {
 
 .host-transfer-widget {
     position: relative;
+}
+
+/* Voir échange avec Guillaume (session du 23 juillet) : colonne alignée à gauche (pas
+   centrée) qui regroupe le bouton "Transférer l'hôte" et le toggle "Robots inactifs" — le
+   second reste ainsi toujours sous le premier, même bord gauche, quel que soit lequel des
+   deux est présent (le toggle reste visible même si le bouton de transfert est masqué,
+   tant qu'aucun autre participant n'est encore connecté). */
+.host-controls-column {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
 }
 
 .transfer-menu {
@@ -713,6 +735,19 @@ body.on-landing-screen .connection-bar {
     padding: 10px 14px;
     border-radius: 8px;
     font-size: 0.9rem;
+}
+
+/* Voir échange avec Guillaume (session du 23 juillet) : état par défaut, tant qu'aucune
+   donne n'est prête — même teinte rouge que .error-banner (pas .is-warning, réservée aux
+   avertissements non bloquants), pour signaler clairement qu'on ne peut pas encore lancer
+   la partie (voir aussi .btn:disabled sur "Commencer la partie" plus bas). */
+.deal-file-info.is-empty {
+    background: #3d2822;
+    background: color-mix(in srgb, #c0392b 20%, var(--card));
+    border-color: #c0392b;
+    border-color: color-mix(in srgb, #c0392b 45%, var(--card));
+    color: #d07062;
+    color: color-mix(in srgb, #c0392b 70%, var(--text));
 }
 
 /* ===== Modale d'aperçu des donnes ===== */
@@ -920,6 +955,23 @@ body.on-landing-screen .connection-bar {
     text-align: center;
 }
 
+/* Voir échange avec Guillaume (session du 23 juillet) : la case du nombre de donnes et
+   "Contraintes avancées" restent sur la même ligne ; "Générer" passe seul en dessous, sur
+   sa propre ligne. */
+.random-deal-controls {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+}
+
+.random-deal-count-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
 .random-deal-constraints-toggle {
     flex-shrink: 0;
 }
@@ -1051,6 +1103,15 @@ body.on-landing-screen .connection-bar {
     justify-content: center;
     margin-top: 20px;
     margin-bottom: 10px;
+}
+
+/* Voir échange avec Guillaume (session du 23 juillet) : variante alignée à gauche, pour
+   une case à cocher qui doit rester collée sous un bouton précis (ex. "Choisir un
+   fichier") plutôt que centrée sur toute la largeur du panneau — marge du haut réduite en
+   conséquence, elle n'a plus besoin de se détacher visuellement d'un large espace vide. */
+.form-group-checkbox-left {
+    justify-content: flex-start;
+    margin-top: 8px;
 }
 
 .start-game-row {
@@ -1376,7 +1437,12 @@ button.kibitz-chip {
    immédiat pour que le changement saute aux yeux, en particulier pour les autres joueurs
    qui le voient arriver via la synchronisation réseau plutôt que de l'avoir cliqué
    eux-mêmes. Se rejoue à chaque fois que la classe est réappliquée (voir
-   prevSeatAssignmentSnapshot dans app.js), car le nœud DOM est recréé à chaque rendu. */
+   prevSeatAssignmentSnapshot dans app.js), car le nœud DOM est recréé à chaque rendu.
+   Voir échange avec Guillaume (session du 23 juillet) : le 100% se termine désormais sur
+   le fond RÉEL de repos de .seat-assignment-grid .seat-box (color-mix, pas transparent) —
+   avant, le fondu doré s'estompait vers transparent, puis la case sautait d'un coup vers
+   sa vraie couleur de fond une fois l'animation terminée (deux temps disgracieux au lieu
+   d'un seul fondu continu). */
 @keyframes seatJustAssigned {
     0% {
         border-color: var(--brass-bright);
@@ -1386,7 +1452,8 @@ button.kibitz-chip {
     100% {
         border-color: var(--line);
         box-shadow: 0 0 0 0 rgba(224, 188, 74, 0);
-        background-color: transparent;
+        background-color: rgba(28, 36, 32, 0.85);
+        background-color: color-mix(in srgb, var(--card) 85%, transparent);
     }
 }
 
@@ -2615,11 +2682,13 @@ table.dd-table td.dd-secondary-contract {
         white-space: nowrap;
     }
 
-    /* Barre d'options (FR/HCP/K&R/4 mains) resserrée et sur une seule ligne — les
-       libellés abrégés (voir plus haut) suffisent largement une fois qu'on sait ce que
-       chaque bouton fait. */
+    /* Barre d'options (FR/HCP/K&R/4 mains) : le groupe de gauche passe déjà à 100% de
+       largeur sur mobile (voir .hand-display-options-left ci-dessous), donc "Noms des
+       joueurs" (à part, à droite en desktop) n'a de toute façon plus de place à côté —
+       voir échange avec Guillaume (session du 23 juillet) : flex-wrap (pas nowrap) pour
+       qu'il file proprement à la ligne suivante plutôt que déborder hors écran. */
     .hand-display-options {
-        flex-wrap: nowrap;
+        flex-wrap: wrap;
         gap: 5px;
         margin-bottom: 6px;
     }

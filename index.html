@@ -143,14 +143,34 @@
             <label>Votre pseudo</label>
             <div class="name-input-row">
                 <input type="text" id="myNameInput" class="name-input" maxlength="20" oninput="uiUpdateMyName()" onblur="uiMyNameBlur()" onfocus="this.select()">
-                <!-- Un seul bouton, ici, plutôt qu'un par participant dans la liste (voir
-                     échange avec Guillaume) : ouvre un menu déroulant listant les
-                     participants à qui transférer. Masqué par défaut — affiché par
-                     renderHostTransferWidget() dans app.js uniquement pour l'hôte, dans le
-                     salon, quand au moins un autre participant est connecté. -->
-                <div id="hostTransferWidget" class="host-transfer-widget" style="display:none;">
-                    <button type="button" id="hostTransferToggleBtn" class="btn btn-secondary btn-small" onclick="uiToggleTransferMenu()">👑 Transférer l'hôte ▾</button>
-                    <div id="transferMenu" class="transfer-menu" style="display:none;"></div>
+                <!-- Voir échange avec Guillaume (session du 23 juillet) : bouton de transfert
+                     et toggle "Robots inactifs" regroupés dans cette colonne, pour que le
+                     second reste toujours ALIGNÉ SOUS le premier (même bord gauche), plutôt
+                     que chacun centré indépendamment sur sa propre ligne. -->
+                <div class="host-controls-column">
+                    <!-- Un seul bouton, ici, plutôt qu'un par participant dans la liste (voir
+                         échange avec Guillaume) : ouvre un menu déroulant listant les
+                         participants à qui transférer. Masqué par défaut — affiché par
+                         renderHostTransferWidget() dans app.js uniquement pour l'hôte, dans le
+                         salon, quand au moins un autre participant est connecté. -->
+                    <div id="hostTransferWidget" class="host-transfer-widget" style="display:none;">
+                        <button type="button" id="hostTransferToggleBtn" class="btn btn-secondary btn-small" onclick="uiToggleTransferMenu()">👑 Transférer l'hôte ▾</button>
+                        <div id="transferMenu" class="transfer-menu" style="display:none;"></div>
+                    </div>
+                    <!-- Configurable uniquement ici, dans le salon, avant de lancer la
+                         session — pas modifiable en cours de partie. Interrupteur façon iOS
+                         plutôt qu'une case à cocher classique (voir .ios-switch dans
+                         styles.css). Visibilité pilotée comme hostSetupPanel (host
+                         uniquement, voir enterLobbyScreen dans app.js). -->
+                    <div id="hostRobotModeGroup" class="form-group-checkbox form-group-checkbox-left" style="display:none;">
+                        <label class="ios-switch-label">
+                            <span>🤖 Robots inactifs</span>
+                            <span class="ios-switch">
+                                <input type="checkbox" id="robotBiddingModeCheckbox" onchange="uiSetRobotBiddingMode(this.checked)">
+                                <span class="ios-switch-track"><span class="ios-switch-thumb"></span></span>
+                            </span>
+                        </label>
+                    </div>
                 </div>
             </div>
         </div>
@@ -185,6 +205,17 @@
                     <span id="dealFileNameDisplay" class="file-picker-name">Aucun fichier choisi</span>
                     <input type="file" id="dealFileInput" accept=".pbn,.lin,text/plain" class="visually-hidden">
                 </div>
+                <!-- Voir échange avec Guillaume (session du 23 juillet) : sous le bouton
+                     "Choisir un fichier", aligné à gauche (pas centré comme avant) — reste
+                     pertinent pour la bibliothèque de donnes juste en dessous (voir
+                     dealLibraryGroup), toutes deux étant des sources IMPORTÉES, contrairement
+                     à la génération aléatoire plus bas qui n'a pas d'ordre "d'origine". -->
+                <div class="form-group-checkbox form-group-checkbox-left">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="randomizeDealsToggle" onchange="uiToggleRandomizeDeals()">
+                        🔀 Ordre aléatoire des donnes
+                    </label>
+                </div>
             </div>
             <div id="dealLibraryGroup" class="form-group" style="display:none;">
                 <div class="form-group-divider">ou</div>
@@ -203,12 +234,17 @@
                      mort de chaque donne est calculé en arrière-plan dès la génération
                      (voir kickOffBackgroundDD), pour que le PAR soit prêt à s'afficher en
                      fin de donne sans attente perceptible. -->
-                <div class="file-picker">
-                    <input type="number" id="randomDealCount" class="random-deal-count-input" min="1" max="40" value="8">
+                <!-- Voir échange avec Guillaume (session du 23 juillet) : "Contraintes
+                     avancées" reste sur la même ligne que la case du nombre de donnes ; seul
+                     "Générer" passe en dessous, sur sa propre ligne. -->
+                <div class="random-deal-controls">
+                    <div class="random-deal-count-row">
+                        <input type="number" id="randomDealCount" class="random-deal-count-input" min="1" max="40" value="8">
+                        <button type="button" class="btn btn-secondary btn-small random-deal-constraints-toggle" onclick="uiToggleRandomDealConstraints()" id="randomDealConstraintsToggle">
+                            ⚙️ Contraintes avancées
+                        </button>
+                    </div>
                     <button type="button" class="btn btn-secondary btn-small" onclick="uiGenerateRandomDeals()">🎲 Générer</button>
-                    <button type="button" class="btn btn-secondary btn-small random-deal-constraints-toggle" onclick="uiToggleRandomDealConstraints()" id="randomDealConstraintsToggle">
-                        ⚙️ Contraintes avancées
-                    </button>
                 </div>
                 <!-- Contraintes optionnelles (voir échange avec Guillaume) : fourchette de
                      points H par siège, fourchette de points combinés par ligne (NS/EO), et
@@ -280,32 +316,18 @@
                     </table>
                 </div>
             </div>
-            <div class="form-group form-group-checkbox">
-                <label class="checkbox-label">
-                    <input type="checkbox" id="randomizeDealsToggle" onchange="uiToggleRandomizeDeals()">
-                    🔀 Ordre aléatoire des donnes
-                </label>
-            </div>
-            <!-- Voir échange avec Guillaume : configurable uniquement ici, dans le salon,
-                 avant de lancer la session — pas modifiable en cours de partie. Interrupteur
-                 façon iOS plutôt qu'une case à cocher classique (voir .ios-switch dans
-                 styles.css). -->
-            <div class="form-group form-group-checkbox">
-                <label class="ios-switch-label">
-                    <span>🤖 Robots inactifs</span>
-                    <span class="ios-switch">
-                        <input type="checkbox" id="robotBiddingModeCheckbox" onchange="uiSetRobotBiddingMode(this.checked)">
-                        <span class="ios-switch-track"><span class="ios-switch-thumb"></span></span>
-                    </span>
-                </label>
-            </div>
             <div id="hostSetupError" class="error-banner" style="display:none;"></div>
-            <div id="dealFileInfo" class="deal-file-info" style="display:none;">
-                <span id="dealFileInfoText"></span>
-                <button type="button" class="btn btn-secondary btn-small" onclick="uiPreviewDeals()">👁 Prévisualiser</button>
+            <!-- Voir échange avec Guillaume (session du 23 juillet) : toujours visible, au
+                 même endroit — rouge ("is-empty", voir styles.css) tant qu'aucune donne
+                 n'est prête, vert une fois chargée ou générée (voir setDealStatusEmpty /
+                 setDealStatusReady dans app.js). Le bouton Prévisualiser n'a de sens que
+                 dans le second cas, masqué par défaut. -->
+            <div id="dealFileInfo" class="deal-file-info is-empty">
+                <span id="dealFileInfoText">Veuillez charger ou générer des donnes</span>
+                <button type="button" id="dealPreviewBtn" class="btn btn-secondary btn-small" style="display:none;" onclick="uiPreviewDeals()">👁 Prévisualiser</button>
             </div>
             <div class="start-game-row">
-                <button id="startGameBtn" class="btn btn-success" onclick="uiStartGameAsHost()">Commencer la partie</button>
+                <button id="startGameBtn" class="btn btn-success" onclick="uiStartGameAsHost()" disabled>Commencer la partie</button>
             </div>
         </div>
 
@@ -358,13 +380,15 @@
                 <button id="frenchRanksToggleBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" onclick="uiToggleFrenchRanks()"><span class="btn-label-full">Notation FR (R D V X)</span><span class="btn-label-short">FR</span></button>
                 <button id="hcpToggleBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" onclick="uiToggleShowHcp()"><span class="btn-label-full">Afficher HCP</span><span class="btn-label-short">HCP</span></button>
                 <button id="krToggleBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" onclick="uiToggleShowKr()"><span class="btn-label-full">Afficher Kaplan-Rubens</span><span class="btn-label-short">K&amp;R</span></button>
-                <!-- Voir échange avec Guillaume (session du 23 juillet) : rejoint ce groupe
-                     plutôt que de rester seul à droite de la ligne — sur mobile, où
-                     hand-display-options-left passe à 100% de largeur (voir styles.css), le
-                     laisser à part le faisait déborder hors de l'écran. -->
-                <button id="ledgerNamesToggleBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" onclick="uiToggleLedgerNames()"><span class="btn-label-full">Noms des joueurs</span><span class="btn-label-short">Noms</span></button>
                 <button id="hostSeeAllHandsBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" style="display:none;" onclick="uiToggleHostSeeAllHands()" title="Réservé à vous : ne change rien pour les autres joueurs"><span class="btn-label-full">👁 Voir les 4 mains</span><span class="btn-label-short">👁 4 mains</span></button>
             </div>
+            <!-- Voir échange avec Guillaume (session du 23 juillet) : de retour à part, à
+                 droite, comme en desktop d'origine — le regroupement avec le bloc de gauche
+                 (utile pour éviter le débordement mobile) est retiré pour desktop ; sur
+                 mobile, c'est maintenant .hand-display-options qui repasse en flex-wrap
+                 (voir styles.css) pour laisser ce bouton filer à la ligne plutôt que hors
+                 écran. -->
+            <button id="ledgerNamesToggleBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" onclick="uiToggleLedgerNames()"><span class="btn-label-full">Noms des joueurs</span><span class="btn-label-short">Noms</span></button>
         </div>
 
         <div class="game-content-row">
