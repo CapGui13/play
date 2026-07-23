@@ -448,18 +448,21 @@
 </div>
 
 <!-- Voir échange avec Guillaume (session du 23 juillet) : réorganisation complète des
-     sièges en cours de partie — même grille en croix que le salon (voir
-     renderSeatAssignmentGrid, qui rend maintenant dans TOUS les .seat-assignment-grid du
-     DOM), cliquable pour réassigner qui joue où, "Robot" y compris pour remettre un siège
-     en jeu automatique. -->
+     sièges en cours de partie — même grille en croix que le salon, cliquable pour
+     réassigner qui joue où, "Robot" y compris pour remettre un siège en jeu automatique.
+     Fonctionne en BROUILLON (voir seatReorgDraft dans app.js) : les changements faits ici
+     ne s'appliquent qu'au clic sur "Valider", jamais en direct — "Fermer" a donc été
+     remplacé par "Valider", qui ferme ET applique en un seul geste. Cliquer hors de la
+     modale reste possible pour abandonner sans valider (voir
+     uiCloseSeatReorgModalOnBackdrop). -->
 <div id="seatReorgModal" class="modal-overlay" style="display:none;" onclick="uiCloseSeatReorgModalOnBackdrop(event)">
     <div class="modal-panel">
         <div class="modal-header">
             <h3>Réorganiser les sièges</h3>
-            <button type="button" class="btn btn-secondary btn-small" onclick="uiCloseSeatReorgModal()">Fermer ✕</button>
+            <button type="button" class="btn btn-primary btn-small" onclick="uiValidateSeatReorg()">Valider</button>
         </div>
         <div class="seat-reorg-content">
-            <div class="seat-assignment-grid"></div>
+            <div id="seatReorgModalGrid" class="seat-assignment-grid"></div>
         </div>
     </div>
 </div>

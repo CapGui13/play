@@ -1899,14 +1899,16 @@ function uiRenameParticipantBlur(participantId, inputEl) {
     renderChat();
 }
 
-function renderSeatAssignmentGrid() {
-    // Voir échange avec Guillaume (session du 23 juillet) : cible TOUS les conteneurs
-    // .seat-assignment-grid présents dans le DOM, plutôt qu'un seul id fixe — désormais il
-    // peut y en avoir deux (celui du salon + celui de la modale de réorganisation
-    // accessible en cours de partie, voir uiOpenSeatReorgModal), qui doivent rester
-    // strictement synchronisés. Rien à faire si aucun n'existe (ne devrait pas arriver).
-    const containers = document.querySelectorAll('.seat-assignment-grid');
-    if (containers.length === 0) return;
+// Voir échange avec Guillaume (session du 23 juillet — passage à un brouillon pour la
+// modale de réorganisation) : construction des 4 cases factorisée ici, partagée entre la
+// grille LIVE du salon (renderSeatAssignmentGrid, applique immédiatement) et la grille
+// PROVISOIRE de la modale de réorganisation en cours de partie (renderSeatReorgModalGrid,
+// n'applique qu'à la validation) — `assignmentObj` est l'assignation à afficher (peut être
+// `seatAssignment` la vraie, ou `seatReorgDraft` un brouillon), `onSelect` le nom de la
+// fonction appelée au clic sur une option (diffère : immédiat pour le salon, brouillon
+// seulement pour la modale). `enableDrag`/`withFlash` n'ont de sens que pour la grille live
+// (le glisser-déposer et l'animation d'arrivée/départ ne concernent que l'état réel).
+function buildSeatBoxesHtml(assignmentObj, onSelect, { enableDrag = false, withFlash = false } = {}) {
     const isHost = myRole === 'host';
 
     // Un siège "vient d'être assigné" si son occupant est non vide ET différent de ce
@@ -1914,8 +1916,8 @@ function renderSeatAssignmentGrid() {
     // changement d'occupant) — voir prevSeatAssignmentSnapshot pour le cas particulier du
     // tout premier rendu.
     const justAssigned = seat => {
-        if (prevSeatAssignmentSnapshot === null) return false;
-        const assignedId = seatAssignment[seat];
+        if (!withFlash || prevSeatAssignmentSnapshot === null) return false;
+        const assignedId = assignmentObj[seat];
         return !!assignedId && assignedId !== prevSeatAssignmentSnapshot[seat];
     };
 
@@ -1923,12 +1925,12 @@ function renderSeatAssignmentGrid() {
     // libéré" s'il était occupé au rendu précédent et ne l'est plus maintenant — même
     // effet visuel que l'arrivée, pour signaler tout autant le départ.
     const justVacated = seat => {
-        if (prevSeatAssignmentSnapshot === null) return false;
-        return !!prevSeatAssignmentSnapshot[seat] && !seatAssignment[seat];
+        if (!withFlash || prevSeatAssignmentSnapshot === null) return false;
+        return !!prevSeatAssignmentSnapshot[seat] && !assignmentObj[seat];
     };
 
-    const seatBoxes = SEATS.map(seat => {
-        const assignedId = seatAssignment[seat];
+    return SEATS.map(seat => {
+        const assignedId = assignmentObj[seat];
         const flashClass = justAssigned(seat) ? ' just-assigned' : (justVacated(seat) ? ' just-vacated' : '');
         if (isHost) {
             // Menu déroulant personnalisé (voir échange avec Guillaume) plutôt qu'un
@@ -1936,29 +1938,31 @@ function renderSeatAssignmentGrid() {
             // Glissable depuis TOUTE la case, pas seulement le petit déclencheur (voir
             // échange avec Guillaume) — même surface que la zone de dépôt (déjà sur la
             // case entière, voir ondragover/ondrop plus bas), pour une prise en main
-            // cohérente dans les deux sens.
+            // cohérente dans les deux sens. Uniquement sur la grille live (enableDrag) :
+            // la modale de réorganisation n'a pas de glisser-déposer, seulement les menus.
             const occupantP = assignedId ? participants.find(x => x.id === assignedId) : null;
-            const boxDragAttrs = occupantP ? ` draggable="true" ondragstart="uiDragStartParticipant(event, '${assignedId}', '${seat}')"` : '';
+            const boxDragAttrs = (enableDrag && occupantP) ? ` draggable="true" ondragstart="uiDragStartParticipant(event, '${assignedId}', '${seat}')"` : '';
+            const dropAttrs = enableDrag ? ` ondragover="uiAllowDrop(event)" ondragenter="uiDragEnterTarget(event)" ondragleave="uiDragLeaveTarget(event)" ondrop="uiDropOnSeat(event, '${seat}')"` : '';
             const triggerContent = occupantP
                 ? `${avatarHtml(assignedId)}<span class="kibitz-chip-name">${escapeHtml(occupantP.name)}</span>`
                 : `<span class="mini-avatar mini-avatar-robot">🤖</span><span class="kibitz-chip-name">Robot</span>`;
 
             const robotOptionClass = assignedId ? '' : ' is-current';
             const optionsHtml = [`
-                <div class="seat-dropdown-option${robotOptionClass}" onclick="uiAssignSeat('${seat}', ''); uiCloseSeatDropdowns();">
+                <div class="seat-dropdown-option${robotOptionClass}" onclick="${onSelect}('${seat}', ''); uiCloseSeatDropdowns();">
                     <span class="mini-avatar mini-avatar-robot">🤖</span><span>Robot</span>
                 </div>
             `].concat(participants.map(p => {
                 const currentClass = p.id === assignedId ? ' is-current' : '';
                 return `
-                    <div class="seat-dropdown-option${currentClass}" onclick="uiAssignSeat('${seat}', '${p.id}'); uiCloseSeatDropdowns();">
+                    <div class="seat-dropdown-option${currentClass}" onclick="${onSelect}('${seat}', '${p.id}'); uiCloseSeatDropdowns();">
                         ${avatarHtml(p.id)}<span>${escapeHtml(p.name)}</span>
                     </div>
                 `;
             }));
 
             return `
-                <div class="seat-box seat-pos-${seat}${flashClass}"${boxDragAttrs} ondragover="uiAllowDrop(event)" ondragenter="uiDragEnterTarget(event)" ondragleave="uiDragLeaveTarget(event)" ondrop="uiDropOnSeat(event, '${seat}')">
+                <div class="seat-box seat-pos-${seat}${flashClass}"${boxDragAttrs}${dropAttrs}>
                     <span class="seat-box-label">${SEAT_FULL_NAME[seat]}</span>
                     <div class="seat-occupant-dropdown">
                         <button type="button" class="kibitz-chip seat-occupant-chip${occupantP ? '' : ' seat-occupant-chip-robot'}" onclick="uiToggleSeatDropdown(event, '${seat}')">
@@ -1982,9 +1986,23 @@ function renderSeatAssignmentGrid() {
             </div>
         `;
     }).join('');
+}
 
-    containers.forEach(container => { container.innerHTML = seatBoxes; });
+function renderSeatAssignmentGrid() {
+    const container = document.getElementById('seatAssignmentGrid');
+    if (!container) return;
+    container.innerHTML = buildSeatBoxesHtml(seatAssignment, 'uiAssignSeat', { enableDrag: true, withFlash: true });
     prevSeatAssignmentSnapshot = { ...seatAssignment };
+}
+
+// Voir échange avec Guillaume (session du 23 juillet) : grille de la modale de
+// réorganisation en cours de partie — affiche seatReorgDraft (le brouillon), pas
+// seatAssignment (l'état réel), et route les sélections vers uiStageSeatAssignment (qui ne
+// fait que modifier le brouillon) plutôt que uiAssignSeat (qui appliquerait immédiatement).
+function renderSeatReorgModalGrid() {
+    const container = document.getElementById('seatReorgModalGrid');
+    if (!container || !seatReorgDraft) return;
+    container.innerHTML = buildSeatBoxesHtml(seatReorgDraft, 'uiStageSeatAssignment', { enableDrag: false, withFlash: false });
 }
 
 let nameUpdateDebounceTimer = null;
@@ -2147,6 +2165,13 @@ let draggedParticipantId = null;
 // place, puisque Nord était trouvé en premier dans SEATS. `null` si le glissé vient du
 // kibbitz (pas de siège d'origine).
 let draggedFromSeat = null;
+
+// Voir échange avec Guillaume (session du 23 juillet) : brouillon d'assignation utilisé
+// par la modale de réorganisation des sièges (voir uiOpenSeatReorgModal/
+// uiStageSeatAssignment/uiValidateSeatReorg) — copie de seatAssignment modifiée localement
+// pendant que la modale est ouverte, appliquée à la vraie assignation UNIQUEMENT au clic
+// sur "Valider". `null` tant que la modale n'est pas ouverte.
+let seatReorgDraft = null;
 
 function uiDragStartParticipant(event, participantId, fromSeat) {
     if (myRole !== 'host') { event.preventDefault(); return; }
@@ -2805,25 +2830,60 @@ function uiCloseDealPreviewOnBackdrop(evt) {
     if (evt.target.id === 'dealPreviewModal') uiCloseDealPreview();
 }
 
-// Voir échange avec Guillaume (session du 23 juillet) : ouvre la grille de réorganisation
-// des sièges en cours de partie — réservé à l'hôte (le bouton lui-même est déjà masqué
-// pour tout autre rôle, voir updateBoardControlVisibility, mais on se protège quand même
-// ici en cas d'appel direct). renderSeatAssignmentGrid() rend déjà dans TOUS les
-// .seat-assignment-grid du DOM (voir échange avec Guillaume) — pas besoin de lui passer
-// quoi que ce soit de spécifique, la grille de cette modale se remplit toute seule.
+// Voir échange avec Guillaume (session du 23 juillet — "ça ne doit être effectif qu'à la
+// fermeture") : ouvre la grille de réorganisation des sièges en cours de partie, en mode
+// BROUILLON — les changements faits dans la modale (voir uiStageSeatAssignment) ne
+// s'appliquent qu'au clic sur "Valider" (voir uiValidateSeatReorg), jamais en direct.
+// Réservé à l'hôte (le bouton lui-même est déjà masqué pour tout autre rôle, voir
+// updateBoardControlVisibility, mais on se protège quand même ici en cas d'appel direct).
 function uiOpenSeatReorgModal() {
     if (myRole !== 'host') return;
-    renderSeatAssignmentGrid();
+    seatReorgDraft = { ...seatAssignment };
+    renderSeatReorgModalGrid();
     document.getElementById('seatReorgModal').style.display = 'flex';
 }
 
-function uiCloseSeatReorgModal() {
+// Modifie UNIQUEMENT le brouillon (voir seatReorgDraft), jamais l'assignation réelle —
+// aucune diffusion réseau, aucun rafraîchissement de l'écran de jeu tant que "Valider"
+// n'a pas été cliqué (voir uiValidateSeatReorg).
+function uiStageSeatAssignment(seat, participantId) {
+    if (myRole !== 'host' || !seatReorgDraft) return;
+    seatReorgDraft[seat] = participantId || null;
+    renderSeatReorgModalGrid();
+}
+
+// Applique enfin le brouillon à l'assignation réelle (même logique que uiAssignSeat, mais
+// en un seul coup pour tous les sièges modifiés), diffuse, rafraîchit, puis ferme.
+function uiValidateSeatReorg() {
+    if (myRole !== 'host' || !seatReorgDraft) return;
+    seatAssignment = { ...seatReorgDraft };
+    // Voir échange avec Guillaume (session du 23 juillet — voir uiAssignSeat) : même
+    // recalcul du statut robot des sièges.
+    if (deals) autoPassSeats = SEATS.filter(s => !seatAssignment[s]);
+    broadcastLobbyState();
+    renderLobby();
+    if (deals) {
+        mySeats = SEATS.filter(s => seatAssignment[s] === myParticipantId);
+        renderBoard();
+    }
+    seatReorgDraft = null;
     document.getElementById('seatReorgModal').style.display = 'none';
-    uiCloseSeatDropdowns(); // pas de menu resté ouvert au prochain affichage
+    uiCloseSeatDropdowns();
+}
+
+// Ferme SANS appliquer le brouillon (voir échange avec Guillaume) : abandonne les
+// changements en cours — utilisé par un clic hors de la modale (voir
+// uiCloseSeatReorgModalOnBackdrop). Pas de bouton dédié pour ça dans la modale elle-même
+// ("Fermer" a été remplacé par "Valider", voir index.html), mais cliquer à l'extérieur
+// reste un moyen d'abandonner sans valider.
+function uiCancelSeatReorg() {
+    seatReorgDraft = null;
+    document.getElementById('seatReorgModal').style.display = 'none';
+    uiCloseSeatDropdowns();
 }
 
 function uiCloseSeatReorgModalOnBackdrop(evt) {
-    if (evt.target.id === 'seatReorgModal') uiCloseSeatReorgModal();
+    if (evt.target.id === 'seatReorgModal') uiCancelSeatReorg();
 }
 
 // Petite carte de main compacte pour l'aperçu (même principe que renderMyHands /
@@ -5161,7 +5221,13 @@ function renderChat() {
         // alignée à droite façon messagerie) — le nom précède toujours le message, avec
         // sa couleur reprise de avatarColorForId (même couleur que la petite pastille
         // d'avatar de ce participant ailleurs dans l'appli, pour un repère cohérent).
-        const senderColor = avatarColorForId(m.senderId);
+        // Voir échange avec Guillaume (session du 23 juillet) : SAUF si ce participant
+        // est actuellement déconnecté — rouge (--suit-red, même couleur que
+        // .disconnected-tag ailleurs dans l'appli) prend alors le pas sur sa couleur
+        // d'avatar habituelle, pour repérer d'un coup d'œil qui a décroché même en
+        // relisant d'anciens messages.
+        const senderP = participants.find(p => p.id === m.senderId);
+        const senderColor = (senderP && senderP.disconnected) ? 'var(--suit-red)' : avatarColorForId(m.senderId);
         // Le ":" reste HORS du span (voir échange avec Guillaume) : uiStartRenamingParticipant
         // reprend span.textContent comme valeur de départ du champ d'édition — s'il incluait
         // le ":", il faudrait le retirer avant de renommer, pour rien.
@@ -5237,9 +5303,13 @@ const wizzCooldownUntil = {}; // targetId -> timestamp, purement local (pas beso
 // wizz au passage (2 clics avant le dblclick) avant d'ouvrir le renommage.
 function wizzableNameHtml(p) {
     const canRename = myRole === 'host';
+    // Voir échange avec Guillaume (session du 23 juillet — voir aussi renderChat) : même
+    // rouge que dans les messages du chat pour un participant déconnecté, cohérent d'un
+    // bout à l'autre du même panneau.
+    const colorStyle = p.disconnected ? ' style="color:var(--suit-red)"' : '';
     const nameAttrs = canRename
-        ? ` class="room-board-name room-board-name-editable" ondblclick="uiStartRenamingParticipant(event, '${p.id}')" title="Double-cliquer pour renommer"`
-        : ` class="room-board-name"`;
+        ? ` class="room-board-name room-board-name-editable" ondblclick="uiStartRenamingParticipant(event, '${p.id}')" title="Double-cliquer pour renommer"${colorStyle}`
+        : ` class="room-board-name"${colorStyle}`;
     const nameSpan = `<span${nameAttrs}>${escapeHtml(p.name)}</span>`;
 
     if (p.disconnected) return nameSpan;
