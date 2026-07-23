@@ -6104,7 +6104,12 @@ function computeDDScores(ddTable, dealVulnerable) {
 // groupés côte à côte), plus pratique à lire que l'ordre de rotation des enchères N E S O
 // utilisé partout ailleurs (SEATS, dans bidding-rules.js) — surtout ne pas réutiliser
 // SEATS ici, sous peine de casser la logique de tour de parole.
-const DD_TABLE_SEAT_ORDER = ['N', 'S', 'E', 'W'];
+// Voir échange avec Guillaume (session du 23 juillet — "décalage EO") : aligné sur
+// l'ordre du relevé d'enchères (N, E, S, O — voir SEATS dans bidding-rules.js), pas
+// l'ordre par paires de partenaires (N, S, E, O) utilisé ailleurs (room board) — ce
+// tableau est affiché juste en dessous du relevé d'enchères, dont l'ordre de colonnes
+// doit rester cohérent pour que les deux s'alignent visuellement.
+const DD_TABLE_SEAT_ORDER = ['N', 'E', 'S', 'W'];
 
 // Construit le tableau HTML du double mort (5 lignes SA/♠/♥/♦/♣ x 4 colonnes N/S/E/O),
 // tel qu'éventuellement fourni dans le fichier PBN chargé (tag [OptimumResultTable]).
@@ -6387,13 +6392,16 @@ function checkAuctionEnd() {
     }
 
     const isLastBoard = boardIndex >= deals.length - 1;
-    const iCanNavigate = canControlBoard();
+    // Voir échange avec Guillaume (session du 23 juillet) : réservé à l'HÔTE désormais,
+    // pas à n'importe quel joueur actif (canControlBoard()) — un simple joueur, ou un
+    // kibitz, ne doit pas pouvoir faire avancer la table pour tout le monde.
+    const iCanNavigate = myRole === 'host';
     nextPanel.style.display = (isLastBoard || !iCanNavigate) ? 'none' : 'block';
 
     if (isLastBoard) {
         resultEl.innerHTML += '<div class="info-text">Dernière donne du fichier chargé.</div>';
     } else if (!iCanNavigate) {
-        resultEl.innerHTML += '<div class="info-text">En attente qu\'un joueur actif passe à la donne suivante.</div>';
+        resultEl.innerHTML += '<div class="info-text">En attente que l\'hôte passe à la donne suivante.</div>';
     }
 }
 
@@ -6724,9 +6732,9 @@ function uiResetAuction() {
 // vers ce tableau : tout push/pop ultérieur (voir applyCall, l'undo) se répercute
 // automatiquement dessus, sans synchronisation supplémentaire à faire. Annule toute
 // demande d'undo en cours, et diffuse le nouvel index à tout le monde. Partagé par le
-// bouton "Donne suivante →" (accessible à tout joueur actif, uniquement une fois
-// l'enchère terminée — voir checkAuctionEnd) et par les flèches ◀▶ de navigation libre,
-// réservées à l'hôte.
+// bouton "Donne suivante →" (réservé à l'hôte, voir échange avec Guillaume — session du 23
+// juillet, uniquement une fois l'enchère terminée, voir checkAuctionEnd) et par les
+// flèches ◀▶ de navigation libre, également réservées à l'hôte.
 function gotoBoard(newIndex) {
     boardIndex = newIndex;
     if (!deals[boardIndex].auctionHistory) deals[boardIndex].auctionHistory = [];
@@ -6738,7 +6746,7 @@ function gotoBoard(newIndex) {
 }
 
 function uiNextBoard() {
-    if (!canControlBoard()) return;
+    if (myRole !== 'host') return;
     if (boardIndex >= deals.length - 1) return;
     gotoBoard(boardIndex + 1);
 }
