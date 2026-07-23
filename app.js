@@ -2083,6 +2083,12 @@ function uiAssignSeat(seat, participantId) {
     // un bug de duplication, alors que c'est exactement ce que cette assignation doit
     // pouvoir faire.
     seatAssignment[seat] = participantId || null;
+    // Voir échange avec Guillaume (session du 23 juillet — "le bot n'enchérit pas") :
+    // autoPassSeats (qui détermine quels sièges sont pilotés par un robot) n'était calculé
+    // qu'une fois, au lancement de la partie — jamais mis à jour quand un siège change de
+    // main ensuite. Recalculé ici avant la diffusion, sinon un siège tout juste rendu à
+    // "Robot" restait un simple trou muet, personne (ni humain ni robot) pour y jouer.
+    if (deals) autoPassSeats = SEATS.filter(s => !seatAssignment[s]);
     broadcastLobbyState();
     renderLobby();
     // Voir échange avec Guillaume (session du 23 juillet) : cette grille est maintenant
@@ -2172,6 +2178,9 @@ function uiDropOnSeat(event, targetSeat) {
 
     draggedParticipantId = null;
     draggedFromSeat = null;
+    // Voir échange avec Guillaume (session du 23 juillet — voir uiAssignSeat) : même
+    // recalcul, pour le glisser-déposer.
+    if (deals) autoPassSeats = SEATS.filter(s => !seatAssignment[s]);
     broadcastLobbyState();
     renderLobby();
     // Voir échange avec Guillaume (session du 23 juillet) : réassignation de siège
@@ -2190,6 +2199,9 @@ function uiDropOnKibitz(event) {
     if (draggedFromSeat) seatAssignment[draggedFromSeat] = null;
     draggedParticipantId = null;
     draggedFromSeat = null;
+    // Voir échange avec Guillaume (session du 23 juillet — voir uiAssignSeat) : même
+    // recalcul — un siège libéré vers le kibbitz redevient robot lui aussi.
+    if (deals) autoPassSeats = SEATS.filter(s => !seatAssignment[s]);
     broadcastLobbyState();
     renderLobby();
     // Voir uiDropOnSeat ci-dessus : même rafraîchissement du côté écran de jeu.
@@ -2449,12 +2461,18 @@ function broadcastLobbyState() {
     // rien lui demander, donc tout le monde doit déjà savoir à l'avance qui prendrait le
     // relais et sous quelle identité l'ancien hôte pourrait revenir (voir
     // computeSubHostId / uiAttemptSubHostTakeover plus bas).
+    //
+    // autoPassSeats inclus aussi (voir échange avec Guillaume — "le bot n'enchérit pas") :
+    // peut changer en cours de partie (voir uiAssignSeat/uiDropOnSeat/uiDropOnKibitz), les
+    // invités doivent rester informés de quels sièges sont robot, pas seulement au
+    // lancement de la partie.
     peerConn.send({
         type: 'lobby-state',
         participants,
         seatAssignment,
         subHostId: computeSubHostId(),
-        hostReconnectToken: getReconnectToken()
+        hostReconnectToken: getReconnectToken(),
+        autoPassSeats
     });
 }
 
@@ -3106,6 +3124,10 @@ function handlePeerData(msg, guestIndex) {
                 // 'seats-rotated' pour la rotation, sinon ce joueur resterait affiché avec
                 // son ancienne main/son ancien rôle jusqu'à sa prochaine reconnexion.
                 mySeats = SEATS.filter(seat => seatAssignment[seat] === myParticipantId);
+                // Voir échange avec Guillaume (session du 23 juillet — "le bot n'enchérit
+                // pas") : autoPassSeats peut changer lui aussi en cours de partie (un
+                // siège réassigné à "Robot") — à tenir à jour ici comme mySeats.
+                autoPassSeats = msg.autoPassSeats || autoPassSeats;
                 renderBoard();
                 // Voir échange avec Guillaume (session du 23 juillet) : l'hôte peut
                 // maintenant changer la couleur d'avatar ou renommer n'importe qui EN
