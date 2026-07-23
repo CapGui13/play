@@ -2243,7 +2243,14 @@ table.dd-table td.dd-secondary-contract {
    game-body) pour ça, depuis que les boutons d'options n'y vivent plus. */
 .all-hands-diagram {
     display: grid;
-    grid-template-columns: 1fr 1fr 1fr;
+    /* Voir échange avec Guillaume (session du 23 juillet — "décalage EO") : minmax(0, 1fr),
+       pas simplement 1fr — une colonne 1fr toute seule garde une largeur MINIMALE
+       automatique basée sur le contenu le plus large qu'elle contient (ex. le badge "8
+       HCP", plus court que "12 HCP", ou une main aux couleurs plus longues), ce qui
+       cassait l'égalité stricte entre les 3 colonnes selon le contenu de chaque main.
+       minmax(0, 1fr) annule ce minimum automatique : les 3 colonnes restent rigoureusement
+       égales quel que soit leur contenu respectif. */
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr);
     grid-template-rows: auto auto auto;
     gap: 10px;
     justify-items: center;
@@ -2262,7 +2269,7 @@ table.dd-table td.dd-secondary-contract {
 
 @media (max-width: 480px) {
     .all-hands-diagram {
-        grid-template-columns: 1fr 1fr;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
         grid-template-rows: auto auto auto auto;
     }
     .all-hands-diagram .hand-N { grid-column: 1 / span 2; grid-row: 1; }
