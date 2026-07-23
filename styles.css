@@ -807,9 +807,26 @@ body.on-landing-screen .connection-bar {
    .deal-preview-content, pour la modale de réorganisation des sièges en cours de partie —
    la grille elle-même (.seat-assignment-grid) garde son style habituel, identique à celui
    du salon. */
+/* Voir échange avec Guillaume (session du 23 juillet) : PAS de overflow-y:auto ici,
+   contrairement à .deal-preview-content — un menu déroulant de siège (voir
+   .seat-dropdown-menu, position:absolute) DOIT pouvoir flotter par-dessus le bord de ce
+   conteneur sans être découpé. Avec overflow:auto, le menu du siège Sud (en bas) se
+   retrouvait coupé, obligeant à scroller pour voir ses propres options — contre-productif
+   pour un simple menu qui devrait rester entièrement visible d'un coup. Avec seulement 4
+   sièges, le contenu tient de toute façon largement dans la hauteur de la modale.
+   .modal-panel garde son max-height (voir styles.css) : sur un écran minuscule où même les
+   4 cases ne tiendraient pas, le contenu déborderait plutôt que de scroller — compromis
+   assumé, ce cas restant marginal. */
 .seat-reorg-content {
-    overflow-y: auto;
     padding: 20px;
+}
+
+/* Largeur rapprochée de celle de la colonne "table" du salon (.lobby-table, ~1.6fr de
+   .lobby-body dans un .app-container de 980px max ≈ 620-640px) plutôt que les 720px
+   génériques de .modal-panel — pour que la grille ait sensiblement la même taille perçue
+   qu'en salon, comme demandé (voir échange avec Guillaume, session du 23 juillet). */
+#seatReorgModal .modal-panel {
+    width: min(640px, 100%);
 }
 
 .deal-preview-board {
@@ -1390,6 +1407,14 @@ button.kibitz-chip {
     grid-template-columns: repeat(4, 1fr);
     gap: 10px 8px;
     align-items: stretch;
+    /* Voir échange avec Guillaume (session du 23 juillet) : sans ça, les 3 rangées (N /
+       O+E / S) se répartissaient sur TOUTE la hauteur disponible du conteneur dès que
+       celui-ci en offrait plus qu'il n'en fallait (ex. la modale de réorganisation des
+       sièges, dont la hauteur ne dépend pas uniquement du contenu) — les cases
+       s'étiraient alors verticalement bien au-delà de leur contenu, donnant une
+       impression de mise en page "déformée". align-content: start les tasse en haut,
+       chacune gardant sa hauteur naturelle, quel que soit l'espace vertical du parent. */
+    align-content: start;
 }
 
 /* Halo doré évoquant le plateau de la table, posé derrière les 4 cases (voir z-index sur

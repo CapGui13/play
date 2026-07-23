@@ -355,13 +355,6 @@
                      fixées par position (N/E/S/O), donc ça change qui joue quelle main à cet
                      instant précis, pas les cartes elles-mêmes ni l'historique déjà enchéri. -->
                 <button id="rotateSeatsBtn" type="button" class="btn btn-secondary btn-small" style="visibility:hidden; pointer-events:none;" onclick="uiRotateSeatsClockwise()"><span class="btn-label-full">🔄 Rotation 90°</span><span class="btn-label-short">🔄 Rotation</span></button>
-                <!-- Voir échange avec Guillaume (session du 23 juillet) : ouvre la même
-                     grille de réorganisation des sièges que dans le salon (croix cliquable,
-                     voir renderSeatAssignmentGrid), maintenant accessible aussi en cours de
-                     partie — pour tout redistribuer d'un coup si besoin, pas seulement
-                     glisser un kibitz un par un (voir uiDropOnSeat). Réservé à l'hôte, même
-                     traitement de visibilité que "Rotation" juste au-dessus. -->
-                <button id="seatReorgBtn" type="button" class="btn btn-secondary btn-small" style="visibility:hidden; pointer-events:none;" onclick="uiOpenSeatReorgModal()"><span class="btn-label-full">🪑 Réorganiser les sièges</span><span class="btn-label-short">🪑 Sièges</span></button>
                 <!-- Visibilité gérée par updateBoardControlVisibility (host ou joueur assis) :
                      voir échange avec Guillaume — récupérer les donnes jouées de toute la session
                      (mains + enchère réelle + vulnérabilité) pour lui permettre de me faire des
@@ -396,6 +389,12 @@
                  (voir styles.css) pour laisser ce bouton filer à la ligne plutôt que hors
                  écran. -->
             <button id="ledgerNamesToggleBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" onclick="uiToggleLedgerNames()"><span class="btn-label-full">Noms des joueurs</span><span class="btn-label-short">Noms</span></button>
+            <!-- Voir échange avec Guillaume (session du 23 juillet) : déplacé ici (était
+                 dans game-actions), même format de bouton que "Noms des joueurs" juste au-
+                 dessus, sur la même ligne. Réservé à l'hôte — visibilité pilotée dans
+                 updateBoardControlVisibility, même traitement que "Rotation" dans
+                 game-actions. -->
+            <button id="seatReorgBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" style="visibility:hidden; pointer-events:none;" onclick="uiOpenSeatReorgModal()"><span class="btn-label-full">🪑 Réorganiser les sièges</span><span class="btn-label-short">🪑 Sièges</span></button>
         </div>
 
         <div class="game-content-row">
