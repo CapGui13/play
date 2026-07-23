@@ -1251,6 +1251,14 @@ function buildHostHandlers(onOpenExtra) {
             // connexion" caché — replaceState (pas pushState) pour ne pas empiler une
             // entrée d'historique de navigateur à chaque partie créée, sans recharger la
             // page (juste l'URL affichée qui change).
+            // Voir échange avec Guillaume (session du 23 juillet) : sans ça, le statut
+            // restait sur son dernier état affiché (ex. "🔴 Déconnecté" après une coupure)
+            // jusqu'à ce qu'un premier invité se connecte (seul endroit qui l'appelait
+            // jusqu'ici) — ne se voyait pas à la création initiale (rien à rafraîchir),
+            // mais devenait trompeur après une reconnexion (manuelle ou automatique via
+            // peer.reconnect()) tant que personne ne rejoignait entre-temps.
+            setConnectionStatus(true);
+            renderReconnectButton();
             window.history.replaceState(null, '', url.toString());
             if (onOpenExtra) onOpenExtra(roomCode);
             else enterLobbyScreen();
@@ -1323,7 +1331,13 @@ function buildHostHandlers(onOpenExtra) {
             if (deals) renderBoard();
         },
         onPeerDisconnected: (guestIndex) => {
-            setConnectionStatus(peerConn ? peerConn.isConnected() : false);
+            // Voir échange avec Guillaume (session du 23 juillet — même souci que
+            // renderReconnectButton juste au-dessus) : signalingOpen (notre propre
+            // connexion), pas isConnected() — sinon le statut passait à tort à "🔴
+            // Déconnecté" dès que le DERNIER invité encore connecté se déconnectait, même
+            // si notre propre lien au serveur de signalisation reste parfaitement sain.
+            setConnectionStatus(peerConn ? peerConn.signalingOpen : false);
+            renderReconnectButton();
             const token = tokenForGuestIndex(guestIndex);
             if (token) {
                 delete guestIndexByToken[token];
@@ -1361,6 +1375,7 @@ function buildHostHandlers(onOpenExtra) {
         // maintenant, le statut reflète ce problème au lieu de rester "🟢 Connecté".
         onSignalingDisconnected: () => {
             setConnectionStatus(false);
+            renderReconnectButton();
         },
         onError: (err) => {
             // Voir échange avec Guillaume (session du 23 juillet — reprise automatique
@@ -1541,6 +1556,13 @@ function connectAsGuest(code, token, nickname) {
 // Reconnexion après coupure : même code de salon, même jeton (localStorage) — l'hôte
 // reconnaît le jeton et renvoie automatiquement les sièges et l'état de partie en cours.
 function uiReconnect() {
+    // Voir échange avec Guillaume (session du 23 juillet — "l'hôte n'a aucun bouton
+    // Se reconnecter") : ce bouton (voir reconnectBtn dans index.html) sert maintenant
+    // aux deux rôles — la logique diffère donc selon qui clique.
+    if (myRole === 'host') {
+        uiHostReconnect();
+        return;
+    }
     if (myRole !== 'guest' || !currentRoomCode) return;
     if (peerConn) peerConn.destroy();
     setConnectionStatus(false);
@@ -1550,12 +1572,60 @@ function uiReconnect() {
     peerConn.joinRoom(currentRoomCode, { reconnectToken: token, nickname: savedNickname });
 }
 
+// Voir échange avec Guillaume (session du 23 juillet) : la reconnexion AUTOMATIQUE de
+// l'hôte (peer.reconnect(), voir peer-connection.js) est bornée à 5 tentatives rapprochées
+// — si le réseau reste indisponible plus longtemps que ça (ex. écran de téléphone
+// verrouillé un moment), l'hôte restait bloqué sans AUCUN moyen de relancer une tentative,
+// même une fois le réseau revenu, contrairement à l'invité qui a toujours eu ce bouton.
+// Contrairement à une reprise par le sous-hôte, ici l'onglet n'a jamais fermé : tout l'état
+// (donnes, enchère, sièges) est déjà intact en mémoire, rien à reconstruire — on retente
+// juste de récupérer le même identifiant réseau sous le même code.
+function uiHostReconnect() {
+    if (myRole !== 'host' || !currentRoomCode) return;
+    if (peerConn) peerConn.destroy();
+    setConnectionStatus(false);
+    const codeToReclaim = currentRoomCode;
+    pushDebugLog(`Reconnexion manuelle en tant qu'hôte, salle ${codeToReclaim}…`);
+
+    const newPeerConn = new BridgePeerConnection(buildHostHandlers(() => {
+        // État déjà intact (voir plus haut) : juste rafraîchir l'affichage, rien à
+        // reconstruire côté salon/partie.
+        renderReconnectButton();
+        if (deals) renderBoard(); else renderLobby();
+    }));
+    peerConn = newPeerConn;
+    // Voir échange avec Guillaume : si quelqu'un (le sous-hôte) a entre-temps repris ce
+    // code — collision d'identifiant — on ne reste pas bloqué : on rejoint nous-mêmes la
+    // partie comme simple invité (même mécanisme que la détection automatique dans
+    // buildHostHandlers, mais ici la tentative est volontaire, pas un peer.reconnect()
+    // automatique qui aurait échoué tout seul).
+    newPeerConn.handlers.onError = (err) => {
+        if (err && err.type === 'unavailable-id' && deals) {
+            pushDebugLog("Impossible de reprendre notre rôle d'hôte (déjà repris) — on rejoint la partie comme simple invité.");
+            connectAsGuest(codeToReclaim, getReconnectToken(), savedNickname);
+            return;
+        }
+        pushDebugLog("Échec de la reconnexion manuelle en tant qu'hôte : " + ((err && (err.message || err.type)) || err));
+    };
+    newPeerConn.createRoom(6, codeToReclaim);
+}
+
 let everConnectedAsGuest = false;
 
 function renderReconnectButton() {
     const btn = document.getElementById('reconnectBtn');
     if (!btn) return;
-    const shouldShow = myRole === 'guest' && everConnectedAsGuest && peerConn && !peerConn.isConnected();
+    // Voir échange avec Guillaume (session du 23 juillet) : visible pour l'hôte aussi
+    // désormais. Attention — PAS le même critère que pour l'invité : isConnected() vaut
+    // signalingOpen ET au moins une connexion active, ce qui est le bon critère pour un
+    // invité (une seule connexion, vers l'hôte) mais donnerait un faux positif pour
+    // l'hôte dès qu'il est seul dans son propre salon (aucun invité connecté n'importe
+    // vraiment) — sa PROPRE connexion (signalingOpen) est le seul critère qui compte pour
+    // lui, indépendamment du nombre d'invités présents.
+    const shouldShow = peerConn && (
+        (myRole === 'guest' && everConnectedAsGuest && !peerConn.isConnected())
+        || (myRole === 'host' && !peerConn.signalingOpen)
+    );
     btn.style.display = shouldShow ? '' : 'none';
 }
 
