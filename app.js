@@ -7079,6 +7079,19 @@ function uiResumeHostSession() {
     auctionHistory = deals[boardIndex].auctionHistory;
     seatAssignment = saved.seatAssignment || { N: null, E: null, S: null, W: null };
     participants = saved.participants || [{ id: 'host', name: savedNickname || 'Hôte' }];
+    // Voir échange avec Guillaume (session du 23 juillet — "il apparaît toujours en
+    // blanc alors qu'il est déconnecté") : le statut restauré reflète la DERNIÈRE
+    // sauvegarde (où tout le monde pouvait très bien être connecté) — mais personne
+    // n'est réellement connecté au tout nouveau Peer qu'on vient de recréer, tant qu'ils
+    // ne se sont pas reconnectés eux-mêmes (voir onGuestConnected, qui les remettra
+    // correctement à disconnected:false à ce moment-là).
+    const resumedAt = Date.now();
+    participants.forEach(p => {
+        if (p.id !== 'host') {
+            p.disconnected = true;
+            p.disconnectedAt = resumedAt;
+        }
+    });
     autoPassSeats = saved.autoPassSeats || [];
     myRole = 'host';
     myParticipantId = 'host';
