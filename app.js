@@ -1430,8 +1430,12 @@ function buildGuestHandlers() {
         },
         onPeerDisconnected: () => {
             setConnectionStatus(false);
-            renderReconnectButton();
             scheduleSubHostTakeoverIfNeeded();
+            // Voir échange avec Guillaume (session du 23 juillet — "le bouton ne sert à
+            // rien pour le sous-hôte") : APRÈS scheduleSubHostTakeoverIfNeeded, pas avant
+            // — renderReconnectButton doit voir subHostTakeoverTimer déjà posé pour
+            // décider correctement de le masquer ou non.
+            renderReconnectButton();
             // Voir échange avec Guillaume (session du 23 juillet — compteur qui défile) :
             // posé seulement s'il ne l'était pas déjà, comme subHostDisconnectDetectedAt —
             // sinon un second événement de coupure pendant qu'on est déjà déconnecté
@@ -1447,8 +1451,8 @@ function buildGuestHandlers() {
         // inaperçue — ni le statut ni le bouton ne se mettaient à jour.
         onSignalingDisconnected: () => {
             setConnectionStatus(false);
-            renderReconnectButton();
             scheduleSubHostTakeoverIfNeeded();
+            renderReconnectButton();
             if (!selfDisconnectedAt) selfDisconnectedAt = Date.now();
             if (deals) renderBoard();
         },
@@ -1622,7 +1626,16 @@ function renderReconnectButton() {
     // l'hôte dès qu'il est seul dans son propre salon (aucun invité connecté n'importe
     // vraiment) — sa PROPRE connexion (signalingOpen) est le seul critère qui compte pour
     // lui, indépendamment du nombre d'invités présents.
-    const shouldShow = peerConn && (
+    //
+    // Masqué en plus pour le SOUS-HÔTE DÉSIGNÉ tant que SON PROPRE minuteur de reprise
+    // tourne (voir subHostTakeoverTimer) : un mécanisme automatique est déjà en cours pour
+    // lui (avec un compte à rebours visible dans la bannière, voir
+    // renderReconnectionBanner) — cliquer ce bouton ne peut rien accomplir tant que
+    // personne n'héberge encore la salle. Les AUTRES invités, eux, gardent le bouton :
+    // pour eux, rien d'automatique n'est en cours, et ça peut être un simple accroc de
+    // LEUR côté plutôt que la disparition de l'hôte.
+    const isSubHostAwaitingTakeover = myParticipantId === currentSubHostId && !!subHostTakeoverTimer;
+    const shouldShow = peerConn && !isSubHostAwaitingTakeover && (
         (myRole === 'guest' && everConnectedAsGuest && !peerConn.isConnected())
         || (myRole === 'host' && !peerConn.signalingOpen)
     );
