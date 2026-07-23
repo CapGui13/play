@@ -1603,7 +1603,7 @@ function enterLobbyScreen() {
     // le choix de quelqu'un qui l'aurait refermé volontairement entre-temps.
     if (!deals && !lobbyChatAutoOpened) {
         lobbyChatAutoOpened = true;
-        if (!chatPanelOpen) uiToggleChat();
+        if (!chatPanelOpen) uiToggleChat(false);
     }
 
     renderLobby();
@@ -3019,7 +3019,7 @@ function handlePeerData(msg, guestIndex) {
             // atterrit sur la partie déjà en cours sans savoir que le chat existe pour
             // demander où en est la table, se présenter, etc.
             if (msg.isNewJoiner && mySeats.length === 0 && !chatPanelOpen) {
-                uiToggleChat();
+                uiToggleChat(false);
             }
             break;
         }
@@ -4858,7 +4858,13 @@ function undockChatFromScreen() {
     }
 }
 
-function uiToggleChat() {
+// Voir échange avec Guillaume (session du 23 juillet — "ça m'ouvre la page à mi hauteur") :
+// `focusInput` par défaut à true (clic manuel sur le bouton chat — on veut alors amener le
+// champ à l'écran). Mis à false pour l'ouverture AUTOMATIQUE et silencieuse à l'entrée dans
+// le salon (voir enterLobbyScreen) : focus() y déclenchait un défilement de page vers le
+// bas (le chat étant ancré en bas de page), atterrissant en plein milieu du salon au lieu
+// du haut, sans qu'on ait rien demandé.
+function uiToggleChat(focusInput = true) {
     chatPanelOpen = !chatPanelOpen;
     const panel = document.getElementById('chatPanel');
     // Voir échange avec Guillaume : fondu rapide plutôt qu'un affichage/masquage instantané
@@ -4884,7 +4890,7 @@ function uiToggleChat() {
         renderChat();
         renderRoomBoard(); // "qui est présent" fusionné dans le même panneau, voir échange avec Guillaume
         const input = document.getElementById('chatInput');
-        if (input) input.focus();
+        if (input && focusInput) input.focus();
     }
 }
 
