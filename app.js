@@ -5004,10 +5004,16 @@ function renderBoard() {
     renderUndoAskBanner();
     renderBoardSkipControls();
     renderReconnectionBanner();
-    // Seulement si le panneau de chat est actuellement ouvert (il contient le bandeau
-    // "qui est présent", voir uiToggleChat) : pas besoin de reconstruire son contenu tant
-    // que personne ne le regarde.
-    if (chatPanelOpen) renderRoomBoard();
+    // Voir échange avec Guillaume (session du 23 juillet — "ça n'affiche plus à la 2e
+    // déconnexion") : renderChat() manquait ici, contrairement à renderRoomBoard()
+    // juste en dessous — la couleur rouge des noms déconnectés dans le chat (voir
+    // renderChat) ne se mettait donc à jour que par coïncidence, si un AUTRE événement
+    // (nouveau message...) déclenchait un rendu au même moment. Même garde que
+    // renderRoomBoard : seulement si le panneau est effectivement ouvert.
+    if (chatPanelOpen) {
+        renderRoomBoard();
+        renderChat();
+    }
     maybeRobotBid();
 }
 
