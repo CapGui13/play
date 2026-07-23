@@ -1255,8 +1255,21 @@ function buildHostHandlers(onOpenExtra) {
             setConnectionStatus(true);
             renderReconnectButton();
             window.history.replaceState(null, '', url.toString());
-            if (onOpenExtra) onOpenExtra(roomCode);
-            else enterLobbyScreen();
+            if (onOpenExtra) {
+                onOpenExtra(roomCode);
+            } else if (deals) {
+                // Voir échange avec Guillaume (session du 23 juillet — "ça me renvoie
+                // dans le salon" après une mise en arrière-plan sur iPhone) : ce handler
+                // se redéclenche à CHAQUE réouverture du Peer, pas seulement à la toute
+                // première création — y compris une reconnexion AUTOMATIQUE
+                // (peer.reconnect(), voir peer-connection.js) après une simple coupure
+                // réseau en pleine partie. Sans ce garde-fou, enterLobbyScreen() était
+                // appelée à chaque fois, arrachant l'hôte de sa partie en cours pour le
+                // renvoyer au salon, alors que rien n'avait été perdu (deals intact).
+                renderBoard();
+            } else {
+                enterLobbyScreen();
+            }
         },
         onGuestConnected: (guestIndex, metadata) => {
             setConnectionStatus(true);
