@@ -2267,6 +2267,11 @@ function promoteSelfToHostAfterTakeover(oldParticipantId, oldHostToken, detected
     cancelSubHostTakeoverTimer();
 
     setConnectionStatus(true);
+    // Voir échange avec Guillaume (session du 23 juillet — "le bouton Se reconnecter
+    // persiste") : jamais rafraîchi ailleurs après la bascule — son affichage ne dépend
+    // que de myRole==='guest' (voir renderReconnectButton), qui vient justement de
+    // changer, mais rien ne le lui redisait explicitement.
+    renderReconnectButton();
     updateBoardControlVisibility();
     renderBoard();
     flashSubHostTookOverToast();
@@ -3052,12 +3057,14 @@ function handlePeerData(msg, guestIndex) {
             hostPendingUndo = null;
             clearUndoUiState();
             enterGameScreen();
-            // Voir échange avec Guillaume (session du 23 juillet) : un tout nouveau
-            // participant (pas un retour de coupure, voir isNewJoiner) qui rejoint sans
-            // siège assigné (kibitz) doit voir le chat ouvert d'office — sans ça, il
-            // atterrit sur la partie déjà en cours sans savoir que le chat existe pour
-            // demander où en est la table, se présenter, etc.
-            if (msg.isNewJoiner && mySeats.length === 0 && !chatPanelOpen) {
+            // Voir échange avec Guillaume (session du 23 juillet) : élargi à TOUT
+            // 'resync' — au départ réservé à un tout nouveau kibitz sans siège
+            // (isNewJoiner), mais un joueur qui REVIENT après une vraie coupure (y
+            // compris l'hôte original, de retour après qu'un sous-hôte a pris le relais
+            // en son absence, voir attemptSubHostTakeover) a tout autant besoin de voir
+            // le chat pour se resituer (qui est là, qu'est-ce qui s'est passé...), qu'il
+            // ait un siège ou non.
+            if (!chatPanelOpen) {
                 uiToggleChat(false);
             }
             break;
