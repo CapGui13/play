@@ -1062,6 +1062,11 @@ function defaultParticipantName(pid) {
 // ===== Navigation entre écrans =====
 
 function showScreen(id) {
+    // Voir échange avec Guillaume (session du 23 juillet — "ça m'ouvre la page à mi
+    // hauteur") : sans ça, le nouvel écran hérite de la position de défilement de
+    // l'ancien — s'ils n'ont pas la même hauteur de contenu à cet endroit précis, on
+    // atterrit au milieu de nulle part plutôt qu'en haut.
+    window.scrollTo(0, 0);
     document.querySelectorAll('.screen').forEach(el => el.style.display = 'none');
     // '' (et non 'block' en dur) : un style inline a une priorité absolue sur n'importe
     // quelle règle de styles.css, y compris #screen-game { display: flex; ... } posé par
@@ -1235,6 +1240,12 @@ function buildHostHandlers(onOpenExtra) {
             url.searchParams.set('room', roomCode);
             document.getElementById('shareLinkInput').value = url.toString();
             document.getElementById('lobbyRoomCodeInline').textContent = `(code ${roomCode})`;
+            // Voir échange avec Guillaume (session du 23 juillet) : reflète le code dans
+            // la barre d'adresse elle-même, pas seulement dans le champ "lien de
+            // connexion" caché — replaceState (pas pushState) pour ne pas empiler une
+            // entrée d'historique de navigateur à chaque partie créée, sans recharger la
+            // page (juste l'URL affichée qui change).
+            window.history.replaceState(null, '', url.toString());
             if (onOpenExtra) onOpenExtra(roomCode);
             else enterLobbyScreen();
         },
@@ -1373,6 +1384,13 @@ function buildGuestHandlers() {
     return {
         onOpen: (role, roomCode) => {
             document.getElementById('lobbyRoomCodeInline').textContent = `(code ${roomCode})`;
+            // Voir échange avec Guillaume (session du 23 juillet) : même correctif que
+            // côté hôte — la barre d'adresse ne reflétait jusqu'ici jamais le code de
+            // salle, y compris en rejoignant via un code tapé à la main (pas via un lien
+            // de partage qui l'aurait déjà dans l'URL).
+            const url = new URL(window.location.href);
+            url.searchParams.set('room', roomCode);
+            window.history.replaceState(null, '', url.toString());
         },
         onGuestConnected: () => {
             hideConnectingOverlay();
