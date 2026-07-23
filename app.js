@@ -1318,6 +1318,11 @@ function buildHostHandlers(onOpenExtra) {
                     deals, boardIndex, auctionHistory,
                     yourSeats: seatsForThisGuest,
                     botSeats: autoPassSeats,
+                    // Voir échange avec Guillaume (session du 23 juillet) : même raison
+                    // que pour 'start-game' — connus dès cette (re)connexion, pas
+                    // seulement à réception d'un futur lobby-state.
+                    subHostId: computeSubHostId(),
+                    hostReconnectToken: getReconnectToken(),
                     // Voir échange avec Guillaume (session du 23 juillet) : permet au client
                     // de distinguer un tout nouveau participant d'un simple retour de coupure
                     // (isReturning), pour n'ouvrir le chat automatiquement que dans le premier
@@ -2890,7 +2895,18 @@ function uiStartGameAsHost() {
             const guestIndex = guestIndexForParticipant(p.id);
             if (guestIndex == null) return;
             const seatsForThisGuest = SEATS.filter(seat => seatAssignment[seat] === p.id);
-            peerConn.send({ type: 'start-game', deals, yourSeats: seatsForThisGuest, botSeats }, guestIndex);
+            // Voir échange avec Guillaume (session du 23 juillet — "rien ne se déclenche")
+            // : subHostId/hostReconnectToken inclus ICI aussi, pas seulement dans
+            // broadcastLobbyState ('lobby-state') — sans ça, un invité qui ne recevait
+            // plus jamais de lobby-state entre le lancement et une éventuelle coupure de
+            // l'hôte ne connaissait jamais le sous-hôte désigné, et la reprise
+            // automatique ne se déclenchait donc jamais.
+            peerConn.send({
+                type: 'start-game',
+                deals, yourSeats: seatsForThisGuest, botSeats,
+                subHostId: computeSubHostId(),
+                hostReconnectToken: getReconnectToken()
+            }, guestIndex);
         });
 
         enterGameScreen();
@@ -3121,6 +3137,11 @@ function handlePeerData(msg, guestIndex) {
             boardIndex = 0;
             if (!deals[0].auctionHistory) deals[0].auctionHistory = [];
             auctionHistory = deals[0].auctionHistory;
+            // Voir échange avec Guillaume (session du 23 juillet) : connus dès le
+            // lancement de la partie, pas seulement à réception d'un futur lobby-state
+            // (voir uiStartGameAsHost, qui les inclut désormais aussi dans ce message).
+            currentSubHostId = msg.subHostId || null;
+            currentHostReconnectToken = msg.hostReconnectToken || null;
             hostPendingUndo = null;
             clearUndoUiState();
             enterGameScreen();
@@ -3137,6 +3158,10 @@ function handlePeerData(msg, guestIndex) {
             boardIndex = msg.boardIndex;
             auctionHistory = msg.auctionHistory || [];
             deals[boardIndex].auctionHistory = auctionHistory; // voir gotoBoard : reste la référence partagée à partir de maintenant
+            // Voir échange avec Guillaume (session du 23 juillet) : voir le commentaire
+            // équivalent dans 'start-game'.
+            currentSubHostId = msg.subHostId || null;
+            currentHostReconnectToken = msg.hostReconnectToken || null;
             hostPendingUndo = null;
             clearUndoUiState();
             enterGameScreen();
