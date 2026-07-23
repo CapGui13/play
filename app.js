@@ -6961,7 +6961,14 @@ window.addEventListener('DOMContentLoaded', () => {
     // de reconnexion — pas besoin d'un message réseau pour ça, chaque client calcule son
     // propre écoulé à partir de disconnectedAt. Sans effet (sortie immédiate) hors partie
     // ou si la bannière n'est pas affichée, voir renderReconnectionBanner.
+    // Voir échange avec Guillaume (session du 23 juillet — "le bouton reste affiché à
+    // tort") : réévalué en continu, comme la bannière — plutôt que de compter sur CHAQUE
+    // scénario de rétablissement pour explicitement appeler renderReconnectButton() au
+    // bon moment (fragile : un cas oublié, ou une reconnexion ICE qui se rétablit sans
+    // passer par nos propres gestionnaires, voir attachPCDiagnostics dans
+    // peer-connection.js, laissait le bouton figé sur son dernier état affiché).
     setInterval(renderReconnectionBanner, 1000);
+    setInterval(renderReconnectButton, 1000);
 
     const params = new URLSearchParams(window.location.search);
     const room = params.get('room');
