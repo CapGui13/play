@@ -485,6 +485,33 @@ body.on-landing-screen .connection-bar {
     line-height: 1.6;
 }
 
+/* Voir échange avec Guillaume (session du 23 juillet — reprise de partie via localStorage) :
+   même teinte verte que .deal-file-info (prêt/positif), pour rester cohérent avec le
+   vocabulaire de couleurs déjà établi ailleurs dans l'appli. */
+.resume-session-banner {
+    max-width: 520px;
+    margin: 0 auto 24px;
+    padding: 16px 20px;
+    border-radius: 10px;
+    background: #223d2c;
+    background: color-mix(in srgb, #3ca05a 20%, var(--card));
+    border: 1px solid color-mix(in srgb, #3ca05a 45%, var(--card));
+    color: #74b883;
+    color: color-mix(in srgb, #3ca05a 70%, var(--text));
+    text-align: center;
+}
+
+.resume-session-text {
+    margin-bottom: 12px;
+    font-weight: 600;
+}
+
+.resume-session-actions {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+}
+
 .landing-choices {
     display: grid;
     grid-template-columns: 1fr 1fr;
