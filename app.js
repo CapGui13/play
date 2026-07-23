@@ -6579,6 +6579,24 @@ function initOfflineHandling() {
 
 // ===== Initialisation =====
 
+// Voir échange avec Guillaume (session du 23 juillet — "si l'hôte refresh dans le salon,
+// ça devrait clôturer la room") : tout l'état de l'hôte vit en mémoire JS, rien n'est
+// persistant côté serveur — recharger la page pendant qu'il est ENCORE dans le salon
+// (avant le lancement) tue sa salle de toute façon, sans espoir de reprise automatique
+// (le sous-hôte n'existe qu'une fois la partie lancée, voir computeSubHostId). Sans ce
+// correctif, l'URL garderait le code (voir history.replaceState dans onOpen) et la page
+// rechargée tenterait, en vain, de rejoindre sa propre salle qui vient de disparaître —
+// retire le code AVANT que le rechargement n'ait lieu, pour atterrir sur un accueil propre.
+// Ne s'applique PAS une fois la partie lancée (deals) : là, garder le code a du sens
+// (reprise possible via le sous-hôte, ou l'hôte qui revient simplement après un blip).
+window.addEventListener('beforeunload', () => {
+    if (myRole === 'host' && !deals) {
+        const url = new URL(window.location.href);
+        url.searchParams.delete('room');
+        window.history.replaceState(null, '', url.toString());
+    }
+});
+
 window.addEventListener('DOMContentLoaded', () => {
     initServiceWorker();
     initIosInstallHint();
