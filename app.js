@@ -7092,6 +7092,17 @@ function uiResumeHostSession() {
     const newPeerConn = new BridgePeerConnection(buildHostHandlers(() => {
         hideConnectingOverlay();
         enterGameScreen();
+        // Voir échange avec Guillaume (session du 23 juillet — "le DD n'est plus
+        // calculé") : le calcul du double mort tourne en arrière-plan via un appel
+        // réseau (voir kickOffBackgroundDD) — s'il n'était pas encore terminé au moment
+        // de la fermeture de l'onglet, cet appel a été abandonné avec lui, et rien ne le
+        // relance tout seul. On relance ici pour toute donne encore sans résultat.
+        const missingDD = deals.filter(d => !d.par && !d.ddTable);
+        if (missingDD.length > 0) kickOffBackgroundDD(missingDD);
+        // Voir échange avec Guillaume (session du 23 juillet — "le chat qui était
+        // ouvert... est fermé") : rouvert par défaut à la reprise, comme pour un joueur
+        // qui rejoint en cours de partie (voir le handler 'resync').
+        if (!chatPanelOpen) uiToggleChat(false);
         saveHostGameStateToStorage(); // remet savedAt à jour tout de suite
     }));
     peerConn = newPeerConn;
