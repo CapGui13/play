@@ -87,6 +87,12 @@ let currentHostReconnectToken = null;
 // perd sa connexion à l'hôte, annulé dès qu'il se reconnecte. `null` tant qu'aucune
 // coupure n'est en cours (ou si ce client n'est pas le sous-hôte).
 let subHostTakeoverTimer = null;
+// Voir échange avec Guillaume (session du 23 juillet) : horodatage de la détection réelle
+// de la coupure (posé au moment où le minuteur démarre, PAS au moment où la bascule
+// s'exécute effectivement 20s plus tard) — sert pour l'affichage "déconnecté depuis Xs"
+// une fois la bascule faite (voir promoteSelfToHostAfterTakeover), pour que ce compteur
+// reflète le vrai délai écoulé plutôt que de repartir de zéro à la bascule.
+let subHostDisconnectDetectedAt = null;
 // Délai avant qu'un sous-hôte considère l'hôte définitivement parti et prenne le relais
 // (voir échange avec Guillaume — 20s : assez court pour rester "fluide" à l'échelle d'une
 // partie de bridge, assez long pour absorber un verrouillage d'écran iOS ou un Wi-Fi qui
@@ -2119,6 +2125,7 @@ function scheduleSubHostTakeoverIfNeeded() {
     if (!deals) return; // le sous-hôte n'existe qu'une fois la partie lancée (voir échange avec Guillaume) — pas de reprise pendant le salon
     if (myParticipantId !== currentSubHostId) return; // seul le sous-hôte désigné programme quoi que ce soit
     if (subHostTakeoverTimer) return; // déjà en cours (ex. deux événements de coupure rapprochés) — pas la peine d'en reposer un
+    subHostDisconnectDetectedAt = Date.now();
     subHostTakeoverTimer = setTimeout(() => {
         subHostTakeoverTimer = null;
         attemptSubHostTakeover();
@@ -2130,6 +2137,7 @@ function cancelSubHostTakeoverTimer() {
         clearTimeout(subHostTakeoverTimer);
         subHostTakeoverTimer = null;
     }
+    subHostDisconnectDetectedAt = null;
 }
 
 // Voir échange avec Guillaume (session du 23 juillet) : déclenchée quand le délai de
@@ -2172,9 +2180,15 @@ function attemptSubHostTakeover() {
 // la perdre : s'il revient un jour, il sera reconnu comme un simple retour (voir
 // onGuestConnected), pas comme un inconnu.
 function promoteSelfToHostAfterTakeover(oldParticipantId, oldHostToken) {
+    // Voir échange avec Guillaume (session du 23 juillet) : reflète le moment où LA
+    // COUPURE a été détectée (posé par scheduleSubHostTakeoverIfNeeded), pas le moment où
+    // cette fonction s'exécute — sinon le compteur "déconnecté depuis Xs" affiché ensuite
+    // (voir renderReconnectionBanner) repartirait de zéro à chaque bascule au lieu de
+    // refléter le vrai délai total écoulé depuis la vraie coupure.
+    const disconnectedAt = subHostDisconnectDetectedAt || Date.now();
     if (oldHostToken) {
         participants = participants.map(p => {
-            if (p.id === 'host') return { ...p, id: oldHostToken, disconnected: true, disconnectedAt: Date.now() };
+            if (p.id === 'host') return { ...p, id: oldHostToken, disconnected: true, disconnectedAt };
             if (p.id === oldParticipantId) return { ...p, id: 'host' };
             return p;
         });
@@ -2198,6 +2212,7 @@ function promoteSelfToHostAfterTakeover(oldParticipantId, oldHostToken) {
     hostPendingUndo = null;
     hostTransferInProgress = false;
     currentSubHostId = null; // périmé — recalculé au prochain broadcastLobbyState
+    subHostDisconnectDetectedAt = null;
 
     setConnectionStatus(true);
     updateBoardControlVisibility();
