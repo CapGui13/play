@@ -545,6 +545,23 @@ class BridgePeerConnection {
         return this.conns.length >= this.maxGuests && this.conns.every(c => c && c.open);
     }
 
+    // Voir échange avec Guillaume (session du 23 juillet — "le bouton Se reconnecter ne
+    // marchait pas côté hôte") : réutilise le MÊME objet Peer (même identifiant déjà
+    // enregistré) plutôt que de le détruire pour en recréer un nouveau sous le même code
+    // (voir createRoom(cap, forcedRoomCode)) — cette dernière approche ouvrait une course
+    // avec le serveur de signalisation PeerJS : rien ne garantit qu'il ait fini de libérer
+    // l'identifiant de l'ancien Peer au moment précis où le nouveau tente de s'enregistrer
+    // sous ce même identifiant, provoquant un échec 'unavailable-id' évitable. reconnect()
+    // ici retente sous la MÊME session déjà connue du serveur, sans cette course.
+    // _postOpenReconnectAttempts remis à zéro : un clic manuel mérite un nouveau crédit de
+    // tentatives, indépendant du plafond des tentatives automatiques déjà épuisées.
+    manualReconnect() {
+        if (!this.peer || this.peer.destroyed) return false;
+        this._postOpenReconnectAttempts = 0;
+        this.peer.reconnect();
+        return true;
+    }
+
     destroy() {
         this._clearTimers();
         this.conns.forEach(c => c && c.close());

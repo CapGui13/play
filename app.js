@@ -1624,10 +1624,20 @@ function uiReconnect() {
 // juste de récupérer le même identifiant réseau sous le même code.
 function uiHostReconnect() {
     if (myRole !== 'host' || !currentRoomCode) return;
-    if (peerConn) peerConn.destroy();
+    // Voir échange avec Guillaume (session du 23 juillet — "ça ne marchait pas") : retente
+    // d'abord sur la connexion EXISTANTE (voir manualReconnect dans peer-connection.js),
+    // sans la détruire — l'onOpen déjà câblé sur buildHostHandlers (voir uiCreateRoom)
+    // gère tout seul le succès (statut, bouton, écran) grâce au correctif appliqué juste
+    // avant dans cette même session. Le filet de sécurité ci-dessous (destroy + nouveau
+    // Peer sous le même code forcé) ne sert que si le Peer n'existe même plus du tout.
+    if (peerConn && peerConn.manualReconnect()) {
+        pushDebugLog(`Reconnexion manuelle en tant qu'hôte (peer.reconnect), salle ${currentRoomCode}…`);
+        return;
+    }
+
     setConnectionStatus(false);
     const codeToReclaim = currentRoomCode;
-    pushDebugLog(`Reconnexion manuelle en tant qu'hôte, salle ${codeToReclaim}…`);
+    pushDebugLog(`Reconnexion manuelle en tant qu'hôte (nouveau Peer), salle ${codeToReclaim}…`);
 
     const newPeerConn = new BridgePeerConnection(buildHostHandlers(() => {
         // État déjà intact (voir plus haut) : juste rafraîchir l'affichage, rien à
