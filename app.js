@@ -5297,6 +5297,10 @@ function flashChatMessageToast(senderName, text) {
 function addChatMessage(msg) {
     chatMessages.push(msg);
     renderChat();
+    // Voir échange avec Guillaume (session du 23 juillet — reprise via localStorage) :
+    // sans effet si on n'est pas hôte ou si la partie n'est pas lancée (voir la garde à
+    // l'intérieur de la fonction elle-même).
+    saveHostGameStateToStorage();
     const isMine = msg.senderId === myParticipantId;
     if (!isMine && !isChatPanelVisibleOnScreen()) {
         chatUnreadCount++;
@@ -5308,18 +5312,6 @@ function addChatMessage(msg) {
 function renderChat() {
     const el = document.getElementById('chatMessages');
     if (!el) return;
-    // Même garde que renderParticipantsList (voir échange avec Guillaume) : si l'hôte est
-    // en train de renommer quelqu'un via un double-clic dans LE CHAT lui-même (voir
-    // ci-dessous), on ne reconstruit pas — ça détruirait l'input actif en pleine frappe.
-    if (document.activeElement && document.activeElement.classList.contains('participant-rename-input')) {
-        return;
-    }
-    // Voir échange avec Guillaume (session du 23 juillet) : l'hôte peut renommer
-    // n'importe qui d'autre par un double-clic sur son nom dans le chat — même mécanisme
-    // que le renommage dans le salon (voir uiStartRenamingParticipant), réutilisé tel
-    // quel. Pas pour soi-même (déjà géré par le champ pseudo) ; pas non plus proposé à un
-    // non-hôte, pour qui uiRenameParticipant serait de toute façon un no-op.
-    const canRenameOthers = myRole === 'host';
     el.innerHTML = chatMessages.map(m => {
         // Tous les messages partent de la gauche, y compris les siens (pas de bulle
         // alignée à droite façon messagerie) — le nom précède toujours le message, avec
@@ -5332,12 +5324,11 @@ function renderChat() {
         // relisant d'anciens messages.
         const senderP = participants.find(p => p.id === m.senderId);
         const senderColor = (senderP && senderP.disconnected) ? 'var(--suit-red)' : avatarColorForId(m.senderId);
-        // Le ":" reste HORS du span (voir échange avec Guillaume) : uiStartRenamingParticipant
-        // reprend span.textContent comme valeur de départ du champ d'édition — s'il incluait
-        // le ":", il faudrait le retirer avant de renommer, pour rien.
-        const senderSpan = (canRenameOthers && m.senderId !== myParticipantId)
-            ? `<span class="chat-message-sender chat-message-sender-editable" style="color:${senderColor}" ondblclick="uiStartRenamingParticipant(event, '${m.senderId}')" title="Double-cliquer pour renommer">${escapeHtml(m.senderName)}</span>`
-            : `<span class="chat-message-sender" style="color:${senderColor}">${escapeHtml(m.senderName)}</span>`;
+        // Voir échange avec Guillaume (session du 23 juillet — "pas en cliquant sur le nom
+        // des gens dans le chat") : renommage réservé au "qui est là" (voir
+        // wizzableNameHtml/renderRoomBoard), plus proposé ici — un simple nom, pas de
+        // double-clic ni de titre associé.
+        const senderSpan = `<span class="chat-message-sender" style="color:${senderColor}">${escapeHtml(m.senderName)}</span>`;
         return `<div class="chat-message">${senderSpan} : <span class="chat-message-text">${escapeHtml(m.text)}</span></div>`;
     }).join('');
     el.scrollTop = el.scrollHeight; // toujours faire défiler vers le message le plus récent
@@ -5576,6 +5567,13 @@ function uiShowCallExplanation(el) {
 function renderRoomBoard() {
     const el = document.getElementById('roomBoard');
     if (!el) return;
+    // Voir échange avec Guillaume (session du 23 juillet) : même garde que
+    // renderParticipantsList — si l'hôte est en train de renommer quelqu'un ici (voir
+    // wizzableNameHtml/uiStartRenamingParticipant), on ne reconstruit pas, ça
+    // détruirait l'input actif en pleine frappe.
+    if (document.activeElement && document.activeElement.classList.contains('participant-rename-input')) {
+        return;
+    }
 
     // Seuls les sièges réellement occupés par un participant apparaissent ici : les
     // robots ne sont pas des "personnes dans la salle", ça n'a pas sa place dans ce
@@ -7004,6 +7002,10 @@ function saveHostGameStateToStorage() {
         const payload = {
             roomCode: currentRoomCode,
             deals, boardIndex, seatAssignment, participants, autoPassSeats,
+            // Voir échange avec Guillaume (session du 23 juillet — "sauve aussi le chat") :
+            // sans ça, la conversation repartait de zéro à chaque reprise, même s'il y
+            // avait des messages échangés juste avant la fermeture de l'onglet.
+            chatMessages,
             savedAt: Date.now()
         };
         localStorage.setItem(HOST_GAME_STATE_KEY, JSON.stringify(payload));
@@ -7093,6 +7095,9 @@ function uiResumeHostSession() {
         }
     });
     autoPassSeats = saved.autoPassSeats || [];
+    // Voir échange avec Guillaume (session du 23 juillet — "sauve aussi le chat") :
+    // restaure la conversation telle qu'elle était juste avant la fermeture de l'onglet.
+    chatMessages = saved.chatMessages || [];
     myRole = 'host';
     myParticipantId = 'host';
     mySeats = SEATS.filter(seat => seatAssignment[seat] === 'host');
@@ -7100,6 +7105,14 @@ function uiResumeHostSession() {
     guestIndexByToken = {};
     hostPendingUndo = null;
     hostTransferInProgress = false;
+    // Voir échange avec Guillaume (session du 23 juillet — même genre de bug que les
+    // participants marqués à tort "connectés") : ces deux "photos" de l'état précédent
+    // servent à détecter des CHANGEMENTS (animation d'arrivée/départ de siège, toast "de
+    // retour") — sans reset, elles restent celles d'avant la fermeture de l'onglet, et
+    // pourraient déclencher une animation ou un toast à tort dès le premier
+    // rafraîchissement après la reprise.
+    prevSeatAssignmentSnapshot = null;
+    prevParticipantsDisconnectedSnapshot = null;
 
     showConnectingOverlay('Reprise de votre partie…');
     const newPeerConn = new BridgePeerConnection(buildHostHandlers(() => {

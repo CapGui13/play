@@ -369,14 +369,6 @@ body.on-landing-screen .connection-bar {
     font-weight: 700;
 }
 
-/* Nom double-cliquable pour renommer (voir échange avec Guillaume, session du 23
-   juillet — uiStartRenamingParticipant depuis le chat, réservé à l'hôte) : curseur
-   pointeur discret, pas de changement visuel plus appuyé pour ne pas alourdir le chat —
-   le tooltip (title=...) suffit à faire découvrir l'interaction. */
-.chat-message-sender-editable {
-    cursor: pointer;
-}
-
 .chat-message-text {
     white-space: pre-wrap;
 }
