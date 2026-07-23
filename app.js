@@ -2178,11 +2178,21 @@ function attemptSubHostTakeover() {
     const oldParticipantId = myParticipantId;
     const oldHostToken = currentHostReconnectToken;
     const codeToReclaim = currentRoomCode;
+    // Voir échange avec Guillaume (session du 23 juillet — "le compteur repart de zéro") :
+    // capturée ICI, AVANT peerConn.destroy() ci-dessous — détruire l'ancienne connexion
+    // redéclenche ses propres événements de déconnexion (le 'disconnected' PeerJS sous-
+    // jacent), qui repassent par scheduleSubHostTakeoverIfNeeded et reposent un NOUVEL
+    // horodatage (subHostTakeoverTimer vient justement d'être remis à null par le
+    // setTimeout qui a appelé cette fonction, donc son garde-fou ne bloque plus rien à cet
+    // instant précis) — en relisant la globale plus tard dans promoteSelfToHostAfterTakeover,
+    // on récupérait cette valeur fraîchement écrasée (≈ maintenant) au lieu de la vraie,
+    // d'où le compteur qui repartait de zéro à chaque bascule.
+    const detectedAt = subHostDisconnectDetectedAt;
     pushDebugLog(`Hôte introuvable depuis ${GUEST_TAKEOVER_GRACE_MS / 1000}s — tentative de reprise du rôle d'hôte sous le code ${codeToReclaim} (sous-hôte désigné).`);
 
     if (peerConn) peerConn.destroy();
     const newPeerConn = new BridgePeerConnection(buildHostHandlers(() => {
-        promoteSelfToHostAfterTakeover(oldParticipantId, oldHostToken);
+        promoteSelfToHostAfterTakeover(oldParticipantId, oldHostToken, detectedAt);
     }));
     peerConn = newPeerConn;
     // Écrasé APRÈS construction (comme pour prepare-become-host) : en cas d'échec de la
@@ -2201,13 +2211,14 @@ function attemptSubHostTakeover() {
 // son PROPRE jeton de reconnexion (déjà connu via currentHostReconnectToken) plutôt que de
 // la perdre : s'il revient un jour, il sera reconnu comme un simple retour (voir
 // onGuestConnected), pas comme un inconnu.
-function promoteSelfToHostAfterTakeover(oldParticipantId, oldHostToken) {
+function promoteSelfToHostAfterTakeover(oldParticipantId, oldHostToken, detectedAt) {
     // Voir échange avec Guillaume (session du 23 juillet) : reflète le moment où LA
-    // COUPURE a été détectée (posé par scheduleSubHostTakeoverIfNeeded), pas le moment où
-    // cette fonction s'exécute — sinon le compteur "déconnecté depuis Xs" affiché ensuite
-    // (voir renderReconnectionBanner) repartirait de zéro à chaque bascule au lieu de
-    // refléter le vrai délai total écoulé depuis la vraie coupure.
-    const disconnectedAt = subHostDisconnectDetectedAt || Date.now();
+    // COUPURE a été détectée (capturé par attemptSubHostTakeover AVANT de détruire
+    // l'ancienne connexion, voir son commentaire), pas le moment où cette fonction
+    // s'exécute — sinon le compteur "déconnecté depuis Xs" affiché ensuite (voir
+    // renderReconnectionBanner) repartirait de zéro à chaque bascule au lieu de refléter
+    // le vrai délai total écoulé depuis la vraie coupure.
+    const disconnectedAt = detectedAt || Date.now();
     if (oldHostToken) {
         participants = participants.map(p => {
             if (p.id === 'host') return { ...p, id: oldHostToken, disconnected: true, disconnectedAt };
@@ -2235,6 +2246,12 @@ function promoteSelfToHostAfterTakeover(oldParticipantId, oldHostToken) {
     hostTransferInProgress = false;
     currentSubHostId = null; // périmé — recalculé au prochain broadcastLobbyState
     subHostDisconnectDetectedAt = null;
+    // Voir échange avec Guillaume (session du 23 juillet) : par précaution, au cas où
+    // peerConn.destroy() (dans attemptSubHostTakeover) aurait réarmé un minuteur fantôme
+    // via les événements de déconnexion de l'ancienne connexion (voir le commentaire
+    // détaillé là-bas) — myRole vient de passer à 'host', donc ce minuteur ne ferait de
+    // toute façon plus rien d'utile, mais autant ne pas le laisser traîner.
+    cancelSubHostTakeoverTimer();
 
     setConnectionStatus(true);
     updateBoardControlVisibility();
