@@ -1265,7 +1265,12 @@ function buildHostHandlers(onOpenExtra) {
                     type: 'resync',
                     deals, boardIndex, auctionHistory,
                     yourSeats: seatsForThisGuest,
-                    botSeats: autoPassSeats
+                    botSeats: autoPassSeats,
+                    // Voir échange avec Guillaume (session du 23 juillet) : permet au client
+                    // de distinguer un tout nouveau participant d'un simple retour de coupure
+                    // (isReturning), pour n'ouvrir le chat automatiquement que dans le premier
+                    // cas — voir le handler 'resync' côté invité.
+                    isNewJoiner: !isReturning
                 }, guestIndex);
             }
 
@@ -1561,6 +1566,28 @@ function uiRandomizeAvatarColor(event, participantId) {
     p.avatarColor = choices[Math.floor(Math.random() * choices.length)];
     broadcastLobbyState();
     renderLobby();
+    // Voir échange avec Guillaume (session du 23 juillet) : le changement de couleur est
+    // maintenant possible EN COURS DE PARTIE aussi (voir interactiveAvatarHtml dans
+    // renderRoomBoard), pas seulement dans le salon — il faut alors aussi rafraîchir le
+    // room board et le chat (la couleur du nom de l'expéditeur y reprend
+    // avatarColorForId), sinon le changement resterait invisible jusqu'au prochain
+    // rafraîchissement fortuit de l'écran de jeu. Ces deux fonctions se protègent déjà si
+    // leurs éléments respectifs n'existent pas, donc rien à garder ici.
+    renderRoomBoard();
+    renderChat();
+}
+
+// Voir échange avec Guillaume (session du 23 juillet) : même mécanisme de changement de
+// couleur au clic que dans le salon (voir avatar-color-trigger ci-dessous, dans
+// renderParticipantsList), mais réutilisable ici pour le room board — permet à l'hôte de
+// changer la couleur de N'IMPORTE QUI, et à chacun la sienne, y compris EN COURS DE
+// PARTIE (avant, ce n'était possible que dans le salon, avant le lancement).
+function interactiveAvatarHtml(participantId) {
+    const canChangeColor = myRole === 'host' || participantId === myParticipantId;
+    const html = avatarHtml(participantId);
+    return canChangeColor
+        ? `<span class="avatar-color-trigger" onclick="uiRandomizeAvatarColor(event, '${participantId}')" title="Changer de couleur">${html}</span>`
+        : html;
 }
 
 function renderParticipantsList() {
@@ -1611,23 +1638,34 @@ function renderParticipantsList() {
     }).join('');
 }
 
+// Remplace un span de nom par un champ éditable (voir échange avec Guillaume) — factorisé
+// pour être appelable soit avec le span cliqué directement (voir uiStartRenamingParticipant
+// ci-dessous), soit avec un span retrouvé autrement (voir uiHandleWizzableNameClick, où
+// l'élément cliqué n'est pas exactement celui à remplacer — voir plus bas).
+function startRenameOnSpan(span, participantId) {
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'participant-rename-input';
+    input.maxLength = 20;
+    // Repart du nom COMPLET stocké côté participant plutôt que de span.textContent : ce
+    // dernier peut contenir des décorations qui ne font pas partie du nom lui-même (ex.
+    // la cloche 🔔 dans le room board, voir wizzableNameHtml).
+    const p = participants.find(x => x.id === participantId);
+    input.value = p ? p.name : span.textContent;
+    input.oninput = () => uiRenameParticipant(participantId, input.value);
+    input.onblur = () => uiRenameParticipantBlur(participantId, input);
+    span.replaceWith(input);
+    input.focus();
+    input.select();
+}
+
 // Convertit le nom (affiché en texte simple, voir renderParticipantsList) en champ
 // éditable au clic explicite — voir échange avec Guillaume : un <input> permanent aurait
 // capté le focus dès un simple appui-maintenu voulant démarrer un glisser-déposer.
 // stopPropagation évite que ce clic ne déclenche autre chose sur le <li> parent.
 function uiStartRenamingParticipant(event, participantId) {
     event.stopPropagation();
-    const span = event.currentTarget;
-    const input = document.createElement('input');
-    input.type = 'text';
-    input.className = 'participant-rename-input';
-    input.maxLength = 20;
-    input.value = span.textContent;
-    input.oninput = () => uiRenameParticipant(participantId, input.value);
-    input.onblur = () => uiRenameParticipantBlur(participantId, input);
-    span.replaceWith(input);
-    input.focus();
-    input.select();
+    startRenameOnSpan(event.currentTarget, participantId);
 }
 
 let participantRenameDebounceTimers = {};
@@ -1646,6 +1684,13 @@ function uiRenameParticipant(participantId, value) {
         p.name = trimmed;
         broadcastLobbyState();
         renderSeatAssignmentGrid();
+        // Voir échange avec Guillaume (session du 23 juillet) : le renommage est
+        // maintenant aussi possible depuis le chat en cours de partie (voir renderChat) —
+        // ces deux affichages reflètent aussi les noms, donc à tenir à jour ici comme
+        // renderSeatAssignmentGrid. renderChat() se protège elle-même si SON PROPRE input
+        // de renommage est actif (pas de risque de l'écraser en pleine frappe).
+        renderRoomBoard();
+        renderChat();
     }, 300);
 }
 
@@ -1658,8 +1703,21 @@ function uiRenameParticipantBlur(participantId, inputEl) {
     if (!p) return;
     const trimmed = inputEl.value.trim();
     p.name = trimmed || defaultParticipantName(participantId);
+    // Voir échange avec Guillaume (session du 23 juillet) : l'hôte peut désormais se
+    // renommer lui-même via ce même mécanisme (voir wizzableNameHtml) — le champ pseudo
+    // du salon (myNameInput) n'est mis à jour qu'à l'entrée dans le salon, donc à
+    // resynchroniser explicitement ici pour ne pas y laisser l'ancien nom.
+    if (participantId === myParticipantId) {
+        const nameInput = document.getElementById('myNameInput');
+        if (nameInput) nameInput.value = p.name;
+    }
     broadcastLobbyState();
     renderLobby();
+    // Voir échange avec Guillaume (session du 23 juillet) : idem qu'au-dessus — le champ
+    // vient de perdre le focus (voir onblur), donc la garde de renderChat() ne bloque
+    // plus rien : le nom se met à jour immédiatement dans les messages déjà affichés.
+    renderRoomBoard();
+    renderChat();
 }
 
 function renderSeatAssignmentGrid() {
@@ -2591,7 +2649,16 @@ function handlePeerData(msg, guestIndex) {
             // l'écran de jeu — sans ça, la bannière de reconnexion et le tour-indicateur
             // resteraient figés jusqu'à la prochaine annonce.
             if (myRole === 'guest' && !deals) enterLobbyScreen();
-            else if (deals) renderBoard();
+            else if (deals) {
+                renderBoard();
+                // Voir échange avec Guillaume (session du 23 juillet) : l'hôte peut
+                // maintenant changer la couleur d'avatar ou renommer n'importe qui EN
+                // COURS DE PARTIE (voir uiRandomizeAvatarColor/uiRenameParticipant) — ce
+                // changement arrive ici via ce même message ; renderBoard() ne rafraîchit
+                // pas le chat, donc on l'appelle en plus (il se protège tout seul si SON
+                // PROPRE input de renommage est actif, aucun risque de l'écraser).
+                renderChat();
+            }
             break;
         }
 
@@ -2633,6 +2700,14 @@ function handlePeerData(msg, guestIndex) {
             hostPendingUndo = null;
             clearUndoUiState();
             enterGameScreen();
+            // Voir échange avec Guillaume (session du 23 juillet) : un tout nouveau
+            // participant (pas un retour de coupure, voir isNewJoiner) qui rejoint sans
+            // siège assigné (kibitz) doit voir le chat ouvert d'office — sans ça, il
+            // atterrit sur la partie déjà en cours sans savoir que le chat existe pour
+            // demander où en est la table, se présenter, etc.
+            if (msg.isNewJoiner && mySeats.length === 0 && !chatPanelOpen) {
+                uiToggleChat();
+            }
             break;
         }
 
@@ -4542,13 +4617,31 @@ function addChatMessage(msg) {
 function renderChat() {
     const el = document.getElementById('chatMessages');
     if (!el) return;
+    // Même garde que renderParticipantsList (voir échange avec Guillaume) : si l'hôte est
+    // en train de renommer quelqu'un via un double-clic dans LE CHAT lui-même (voir
+    // ci-dessous), on ne reconstruit pas — ça détruirait l'input actif en pleine frappe.
+    if (document.activeElement && document.activeElement.classList.contains('participant-rename-input')) {
+        return;
+    }
+    // Voir échange avec Guillaume (session du 23 juillet) : l'hôte peut renommer
+    // n'importe qui d'autre par un double-clic sur son nom dans le chat — même mécanisme
+    // que le renommage dans le salon (voir uiStartRenamingParticipant), réutilisé tel
+    // quel. Pas pour soi-même (déjà géré par le champ pseudo) ; pas non plus proposé à un
+    // non-hôte, pour qui uiRenameParticipant serait de toute façon un no-op.
+    const canRenameOthers = myRole === 'host';
     el.innerHTML = chatMessages.map(m => {
         // Tous les messages partent de la gauche, y compris les siens (pas de bulle
         // alignée à droite façon messagerie) — le nom précède toujours le message, avec
         // sa couleur reprise de avatarColorForId (même couleur que la petite pastille
         // d'avatar de ce participant ailleurs dans l'appli, pour un repère cohérent).
         const senderColor = avatarColorForId(m.senderId);
-        return `<div class="chat-message"><span class="chat-message-sender" style="color:${senderColor}">${escapeHtml(m.senderName)} :</span> <span class="chat-message-text">${escapeHtml(m.text)}</span></div>`;
+        // Le ":" reste HORS du span (voir échange avec Guillaume) : uiStartRenamingParticipant
+        // reprend span.textContent comme valeur de départ du champ d'édition — s'il incluait
+        // le ":", il faudrait le retirer avant de renommer, pour rien.
+        const senderSpan = (canRenameOthers && m.senderId !== myParticipantId)
+            ? `<span class="chat-message-sender chat-message-sender-editable" style="color:${senderColor}" ondblclick="uiStartRenamingParticipant(event, '${m.senderId}')" title="Double-cliquer pour renommer">${escapeHtml(m.senderName)}</span>`
+            : `<span class="chat-message-sender" style="color:${senderColor}">${escapeHtml(m.senderName)}</span>`;
+        return `<div class="chat-message">${senderSpan} : <span class="chat-message-text">${escapeHtml(m.text)}</span></div>`;
     }).join('');
     el.scrollTop = el.scrollHeight; // toujours faire défiler vers le message le plus récent
 }
@@ -4608,13 +4701,25 @@ const wizzCooldownUntil = {}; // targetId -> timestamp, purement local (pas beso
 // celui de quelqu'un de déconnecté (personne pour le recevoir). Sur son propre nom,
 // déclenche l'effet directement en local (voir uiSelfWizz) plutôt que de faire un
 // aller-retour réseau inutile.
+// Voir échange avec Guillaume (session du 23 juillet) : nom et cloche de wizz séparés en
+// deux éléments (au lieu d'un seul span cliquable pour tout) — un double-clic sur le nom
+// déclenche maintenant le renommage (host, pour n'importe qui, y compris lui-même — voir
+// uiStartRenamingParticipant) pendant qu'un simple clic sur 🔔 déclenche le wizz. Les
+// fusionner posait deux problèmes : le texte de la cloche (" 🔔") se serait retrouvé dans
+// le champ d'édition du renommage, et un double-clic aurait de toute façon déclenché 2
+// wizz au passage (2 clics avant le dblclick) avant d'ouvrir le renommage.
 function wizzableNameHtml(p) {
-    const name = `<span class="room-board-name">${escapeHtml(p.name)}</span>`;
-    if (p.disconnected) return name;
+    const canRename = myRole === 'host';
+    const nameAttrs = canRename
+        ? ` class="room-board-name room-board-name-editable" ondblclick="uiStartRenamingParticipant(event, '${p.id}')" title="Double-cliquer pour renommer"`
+        : ` class="room-board-name"`;
+    const nameSpan = `<span${nameAttrs}>${escapeHtml(p.name)}</span>`;
+
+    if (p.disconnected) return nameSpan;
     if (p.id === myParticipantId) {
-        return `<span class="room-board-name wizzable" onclick="uiSelfWizz()" title="Tester l'effet wizz sur soi-même">${escapeHtml(p.name)} 🔔</span>`;
+        return `${nameSpan}<span class="room-board-wizz-btn" onclick="uiSelfWizz()" title="Tester l'effet wizz sur soi-même">🔔</span>`;
     }
-    return `<span class="room-board-name wizzable" onclick="uiSendWizz('${p.id}')" title="Faire trembler l'écran de ${escapeHtml(p.name)}">${escapeHtml(p.name)} 🔔</span>`;
+    return `${nameSpan}<span class="room-board-wizz-btn" onclick="uiSendWizz('${p.id}')" title="Faire trembler l'écran de ${escapeHtml(p.name)}">🔔</span>`;
 }
 
 // Voir échange avec Guillaume : déclenche l'effet wizz directement en local, sans passer
@@ -4779,8 +4884,14 @@ function renderRoomBoard() {
     // Regroupement par participant plutôt qu'une ligne par siège : en mode diagonale ou
     // "maître du jeu", une même personne peut occuper 2 sièges — elle ne doit apparaître
     // qu'une fois, avec ses sièges listés ensemble (ex. "Nord + Sud"), pas deux fois.
-    const seatsByParticipant = new Map(); // id -> [seat, seat, ...], dans l'ordre N/E/S/O
-    SEATS.forEach(seat => {
+    //
+    // Voir échange avec Guillaume (session du 23 juillet) : ordre d'affichage N, S, E, O
+    // (par paires de partenaires — Nord/Sud d'abord, puis Est/Ouest) plutôt que l'ordre de
+    // rotation habituel N, E, S, O (voir SEATS) — un ordre propre à ce panneau, sans
+    // rapport avec l'ordre de jeu.
+    const ROOM_BOARD_SEAT_ORDER = ['N', 'S', 'E', 'W'];
+    const seatsByParticipant = new Map(); // id -> [seat, seat, ...], dans l'ordre N/S/E/O
+    ROOM_BOARD_SEAT_ORDER.forEach(seat => {
         const pid = seatAssignment[seat];
         if (!pid) return;
         if (!seatsByParticipant.has(pid)) seatsByParticipant.set(pid, []);
@@ -4792,7 +4903,7 @@ function renderRoomBoard() {
         if (!p) return '';
         const seatsLabel = seatsByParticipant.get(pid).map(seatFullName).join(' + ');
         const disconnectedTag = p.disconnected ? ' <span class="disconnected-tag">🔌</span>' : '';
-        const occupant = `${avatarHtml(p.id)}${wizzableNameHtml(p)}${disconnectedTag}`;
+        const occupant = `${interactiveAvatarHtml(p.id)}${wizzableNameHtml(p)}${disconnectedTag}`;
         return `<div class="room-board-seat"><span class="room-board-seat-label">${seatsLabel}</span>${occupant}</div>`;
     }).filter(Boolean).join('');
 
@@ -4802,10 +4913,14 @@ function renderRoomBoard() {
     // ne pas avoir de siège ne veut encore rien dire — l'hôte est peut-être justement en
     // train de composer la table — donc l'étiquette "Kibbitz" n'y a pas sa place.
     const kibbitzNames = deals ? participants.filter(p => !seatsByParticipant.has(p.id)) : [];
+    // Voir échange avec Guillaume (session du 23 juillet) : chaque kibitz dans sa PROPRE
+    // ligne (room-board-kibitz-person), comme les sièges ci-dessus — avant, ils étaient
+    // tous des enfants directs de .room-board-kibitz (flex-wrap), donc affichés plusieurs
+    // par ligne au lieu d'un par ligne.
     const kibbitzHtml = kibbitzNames.length > 0
         ? `<div class="room-board-kibbitz">
                <span class="room-board-section-label">👁 Kibbitz :</span>
-               ${kibbitzNames.map(p => `${avatarHtml(p.id)}${wizzableNameHtml(p)}`).join('')}
+               ${kibbitzNames.map(p => `<div class="room-board-kibitz-person">${interactiveAvatarHtml(p.id)}${wizzableNameHtml(p)}</div>`).join('')}
            </div>`
         : '';
 

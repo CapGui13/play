@@ -369,6 +369,14 @@ body.on-landing-screen .connection-bar {
     font-weight: 700;
 }
 
+/* Nom double-cliquable pour renommer (voir échange avec Guillaume, session du 23
+   juillet — uiStartRenamingParticipant depuis le chat, réservé à l'hôte) : curseur
+   pointeur discret, pas de changement visuel plus appuyé pour ne pas alourdir le chat —
+   le tooltip (title=...) suffit à faire découvrir l'interaction. */
+.chat-message-sender-editable {
+    cursor: pointer;
+}
+
 .chat-message-text {
     white-space: pre-wrap;
 }
@@ -1224,22 +1232,32 @@ body.on-landing-screen .connection-bar {
     cursor: pointer;
 }
 
+/* Voir échange avec Guillaume (session du 23 juillet) : hérite désormais de la police/
+   taille du contexte où il apparaît (liste du salon, room board, chat — chacun avec sa
+   propre taille de texte) plutôt qu'une taille fixe qui ne correspondait qu'au cas du
+   salon. Transparent par défaut (fond et bordure), pour rester discret — se remarque
+   seulement au survol/focus, pas comme un vrai champ de formulaire qui s'ouvrirait. */
 .participant-rename-input {
     flex: 1 1 60px;
     min-width: 40px;
-    max-width: 160px;
-    font-family: var(--font-body);
-    font-size: 0.9rem;
-    padding: 3px 8px;
-    border-radius: 5px;
-    border: 1.5px solid var(--line);
-    background: var(--input-bg);
-    color: var(--text);
+    max-width: 200px;
+    font: inherit;
+    color: inherit;
+    padding: 0 3px;
+    margin: -1px -3px;
+    border-radius: 4px;
+    border: 1px solid transparent;
+    background: transparent;
+}
+
+.participant-rename-input:hover {
+    border-color: var(--line);
 }
 
 .participant-rename-input:focus {
     outline: none;
     border-color: var(--brass);
+    background: var(--input-bg);
 }
 
 /* Disposition en croix façon vraie table : Nord en haut, Sud en bas, Ouest/Est sur les
@@ -2416,7 +2434,7 @@ table.dd-table td.dd-secondary-contract {
    (avant l'ouverture initiale du chat, voir index.html — évite un vide disgracieux). */
 .room-board {
     flex-shrink: 0;
-    max-height: 90px;
+    max-height: 200px;
     overflow-y: auto;
     overflow-x: hidden;
     padding: 8px 14px;
@@ -2428,10 +2446,15 @@ table.dd-table td.dd-secondary-contract {
     display: none;
 }
 
+/* Voir échange avec Guillaume (session du 23 juillet) : liste verticale (un participant
+   par ligne) plutôt que des chips côte à côte qui se repliaient plusieurs par ligne selon
+   la largeur disponible — tout le monde doit rester visible d'un coup d'œil, sans avoir à
+   deviner qui est sur quelle "ligne visuelle". */
 .room-board-seats {
     display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
 }
 
 .room-board-seat {
@@ -2453,19 +2476,27 @@ table.dd-table td.dd-secondary-contract {
     white-space: nowrap;
 }
 
-/* Nom cliquable pour envoyer un wizz (voir wizzableNameHtml/uiSendWizz dans app.js) —
-   discret par défaut (même look que les noms non cliquables), un peu plus affirmé au
-   survol/tap pour laisser deviner que c'est actionnable. */
-.room-board-name.wizzable {
+/* Voir échange avec Guillaume (session du 23 juillet) : affordance discrète pour signaler
+   que le nom est double-cliquable (renommage, hôte uniquement, voir wizzableNameHtml dans
+   app.js) — juste le curseur, pas de fond ni de bordure pour ne pas alourdir le chat. */
+.room-board-name-editable {
+    cursor: pointer;
+}
+
+/* Cloche cliquable pour envoyer un wizz (voir wizzableNameHtml/uiSendWizz dans app.js) —
+   élément à part du nom désormais (voir échange avec Guillaume, session du 23 juillet),
+   pour ne pas entrer en conflit avec le double-clic de renommage sur le nom. */
+.room-board-wizz-btn {
+    display: inline-block;
     cursor: pointer;
     border-radius: 4px;
     padding: 1px 4px;
-    margin: -1px -4px;
+    margin-left: 2px;
     transition: background 0.15s ease;
 }
 
-.room-board-name.wizzable:hover,
-.room-board-name.wizzable:active {
+.room-board-wizz-btn:hover,
+.room-board-wizz-btn:active {
     background: rgba(224, 188, 74, 0.18);
 }
 
@@ -2547,12 +2578,24 @@ table.dd-table td.dd-secondary-contract {
 
 .room-board-kibbitz {
     display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 6px;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
     margin-top: 6px;
     padding-top: 6px;
     border-top: 1px solid var(--line);
+}
+
+/* Voir échange avec Guillaume (session du 23 juillet) : même look que .room-board-seat
+   (fond, arrondi, padding), pour que chaque kibitz forme aussi une ligne bien délimitée
+   plutôt que de simples éléments flottants. */
+.room-board-kibitz-person {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    background: var(--surface-2);
+    border-radius: 6px;
+    padding: 3px 8px;
 }
 
 .room-board-section-label {
