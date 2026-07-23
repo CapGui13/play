@@ -1721,7 +1721,13 @@ function uiRenameParticipantBlur(participantId, inputEl) {
 }
 
 function renderSeatAssignmentGrid() {
-    const container = document.getElementById('seatAssignmentGrid');
+    // Voir échange avec Guillaume (session du 23 juillet) : cible TOUS les conteneurs
+    // .seat-assignment-grid présents dans le DOM, plutôt qu'un seul id fixe — désormais il
+    // peut y en avoir deux (celui du salon + celui de la modale de réorganisation
+    // accessible en cours de partie, voir uiOpenSeatReorgModal), qui doivent rester
+    // strictement synchronisés. Rien à faire si aucun n'existe (ne devrait pas arriver).
+    const containers = document.querySelectorAll('.seat-assignment-grid');
+    if (containers.length === 0) return;
     const isHost = myRole === 'host';
 
     // Un siège "vient d'être assigné" si son occupant est non vide ET différent de ce
@@ -1780,7 +1786,7 @@ function renderSeatAssignmentGrid() {
                             ${triggerContent}
                             <span class="seat-dropdown-chevron">▾</span>
                         </button>
-                        <div class="seat-dropdown-menu" id="seatDropdownMenu-${seat}" style="display:none;">${optionsHtml.join('')}</div>
+                        <div class="seat-dropdown-menu" style="display:none;">${optionsHtml.join('')}</div>
                     </div>
                 </div>
             `;
@@ -1798,7 +1804,7 @@ function renderSeatAssignmentGrid() {
         `;
     }).join('');
 
-    container.innerHTML = seatBoxes;
+    containers.forEach(container => { container.innerHTML = seatBoxes; });
     prevSeatAssignmentSnapshot = { ...seatAssignment };
 }
 
@@ -1862,7 +1868,13 @@ function uiMyNameBlur() {
 // reste enfermé dans le contexte d'empilement (plus bas) de sa propre case.
 function uiToggleSeatDropdown(event, seat) {
     event.stopPropagation();
-    const menu = document.getElementById(`seatDropdownMenu-${seat}`);
+    // Voir échange avec Guillaume (session du 23 juillet) : recherche scopée au bouton
+    // cliqué (voir la structure HTML dans renderSeatAssignmentGrid — le menu est le
+    // sibling suivant du bouton, tous deux enfants directs de .seat-occupant-dropdown),
+    // plutôt qu'un id global "seatDropdownMenu-${seat}" — maintenant que la grille peut
+    // exister en double (salon + modale de réorganisation en cours de partie), un id
+    // global ne trouverait toujours que la PREMIÈRE des deux copies.
+    const menu = event.currentTarget.parentElement.querySelector('.seat-dropdown-menu');
     if (!menu) return;
     const wasOpen = menu.style.display !== 'none';
     uiCloseSeatDropdowns();
@@ -1894,6 +1906,13 @@ function uiAssignSeat(seat, participantId) {
     seatAssignment[seat] = participantId || null;
     broadcastLobbyState();
     renderLobby();
+    // Voir échange avec Guillaume (session du 23 juillet) : cette grille est maintenant
+    // aussi accessible EN COURS DE PARTIE (voir uiOpenSeatReorgModal) — même
+    // rafraîchissement de l'écran de jeu que pour le glisser-déposer (uiDropOnSeat).
+    if (deals) {
+        mySeats = SEATS.filter(s => seatAssignment[s] === myParticipantId);
+        renderBoard();
+    }
 }
 
 // Cliquer-glisser pour réorganiser les sièges (voir échange avec Guillaume) : glisser un
@@ -1976,6 +1995,14 @@ function uiDropOnSeat(event, targetSeat) {
     draggedFromSeat = null;
     broadcastLobbyState();
     renderLobby();
+    // Voir échange avec Guillaume (session du 23 juillet) : réassignation de siège
+    // maintenant possible EN COURS DE PARTIE (voir renderRoomBoard/renderAuctionLedger) —
+    // renderLobby() seul ne touche pas l'écran de jeu, donc à rafraîchir explicitement ici
+    // (mySeats recalculé au passage, au cas où l'hôte lui-même vient d'être déplacé).
+    if (deals) {
+        mySeats = SEATS.filter(seat => seatAssignment[seat] === myParticipantId);
+        renderBoard();
+    }
 }
 
 function uiDropOnKibitz(event) {
@@ -1986,6 +2013,11 @@ function uiDropOnKibitz(event) {
     draggedFromSeat = null;
     broadcastLobbyState();
     renderLobby();
+    // Voir uiDropOnSeat ci-dessus : même rafraîchissement du côté écran de jeu.
+    if (deals) {
+        mySeats = SEATS.filter(seat => seatAssignment[seat] === myParticipantId);
+        renderBoard();
+    }
 }
 
 const SEAT_CLOCKWISE_NEXT = { N: 'E', E: 'S', S: 'W', W: 'N' };
@@ -2382,6 +2414,27 @@ function uiCloseDealPreviewOnBackdrop(evt) {
     if (evt.target.id === 'dealPreviewModal') uiCloseDealPreview();
 }
 
+// Voir échange avec Guillaume (session du 23 juillet) : ouvre la grille de réorganisation
+// des sièges en cours de partie — réservé à l'hôte (le bouton lui-même est déjà masqué
+// pour tout autre rôle, voir updateBoardControlVisibility, mais on se protège quand même
+// ici en cas d'appel direct). renderSeatAssignmentGrid() rend déjà dans TOUS les
+// .seat-assignment-grid du DOM (voir échange avec Guillaume) — pas besoin de lui passer
+// quoi que ce soit de spécifique, la grille de cette modale se remplit toute seule.
+function uiOpenSeatReorgModal() {
+    if (myRole !== 'host') return;
+    renderSeatAssignmentGrid();
+    document.getElementById('seatReorgModal').style.display = 'flex';
+}
+
+function uiCloseSeatReorgModal() {
+    document.getElementById('seatReorgModal').style.display = 'none';
+    uiCloseSeatDropdowns(); // pas de menu resté ouvert au prochain affichage
+}
+
+function uiCloseSeatReorgModalOnBackdrop(evt) {
+    if (evt.target.id === 'seatReorgModal') uiCloseSeatReorgModal();
+}
+
 // Petite carte de main compacte pour l'aperçu (même principe que renderMyHands /
 // renderAllHandsDiagram, mais toujours avec le HCP affiché, indépendamment de la
 // préférence showHcp qui ne concerne que l'écran de jeu).
@@ -2650,6 +2703,12 @@ function handlePeerData(msg, guestIndex) {
             // resteraient figés jusqu'à la prochaine annonce.
             if (myRole === 'guest' && !deals) enterLobbyScreen();
             else if (deals) {
+                // Voir échange avec Guillaume (session du 23 juillet) : seatAssignment peut
+                // maintenant changer EN COURS DE PARTIE (réassignation de siège par glisser-
+                // déposer, voir uiDropOnSeat) — recalculer mySeats ici, comme le fait déjà
+                // 'seats-rotated' pour la rotation, sinon ce joueur resterait affiché avec
+                // son ancienne main/son ancien rôle jusqu'à sa prochaine reconnexion.
+                mySeats = SEATS.filter(seat => seatAssignment[seat] === myParticipantId);
                 renderBoard();
                 // Voir échange avec Guillaume (session du 23 juillet) : l'hôte peut
                 // maintenant changer la couleur d'avatar ou renommer n'importe qui EN
@@ -4453,6 +4512,14 @@ function updateBoardControlVisibility() {
         rotateBtn.style.visibility = myRole === 'host' ? '' : 'hidden';
         rotateBtn.style.pointerEvents = myRole === 'host' ? '' : 'none';
     }
+    // Voir échange avec Guillaume (session du 23 juillet) : même traitement que
+    // "Rotation" juste au-dessus — réservé à l'hôte, seul à pouvoir réorganiser qui joue
+    // où (voir uiOpenSeatReorgModal).
+    const seatReorgBtn = document.getElementById('seatReorgBtn');
+    if (seatReorgBtn) {
+        seatReorgBtn.style.visibility = myRole === 'host' ? '' : 'hidden';
+        seatReorgBtn.style.pointerEvents = myRole === 'host' ? '' : 'none';
+    }
     // Téléchargement local pur (voir uiExportSessionPBN) : contrairement à l'export PBN
     // d'une seule donne (qui écrit sur le repo GitHub, réservé à l'hôte), rien n'empêche
     // n'importe quel joueur actif de récupérer sa propre vue locale de la session.
@@ -4917,10 +4984,24 @@ function renderRoomBoard() {
     // ligne (room-board-kibitz-person), comme les sièges ci-dessus — avant, ils étaient
     // tous des enfants directs de .room-board-kibitz (flex-wrap), donc affichés plusieurs
     // par ligne au lieu d'un par ligne.
+    //
+    // Glissable vers un siège (voir échange avec Guillaume — réassignation de siège en
+    // pleine partie) : réutilise exactement le même mécanisme que la zone kibbitz du salon
+    // (uiDragStartParticipant, fromSeat=null puisque justement kibitz), déposable sur
+    // l'en-tête d'une colonne du relevé d'enchères (voir renderAuctionLedger, uiDropOnSeat
+    // rafraîchit maintenant aussi l'écran de jeu). Réservé à l'hôte, seul à pouvoir
+    // réorganiser qui joue où — voir la garde dans uiDragStartParticipant lui-même.
+    // PORTÉE ACTUELLE : seulement les kibitz (pas encore les joueurs déjà assis, dont le
+    // siège d'origine serait ambigu s'ils en occupent 2 à la fois — voir ROOM_BOARD_SEAT_ORDER
+    // ci-dessus qui les regroupe) — à étendre plus tard si besoin.
+    const isHost = myRole === 'host';
     const kibbitzHtml = kibbitzNames.length > 0
         ? `<div class="room-board-kibbitz">
                <span class="room-board-section-label">👁 Kibbitz :</span>
-               ${kibbitzNames.map(p => `<div class="room-board-kibitz-person">${interactiveAvatarHtml(p.id)}${wizzableNameHtml(p)}</div>`).join('')}
+               ${kibbitzNames.map(p => {
+                   const dragAttrs = isHost ? ` draggable="true" ondragstart="uiDragStartParticipant(event, '${p.id}')"` : '';
+                   return `<div class="room-board-kibitz-person"${dragAttrs}>${interactiveAvatarHtml(p.id)}${wizzableNameHtml(p)}</div>`;
+               }).join('')}
            </div>`
         : '';
 
@@ -5047,12 +5128,21 @@ function renderAuctionLedger() {
     const toggleBtn = document.getElementById('ledgerNamesToggleBtn');
     if (toggleBtn) toggleBtn.classList.toggle('is-active', showLedgerNames);
     const turnSeat = isAuctionOver(auctionHistory) ? null : currentTurnSeat(deal.dealer, auctionHistory);
+    // Voir échange avec Guillaume (session du 23 juillet) : cible de dépôt pour
+    // réassigner un siège en pleine partie (glisser un kibitz depuis le chat, voir
+    // renderRoomBoard) — mêmes gestionnaires que dans le salon (uiAllowDrop,
+    // uiDragEnterTarget/uiDragLeaveTarget pour la surbrillance), réservés à l'hôte
+    // (chacune de ces fonctions se protège déjà individuellement).
+    const isHost = myRole === 'host';
+    const dropAttrs = isHost
+        ? (s) => ` ondragover="uiAllowDrop(event)" ondragenter="uiDragEnterTarget(event)" ondragleave="uiDragLeaveTarget(event)" ondrop="uiDropOnSeat(event, '${s}')"`
+        : () => '';
     header.innerHTML = SEATS.map(s => {
         const pair = partnershipOf(s);
         const isVulnerable = deal.vulnerable === 'Both' || deal.vulnerable === pair;
         const vulnClass = isVulnerable ? 'vuln-bar-danger' : 'vuln-bar-safe';
         const classes = [s === turnSeat ? 'turn-col' : ''].filter(Boolean).join(' ');
-        return `<th class="${classes}">
+        return `<th class="${classes}"${dropAttrs(s)}>
             <span class="ledger-seat-label">${escapeHtml(ledgerSeatLabel(s))}</span>
             <span class="vuln-bar ${vulnClass}"></span>
         </th>`;

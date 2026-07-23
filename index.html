@@ -355,6 +355,13 @@
                      fixées par position (N/E/S/O), donc ça change qui joue quelle main à cet
                      instant précis, pas les cartes elles-mêmes ni l'historique déjà enchéri. -->
                 <button id="rotateSeatsBtn" type="button" class="btn btn-secondary btn-small" style="visibility:hidden; pointer-events:none;" onclick="uiRotateSeatsClockwise()"><span class="btn-label-full">🔄 Rotation 90°</span><span class="btn-label-short">🔄 Rotation</span></button>
+                <!-- Voir échange avec Guillaume (session du 23 juillet) : ouvre la même
+                     grille de réorganisation des sièges que dans le salon (croix cliquable,
+                     voir renderSeatAssignmentGrid), maintenant accessible aussi en cours de
+                     partie — pour tout redistribuer d'un coup si besoin, pas seulement
+                     glisser un kibitz un par un (voir uiDropOnSeat). Réservé à l'hôte, même
+                     traitement de visibilité que "Rotation" juste au-dessus. -->
+                <button id="seatReorgBtn" type="button" class="btn btn-secondary btn-small" style="visibility:hidden; pointer-events:none;" onclick="uiOpenSeatReorgModal()"><span class="btn-label-full">🪑 Réorganiser les sièges</span><span class="btn-label-short">🪑 Sièges</span></button>
                 <!-- Visibilité gérée par updateBoardControlVisibility (host ou joueur assis) :
                      voir échange avec Guillaume — récupérer les donnes jouées de toute la session
                      (mains + enchère réelle + vulnérabilité) pour lui permettre de me faire des
@@ -438,6 +445,23 @@
             <button type="button" class="btn btn-secondary btn-small" onclick="uiCloseDealPreview()">Fermer ✕</button>
         </div>
         <div id="dealPreviewContent" class="deal-preview-content"></div>
+    </div>
+</div>
+
+<!-- Voir échange avec Guillaume (session du 23 juillet) : réorganisation complète des
+     sièges en cours de partie — même grille en croix que le salon (voir
+     renderSeatAssignmentGrid, qui rend maintenant dans TOUS les .seat-assignment-grid du
+     DOM), cliquable pour réassigner qui joue où, "Robot" y compris pour remettre un siège
+     en jeu automatique. -->
+<div id="seatReorgModal" class="modal-overlay" style="display:none;" onclick="uiCloseSeatReorgModalOnBackdrop(event)">
+    <div class="modal-panel">
+        <div class="modal-header">
+            <h3>Réorganiser les sièges</h3>
+            <button type="button" class="btn btn-secondary btn-small" onclick="uiCloseSeatReorgModal()">Fermer ✕</button>
+        </div>
+        <div class="seat-reorg-content">
+            <div class="seat-assignment-grid"></div>
+        </div>
     </div>
 </div>
 
