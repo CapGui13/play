@@ -1254,6 +1254,11 @@ function buildHostHandlers(onOpenExtra) {
             // peer.reconnect()) tant que personne ne rejoignait entre-temps.
             setConnectionStatus(true);
             renderReconnectButton();
+            // Voir échange avec Guillaume (session du 23 juillet) : succès (par n'importe
+            // quelle voie — reconnexion légère ou réinitialisation complète, voir
+            // uiHostReconnect) — plus besoin du watchdog qui basculerait sinon vers une
+            // réinitialisation complète pour rien.
+            clearTimeout(hostReconnectWatchdogTimer);
             window.history.replaceState(null, '', url.toString());
             if (onOpenExtra) {
                 onOpenExtra(roomCode);
@@ -1403,21 +1408,20 @@ function buildHostHandlers(onOpenExtra) {
             renderReconnectButton();
         },
         onError: (err) => {
-            // Voir échange avec Guillaume (session du 23 juillet — reprise automatique
-            // d'hôte) : une reconnexion automatique (peer.reconnect(), voir
-            // peer-connection.js) qui échoue avec "identifiant déjà pris" EN COURS DE
-            // PARTIE signifie très probablement que le sous-hôte a pris le relais pendant
-            // notre absence (voir attemptSubHostTakeover) — PAS une simple erreur réseau à
-            // afficher sur l'écran d'accueil (de toute façon invisible, on est en plein
-            // jeu). On rejoint alors nous-mêmes la salle comme simple invité, avec notre
-            // propre jeton persistant — le nouvel hôte nous reconnaît (voir
-            // promoteSelfToHostAfterTakeover, qui a remappé notre ancienne identité 'host'
-            // vers ce même jeton) et nous redonne notre place.
-            if (err && err.type === 'unavailable-id' && deals) {
-                pushDebugLog("Impossible de reprendre notre ancien rôle d'hôte (déjà repris) — on rejoint la partie comme simple invité.");
-                connectAsGuest(currentRoomCode, getReconnectToken(), savedNickname);
-                return;
-            }
+            // Voir échange avec Guillaume (session du 23 juillet — "ça m'a fait
+            // redevenir invité à tort") : PAS de bascule automatique en invité ici.
+            // 'unavailable-id' peut arriver sur un simple peer.reconnect() automatique
+            // (voir peer-connection.js) SANS qu'aucun sous-hôte n'ait réellement pris le
+            // relais — ambiguïté entre "quelqu'un d'autre a vraiment ce code" et "notre
+            // propre ancienne session traîne encore, non nettoyée côté serveur PeerJS".
+            // Cette bascule ne se déclenche maintenant QUE dans le filet de sécurité de
+            // uiHostReconnect, après une réinitialisation complète (destroy + nouvelle
+            // tentative) qui lève cette ambiguïté — voir son commentaire détaillé.
+            // Pendant ce temps, le statut/bouton (déjà mis à jour par
+            // onSignalingDisconnected) restent la seule indication ; rien d'autre à
+            // afficher ici tant qu'on est en pleine partie (l'écran d'accueil, où
+            // atterrirait ce message, n'est de toute façon pas visible).
+            if (deals) return;
             hideConnectingOverlay();
             showLandingError('Erreur de connexion : ' + ((err && (err.message || err.type)) || err));
         }
@@ -1622,44 +1626,71 @@ function uiReconnect() {
 // Contrairement à une reprise par le sous-hôte, ici l'onglet n'a jamais fermé : tout l'état
 // (donnes, enchère, sièges) est déjà intact en mémoire, rien à reconstruire — on retente
 // juste de récupérer le même identifiant réseau sous le même code.
+// Voir échange avec Guillaume (session du 23 juillet — "ça affichait connexion perdue
+// sans jamais réussir") : surveille la tentative légère (manualReconnect) — peer.reconnect()
+// sur une connexion restée hors ligne un moment n'est pas toujours fiable (limite connue
+// de PeerJS, sans erreur explicite en cas d'échec silencieux). Si notre propre connexion
+// n'est toujours pas rétablie après ce délai, on bascule sur la réinitialisation complète
+// plutôt que de laisser le joueur bloqué indéfiniment sur "reconnexion en cours".
+let hostReconnectWatchdogTimer = null;
+const HOST_RECONNECT_WATCHDOG_MS = 4000;
+
 function uiHostReconnect() {
     if (myRole !== 'host' || !currentRoomCode) return;
-    // Voir échange avec Guillaume (session du 23 juillet — "ça ne marchait pas") : retente
-    // d'abord sur la connexion EXISTANTE (voir manualReconnect dans peer-connection.js),
-    // sans la détruire — l'onOpen déjà câblé sur buildHostHandlers (voir uiCreateRoom)
-    // gère tout seul le succès (statut, bouton, écran) grâce au correctif appliqué juste
-    // avant dans cette même session. Le filet de sécurité ci-dessous (destroy + nouveau
-    // Peer sous le même code forcé) ne sert que si le Peer n'existe même plus du tout.
+    const codeToReclaim = currentRoomCode;
+
+    // Tentative légère d'abord : réutilise la connexion existante (voir manualReconnect
+    // dans peer-connection.js), sans rien détruire — l'onOpen déjà câblé sur
+    // buildHostHandlers gère tout seul le succès (statut, bouton, écran).
     if (peerConn && peerConn.manualReconnect()) {
-        pushDebugLog(`Reconnexion manuelle en tant qu'hôte (peer.reconnect), salle ${currentRoomCode}…`);
+        pushDebugLog(`Reconnexion manuelle en tant qu'hôte (peer.reconnect), salle ${codeToReclaim}…`);
+        clearTimeout(hostReconnectWatchdogTimer);
+        hostReconnectWatchdogTimer = setTimeout(() => {
+            if (myRole === 'host' && (!peerConn || !peerConn.signalingOpen)) {
+                pushDebugLog("La reconnexion légère n'a pas abouti — réinitialisation complète.");
+                hardResetHostConnection(codeToReclaim);
+            }
+        }, HOST_RECONNECT_WATCHDOG_MS);
         return;
     }
 
+    hardResetHostConnection(codeToReclaim);
+}
+
+// Réinitialisation complète : détruit la connexion actuelle, attend un court instant (le
+// temps que le serveur de signalisation PeerJS enregistre cette destruction, pour éviter
+// une collision avec notre PROPRE ancienne session), puis retente sous le même code forcé.
+function hardResetHostConnection(codeToReclaim) {
+    if (peerConn) peerConn.destroy();
     setConnectionStatus(false);
-    const codeToReclaim = currentRoomCode;
+    renderReconnectButton();
     pushDebugLog(`Reconnexion manuelle en tant qu'hôte (nouveau Peer), salle ${codeToReclaim}…`);
 
-    const newPeerConn = new BridgePeerConnection(buildHostHandlers(() => {
-        // État déjà intact (voir plus haut) : juste rafraîchir l'affichage, rien à
-        // reconstruire côté salon/partie.
-        renderReconnectButton();
-        if (deals) renderBoard(); else renderLobby();
-    }));
-    peerConn = newPeerConn;
-    // Voir échange avec Guillaume : si quelqu'un (le sous-hôte) a entre-temps repris ce
-    // code — collision d'identifiant — on ne reste pas bloqué : on rejoint nous-mêmes la
-    // partie comme simple invité (même mécanisme que la détection automatique dans
-    // buildHostHandlers, mais ici la tentative est volontaire, pas un peer.reconnect()
-    // automatique qui aurait échoué tout seul).
-    newPeerConn.handlers.onError = (err) => {
-        if (err && err.type === 'unavailable-id' && deals) {
-            pushDebugLog("Impossible de reprendre notre rôle d'hôte (déjà repris) — on rejoint la partie comme simple invité.");
-            connectAsGuest(codeToReclaim, getReconnectToken(), savedNickname);
-            return;
-        }
-        pushDebugLog("Échec de la reconnexion manuelle en tant qu'hôte : " + ((err && (err.message || err.type)) || err));
-    };
-    newPeerConn.createRoom(6, codeToReclaim);
+    setTimeout(() => {
+        if (myRole !== 'host') return; // entre-temps basculé autrement (ex. déjà résolu)
+        const newPeerConn = new BridgePeerConnection(buildHostHandlers(() => {
+            // État déjà intact (voir plus haut) : juste rafraîchir l'affichage, rien à
+            // reconstruire côté salon/partie.
+            renderReconnectButton();
+            if (deals) renderBoard(); else renderLobby();
+        }));
+        peerConn = newPeerConn;
+        // Voir échange avec Guillaume : ICI seulement (après une réinitialisation
+        // complète, pas sur une simple reconnexion automatique — voir le onError partagé
+        // de buildHostHandlers, qui ne bascule plus jamais en invité tout seul) un
+        // 'unavailable-id' signifie sans ambiguïté que quelqu'un d'autre (le sous-hôte) a
+        // vraiment ce code — pas notre propre session zombie, qu'on vient de détruire
+        // proprement juste avant.
+        newPeerConn.handlers.onError = (err) => {
+            if (err && err.type === 'unavailable-id' && deals) {
+                pushDebugLog("Impossible de reprendre notre rôle d'hôte (déjà repris) — on rejoint la partie comme simple invité.");
+                connectAsGuest(codeToReclaim, getReconnectToken(), savedNickname);
+                return;
+            }
+            pushDebugLog("Échec de la reconnexion manuelle en tant qu'hôte : " + ((err && (err.message || err.type)) || err));
+        };
+        newPeerConn.createRoom(6, codeToReclaim);
+    }, 500);
 }
 
 let everConnectedAsGuest = false;
