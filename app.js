@@ -1570,6 +1570,10 @@ function uiCopyShareLink() {
 
 function enterLobbyScreen() {
     showScreen('screen-lobby');
+    // Voir échange avec Guillaume (session du 23 juillet) : voir HOSTING_PREGAME_KEY tout
+    // en bas du fichier — reposé à chaque appel (enterLobbyScreen est réappelée à chaque
+    // changement de participant), inoffensif de le refaire à chaque fois.
+    if (myRole === 'host') markHostingPregame(currentRoomCode);
     document.getElementById('lobbyRoomCodeBlock').style.display = myRole === 'host' ? 'block' : 'none';
     document.getElementById('hostSetupPanel').style.display = myRole === 'host' ? 'block' : 'none';
     // Voir échange avec Guillaume (session du 23 juillet) : déplacé hors de hostSetupPanel
@@ -2752,6 +2756,11 @@ function uiStartGameAsHost() {
         boardIndex = 0;
         if (!deals[0].auctionHistory) deals[0].auctionHistory = [];
         auctionHistory = deals[0].auctionHistory;
+        // Voir échange avec Guillaume (session du 23 juillet) : la partie démarre
+        // effectivement — retire le marqueur "encore dans le salon" (voir
+        // HOSTING_PREGAME_KEY tout en bas du fichier) : un rechargement à partir de
+        // maintenant a du sens de garder le code dans l'URL (reprise possible).
+        clearHostingPregameMark();
         hostPendingUndo = null;
         clearUndoUiState();
 
@@ -6580,22 +6589,26 @@ function initOfflineHandling() {
 // ===== Initialisation =====
 
 // Voir échange avec Guillaume (session du 23 juillet — "si l'hôte refresh dans le salon,
-// ça devrait clôturer la room") : tout l'état de l'hôte vit en mémoire JS, rien n'est
-// persistant côté serveur — recharger la page pendant qu'il est ENCORE dans le salon
-// (avant le lancement) tue sa salle de toute façon, sans espoir de reprise automatique
-// (le sous-hôte n'existe qu'une fois la partie lancée, voir computeSubHostId). Sans ce
-// correctif, l'URL garderait le code (voir history.replaceState dans onOpen) et la page
-// rechargée tenterait, en vain, de rejoindre sa propre salle qui vient de disparaître —
-// retire le code AVANT que le rechargement n'ait lieu, pour atterrir sur un accueil propre.
-// Ne s'applique PAS une fois la partie lancée (deals) : là, garder le code a du sens
-// (reprise possible via le sous-hôte, ou l'hôte qui revient simplement après un blip).
-window.addEventListener('beforeunload', () => {
-    if (myRole === 'host' && !deals) {
-        const url = new URL(window.location.href);
-        url.searchParams.delete('room');
-        window.history.replaceState(null, '', url.toString());
-    }
-});
+// ça devrait clôturer la room") : PREMIER essai avec beforeunload (retirer le code de
+// l'URL juste avant le rechargement) — ne fonctionnait pas, le navigateur a déjà figé
+// quelle URL il va recharger avant que ce code n'ait la moindre chance de s'exécuter,
+// donc la modifier à ce moment-là n'a aucun effet sur le rechargement en cours. Reprise
+// avec sessionStorage à la place (survit à un rechargement de CET onglet, contrairement
+// aux variables JS) : posé tant que l'hôte est dans le salon (avant le lancement, voir
+// enterLobbyScreen), retiré dès que la partie démarre (voir uiStartGameAsHost). Au
+// chargement de la page, AVANT de tenter quoi que ce soit avec un ?room= dans l'URL, on
+// vérifie s'il correspond à une salle qu'on hébergeait nous-même, encore dans le salon,
+// juste avant ce rechargement — auquel cas elle est morte de toute façon (rien n'est
+// persistant), pas la peine de tenter (et échouer) à la rejoindre.
+const HOSTING_PREGAME_KEY = 'bridgeBidHostingPregameRoom';
+
+function markHostingPregame(roomCode) {
+    try { sessionStorage.setItem(HOSTING_PREGAME_KEY, roomCode); } catch (e) { /* tant pis */ }
+}
+
+function clearHostingPregameMark() {
+    try { sessionStorage.removeItem(HOSTING_PREGAME_KEY); } catch (e) { /* tant pis */ }
+}
 
 window.addEventListener('DOMContentLoaded', () => {
     initServiceWorker();
@@ -6612,7 +6625,20 @@ window.addEventListener('DOMContentLoaded', () => {
 
     const params = new URLSearchParams(window.location.search);
     const room = params.get('room');
-    if (room && navigator.onLine) {
+    // Voir échange avec Guillaume (session du 23 juillet) — voir HOSTING_PREGAME_KEY plus
+    // haut : si ce code correspond à une salle qu'on hébergeait nous-même, encore dans le
+    // salon, juste avant ce rechargement, elle est morte de toute façon (rien n'est
+    // persistant côté hôte avant le lancement) — pas la peine de tenter (et échouer) à la
+    // rejoindre comme invité. On nettoie l'URL et le marqueur, puis on atterrit sur un
+    // accueil propre, sans code préempli ni tentative de connexion.
+    let wasHostingThisPregame = false;
+    try { wasHostingThisPregame = room && sessionStorage.getItem(HOSTING_PREGAME_KEY) === room; } catch (e) { /* tant pis */ }
+    if (wasHostingThisPregame) {
+        clearHostingPregameMark();
+        const url = new URL(window.location.href);
+        url.searchParams.delete('room');
+        window.history.replaceState(null, '', url.toString());
+    } else if (room && navigator.onLine) {
         document.getElementById('joinCodeInput').value = room.toUpperCase();
         uiJoinRoom();
     } else if (room) {
