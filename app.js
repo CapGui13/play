@@ -4672,6 +4672,19 @@ function renderReconnectionBanner() {
         return;
     }
 
+    // Voir échange avec Guillaume (session du 23 juillet) : priorité à NOTRE PROPRE
+    // déconnexion — dans ce cas, l'état reçu des autres participants (qui est marqué
+    // déconnecté ou non) est de toute façon périmé (on ne reçoit plus rien de l'hôte),
+    // pas la peine d'afficher autre chose que ça. Regroupe ici tout ce qui concerne une
+    // coupure, plutôt que de disperser un second message ailleurs sur l'écran (voir
+    // renderBiddingBox, qui ne fait plus que geler les boutons sans texte redondant).
+    if (myRole === 'guest' && (!peerConn || !peerConn.isConnected())) {
+        banner.className = 'reconnection-banner is-waiting';
+        banner.textContent = '🔌 Connexion perdue — reconnexion en cours...';
+        banner.style.display = 'block';
+        return;
+    }
+
     if (welcomeBackName) {
         banner.className = 'reconnection-banner is-back';
         banner.textContent = `✅ ${welcomeBackName} est de retour !`;
@@ -5431,16 +5444,21 @@ function renderBiddingBox() {
     const turnOwner = turnOwnerId ? participants.find(p => p.id === turnOwnerId) : null;
     const ownerDisconnected = !!(turnOwner && turnOwner.disconnected);
 
-    if (disconnectedFromHost) {
-        turnPanel.textContent = '🔌 Connexion perdue — en attente de reconnexion...';
-    } else if (myTurn) {
+    // Voir échange avec Guillaume (session du 23 juillet) : PAS de message dédié ici pour
+    // disconnectedFromHost — ce serait un doublon avec la bannière de reconnexion en haut
+    // de l'écran (voir renderReconnectionBanner, qui couvre maintenant aussi le cas où
+    // c'est NOUS qui sommes déconnectés), affichée à un autre endroit de la page. Seul le
+    // gel des boutons compte ici (voir `legal` plus bas) ; le texte se contente de rester
+    // sur son état normal (À vous d'enchérir / En attente de X...), qui redevient
+    // simplement inerte pendant la coupure plutôt que de raconter deux fois la même chose.
+    if (myTurn) {
         turnPanel.textContent = `À vous d'enchérir (${seatFullName(turnSeat)})`;
     } else if (ownerDisconnected) {
         turnPanel.textContent = `🔌 En attente que ${turnOwner.name} se reconnecte (${seatFullName(turnSeat)})...`;
     } else {
         turnPanel.textContent = `En attente de ${seatFullName(turnSeat)}...`;
     }
-    turnPanel.className = 'turn-indicator ' + (disconnectedFromHost || ownerDisconnected ? 'disconnected-turn' : (myTurn ? 'my-turn' : 'their-turn'));
+    turnPanel.className = 'turn-indicator ' + (ownerDisconnected ? 'disconnected-turn' : (myTurn ? 'my-turn' : 'their-turn'));
 
     const specialLabels = { PASS: 'Passe', X: 'X', XX: 'XX' };
     // Voir échange avec Guillaume : ligne spéciale calée sur la même grille à 5 colonnes
