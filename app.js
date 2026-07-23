@@ -93,6 +93,12 @@ let subHostTakeoverTimer = null;
 // une fois la bascule faite (voir promoteSelfToHostAfterTakeover), pour que ce compteur
 // reflète le vrai délai écoulé plutôt que de repartir de zéro à la bascule.
 let subHostDisconnectDetectedAt = null;
+// Voir échange avec Guillaume (session du 23 juillet — "un compteur qui défile") :
+// horodatage de NOTRE PROPRE déconnexion détectée (tout invité, pas seulement le sous-
+// hôte) — sert à afficher un compteur "0/20 sec" qui défile dans la bannière (voir
+// renderReconnectionBanner), pour rendre visible ce qui se passe pendant l'attente plutôt
+// que de laisser un message statique sans aucune indication de progression.
+let selfDisconnectedAt = null;
 // Délai avant qu'un sous-hôte considère l'hôte définitivement parti et prenne le relais
 // (voir échange avec Guillaume — 20s : assez court pour rester "fluide" à l'échelle d'une
 // partie de bridge, assez long pour absorber un verrouillage d'écran iOS ou un Wi-Fi qui
@@ -1402,6 +1408,7 @@ function buildGuestHandlers() {
             // sous le même code, peu importe lequel de son point de vue) — annule le
             // minuteur de reprise s'il était en cours, plus la peine.
             cancelSubHostTakeoverTimer();
+            selfDisconnectedAt = null;
             // Dégèle la boîte d'enchères tout de suite (voir renderBiddingBox) — sans
             // ça, il faudrait attendre le prochain événement de jeu pour que ça se voie.
             if (deals) renderBoard();
@@ -1410,6 +1417,11 @@ function buildGuestHandlers() {
             setConnectionStatus(false);
             renderReconnectButton();
             scheduleSubHostTakeoverIfNeeded();
+            // Voir échange avec Guillaume (session du 23 juillet — compteur qui défile) :
+            // posé seulement s'il ne l'était pas déjà, comme subHostDisconnectDetectedAt —
+            // sinon un second événement de coupure pendant qu'on est déjà déconnecté
+            // repousserait le départ du compteur à chaque fois.
+            if (!selfDisconnectedAt) selfDisconnectedAt = Date.now();
             // Gèle la boîte d'enchères tout de suite (voir renderBiddingBox), pas
             // seulement au prochain événement de jeu.
             if (deals) renderBoard();
@@ -1422,6 +1434,7 @@ function buildGuestHandlers() {
             setConnectionStatus(false);
             renderReconnectButton();
             scheduleSubHostTakeoverIfNeeded();
+            if (!selfDisconnectedAt) selfDisconnectedAt = Date.now();
             if (deals) renderBoard();
         },
         onSlowConnection: () => {
@@ -4738,8 +4751,19 @@ function renderReconnectionBanner() {
     // coupure, plutôt que de disperser un second message ailleurs sur l'écran (voir
     // renderBiddingBox, qui ne fait plus que geler les boutons sans texte redondant).
     if (myRole === 'guest' && (!peerConn || !peerConn.isConnected())) {
+        const elapsedS = selfDisconnectedAt ? Math.max(0, Math.floor((Date.now() - selfDisconnectedAt) / 1000)) : 0;
+        // Voir échange avec Guillaume (session du 23 juillet — "un truc qui défile") : le
+        // "/20" n'a de sens QUE pour le sous-hôte désigné (voir currentSubHostId) — c'est
+        // le seul pour qui ce délai déclenche quoi que ce soit (voir
+        // scheduleSubHostTakeoverIfNeeded). Pour tout le monde d'autre, afficher "/20"
+        // laisserait croire à tort qu'il se passera quelque chose à 20s les concernant
+        // eux aussi.
+        const isDesignatedSubHost = myParticipantId === currentSubHostId;
+        const counterText = isDesignatedSubHost
+            ? `${elapsedS}/${GUEST_TAKEOVER_GRACE_MS / 1000}s`
+            : `${elapsedS}s`;
         banner.className = 'reconnection-banner is-waiting';
-        banner.textContent = '🔌 Connexion perdue — reconnexion en cours...';
+        banner.textContent = `🔌 Connexion perdue — reconnexion en cours... ${counterText}`;
         banner.style.display = 'block';
         return;
     }
