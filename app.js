@@ -65,11 +65,6 @@ let prevSeatAssignmentSnapshot = null;
 // donc ce snapshot n'y est pas utilisé pour cette partie-là.
 let prevParticipantsDisconnectedSnapshot = null;
 
-// Nom affiché dans la bannière "de retour" (voir flashWelcomeBack/renderReconnectionBanner)
-// pendant les quelques secondes où elle est visible ; null sinon.
-let welcomeBackName = null;
-let welcomeBackTimeoutId = null;
-
 let currentRoomCode = null; // pour uiReconnect() : on doit se souvenir du code utilisé pour rejoindre
 
 // ===== Reprise automatique d'hôte par le sous-hôte (voir échange avec Guillaume, session
@@ -1302,7 +1297,10 @@ function buildHostHandlers(onOpenExtra) {
                 p.disconnectedAt = null;
             }
             pushDebugLog(`Connexion #${guestIndex} : jeton ${token.slice(0, 10)}… → ${isReturning ? 'reconnexion reconnue (' + p.name + ')' : 'nouveau participant'}`);
-            if (wasDisconnected) flashWelcomeBack(p.name);
+            // Voir échange avec Guillaume (session du 23 juillet — "un bandeau similaire
+            // à celui du wizz") : remplace flashWelcomeBack, même mécanique de toast que
+            // le wizz (voir styles.css), texte simplifié avec le siège si assis.
+            if (wasDisconnected) flashPresenceToast(`✅ ${presenceLabelFor(p)} s'est reconnecté`, true);
 
             peerConn.send({ type: 'welcome', yourId: token }, guestIndex);
 
@@ -1351,7 +1349,16 @@ function buildHostHandlers(onOpenExtra) {
                 // l'enchère patiente simplement (le tour-indicateur et la bannière de
                 // reconnexion le signalent tous les deux, cf. renderReconnectionBanner).
                 const p = participants.find(x => x.id === token);
-                if (p) { p.disconnected = true; p.disconnectedAt = Date.now(); }
+                if (p) {
+                    p.disconnected = true;
+                    p.disconnectedAt = Date.now();
+                    // Voir échange avec Guillaume (session du 23 juillet) : n'intéresse
+                    // que les joueurs ASSIS (un kibitz déconnecté ne bloque rien pour
+                    // personne — même restriction que l'ancienne bannière "waiting").
+                    if (SEATS.some(s => seatAssignment[s] === p.id)) {
+                        flashPresenceToast(`🔌 ${presenceLabelFor(p)} s'est déconnecté`, false);
+                    }
+                }
             }
             hostPendingUndo = null; // un invité qui part au milieu d'un arbitrage : on ne reste pas bloqué
             // Voir audit : si le participant qui vient de partir était justement la cible
@@ -1428,6 +1435,11 @@ function buildGuestHandlers() {
             // sous le même code, peu importe lequel de son point de vue) — annule le
             // minuteur de reprise s'il était en cours, plus la peine.
             cancelSubHostTakeoverTimer();
+            // Voir échange avec Guillaume (session du 23 juillet — "on fait idem pour
+            // l'host") : toast vert AVANT de réinitialiser selfDisconnectedAt — il faut
+            // encore savoir qu'on ÉTAIT déconnecté pour décider d'afficher ce toast (pas
+            // au tout premier succès de connexion, où il n'y a rien à "reconnecter").
+            if (deals && selfDisconnectedAt) flashPresenceToast('✅ Reconnecté à la partie', true);
             selfDisconnectedAt = null;
             // Dégèle la boîte d'enchères tout de suite (voir renderBiddingBox) — sans
             // ça, il faudrait attendre le prochain événement de jeu pour que ça se voie.
@@ -1444,8 +1456,13 @@ function buildGuestHandlers() {
             // Voir échange avec Guillaume (session du 23 juillet — compteur qui défile) :
             // posé seulement s'il ne l'était pas déjà, comme subHostDisconnectDetectedAt —
             // sinon un second événement de coupure pendant qu'on est déjà déconnecté
-            // repousserait le départ du compteur à chaque fois.
-            if (!selfDisconnectedAt) selfDisconnectedAt = Date.now();
+            // repousserait le départ du compteur à chaque fois. Le toast (voir "on fait
+            // idem pour l'host") ne part qu'à ce moment précis (première détection), jamais
+            // répété pour les tentatives suivantes tant qu'on reste déconnecté.
+            if (!selfDisconnectedAt) {
+                selfDisconnectedAt = Date.now();
+                if (deals) flashPresenceToast("🔌 Connexion à l'hôte perdue", false);
+            }
             // Gèle la boîte d'enchères tout de suite (voir renderBiddingBox), pas
             // seulement au prochain événement de jeu.
             if (deals) renderBoard();
@@ -1458,7 +1475,10 @@ function buildGuestHandlers() {
             setConnectionStatus(false);
             scheduleSubHostTakeoverIfNeeded();
             renderReconnectButton();
-            if (!selfDisconnectedAt) selfDisconnectedAt = Date.now();
+            if (!selfDisconnectedAt) {
+                selfDisconnectedAt = Date.now();
+                if (deals) flashPresenceToast("🔌 Connexion à l'hôte perdue", false);
+            }
             if (deals) renderBoard();
         },
         onSlowConnection: () => {
@@ -3145,15 +3165,26 @@ function handlePeerData(msg, guestIndex) {
 
         case 'lobby-state': {
             const newParticipants = msg.participants;
-            // Détecte les reconnexions (disconnected true -> false) pour la bannière de
-            // bienvenue transitoire (voir flashWelcomeBack). Un diff est nécessaire ici,
-            // contrairement au côté hôte qui connaît déjà l'événement précis au moment où
-            // il se produit (voir onGuestConnected) : ce message ne porte qu'un instantané,
-            // pas la nature du changement.
+            const newSeatAssignment = msg.seatAssignment;
+            // Voir échange avec Guillaume (session du 23 juillet — "un bandeau similaire
+            // à celui du wizz") : détecte maintenant les DEUX transitions (pas seulement
+            // le retour) pour les AUTRES participants — la déconnexion utilise le même
+            // toast que côté hôte (voir onPeerDisconnected), restreinte aux joueurs
+            // ASSIS. Un diff est nécessaire ici, contrairement au côté hôte qui connaît
+            // déjà l'événement précis au moment où il se produit (voir onGuestConnected) :
+            // ce message ne porte qu'un instantané, pas la nature du changement.
+            // seatAssignment appliqué AVANT ce diff (pas après, comme c'était le cas) :
+            // presenceLabelFor a besoin du siège À JOUR pour construire son libellé.
+            seatAssignment = newSeatAssignment;
             if (deals && prevParticipantsDisconnectedSnapshot) {
                 newParticipants.forEach(p => {
-                    if (prevParticipantsDisconnectedSnapshot[p.id] && !p.disconnected) {
-                        flashWelcomeBack(p.name);
+                    if (p.id === myParticipantId) return; // notre propre transition est gérée à part (voir onGuestConnected/onPeerDisconnected)
+                    const wasDisconnected = prevParticipantsDisconnectedSnapshot[p.id];
+                    if (wasDisconnected === undefined) return; // tout nouveau participant, rien à comparer
+                    if (wasDisconnected && !p.disconnected) {
+                        flashPresenceToast(`✅ ${presenceLabelFor(p)} s'est reconnecté`, true);
+                    } else if (!wasDisconnected && p.disconnected && SEATS.some(s => seatAssignment[s] === p.id)) {
+                        flashPresenceToast(`🔌 ${presenceLabelFor(p)} s'est déconnecté`, false);
                     }
                 });
             }
@@ -3161,7 +3192,6 @@ function handlePeerData(msg, guestIndex) {
             newParticipants.forEach(p => { prevParticipantsDisconnectedSnapshot[p.id] = !!p.disconnected; });
 
             participants = newParticipants;
-            seatAssignment = msg.seatAssignment;
             // Voir échange avec Guillaume (session du 23 juillet — reprise automatique
             // d'hôte) : reçus à chaque diffusion, voir broadcastLobbyState/
             // computeSubHostId — ce client sait ainsi en permanence qui prendrait le
@@ -4911,6 +4941,14 @@ function seatFullName(seat) {
     return SEAT_FULL_NAME[seat];
 }
 
+// Voir échange avec Guillaume (session du 23 juillet) : "Nom (Siège)" pour un joueur
+// assis, juste "Nom" pour un kibitz — utilisé par les toasts de (dé)connexion
+// (flashPresenceToast) pour un texte cohérent, avec ou sans siège selon le cas.
+function presenceLabelFor(p) {
+    const seat = SEATS.find(s => seatAssignment[s] === p.id);
+    return seat ? `${p.name} (${seatFullName(seat)})` : p.name;
+}
+
 // ===== Bannière de reconnexion =====
 //
 // Signale, pendant toute la partie (pas seulement quand c'est son tour — voir aussi
@@ -4922,16 +4960,32 @@ function seatFullName(seat) {
 
 // Affiche brièvement "X est de retour" à la place de la bannière d'attente, puis revient
 // automatiquement à l'affichage normal après quelques secondes.
-function flashWelcomeBack(name) {
-    welcomeBackName = name;
-    renderReconnectionBanner();
-    clearTimeout(welcomeBackTimeoutId);
-    welcomeBackTimeoutId = setTimeout(() => {
-        welcomeBackName = null;
-        renderReconnectionBanner();
-    }, 4000);
+// Voir échange avec Guillaume (session du 23 juillet — "un bandeau similaire à celui du
+// wizz") : même mécanique d'apparition que flashWizzToast, deux teintes (voir
+// .presence-toast dans styles.css) — remplace l'ancienne bannière persistante pour les
+// annonces ponctuelles de (dé)connexion d'un participant (pas notre propre déconnexion en
+// cours, qui reste gérée par renderReconnectionBanner avec son compteur, toujours utile
+// pour le sous-hôte).
+function flashPresenceToast(text, isConnect) {
+    let toast = document.getElementById('presenceToast');
+    if (!toast) {
+        toast = document.createElement('div');
+        toast.id = 'presenceToast';
+        document.body.appendChild(toast);
+    }
+    toast.className = 'presence-toast ' + (isConnect ? 'is-connect' : 'is-disconnect');
+    toast.textContent = text;
+    toast.classList.remove('visible');
+    void toast.offsetWidth;
+    toast.classList.add('visible');
+    clearTimeout(toast._hideTimer);
+    toast._hideTimer = setTimeout(() => toast.classList.remove('visible'), 4000);
 }
 
+// Voir échange avec Guillaume (session du 23 juillet) : ne gère plus QUE notre propre
+// déconnexion en cours (avec son compteur, voir GUEST_TAKEOVER_GRACE_MS) — les annonces
+// ponctuelles concernant les AUTRES participants (ou l'hôte, de notre point de vue) sont
+// passées à flashPresenceToast, un simple toast plutôt qu'une bannière persistante.
 function renderReconnectionBanner() {
     const banner = document.getElementById('reconnectionBanner');
     if (!banner) return;
@@ -4941,12 +4995,6 @@ function renderReconnectionBanner() {
         return;
     }
 
-    // Voir échange avec Guillaume (session du 23 juillet) : priorité à NOTRE PROPRE
-    // déconnexion — dans ce cas, l'état reçu des autres participants (qui est marqué
-    // déconnecté ou non) est de toute façon périmé (on ne reçoit plus rien de l'hôte),
-    // pas la peine d'afficher autre chose que ça. Regroupe ici tout ce qui concerne une
-    // coupure, plutôt que de disperser un second message ailleurs sur l'écran (voir
-    // renderBiddingBox, qui ne fait plus que geler les boutons sans texte redondant).
     if (myRole === 'guest' && (!peerConn || !peerConn.isConnected())) {
         const elapsedS = selfDisconnectedAt ? Math.max(0, Math.floor((Date.now() - selfDisconnectedAt) / 1000)) : 0;
         // Voir échange avec Guillaume (session du 23 juillet — "un truc qui défile") : le
@@ -4965,31 +5013,7 @@ function renderReconnectionBanner() {
         return;
     }
 
-    if (welcomeBackName) {
-        banner.className = 'reconnection-banner is-back';
-        banner.textContent = `✅ ${welcomeBackName} est de retour !`;
-        banner.style.display = 'block';
-        return;
-    }
-
-    // Seuls les joueurs assis à la table intéressent cette bannière : un kibbitz
-    // déconnecté ne bloque rien pour personne.
-    const waiting = participants.filter(p =>
-        p.disconnected && Object.values(seatAssignment).includes(p.id)
-    );
-    if (waiting.length === 0) {
-        banner.style.display = 'none';
-        return;
-    }
-
-    banner.textContent = waiting.map(p => {
-        const seat = SEATS.find(s => seatAssignment[s] === p.id);
-        const seatLabel = seat ? ` (${seatFullName(seat)})` : '';
-        const elapsedS = p.disconnectedAt ? Math.max(0, Math.floor((Date.now() - p.disconnectedAt) / 1000)) : 0;
-        return `🔌 ${p.name}${seatLabel} déconnecté depuis ${elapsedS}s — sa place est réservée`;
-    }).join('\n');
-    banner.className = 'reconnection-banner is-waiting';
-    banner.style.display = 'block';
+    banner.style.display = 'none';
 }
 
 function renderBoard() {

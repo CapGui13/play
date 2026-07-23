@@ -2452,14 +2452,6 @@ table.dd-table td.dd-secondary-contract {
     color: color-mix(in srgb, var(--warn-amber) 75%, var(--text));
 }
 
-.reconnection-banner.is-back {
-    background: #223d2c;
-    background: color-mix(in srgb, #3ca05a 20%, var(--card));
-    border: 1px solid color-mix(in srgb, #3ca05a 45%, var(--card));
-    color: #74b883;
-    color: color-mix(in srgb, #3ca05a 70%, var(--text));
-}
-
 /* Bandeau "qui est présent", fusionné en haut du panneau de chat (voir
    renderRoomBoard/uiToggleChat dans app.js) plutôt qu'un panneau à part — consultable
    d'un coup d'œil pendant qu'on discute, sans clic supplémentaire pour y accéder.
@@ -2559,6 +2551,44 @@ table.dd-table td.dd-secondary-contract {
 .wizz-toast.visible {
     opacity: 1;
     transform: translateX(-50%) translateY(0);
+}
+
+/* Voir échange avec Guillaume (session du 23 juillet) : même mécanique d'apparition que
+   .wizz-toast (positionnement, fondu, translation) pour les annonces de (dé)connexion —
+   voir flashPresenceToast dans app.js. Deux teintes seulement, posées via une classe
+   supplémentaire plutôt qu'un second jeu de règles dupliqué. */
+.presence-toast {
+    position: fixed;
+    top: 14px;
+    left: 50%;
+    transform: translateX(-50%) translateY(-20px);
+    font-weight: 700;
+    font-size: 0.9rem;
+    padding: 10px 18px;
+    border-radius: 20px;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+    z-index: 500;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s ease, transform 0.2s ease;
+    white-space: nowrap;
+}
+
+.presence-toast.visible {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+}
+
+.presence-toast.is-connect {
+    background: #3ca05a;
+    background: color-mix(in srgb, #3ca05a 85%, var(--card));
+    color: white;
+}
+
+.presence-toast.is-disconnect {
+    background: #c0392b;
+    background: color-mix(in srgb, #c0392b 85%, var(--card));
+    color: white;
 }
 
 /* Bandeau du même type pour l'outil de diagnostic (voir uiShowCallExplanation dans
