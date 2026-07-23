@@ -4133,6 +4133,32 @@ function decideRobotIntervention(hand, hcp, hl, seat, history, dealVulnerable) {
     return chosenLevel + suit;
 }
 
+// Réponse à un RENVERSE forcing de l'ouvreur (voir échange avec Guillaume, session du 23
+// juillet, donne 8 — "un renverse du partenaire est 100% forcing") : jamais de passe
+// possible ici, quelle que soit la main. Priorité simple, dans l'ordre : répéter sa propre
+// couleur si 5+ cartes (montre la longueur, choix le plus naturel et le plus fréquent —
+// voir donne 8) ; sinon revenir à la 1ère couleur de l'ouvreur si 2+ cartes de soutien ;
+// en tout dernier recours (main sans fit nulle part), SA au palier le moins cher possible.
+function decideReverseForcingResponse(hand, myResponseBid, partnerOpeningBid, partnerRebidBid, seat, history) {
+    const lengths = suitLengths(hand);
+
+    if (myResponseBid.strain !== 'NT' && lengths[myResponseBid.strain] >= 5) {
+        const ownSuitCall = partnerRebidBid.level + myResponseBid.strain;
+        if (isCallLegal(history, ownSuitCall, seat)) return ownSuitCall;
+    }
+
+    if (lengths[partnerOpeningBid.strain] >= 2) {
+        const preferenceCall = (partnerRebidBid.level + 1) + partnerOpeningBid.strain;
+        if (isCallLegal(history, preferenceCall, seat)) return preferenceCall;
+    }
+
+    for (let level = partnerRebidBid.level; level <= 7; level++) {
+        const ntCall = level + 'NT';
+        if (isCallLegal(history, ntCall, seat)) return ntCall;
+    }
+    return 'PASS'; // filet de sécurité improbable : rien de légal trouvé
+}
+
 // Suite du RÉPONDANT une fois que le partenaire a rebiddé, quand le répondant sait être en
 // zone de manche (voir échange avec Guillaume) : une ouverture à la couleur promet 12+,
 // donc un répondant ayant lui-même 12+ sait que son camp a 24+ à eux deux — la séquence
@@ -4938,9 +4964,43 @@ function decideRobotCall(seat, deal, history) {
                 && responseLengths[myResponseBid.strain] < 6
                 && isHandBalancedForNT(responseLengths);
 
+            // Voir échange avec Guillaume (session du 23 juillet — "ne pas passer sur une
+            // situation forcing") : un RENVERSE de l'ouvreur (2e couleur annoncée de rang
+            // supérieur à la 1ère, au palier immédiatement au-dessus de ce qu'il faudrait
+            // pour revenir à sa 1ère couleur) est forcing — le répondant NE DOIT PAS
+            // passer, quelle que soit sa main, même minimale (voir donne 8).
+            const partnerRebidBid = parseBid(myPartnerBid.call);
+            const partnerRebidIsReverse = partnerOpeningBid && partnerRebidBid && partnerRebidBid.strain !== 'NT'
+                && partnerRebidBid.strain !== partnerOpeningBid.strain
+                && STRAIN_RANK[partnerRebidBid.strain] > STRAIN_RANK[partnerOpeningBid.strain]
+                && partnerRebidBid.level === partnerOpeningBid.level + 1;
+
+            // Voir échange avec Guillaume (session du 23 juillet, donnes 1 et 6) : le
+            // partenaire a redemandé SA (main équilibrée) — s'il existe un fit connu dans
+            // SA PROPRE couleur d'ouverture (5+ cartes si mineure, 3+ si majeure) et que
+            // la main est trop faible pour forcer (knowsGameZone déjà géré ailleurs, en
+            // priorité), mieux vaut corriger vers ce fit que de laisser jouer SA.
+            const partnerRebidWasLowNT = partnerRebidBid && partnerRebidBid.strain === 'NT' && partnerRebidBid.level <= 2;
+            const openingSuitIsMajor = partnerOpeningBid && (partnerOpeningBid.strain === 'H' || partnerOpeningBid.strain === 'S');
+            const fitThresholdInOpeningSuit = openingSuitIsMajor ? 3 : 5;
+            const hasKnownFitInOpeningSuit = partnerRebidWasLowNT && partnerOpeningBid && myResponseBid
+                && myResponseBid.strain !== partnerOpeningBid.strain
+                && responseLengths && responseLengths[partnerOpeningBid.strain] >= fitThresholdInOpeningSuit;
+
             if ((knowsGameZone || mustAnswerQuantitative) && partnerBidsCount === 2) {
                 call = decideResponderContinuationAfterNewSuit(hand, hcp, hl, partnerOpeningBid, myResponseBid, myPartnerBid.call, seat, history);
                 explanation = `Suite en zone de manche après ${formatCallForDisplay(myPartnerBid.call)} du partenaire (${points})`;
+            } else if (partnerRebidIsReverse && partnerBidsCount === 2) {
+                call = decideReverseForcingResponse(hand, myResponseBid, partnerOpeningBid, partnerRebidBid, seat, history);
+                explanation = `Renverse du partenaire (${formatCallForDisplay(myPartnerBid.call)}), forcing — obligation de reparler (${points})`;
+            } else if (hasKnownFitInOpeningSuit && partnerBidsCount === 2) {
+                const correctionCall = (partnerRebidBid.level + 1) + partnerOpeningBid.strain;
+                if (isCallLegal(history, correctionCall, seat)) {
+                    call = correctionCall;
+                    explanation = `Fit connu à ${STRAIN_SYMBOL[partnerOpeningBid.strain]} (${responseLengths[partnerOpeningBid.strain]} cartes) avec l'ouverture du partenaire — corrige plutôt que de laisser jouer SA (${points})`;
+                } else {
+                    explanation = `A déjà annoncé — passe (règle du tour unique)`;
+                }
             } else if (lowZoneFlatNoInsist && partnerBidsCount === 2) {
                 const ntCall = parseBid(myPartnerBid.call).level + 'NT';
                 if (isCallLegal(history, ntCall, seat)) {
