@@ -64,6 +64,15 @@ const INITIAL_CONNECT_RETRY_DELAY_MS = 1500;
 // premier succès — sans quoi ce mécanisme pourrait, comme le bug corrigé avec Guillaume,
 // tourner indéfiniment.
 const MAX_POST_OPEN_RECONNECT_ATTEMPTS = 5;
+
+// Voir échange avec Guillaume (session du 23 juillet — "rien ne se passe après
+// 'disconnected'") : délai de tolérance avant de fermer nous-mêmes une connexion dont
+// l'état ICE reste bloqué en 'disconnected'/'failed' sans jamais se rétablir tout seul
+// (voir attachPCDiagnostics ci-dessous) — assez court pour ne pas retarder inutilement la
+// détection (qui doit elle-même précéder le délai de grâce de reprise du sous-hôte, voir
+// GUEST_TAKEOVER_GRACE_MS dans app.js), assez long pour laisser ICE récupérer seul d'un
+// blip vraiment bref sans qu'on lui coupe l'herbe sous le pied.
+const ICE_STUCK_TIMEOUT_MS = 6000;
 // Types d'erreur PeerJS considérés comme transitoires (réseau/serveur), donc valant la
 // peine d'être retentés — par opposition à des erreurs de fond qui ne se résoudraient pas
 // en réessayant (identifiant invalide, navigateur incompatible...). 'unavailable-id' est
@@ -271,8 +280,40 @@ class BridgePeerConnection {
                 return;
             }
             this._log(`[#${guestIndex}] Diagnostic attaché à peerConnection, état actuel :`, pc.iceConnectionState);
+            // Voir échange avec Guillaume (session du 23 juillet — "rien ne se passe après
+            // 'disconnected'") : un Wi-Fi qui vacille peut dégrader la connexion ICE
+            // sous-jacente sans jamais déclencher conn.close() ni la coupure du serveur de
+            // signalisation (les deux seuls événements dont dépendait jusqu'ici toute la
+            // mécanique de reconnexion, voir onPeerDisconnected/onSignalingDisconnected) —
+            // laissant l'appli bloquée dans les limbes, persuadée que tout va bien. Ce
+            // minuteur ferme nous-mêmes la connexion (déclenchant alors le vrai
+            // conn.close(), donc toute la mécanique existante) si l'état ICE reste
+            // bloqué en 'disconnected' ou 'failed' plus de ICE_STUCK_TIMEOUT_MS SANS être
+            // revenu à 'connected'/'completed' entre-temps — un blip très bref, qu'ICE
+            // rattrape presque toujours tout seul en quelques secondes, ne déclenche donc
+            // jamais rien ici.
+            let iceStuckTimer = null;
             pc.addEventListener('iceconnectionstatechange', () => {
                 this._log(`[#${guestIndex}] État ICE (peerConnection) :`, pc.iceConnectionState);
+                const state = pc.iceConnectionState;
+                if (state === 'disconnected' || state === 'failed') {
+                    if (!iceStuckTimer) {
+                        iceStuckTimer = setTimeout(() => {
+                            iceStuckTimer = null;
+                            const stillStuck = pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed';
+                            if (stillStuck && this.conns[guestIndex] === conn) {
+                                this._log(`[#${guestIndex}] ICE bloqué en '${pc.iceConnectionState}' depuis ${ICE_STUCK_TIMEOUT_MS / 1000}s — fermeture forcée de la connexion.`);
+                                conn.close(); // déclenche le conn.on('close', ...) déjà câblé plus haut
+                            }
+                        }, ICE_STUCK_TIMEOUT_MS);
+                    }
+                } else if (iceStuckTimer) {
+                    // Rétabli tout seul avant l'échéance (voir 'connected'/'completed') :
+                    // annule, rien à faire — c'est exactement le cas qu'on veut laisser
+                    // ICE gérer sans intervenir.
+                    clearTimeout(iceStuckTimer);
+                    iceStuckTimer = null;
+                }
             });
             pc.addEventListener('icecandidate', (event) => {
                 if (event.candidate) {

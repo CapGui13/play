@@ -2262,6 +2262,18 @@ table.dd-table td.dd-secondary-contract {
     max-width: 190px;
 }
 
+/* Voir échange avec Guillaume (session du 23 juillet — "décalage EO") : dernier maillon du
+   problème, une fois les colonnes rendues rigoureusement égales (voir minmax(0, 1fr)
+   plus haut) — "Ouest" (5 lettres) laisse moins de place aux badges HCP/K&R que "Est" (3
+   lettres) sur la même ligne, donc K&R passait à la ligne chez Ouest mais pas chez Est,
+   changeant la hauteur de leurs en-têtes respectifs et donnant une impression de
+   décalage même à largeur de case identique. Empilé systématiquement, pour TOUTES les
+   cases : la hauteur d'en-tête ne dépend plus jamais de la longueur du nom du siège. */
+.all-hands-diagram .hand-card-badges {
+    flex-direction: column;
+    align-items: flex-end;
+}
+
 .all-hands-diagram .hand-N { grid-column: 2; grid-row: 1; }
 .all-hands-diagram .hand-W { grid-column: 1; grid-row: 2; }
 .all-hands-diagram .hand-E { grid-column: 3; grid-row: 2; }
