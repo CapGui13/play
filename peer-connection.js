@@ -33,6 +33,16 @@
 //   (botSeats reste celui décidé au lancement de la partie — un joueur déconnecté n'est
 //   PAS remplacé par un robot, son siège attend simplement sa reconnexion)
 //
+//   Reprise automatique d'hôte (voir échange avec Guillaume, session du 23 juillet) : si
+//   l'hôte disparaît en cours de partie sans revenir, un "sous-hôte" pré-désigné (voir
+//   computeSubHostId dans app.js — le partenaire de l'hôte de préférence) recrée
+//   automatiquement la salle sous EXACTEMENT le même code (voir createRoom(cap,
+//   forcedRoomCode) ci-dessous) après un délai de grâce de 20s (GUEST_TAKEOVER_GRACE_MS
+//   dans app.js) sans reconnexion. Les autres participants ne remarquent rien : leur
+//   reconnexion habituelle (auto ou bouton manuel) vise déjà ce même code. Si l'ancien
+//   hôte revient après coup, il détecte la collision d'identifiant (erreur
+//   'unavailable-id') et rejoint lui-même la partie comme simple invité.
+//
 // Diagnostic : tout ce qui touche à l'établissement de la connexion est aussi loggué en
 // console (F12) et dans le panneau de diagnostic à l'écran (préfixe "[peer]").
 
@@ -298,11 +308,18 @@ class BridgePeerConnection {
     // Crée une partie : génère un code, ouvre un Peer, accepte les invités au fil de l'eau
     // (jusqu'à `cap`, une limite de sécurité — la composition réelle de la table est décidée
     // librement par l'hôte dans le salon, pas à la création de la partie).
-    createRoom(cap = 6) {
+    //
+    // Voir échange avec Guillaume (session du 23 juillet — reprise automatique d'hôte par
+    // le sous-hôte) : `forcedRoomCode`, optionnel, impose un code précis au lieu d'en tirer
+    // un nouveau au hasard — nécessaire pour que le sous-hôte puisse reprendre EXACTEMENT
+    // le même code que celui de l'hôte disparu (sans quoi les autres participants, dont la
+    // reconnexion vise toujours l'ancien code, ne retrouveraient jamais la salle).
+    createRoom(cap = 6, forcedRoomCode) {
         this.role = 'host';
         this.maxGuests = cap;
         this._everOpened = false;
         this._connectRetries = 0;
+        this._forcedRoomCode = forcedRoomCode || null;
         this._attemptCreateRoom(cap);
     }
 
@@ -310,8 +327,13 @@ class BridgePeerConnection {
     // d'aléa réseau transitoire (voir RETRIABLE_ERROR_TYPES et le handler 'error' plus bas).
     // Génère un NOUVEAU code à chaque tentative — utile en particulier pour 'unavailable-id'
     // (collision d'identifiant, très improbable mais possible), que ça résout au passage.
+    // SAUF si `this._forcedRoomCode` est posé (voir createRoom ci-dessus) : dans ce cas
+    // précis, le code reste fixe même d'une tentative à l'autre — un 'unavailable-id' y
+    // signifie alors que quelqu'un d'autre détient déjà ce code précis (collision de
+    // reprise, voir échange avec Guillaume), pas une simple malchance à contourner en
+    // changeant de code.
     _attemptCreateRoom(cap) {
-        this.roomCode = makeRoomCode();
+        this.roomCode = this._forcedRoomCode || makeRoomCode();
         const id = PEER_ID_PREFIX + this.roomCode;
         this._log('Création de la partie, id =', id, this._connectRetries ? `(tentative ${this._connectRetries + 1})` : '');
         this.peer = new Peer(id, { config: ICE_CONFIG, debug: 1 });
@@ -387,8 +409,14 @@ class BridgePeerConnection {
             // Retry uniquement pour la toute première connexion (jamais ouverte ne serait-
             // ce qu'une fois) — passé ce cap, une erreur relève de 'disconnected'/reconnect()
             // ci-dessus, pas de ce mécanisme-ci (voir RETRIABLE_ERROR_TYPES en tête de fichier).
+            // Voir échange avec Guillaume (session du 23 juillet) : le retry sur
+            // 'unavailable-id' change habituellement de code pour contourner la collision —
+            // mais avec un code IMPOSÉ (`_forcedRoomCode`, voir createRoom), ce serait
+            // retenter exactement le même code déjà pris, donc futile. Dans ce cas précis,
+            // l'erreur remonte tout de suite à l'appelant (voir uiOnSubHostTakeover) plutôt
+            // que de gaspiller les tentatives bornées pour rien.
             const canRetry = !this._everOpened && this._connectRetries < MAX_INITIAL_CONNECT_RETRIES
-                && (RETRIABLE_ERROR_TYPES.includes(err.type) || err.type === 'unavailable-id');
+                && (RETRIABLE_ERROR_TYPES.includes(err.type) || (err.type === 'unavailable-id' && !this._forcedRoomCode));
             if (canRetry) {
                 this._connectRetries++;
                 this._log(`Nouvelle tentative de création (${this._connectRetries}/${MAX_INITIAL_CONNECT_RETRIES}) dans ${INITIAL_CONNECT_RETRY_DELAY_MS}ms...`);

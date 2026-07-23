@@ -72,6 +72,27 @@ let welcomeBackTimeoutId = null;
 
 let currentRoomCode = null; // pour uiReconnect() : on doit se souvenir du code utilisé pour rejoindre
 
+// ===== Reprise automatique d'hôte par le sous-hôte (voir échange avec Guillaume, session
+// du 23 juillet) =====
+//
+// Connues de CHAQUE participant (reçues via 'lobby-state', voir broadcastLobbyState) —
+// currentSubHostId : qui prendrait le relais si l'hôte disparaît ; currentHostReconnectToken
+// : le jeton de reconnexion PERSONNEL de l'hôte actuel (celui de son propre localStorage),
+// pour que, si un jour un sous-hôte prend sa place, l'ancien hôte revenant plus tard sous ce
+// jeton soit bien reconnu comme un simple retour, pas un inconnu (voir
+// uiAttemptSubHostTakeover, qui remappe l'entrée 'host' vers ce jeton avant de basculer).
+let currentSubHostId = null;
+let currentHostReconnectToken = null;
+// Minuteur du délai de grâce (voir GUEST_TAKEOVER_GRACE_MS) : posé dès que LE SOUS-HÔTE
+// perd sa connexion à l'hôte, annulé dès qu'il se reconnecte. `null` tant qu'aucune
+// coupure n'est en cours (ou si ce client n'est pas le sous-hôte).
+let subHostTakeoverTimer = null;
+// Délai avant qu'un sous-hôte considère l'hôte définitivement parti et prenne le relais
+// (voir échange avec Guillaume — 20s : assez court pour rester "fluide" à l'échelle d'une
+// partie de bridge, assez long pour absorber un verrouillage d'écran iOS ou un Wi-Fi qui
+// hoquette sans provoquer un changement d'hôte pour rien).
+const GUEST_TAKEOVER_GRACE_MS = 20000;
+
 // (Hôte uniquement) jeton de reconnexion -> numéro de connexion PeerJS actif. Un invité
 // garde le même jeton (localStorage) à travers ses reconnexions, mais son guestIndex
 // change à chaque fois (nouvelle connexion PeerJS) : cette table fait le pont entre les
@@ -1319,6 +1340,21 @@ function buildHostHandlers(onOpenExtra) {
             setConnectionStatus(false);
         },
         onError: (err) => {
+            // Voir échange avec Guillaume (session du 23 juillet — reprise automatique
+            // d'hôte) : une reconnexion automatique (peer.reconnect(), voir
+            // peer-connection.js) qui échoue avec "identifiant déjà pris" EN COURS DE
+            // PARTIE signifie très probablement que le sous-hôte a pris le relais pendant
+            // notre absence (voir attemptSubHostTakeover) — PAS une simple erreur réseau à
+            // afficher sur l'écran d'accueil (de toute façon invisible, on est en plein
+            // jeu). On rejoint alors nous-mêmes la salle comme simple invité, avec notre
+            // propre jeton persistant — le nouvel hôte nous reconnaît (voir
+            // promoteSelfToHostAfterTakeover, qui a remappé notre ancienne identité 'host'
+            // vers ce même jeton) et nous redonne notre place.
+            if (err && err.type === 'unavailable-id' && deals) {
+                pushDebugLog("Impossible de reprendre notre ancien rôle d'hôte (déjà repris) — on rejoint la partie comme simple invité.");
+                connectAsGuest(currentRoomCode, getReconnectToken(), savedNickname);
+                return;
+            }
             hideConnectingOverlay();
             showLandingError('Erreur de connexion : ' + ((err && (err.message || err.type)) || err));
         }
@@ -1337,10 +1373,22 @@ function buildGuestHandlers() {
             everConnectedAsGuest = true;
             setConnectionStatus(true);
             renderReconnectButton();
+            // Voir échange avec Guillaume (session du 23 juillet — reprise automatique
+            // d'hôte) : la connexion est rétablie (avec l'ancien hôte OU un nouvel hôte
+            // sous le même code, peu importe lequel de son point de vue) — annule le
+            // minuteur de reprise s'il était en cours, plus la peine.
+            cancelSubHostTakeoverTimer();
+            // Dégèle la boîte d'enchères tout de suite (voir renderBiddingBox) — sans
+            // ça, il faudrait attendre le prochain événement de jeu pour que ça se voie.
+            if (deals) renderBoard();
         },
         onPeerDisconnected: () => {
             setConnectionStatus(false);
             renderReconnectButton();
+            scheduleSubHostTakeoverIfNeeded();
+            // Gèle la boîte d'enchères tout de suite (voir renderBiddingBox), pas
+            // seulement au prochain événement de jeu.
+            if (deals) renderBoard();
         },
         // Voir échange avec Guillaume ("le bouton Se reconnecter n'apparaît pas") : sans ce
         // handler, une coupure de la connexion au serveur de signalisation (WebSocket) qui
@@ -1349,6 +1397,8 @@ function buildGuestHandlers() {
         onSignalingDisconnected: () => {
             setConnectionStatus(false);
             renderReconnectButton();
+            scheduleSubHostTakeoverIfNeeded();
+            if (deals) renderBoard();
         },
         onSlowConnection: () => {
             // Masque l'overlay ici (voir échange avec Guillaume) : sinon le message
@@ -2022,6 +2072,157 @@ function uiDropOnKibitz(event) {
 
 const SEAT_CLOCKWISE_NEXT = { N: 'E', E: 'S', S: 'W', W: 'N' };
 
+// Voir échange avec Guillaume (session du 23 juillet — reprise automatique d'hôte) : le
+// partenaire assis EN FACE, pas le "prochain" dans le sens horaire (contrairement à
+// SEAT_CLOCKWISE_NEXT ci-dessus, qui sert à la rotation) — N/S sont partenaires, E/O sont
+// partenaires.
+const SEAT_ACROSS = { N: 'S', S: 'N', E: 'W', W: 'E' };
+
+// Désigne le "sous-hôte" : le participant humain qui prendra automatiquement le relais si
+// l'hôte disparaît sans revenir (voir échange avec Guillaume). Recalculée à chaque
+// diffusion d'état (broadcastLobbyState), jamais figée une fois pour toutes — reste donc
+// valable même si la situation change en cours de partie (le partenaire de l'hôte se
+// déconnecte à son tour, quelqu'un change de siège...).
+// Ordre de préférence :
+//   1. Le partenaire de l'hôte (siège en face), s'il est assis et connecté.
+//   2. Sinon, le premier joueur humain ASSIS à avoir rejoint (ordre du tableau
+//      `participants`, qui est l'ordre d'arrivée — voir onGuestConnected).
+//   3. Sinon (aucun autre joueur assis), le premier participant humain connecté tout
+//      court, kibitz compris — il faut bien un filet de secours.
+// Renvoie null s'il n'y a vraiment personne d'autre (partie solo, ou tout le monde
+// déconnecté).
+function computeSubHostId() {
+    const hostSeat = SEATS.find(seat => seatAssignment[seat] === 'host');
+    if (hostSeat) {
+        const partnerId = seatAssignment[SEAT_ACROSS[hostSeat]];
+        if (partnerId && partnerId !== 'host') {
+            const partner = participants.find(p => p.id === partnerId);
+            if (partner && !partner.disconnected) return partnerId;
+        }
+    }
+
+    const seatedIds = new Set(SEATS.map(seat => seatAssignment[seat]).filter(pid => pid && pid !== 'host'));
+    const firstSeatedHuman = participants.find(p => seatedIds.has(p.id) && !p.disconnected);
+    if (firstSeatedHuman) return firstSeatedHuman.id;
+
+    const firstConnectedHuman = participants.find(p => p.id !== 'host' && !p.disconnected);
+    return firstConnectedHuman ? firstConnectedHuman.id : null;
+}
+
+// Voir échange avec Guillaume (session du 23 juillet — reprise automatique d'hôte) : posé
+// UNIQUEMENT chez le sous-hôte désigné (voir currentSubHostId), dès qu'il perd sa propre
+// connexion à l'hôte. Si l'hôte ne réapparaît pas dans le délai de grâce, tentative de
+// reprise automatique. Annulé (cancelSubHostTakeoverTimer) dès qu'une reconnexion réussit,
+// peu importe si c'est l'ancien hôte qui est simplement revenu.
+function scheduleSubHostTakeoverIfNeeded() {
+    if (myRole !== 'guest') return;
+    if (!deals) return; // le sous-hôte n'existe qu'une fois la partie lancée (voir échange avec Guillaume) — pas de reprise pendant le salon
+    if (myParticipantId !== currentSubHostId) return; // seul le sous-hôte désigné programme quoi que ce soit
+    if (subHostTakeoverTimer) return; // déjà en cours (ex. deux événements de coupure rapprochés) — pas la peine d'en reposer un
+    subHostTakeoverTimer = setTimeout(() => {
+        subHostTakeoverTimer = null;
+        attemptSubHostTakeover();
+    }, GUEST_TAKEOVER_GRACE_MS);
+}
+
+function cancelSubHostTakeoverTimer() {
+    if (subHostTakeoverTimer) {
+        clearTimeout(subHostTakeoverTimer);
+        subHostTakeoverTimer = null;
+    }
+}
+
+// Voir échange avec Guillaume (session du 23 juillet) : déclenchée quand le délai de
+// grâce expire sans reconnexion. Revérifie tout avant d'agir (le contexte a pu changer
+// entre-temps) puis tente de recréer la salle sous EXACTEMENT le même code (voir
+// createRoom dans peer-connection.js, étendu pour ça) — la bascule effective en hôte
+// (promoteSelfToHostAfterTakeover) n'a lieu qu'une fois cette reprise confirmée réussie,
+// jamais avant, pour ne jamais afficher un état "hôte" halluciné si ça échoue.
+function attemptSubHostTakeover() {
+    if (myRole !== 'guest') return;
+    if (!deals) return;
+    if (myParticipantId !== currentSubHostId) return;
+    if (peerConn && peerConn.isConnected()) return; // reconnecté entre-temps par un autre chemin, rien à faire
+    if (!currentRoomCode) return; // filet de sécurité, ne devrait pas arriver
+
+    const oldParticipantId = myParticipantId;
+    const oldHostToken = currentHostReconnectToken;
+    const codeToReclaim = currentRoomCode;
+    pushDebugLog(`Hôte introuvable depuis ${GUEST_TAKEOVER_GRACE_MS / 1000}s — tentative de reprise du rôle d'hôte sous le code ${codeToReclaim} (sous-hôte désigné).`);
+
+    if (peerConn) peerConn.destroy();
+    const newPeerConn = new BridgePeerConnection(buildHostHandlers(() => {
+        promoteSelfToHostAfterTakeover(oldParticipantId, oldHostToken);
+    }));
+    peerConn = newPeerConn;
+    // Écrasé APRÈS construction (comme pour prepare-become-host) : en cas d'échec de la
+    // reprise (collision improbable — quelqu'un d'autre a déjà réclamé ce code entre-
+    // temps), on ne reste pas bloqué dans un entre-deux — on redevient un invité tout à
+    // fait normal, comme si cette tentative n'avait jamais eu lieu.
+    newPeerConn.handlers.onError = (err) => {
+        pushDebugLog('Échec de la reprise du rôle d\'hôte : ' + ((err && (err.message || err.type)) || err));
+        connectAsGuest(codeToReclaim, getReconnectToken(), savedNickname);
+    };
+    newPeerConn.createRoom(6, codeToReclaim);
+}
+
+// Bascule effective, appelée UNIQUEMENT une fois la salle recréée avec succès sous
+// l'ancien code (voir attemptSubHostTakeover). Remappe l'identité de l'ancien hôte vers
+// son PROPRE jeton de reconnexion (déjà connu via currentHostReconnectToken) plutôt que de
+// la perdre : s'il revient un jour, il sera reconnu comme un simple retour (voir
+// onGuestConnected), pas comme un inconnu.
+function promoteSelfToHostAfterTakeover(oldParticipantId, oldHostToken) {
+    if (oldHostToken) {
+        participants = participants.map(p => {
+            if (p.id === 'host') return { ...p, id: oldHostToken, disconnected: true, disconnectedAt: Date.now() };
+            if (p.id === oldParticipantId) return { ...p, id: 'host' };
+            return p;
+        });
+        SEATS.forEach(seat => {
+            if (seatAssignment[seat] === 'host') seatAssignment[seat] = oldHostToken;
+            else if (seatAssignment[seat] === oldParticipantId) seatAssignment[seat] = 'host';
+        });
+    } else {
+        // Filet improbable (jamais reçu de hostReconnectToken) : on bascule quand même,
+        // juste sans reconnaissance automatique si l'ancien hôte revient un jour.
+        participants = participants.map(p => (p.id === oldParticipantId ? { ...p, id: 'host' } : p));
+        SEATS.forEach(seat => { if (seatAssignment[seat] === oldParticipantId) seatAssignment[seat] = 'host'; });
+    }
+
+    myRole = 'host';
+    myParticipantId = 'host';
+    mySeats = SEATS.filter(seat => seatAssignment[seat] === 'host');
+    guestIndexByToken = {};
+    prevSeatAssignmentSnapshot = null;
+    prevParticipantsDisconnectedSnapshot = null;
+    hostPendingUndo = null;
+    hostTransferInProgress = false;
+    currentSubHostId = null; // périmé — recalculé au prochain broadcastLobbyState
+
+    setConnectionStatus(true);
+    updateBoardControlVisibility();
+    renderBoard();
+    flashSubHostTookOverToast();
+}
+
+// Voir flashSeatsRotatedToast/flashChatMessageToast pour le même principe de toast
+// discret et temporaire.
+function flashSubHostTookOverToast() {
+    let toast = document.getElementById('subHostTookOverToast');
+    if (!toast) {
+        toast = document.createElement('div');
+        toast.id = 'subHostTookOverToast';
+        toast.className = 'call-explanation-toast';
+        document.body.appendChild(toast);
+    }
+    toast.textContent = "👑 L'hôte a été injoignable trop longtemps — vous prenez le relais.";
+    toast.classList.remove('visible');
+    void toast.offsetWidth;
+    toast.classList.add('visible');
+    clearTimeout(toast._hideTimer);
+    toast._hideTimer = setTimeout(() => toast.classList.remove('visible'), 5000);
+}
+
 // Fait tourner l'assignation des sièges de 90° dans le sens horaire (voir échange avec
 // Guillaume) : qui était à N se retrouve à E, qui était à E se retrouve à S, etc. Les
 // mains restent fixées par position (N/E/S/O) — donc ça change qui joue quelle main à cet
@@ -2082,7 +2283,19 @@ function flashSeatsRotatedToast() {
 }
 
 function broadcastLobbyState() {
-    peerConn.send({ type: 'lobby-state', participants, seatAssignment });
+    // Voir échange avec Guillaume (session du 23 juillet — reprise automatique d'hôte) :
+    // subHostId et hostReconnectToken voyagent avec CHAQUE diffusion d'état, pas seulement
+    // en cas de besoin — au moment où l'hôte disparaît, il n'y a justement plus moyen de
+    // rien lui demander, donc tout le monde doit déjà savoir à l'avance qui prendrait le
+    // relais et sous quelle identité l'ancien hôte pourrait revenir (voir
+    // computeSubHostId / uiAttemptSubHostTakeover plus bas).
+    peerConn.send({
+        type: 'lobby-state',
+        participants,
+        seatAssignment,
+        subHostId: computeSubHostId(),
+        hostReconnectToken: getReconnectToken()
+    });
 }
 
 // Affiche/masque le petit bandeau de statut du transfert d'hôte, dans le salon (distinct
@@ -2695,6 +2908,14 @@ function handlePeerData(msg, guestIndex) {
 
             participants = newParticipants;
             seatAssignment = msg.seatAssignment;
+            // Voir échange avec Guillaume (session du 23 juillet — reprise automatique
+            // d'hôte) : reçus à chaque diffusion, voir broadcastLobbyState/
+            // computeSubHostId — ce client sait ainsi en permanence qui prendrait le
+            // relais et sous quel jeton l'hôte actuel pourrait revenir, sans avoir
+            // besoin de le demander au moment où ça compterait vraiment (l'hôte ne
+            // répond plus, justement).
+            currentSubHostId = msg.subHostId || null;
+            currentHostReconnectToken = msg.hostReconnectToken || null;
             // Ce message est aussi renvoyé quand la connectivité change en pleine partie
             // (quelqu'un se (re)connecte) : on ne bascule à l'écran du salon que si la
             // partie n'a pas encore commencé, sinon ça arracherait un invité de sa table.
@@ -5196,20 +5417,30 @@ function renderBiddingBox() {
     }
 
     const turnSeat = currentTurnSeat(deal.dealer, auctionHistory);
-    const myTurn = mySeats && mySeats.includes(turnSeat);
+    // Voir échange avec Guillaume (session du 23 juillet) : geler la boîte d'enchères
+    // pour TOUT LE MONDE dès que la connexion à l'hôte est perdue — pas seulement pour le
+    // joueur dont c'est le tour. Personne n'est connecté à personne d'autre qu'à l'hôte
+    // (topologie en étoile), donc une coupure de l'hôte coupe tout le monde EN MÊME
+    // TEMPS. Sans ce garde-fou, un clic pendant la coupure s'appliquait localement sans
+    // jamais partir nulle part (voir uiMakeCall), créant un décalage silencieux entre ce
+    // qu'on croit avoir joué et la vraie table.
+    const disconnectedFromHost = myRole === 'guest' && (!peerConn || !peerConn.isConnected());
+    const myTurn = !disconnectedFromHost && mySeats && mySeats.includes(turnSeat);
 
     const turnOwnerId = seatAssignment[turnSeat];
     const turnOwner = turnOwnerId ? participants.find(p => p.id === turnOwnerId) : null;
     const ownerDisconnected = !!(turnOwner && turnOwner.disconnected);
 
-    if (myTurn) {
+    if (disconnectedFromHost) {
+        turnPanel.textContent = '🔌 Connexion perdue — en attente de reconnexion...';
+    } else if (myTurn) {
         turnPanel.textContent = `À vous d'enchérir (${seatFullName(turnSeat)})`;
     } else if (ownerDisconnected) {
         turnPanel.textContent = `🔌 En attente que ${turnOwner.name} se reconnecte (${seatFullName(turnSeat)})...`;
     } else {
         turnPanel.textContent = `En attente de ${seatFullName(turnSeat)}...`;
     }
-    turnPanel.className = 'turn-indicator ' + (myTurn ? 'my-turn' : (ownerDisconnected ? 'disconnected-turn' : 'their-turn'));
+    turnPanel.className = 'turn-indicator ' + (disconnectedFromHost || ownerDisconnected ? 'disconnected-turn' : (myTurn ? 'my-turn' : 'their-turn'));
 
     const specialLabels = { PASS: 'Passe', X: 'X', XX: 'XX' };
     // Voir échange avec Guillaume : ligne spéciale calée sur la même grille à 5 colonnes
@@ -5248,6 +5479,10 @@ function renderBiddingBox() {
 }
 
 function uiMakeCall(call) {
+    // Voir renderBiddingBox (même règle) : jamais d'enchère locale pendant une coupure
+    // avec l'hôte, même si cette fonction était appelée autrement qu'en cliquant un
+    // bouton déjà désactivé.
+    if (myRole === 'guest' && (!peerConn || !peerConn.isConnected())) return;
     const deal = currentDeal();
     const turnSeat = currentTurnSeat(deal.dealer, auctionHistory);
     if (!mySeats || !mySeats.includes(turnSeat)) return;
