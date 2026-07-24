@@ -837,7 +837,16 @@ function kickOffBackgroundDD(dealsList) {
     }
 }
 
-async function sendDDChunk(chunk, generationId) {
+// Voir échange avec Guillaume (session du 23 juillet — "une donne au milieu sans PAR
+// calculé") : borne le nombre de fois où une même donne peut être retentée, pour éviter
+// une boucle infinie si son calcul échoue systématiquement (distribution pathologique
+// pour le solveur, pas un simple aléa ponctuel) — 2 tentatives suffisent largement pour
+// absorber un timeout isolé côté serveur, sans s'acharner indéfiniment sur un cas
+// réellement bloqué.
+const DD_MAX_RETRIES_PER_DEAL = 2;
+const DD_RETRY_DELAY_MS = 1500;
+
+async function sendDDChunk(chunk, generationId, retryCount = 0) {
     const items = chunk.map(deal => ({ id: deal.board, pbn: dealToPbnStringForDD(deal) }));
     try {
         const response = await fetch(RANDOM_DEAL_DD_SERVER_URL, {
@@ -848,15 +857,40 @@ async function sendDDChunk(chunk, generationId) {
         if (!response.ok) throw new Error('HTTP ' + response.status);
         const data = await response.json();
         if (generationId !== ddResultGenerationId) return; // lot périmé, voir ddResultGenerationId
+
+        // Voir échange avec Guillaume : un résultat sans `table` (voir applyDDResultToBoard,
+        // qui ignore silencieusement ce cas) signifie très probablement un timeout ponctuel
+        // du solveur côté serveur sur CETTE distribution précise — les autres donnes du même
+        // lot, elles, ont bien abouti. On les identifie ici pour les retenter isolément,
+        // plutôt que de les laisser filer sans PAR pour le reste de la partie.
+        const succeededIds = new Set();
         for (const r of data.results) {
-            if (r.table) applyDDResultToBoard(r.id, r.table);
+            if (r.table) {
+                applyDDResultToBoard(r.id, r.table);
+                succeededIds.add(r.id);
+            }
+        }
+        const missingDeals = chunk.filter(d => !succeededIds.has(d.board));
+        if (missingDeals.length > 0 && retryCount < DD_MAX_RETRIES_PER_DEAL) {
+            pushDebugLog(`Double mort : ${missingDeals.length} donne(s) sans résultat dans ce lot — nouvelle tentative (${retryCount + 1}/${DD_MAX_RETRIES_PER_DEAL})…`);
+            setTimeout(() => sendDDChunk(missingDeals, generationId, retryCount + 1), DD_RETRY_DELAY_MS);
+        } else if (missingDeals.length > 0) {
+            pushDebugLog(`Double mort : ${missingDeals.length} donne(s) toujours sans résultat après ${DD_MAX_RETRIES_PER_DEAL} tentatives — abandon pour elles (le reste de la partie n'est pas affecté).`);
         }
     } catch (err) {
-        // Échec silencieux du point de vue du joueur : pas de PAR pour ce lot, mais la
-        // partie elle-même n'est pas affectée (voir échange avec Guillaume — le calcul DD
-        // est un bonus, jamais un prérequis pour jouer). Tracé dans le journal de
-        // diagnostic pour comprendre après coup si ça arrive souvent.
-        pushDebugLog('Double mort en arrière-plan : échec pour un lot (' + ((err && err.message) || err) + ')');
+        // Échec COMPLET du lot (réseau, erreur HTTP...) — même logique de retry borné que
+        // pour un résultat partiel ci-dessus, plutôt que d'abandonner tout de suite sur un
+        // aléa réseau transitoire.
+        if (retryCount < DD_MAX_RETRIES_PER_DEAL) {
+            pushDebugLog(`Double mort en arrière-plan : échec pour un lot (${(err && err.message) || err}) — nouvelle tentative (${retryCount + 1}/${DD_MAX_RETRIES_PER_DEAL})…`);
+            setTimeout(() => sendDDChunk(chunk, generationId, retryCount + 1), DD_RETRY_DELAY_MS);
+        } else {
+            // Échec silencieux du point de vue du joueur : pas de PAR pour ce lot, mais la
+            // partie elle-même n'est pas affectée (voir échange avec Guillaume — le calcul
+            // DD est un bonus, jamais un prérequis pour jouer). Tracé dans le journal de
+            // diagnostic pour comprendre après coup si ça arrive souvent.
+            pushDebugLog(`Double mort en arrière-plan : échec définitif pour un lot après ${DD_MAX_RETRIES_PER_DEAL} tentatives (${(err && err.message) || err})`);
+        }
     }
 }
 
