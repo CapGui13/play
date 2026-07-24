@@ -3604,6 +3604,45 @@ function isSeatVulnerable(seat, dealVulnerable) {
 // pour la plupart des décisions (à l'exception notable d'1SA, qui se compte en H purs :
 // voir decideRobotOpening). Source : fiche "Ouvertures" du SEF, bridge-chailley.fr (voir
 // échange avec Guillaume).
+// ===== Zones de manche et de chelem (voir échange avec Guillaume, session du 24
+// juillet) =====
+//
+// Avant cette session, chaque fonction qui devait juger "sommes-nous en zone de manche/
+// chelem ?" refaisait son propre petit calcul ad hoc (hl+12>=33 ici, hl>=22 là, une
+// troisième variante ailleurs) — ni les mêmes seuils partout, ni la même logique
+// HL/HLD. Centralisé ici : toute nouvelle décision de zone doit passer par ces
+// constantes plutôt que d'en inventer une nouvelle.
+//
+// RÈGLE HL vs HLD (voir aussi le commentaire de computeSupportPoints juste en dessous) :
+// une main s'évalue TOUJOURS en HL (computeHandHL — H + points de longueur dans SA
+// PROPRE main) tant qu'aucun fit n'est trouvé avec le partenaire. Dès qu'un fit est
+// CONFIRMÉ (soutien direct, ou couleur du partenaire connue avec une longueur garantie —
+// majeure 5ème, intervention 5+, etc.), on bascule sur HLD (computeSupportPoints — H +
+// DISTRIBUTION selon ce fit précis : bonus du 9ème atout + valeur des courtes ailleurs)
+// à la place des points de longueur — jamais les deux à la fois sur la même main, "HLD"
+// au sens SEF ne les additionne pas.
+//
+// Zones, à l'échelle du CAMP (ma main + le minimum garanti par le partenaire, voir
+// OPENING_MINIMUM plus bas) :
+const GAME_ZONE_NT = 25;      // manche à SA (3SA)
+const GAME_ZONE_MAJOR = 27;   // manche à la majeure (4C/4P), en HLD une fois le fit connu
+const GAME_ZONE_MINOR = 30;   // manche à la mineure (5T/5K), en HLD une fois le fit connu
+const SLAM_ZONE_SMALL = 33;   // petit chelem
+const SLAM_ZONE_GRAND = 37;   // grand chelem
+
+// Minimum garanti par une ouverture normale au palier 1 (voir decideRobotOpening) —
+// utilisé partout où il faut estimer le minimum du partenaire sans le connaître
+// précisément (avant qu'il n'ait eu l'occasion de préciser sa main davantage).
+const OPENING_MINIMUM = 12;
+
+// Voir échange avec Guillaume (session du 24 juillet — régression trouvée à l'audit) :
+// minimum promis par un simple SOUTIEN (pas une ouverture) — bien plus bas. Utilisé
+// spécifiquement quand le "partenaire" dont on estime le plancher est un RÉPONDANT qui a
+// juste soutenu, pas un OUVREUR (OPENING_MINIMUM ne s'applique qu'à ce dernier cas —
+// les confondre faisait sauter au chelem à tort avec une simple main d'ouverture forte
+// face à un soutien qui ne promet presque rien).
+const SIMPLE_RAISE_MINIMUM = 6;
+
 function computeHandHL(hand) {
     const lengths = suitLengths(hand);
     let lengthPoints = 0;
@@ -4091,9 +4130,41 @@ function decideRobotResponse(hand, hcp, hl, partnerCall, seat, history, partnerP
 // contre d'appel si la main s'y prête (voir échange avec Guillaume), sinon une couleur
 // solide (5+ cartes) et assez de points (HL, ajustés par vulnérabilité) pour un
 // contre-appel naturel, au palier minimal légal.
-function decideRobotIntervention(hand, hcp, hl, seat, history, dealVulnerable) {
+function decideRobotIntervention(hand, hcp, hl, seat, history, dealVulnerable, isReopening) {
     const lengths = suitLengths(hand);
     const lastBid = getLastActualBid(history); // l'enchère adverse à laquelle on réagit
+
+    // Voir échange avec Guillaume (session du 24 juillet) : RÉVEIL — moins exigeant
+    // qu'une intervention directe, puisque le silence du partenaire (qui n'a pas pu
+    // agir seul) ne dit rien sur SES points ; les siens peuvent très bien être là. Trois
+    // cas, dans cet ordre : main plate sans couleur 5ème annonçable (8-12H, avec ou sans
+    // arrêt — pas d'exigence d'arrêt en réveil, contrairement à un 1SA direct) → 1SA ;
+    // couleur 5ème annonçable et 13H+ → contre d'abord (même principe que "toute
+    // distribution" plus bas, mais réveil = moins de jeu suffit), puis la nommer
+    // naturellement au tour suivant (voir decideDoublerFollowUp, déjà étendu pour ce cas
+    // avec hcp>=13) ; couleur 5ème annonçable et 7-12H → la nommer directement,
+    // naturellement, palier minimal légal. En dessous de 7H sans couleur ni main de SA :
+    // rien à faire ici, la suite de la fonction (seuils d'intervention normaux, plus
+    // exigeants) ne devrait de toute façon rien trouver — laissé tomber jusqu'au passe
+    // final par défaut.
+    if (isReopening) {
+        const reopenSuit = longestSuitPreferHigh(lengths);
+        const hasReopenSuit = lengths[reopenSuit] >= 5;
+
+        if (!hasReopenSuit && hcp >= 8 && hcp <= 12 && isHandBalancedForNT(lengths)) {
+            const call = '1NT';
+            if (isCallLegal(history, call, seat)) return call;
+        }
+        if (hasReopenSuit && hcp >= 13 && isCallLegal(history, 'X', seat)) {
+            return 'X';
+        }
+        if (hasReopenSuit && hcp >= 7 && hcp <= 12) {
+            for (let level = 1; level <= 7; level++) {
+                const call = level + reopenSuit;
+                if (isCallLegal(history, call, seat)) return call;
+            }
+        }
+    }
 
     // "Contre toute distribution" (voir échange avec Guillaume, donne 2) : à partir de
     // 19HL+, on contre d'abord, quelle que soit la distribution — même avec une belle
@@ -4241,7 +4312,7 @@ function decideResponderContinuationAfterNewSuit(hand, hcp, hl, openingBid, myRe
     // decideOpenerRebidAfterNewSuit) et demande si j'ai un peu plus que le minimum promis
     // par ma réponse — avec 9H+ (le haut de la fourchette habituelle d'une réponse simple,
     // 6-11H), je dis 6SA ; sinon je reste sur 4SA. Traité à part de l'heuristique de
-    // chelem générique plus bas (qui suppose une ouverture normale à 12H minimum) : ici
+    // zone générique plus bas (qui suppose une ouverture normale à 12H minimum) : ici
     // c'est une vraie question du partenaire, pas un simple compte de points de ma part.
     if (partnerRebidCall === '4NT') {
         if (hcp >= 9) {
@@ -4251,39 +4322,53 @@ function decideResponderContinuationAfterNewSuit(hand, hcp, hl, openingBid, myRe
         return 'PASS';
     }
 
-    // Chelem par simple compte de points (voir échange avec Guillaume, donne 6) : pas de
-    // véritable enchère de contrôle (cue-bids, Blackwood — hors périmètre, voir le
-    // README), mais un déclenchement borné et sûr — si MES points (HL) combinés au
-    // MINIMUM garanti par l'ouverture du partenaire (12, quelle que soit la couleur
-    // ouverte) atteignent 33+ (zone de petit chelem), on saute directement à 6SA plutôt
-    // que de s'arrêter à la manche. Un excès de matériel aussi manifeste ne doit pas
-    // rester ignoré juste parce qu'on ne fait pas de vraie enchère de contrôle.
-    if (hl + 12 >= 33) {
-        const call = '6NT';
-        if (isCallLegal(history, call, seat)) return call;
-    }
-
+    // Voir échange avec Guillaume (session du 24 juillet) : bascule sur HLD
+    // (computeSupportPoints) dès qu'un fit MAJEUR est identifié — via l'ouverture
+    // (majeure 5ème garantie) ou via la redemande du partenaire (4+ garanti, voir
+    // decideOpenerRebidAfterNewSuit) — plutôt que HL (mes propres points de longueur,
+    // qui ne veulent plus rien dire une fois qu'on joue avec l'atout du partenaire).
+    // Sans fit majeur (on va vers SA), HL reste la bonne mesure : pas de couleur d'atout
+    // connue, donc pas de distribution à valoriser par rapport à elle.
+    let zonePoints = hl;
+    let fitSuit = null;
     if (rebid.strain !== 'NT') {
         const openingIsMajor = openingBid.strain === 'S' || openingBid.strain === 'H';
         const rebidIsMajor = rebid.strain === 'S' || rebid.strain === 'H';
+        if (openingIsMajor && lengths[openingBid.strain] + 5 >= 8) fitSuit = openingBid.strain;
+        else if (rebidIsMajor && rebid.strain !== myResponseBid.strain && lengths[rebid.strain] + 4 >= 8) fitSuit = rebid.strain;
+        if (fitSuit) {
+            const partnerGuaranteedLength = fitSuit === openingBid.strain ? 5 : 4;
+            zonePoints = computeSupportPoints(hand, fitSuit, partnerGuaranteedLength);
+        }
+    }
 
+    // Chelem par simple compte de points (voir échange avec Guillaume, donne 6) : pas de
+    // véritable enchère de contrôle (cue-bids, Blackwood — hors périmètre, voir le
+    // README), mais un déclenchement borné et sûr — si MES points (HL, ou HLD si un fit
+    // majeur vient d'être identifié ci-dessus) combinés au MINIMUM garanti par
+    // l'ouverture du partenaire (OPENING_MINIMUM) atteignent la zone de petit chelem,
+    // voire de grand chelem, on saute directement plutôt que de s'arrêter à la manche.
+    // Un excès de matériel aussi manifeste ne doit pas rester ignoré juste parce qu'on ne
+    // fait pas de vraie enchère de contrôle.
+    if (zonePoints + OPENING_MINIMUM >= SLAM_ZONE_GRAND) {
+        const call = fitSuit ? '7' + fitSuit : '7NT';
+        if (isCallLegal(history, call, seat)) return call;
+    }
+    if (zonePoints + OPENING_MINIMUM >= SLAM_ZONE_SMALL) {
+        const call = fitSuit ? '6' + fitSuit : '6NT';
+        if (isCallLegal(history, call, seat)) return call;
+    }
+
+    if (fitSuit) {
         // Vise directement la MANCHE (palier 4) une fois le fit identifié — pas juste le
         // palier minimal légal au-dessus du rebid du partenaire (bug trouvé à l'audit,
         // donne 7 : atterrissait sur un simple "3H" alors que la zone de manche est déjà
         // connue par construction, voir le déclencheur dans decideRobotCall). Repli sur
         // le palier minimal légal seulement si le palier 4 lui-même n'est plus
         // disponible (enchère déjà montée plus haut, cas rare).
-        if (openingIsMajor && lengths[openingBid.strain] + 5 >= 8) {
-            for (let level = Math.max(4, rebid.level); level <= 7; level++) {
-                const call = level + openingBid.strain;
-                if (isCallLegal(history, call, seat)) return call;
-            }
-        }
-        if (rebidIsMajor && rebid.strain !== myResponseBid.strain && lengths[rebid.strain] + 4 >= 8) {
-            for (let level = Math.max(4, rebid.level); level <= 7; level++) {
-                const call = level + rebid.strain;
-                if (isCallLegal(history, call, seat)) return call;
-            }
+        for (let level = Math.max(4, rebid.level); level <= 7; level++) {
+            const call = level + fitSuit;
+            if (isCallLegal(history, call, seat)) return call;
         }
     }
 
@@ -4321,8 +4406,14 @@ function decideDoublerFollowUp(hand, hcp, hl, partnerResponseCall, seat, history
     // annoncée par la séquence elle-même), plutôt que de pousser la couleur choisie par
     // le partenaire, qui ne connaît pas encore ma vraie main. Priorité sur la logique
     // normale ci-dessous, pensée pour un contre d'appel standard (12-18HL).
-    if (hl >= 19) {
-        const suit = longestSuitPreferHigh(lengths);
+    // Généralisé (session du 24 juillet, voir échange avec Guillaume — contre de RÉVEIL
+    // sur une couleur 5ème, 13H+) : même geste, mais avec 13H+ (H purs, pas HL) dès lors
+    // qu'il y a une vraie couleur 5ème à montrer — le seuil plus bas suffit dans ce cas,
+    // qu'on soit en réveil ou non (rien ne distingue plus les deux à ce stade de la
+    // fonction, qui ne connaît que la main et l'historique).
+    const myLongSuit = longestSuitPreferHigh(lengths);
+    if (hl >= 19 || (hcp >= 13 && lengths[myLongSuit] >= 5)) {
+        const suit = myLongSuit;
         for (let level = responseBid.level; level <= 7; level++) {
             const call = level + suit;
             if (isCallLegal(history, call, seat)) return call;
@@ -4728,32 +4819,57 @@ function decideRobotOpenerRebid(hand, hcp, hl, myOpeningCall, partnerCall, seat,
         }
     }
 
+    // Voir échange avec Guillaume (session du 24 juillet) : bascule sur HLD
+    // (computeSupportPoints) dès que le partenaire soutient MA couleur directement — le
+    // fit est alors connu avec certitude (au moins 3 cartes de soutien, voir
+    // decideRobotMajorSupport), donc mes propres points de longueur (HL) ne veulent plus
+    // rien dire par rapport à la distribution de mon jeu vis-à-vis de CET atout précis.
+    const supportPoints = isRaiseOfMySuit ? computeSupportPoints(hand, myBid.strain, 3) : hl;
+
     // Voir échange avec Guillaume (session du 24 juillet, donne 3) : ENCHÈRE D'ESSAI (2SA
     // générique, pas un essai de couleur courte — pas encore implémenté) quand un fit
     // majeur vient d'être trouvé par un soutien SIMPLE (palier 2) et que ma main est dans
-    // la zone D'ESPOIR de manche (15-17HL) — ni un minimum tout juste suffisant pour
+    // la zone D'ESPOIR de manche (15-17HLD) — ni un minimum tout juste suffisant pour
     // compéter (<15, filet PASS juste en dessous), ni déjà sûr d'être en zone de manche
-    // (18HL+, viser la manche directement, voir plus bas). Le partenaire répond ensuite
+    // (18HLD+, viser la manche directement, voir plus bas). Le partenaire répond ensuite
     // mini (revient dans le fit au palier minimal) ou maxi (manche) selon ses propres
     // points de soutien — voir la moitié symétrique de cette règle côté RÉPONDANT
     // (wasTrialBidAsk, dans le traitement du 2e tour du répondant).
     if (isRaiseOfMySuit && (myBid.strain === 'S' || myBid.strain === 'H') && myBid.level === 1
-        && partnerParsed.level === 2 && hl >= 15 && hl < 18) {
+        && partnerParsed.level === 2 && supportPoints >= 15 && supportPoints < 18) {
         const call = '2NT';
         if (isCallLegal(history, call, seat)) return call;
     }
 
-    if (hl < 18) return 'PASS'; // seule une main nettement au-dessus d'une ouverture minimale rejustifie de reparler
+    if (supportPoints < 18 && !isRaiseOfMySuit) return 'PASS'; // seule une main nettement au-dessus d'une ouverture minimale rejustifie de reparler (voir plus bas pour isRaiseOfMySuit, qui a son propre filet une fois le chelem écarté)
 
     // Le partenaire a-t-il confirmé un fit pour MA couleur d'ouverture par un soutien
     // NATUREL (pas conventionnel — les cas 2SA/3SA sont désormais traités plus haut,
     // avant ce seuil) ?
     if (isRaiseOfMySuit) {
-        // Fit confirmé et main d'ouverture nettement excédentaire (18HL+) : la manche est
-        // quasiment automatique. Simplification volontaire : toujours viser la manche
-        // dans MA couleur, jamais le chelem (pas de contrôle/Blackwood, hors périmètre).
-        // Si le partenaire a déjà annoncé la manche lui-même (barrage), isCallLegal
-        // rejettera naturellement cette annonce (déjà atteinte) et on se rabat sur passe.
+        // Voir échange avec Guillaume (session du 24 juillet) : chelem par simple compte
+        // de points (même principe que decideResponderContinuationAfterNewSuit, mis de
+        // côté ici à tort jusqu'ici) — mes points de soutien (HLD, fit déjà connu)
+        // combinés au minimum garanti par le soutien du partenaire (3 cartes, voir
+        // computeSupportPoints ci-dessus) donnent une estimation basse mais sûre du
+        // camp ; testé AVANT le filet "sous 18 → passe", pour ne pas manquer une main
+        // suffisamment forte alors que supportPoints est déjà dans la zone de manche.
+        if (supportPoints + SIMPLE_RAISE_MINIMUM >= SLAM_ZONE_GRAND) {
+            const call = '7' + myBid.strain;
+            if (isCallLegal(history, call, seat)) return call;
+        }
+        if (supportPoints + SIMPLE_RAISE_MINIMUM >= SLAM_ZONE_SMALL) {
+            const call = '6' + myBid.strain;
+            if (isCallLegal(history, call, seat)) return call;
+        }
+        if (supportPoints < 18) return 'PASS'; // main modeste (soutien simple déjà géré par la loi des atouts/l'essai plus haut) — rien de plus à ajouter ici
+
+        // Fit confirmé et main d'ouverture nettement excédentaire (18HLD+) : la manche est
+        // quasiment automatique. Simplification volontaire : pas de vraie enchère de
+        // contrôle (cue-bids, Blackwood, hors périmètre) au-delà du chelem par points
+        // ci-dessus. Si le partenaire a déjà annoncé la manche lui-même (barrage),
+        // isCallLegal rejettera naturellement cette annonce (déjà atteinte) et on se
+        // rabat sur passe.
         const call = (myBid.strain === 'S' || myBid.strain === 'H') ? ('4' + myBid.strain) : ('5' + myBid.strain);
         if (isCallLegal(history, call, seat)) return call;
         return 'PASS';
@@ -4907,8 +5023,19 @@ function decideRobotCall(seat, deal, history) {
                     : `Réponse à ${formatCallForDisplay(lastBid.call)} du partenaire (${points}, fit ${suitLengths(hand)[partnerBidInfo.strain] || 0}${partnerBidInfo.strain !== 'NT' ? ' carte(s) à ' + STRAIN_SYMBOL[partnerBidInfo.strain] : ''})`;
                 } // fin du if (call !== 'X') — voir le contre protecteur plus haut
             } else {
-                call = decideRobotIntervention(hand, hcp, hl, seat, history, deal.vulnerable);
-                explanation = `Intervention sur ${formatCallForDisplay(lastBid.call)} adverse (${points})`;
+                // Voir échange avec Guillaume (session du 24 juillet) : RÉVEIL — si je
+                // passe, l'enchère se termine sur la dernière annonce adverse (les 2
+                // derniers appels sont des passes, précédés d'une vraie annonce
+                // adverse). Moins exigeant qu'une intervention directe (voir
+                // decideRobotIntervention) : le silence du partenaire ne veut pas dire
+                // qu'il n'a rien, juste qu'il n'avait pas de quoi agir seul.
+                const last2 = history.slice(-2);
+                const isReopening = last2.length === 2 && last2.every(e => isPass(e.call))
+                    && lastBid && partnershipOf(lastBid.seat) !== partnershipOf(seat);
+                call = decideRobotIntervention(hand, hcp, hl, seat, history, deal.vulnerable, isReopening);
+                explanation = isReopening
+                    ? `Réveil sur ${formatCallForDisplay(lastBid.call)} adverse (${points})`
+                    : `Intervention sur ${formatCallForDisplay(lastBid.call)} adverse (${points})`;
             }
         }
     } else if (myBids.length === 1) {

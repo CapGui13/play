@@ -211,10 +211,13 @@ notamment sa fiche "Ouvertures", plutôt qu'une généralisation approximative :
   le contre en place), hors périmètre.
 - **Vulnérabilité** : barrages et interventions naturelles resserrés (seuil relevé de 8HL à
   10HL) quand le camp du robot est vulnérable, plus agressifs sinon — comme le vrai SEF.
-- **Globalement un seul tour de dialogue** : une fois qu'un robot a annoncé quelque chose
-  dans une donne, il passe systématiquement ensuite — sauf l'ouvreur avec une main très
-  forte (18HL+), qui dispose d'un unique rebid après la réponse du partenaire (voir
-  ci-dessus). Pas de contre-annonce après une nouvelle enchère adverse.
+- **Globalement un seul tour de dialogue, avec des exceptions forcing ciblées** : une fois
+  qu'un robot a annoncé quelque chose dans une donne, il passe systématiquement ensuite —
+  sauf l'ouvreur avec une main très forte (18HL+), qui dispose d'un unique rebid après la
+  réponse du partenaire (voir ci-dessus), et sauf les situations explicitement forcing
+  (renverse, 4ème couleur, réveil suivi d'un contre — voir "Corrections des sessions du
+  23-24 juillet" plus bas), qui obligent à reparler quelle que soit la main. Pas de
+  contre-annonce après une nouvelle enchère adverse en dehors de ces cas précis.
 - **Contre d'appel (takeout) seulement** — jamais de surcontre, jamais de contre de
   pénalité, jamais de convention (Stayman, Blackwood, Roudi,
   Texas...), pas de 2♣ fort indéterminé ni de 2♦ forcing de manche (une main assez forte
@@ -581,12 +584,76 @@ Après une session de test, Guillaume a exporté le fichier et relu chaque donne
   à un "2 faible" du partenaire, un saut au-delà du palier naturel montre l'excédent
   plutôt qu'une simple couleur au minimum, qui ressemblerait à une main limitée.
 
+**Corrections des sessions du 23-24 juillet** (voir échange avec Guillaume, retests
+successifs sur fichiers PBN exportés depuis une vraie session) :
+- **Correction vers un fit connu après SA du partenaire** : un répondant qui a montré une
+  autre couleur mais dispose de 5+ cartes dans la couleur d'OUVERTURE du partenaire (ou
+  3+ si c'est une majeure), avec une main trop faible pour forcer, corrige maintenant vers
+  ce fit plutôt que de laisser jouer SA.
+- **Renverse forcing** : un renverse de l'ouvreur (2e couleur de rang supérieur à la 1ère,
+  au palier immédiatement au-dessus de ce qu'il faudrait pour revenir à la 1ère) oblige
+  désormais le répondant à reparler — jamais de passe, même avec une main minimale.
+  L'ouvreur lui-même, après son propre renverse, ne peut plus passer non plus sur la
+  réponse la plus économique du partenaire ("auto-forcing") : il répète sa couleur si
+  minimum, ou utilise la 4ème couleur forcing si sa main est nettement excédentaire.
+- **4ème couleur forcing** : détectée (une couleur jamais annoncée par personne, après que
+  chaque camp en a déjà montré une) et reconnue comme forcing — plus de passe dessus. La
+  réponse cherche d'abord un arrêt (SA), sinon un fit connu dans une couleur déjà montrée
+  par le partenaire.
+- **Enchère d'essai à SA** : après un soutien SIMPLE d'une majeure (palier 2) avec 15-17
+  points de soutien — ni un minimum qui compète juste, ni déjà sûr d'être en zone de
+  manche —, l'ouvreur fait un essai à 2SA générique plutôt que de passer directement. Le
+  répondant tranche mini (revient dans le fit au palier minimal, 6-7 points) ou maxi
+  (manche, 9+).
+- **Réveil** (voir "quatrième position" ci-dessus, la bonne terminologie) : quand passer
+  clôturerait l'enchère sur la dernière annonce adverse, moins exigeant qu'une
+  intervention directe — main plate sans couleur 5ème (8-12H) → 1SA, sans exigence
+  d'arrêt ; couleur 5ème et 7-12H → nommée directement ; couleur 5ème et 13H+ → contre
+  d'abord (même principe que le "contre toute distribution", généralisé à 13H — voir
+  plus bas), la vraie couleur au tour suivant.
+- **Préférence simple entre les deux couleurs de l'ouvreur** : avec une main minimale
+  (jusqu'à 9H), le répondant reste par défaut sur la 1ère couleur de l'ouvreur (présumée
+  plus longue) sauf avantage NET (2+ cartes) pour sa redemande — un simple écart d'une
+  carte ne suffit pas à préférer la redemande, contrairement à ce qu'un premier correctif
+  avait fait à tort.
+- **Main énorme qui ne doit jamais passer** : un répondant avec 18H+, face à un partenaire
+  qui n'a fait qu'ouvrir puis passer (typiquement après une intervention adverse), impose
+  sa plus longue couleur en zone de chelem plutôt que de laisser filer un partiel — un
+  éventuel destinataire de ce saut (le partenaire, recevant un contrat de manche/chelem
+  nommé directement) sait s'arrêter net dessus, sauf surplus propre qui justifierait
+  d'aller plus haut.
+- **Framework HL/HLD unifié** (voir "Points HL/HLD" plus bas) : constantes de zone
+  partagées (25H pour 3SA, 27HLD pour 4♥/4♠, 30HLD pour 5♣/5♦, 33 pour le petit chelem,
+  37 pour le grand chelem) réutilisées à plusieurs endroits clés du moteur, remplaçant des
+  calculs ad hoc jusque-là dispersés et parfois incohérents entre eux.
+
+### Points HL/HLD
+
+Une main s'évalue **toujours en HL** (honneurs + longueur dans sa propre main) tant
+qu'aucun fit n'est trouvé avec le partenaire. Dès qu'un fit est **confirmé** (soutien
+direct, ou couleur du partenaire à longueur garantie — majeure 5ème, intervention 5+...),
+bascule sur **HLD** (`computeSupportPoints` — honneurs + DISTRIBUTION selon ce fit précis :
+bonus du 9ème atout + valeur des courtes ailleurs) à la place des points de longueur —
+jamais les deux additionnés sur la même main, la terminologie SEF "HLD" ne les cumule pas.
+
+Zones, à l'échelle du camp (ses propres points + le minimum estimé du partenaire — 12
+pour une ouverture, seulement 6 pour un simple soutien qui ne promet presque rien) :
+25H pour 3SA, 27HLD pour la manche à la majeure, 30HLD à la mineure, 33 pour le petit
+chelem, 37 pour le grand chelem — tant que ce seuil est atteignable, la séquence continue
+d'une manière ou d'une autre plutôt que de s'arrêter prématurément. Implémenté pour
+l'instant dans les deux fonctions les plus centrales (suite du répondant après une
+nouvelle couleur, rebid de l'ouvreur après un soutien direct) ; le reste du moteur
+(réponse au contre, soutiens directs, barrages...) n'a pas encore été repassé en revue
+avec ce même cadre unifié.
+
 **Mis de côté pour l'instant**, signalés explicitement plutôt qu'ignorés silencieusement :
-4ème couleur forcing complet (exigerait plusieurs enchères par camp au-delà du cas 2/1
-borné ci-dessus, risque de casser la terminaison sans une refonte plus large), points
-Kaplan-Rubens (pas de formule fournie), contre "toute distribution" et séquences
-compétitives détaillées après contre (trop pointu pour une première passe), repli 1SA en
-quatrième position (ambigu sur les conditions exactes de déclenchement).
+4ème couleur forcing complet au-delà du cas 2/1 borné et du cas "après mon propre
+renverse" (une généralisation totale exigerait plusieurs enchères par camp, avec un vrai
+risque de casser la terminaison sans une refonte plus large), points Kaplan-Rubens (pas de
+formule fournie), séquences compétitives détaillées après un contre (l'adversaire qui
+reparle avant que le partenaire n'ait répondu, un contre de pénalité plus tard dans
+l'enchère — trop pointu pour une première passe), repli 1SA en quatrième position (déjà
+couvert en fait par le réveil ci-dessus, qui répond à la même question).
 
 ## Limites connues
 
@@ -601,17 +668,41 @@ quatrième position (ambigu sur les conditions exactes de déclenchement).
 - Le fichier de donnes n'est chargé que par l'hôte ; les invités le reçoivent
   automatiquement via la connexion, ils n'ont rien à importer de leur côté.
 
-## Reconnexion
+## Fiabilité et confort en cours de partie (sessions du 23-24 juillet)
+
+- **Réorganiser les sièges en cours de partie** : bouton dans la barre d'actions (à côté
+  d'Undo/Recommencer/Rotation, réservé à l'hôte) ouvrant une grille en croix identique à
+  celle du salon. Fonctionne en **brouillon** : les changements ne s'appliquent qu'au clic
+  sur "Valider" — "Annuler" à côté abandonne sans rien changer, et il n'y a plus moyen de
+  fermer la fenêtre en cliquant à côté (seuls ces deux boutons ferment). Permet notamment
+  de réassigner à "Robot" le siège d'un joueur parti durablement, ce qui remet
+  automatiquement ce siège en jeu automatique (recalcul à la volée des sièges "robot").
+- **Notifications de présence** : un toast temporaire (même animation que le "wizz"), vert
+  à la connexion, rouge à la déconnexion, pour chaque joueur assis — remplace l'ancienne
+  bannière permanente et verbeuse. Compteur en direct pour sa PROPRE déconnexion en cours
+  ("connexion perdue — reconnexion en cours... Xs", avec le décompte du sous-hôte
+  spécifiquement affiché "X/20s" puisque lui seul est concerné par ce délai).
+- **Chat permanent sur desktop** (≥600px) : ne peut plus être fermé, bouton et bandeau de
+  fermeture masqués (redondants une fois le chat toujours visible). Reste fermable sur
+  mobile. Hauteur fixe avec défilement interne (ne grandit plus avec la conversation).
+  Historique des messages inclus dans la sauvegarde de reprise d'hôte (voir
+  "Reconnexion"). Le renommage d'un participant par double-clic est réservé au "qui est
+  là" en haut du panneau, plus disponible directement sur un message.
+- **Nom de l'hôte affiché** à côté du code de salle en cours de partie.
+
+
 
 Chaque invité porte un petit jeton généré dans son navigateur (conservé via
 `localStorage` — survit à la fermeture de l'onglet et à un redémarrage du navigateur,
 tant que c'est le même appareil). Si sa connexion tombe — Wi-Fi qui coupe, ordinateur qui
 se met en veille, onglet qui plante — l'hôte garde sa place et son ou ses sièges
-réservés. **Son siège n'est pas remplacé par un robot** : l'enchère patiente simplement
-que ce joueur revienne, avec un indicateur qui le signale clairement ("🔌 En attente que
-X se reconnecte...").
+réservés. **Son siège n'est pas remplacé par un robot automatiquement** : l'enchère
+patiente que ce joueur revienne, avec un toast qui signale la déconnexion (rouge) puis la
+reconnexion (vert) de chaque participant. L'hôte peut, s'il le souhaite, réassigner
+manuellement un siège resté vacant trop longtemps à "Robot" (voir "Réorganiser les
+sièges" en cours de partie).
 
-Pour revenir :
+Pour revenir (invité) :
 - **En rechargeant simplement la page** (ou en rouvrant le lien de partage, même dans un
   nouvel onglet) : la reconnexion et la reprise de la partie en cours (donne, enchère,
   sièges) sont automatiques.
@@ -619,15 +710,48 @@ Pour revenir :
   dès que la connexion est perdue ; un clic suffit pour reprendre exactement où on en
   était.
 
+**Détection renforcée** : au-delà des événements PeerJS standards (fermeture de
+connexion, coupure du serveur de signalisation), une connexion qui reste bloquée en état
+ICE `disconnected`/`failed` plus de 6 secondes sans se rétablir toute seule est
+considérée morte et fermée activement — un simple Wi-Fi qui vacille peut dégrader la
+connexion sous-jacente sans jamais déclencher les événements PeerJS classiques, ce qui la
+laissait auparavant dans les limbes sans que l'appli s'en aperçoive.
+
+### Si c'est l'hôte qui part
+
+Deux mécanismes complémentaires, selon la situation :
+
+**1. Coupure réseau, onglet resté ouvert** — l'hôte dispose du même bouton **"🔌 Se
+reconnecter"** que les invités (tentative légère de reprendre la même connexion ; si ça
+n'aboutit pas sous 4s, réinitialisation complète sous le même code de salle). Comme tout
+l'état (donnes, enchère, sièges) est resté intact en mémoire (l'onglet n'a jamais fermé),
+rien à reconstruire.
+
+**2. Fermeture complète de l'onglet/du navigateur** — deux filets se combinent :
+- **Bascule automatique du sous-hôte** : le partenaire de l'hôte (ou, à défaut, le
+  premier joueur assis, ou le premier participant connecté) est désigné en continu comme
+  "sous-hôte". Si l'hôte disparaît plus de 20 secondes sans revenir, le sous-hôte reprend
+  automatiquement la main sous le **même code de salle**, avec l'état de la partie tel
+  qu'il l'a lui-même vécu (donnes, enchère, sièges) — tout le monde s'y reconnecte de
+  façon transparente. Si l'hôte revient entre-temps (avant les 20s), il retrouve
+  normalement son rôle.
+- **Reprise via `localStorage`** : l'état complet de la partie (donnes, enchère, sièges,
+  participants, messages du chat) est sauvegardé en continu dans le `localStorage` de
+  l'hôte pendant qu'il joue. À la réouverture du site (même appareil, même navigateur —
+  jusqu'à 6h après la dernière sauvegarde), une bannière **"Reprendre la partie"**
+  propose de relancer exactement là où c'était resté, en réclamant le même code de salle.
+  Si le sous-hôte a entre-temps déjà pris le relais, l'hôte d'origine rejoint
+  automatiquement comme simple invité plutôt que de rester bloqué.
+
 Limites connues :
-- Ceci ne couvre que la reconnexion d'un **invité**. Si c'est l'**hôte** qui part une fois
-  la partie lancée, la partie ne peut pas reprendre (son identifiant de connexion change à
-  chaque nouvelle partie) — il faudra recréer une partie et repartager un nouveau code.
-  Dans le salon (avant le lancement), voir "Transfert d'hôte" ci-dessous, qui couvre un cas
-  proche mais différent (un départ volontaire, pas une coupure).
+- Ces deux mécanismes ne couvrent que le **même appareil/navigateur** que celui qui
+  hébergeait — passer à un autre appareil ou nettoyer les données du site entre-temps
+  empêche la reprise via `localStorage` (la bascule du sous-hôte, elle, fonctionne
+  indépendamment de ça, puisqu'elle se produit sur l'appareil d'un AUTRE participant).
 - Deux onglets ouverts sur la même partie, dans le même navigateur, partagent le même
-  jeton — sans conséquence pour un usage normal (un onglet par joueur), mais à éviter si
-  vous testez seul avec plusieurs onglets pour simuler plusieurs joueurs.
+  jeton (invité) ou la même sauvegarde (hôte) — sans conséquence pour un usage normal (un
+  onglet par joueur), mais à éviter si vous testez seul avec plusieurs onglets pour
+  simuler plusieurs joueurs.
 
 ## Transfert d'hôte
 
