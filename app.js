@@ -4076,11 +4076,22 @@ function decideRobotIntervention(hand, hcp, hl, seat, history, dealVulnerable) {
         const oppBid = parseBid(lastBid.call);
         const hasLongSuit = ['S', 'H', 'D', 'C'].some(s => lengths[s] >= 6);
         const hasFiveCardMajor = ['S', 'H'].some(s => lengths[s] >= 5);
-        if (oppBid && oppBid.strain !== 'NT' && hl >= 12 && lengths[oppBid.strain] <= 2 && !hasLongSuit && !hasFiveCardMajor) {
+        // Voir échange avec Guillaume (session du 23 juillet, donne 2) : HCP réel exigé
+        // ici (pas HL) — "12H+", distinct de la règle "toute distribution" ci-dessus qui,
+        // elle, se base sur HL (19HL+). Les deux seuils ne sont pas interchangeables.
+        if (oppBid && oppBid.strain !== 'NT' && hcp >= 12 && lengths[oppBid.strain] <= 2 && !hasLongSuit && !hasFiveCardMajor) {
             const otherSuits = ['S', 'H', 'D', 'C'].filter(s => s !== oppBid.strain);
-            const has4Count = otherSuits.filter(s => lengths[s] >= 4).length;
-            const allAtLeast3 = otherSuits.every(s => lengths[s] >= 3);
-            if (allAtLeast3 || has4Count >= 2) {
+            // Voir échange avec Guillaume (session du 23 juillet, donne 2) : sur une
+            // MINEURE adverse, le contre d'appel promet spécifiquement les DEUX
+            // majeures (au moins 3 cartes chacune, idéalement 4-3) — l'ancienne règle
+            // ("2 couleurs quelconques parmi les 3 restantes à 4+") pouvait laisser une
+            // majeure complètement dénudée (2 cartes) tant que les 2 AUTRES étaient
+            // longues, ce qui n'est plus assez précis pour orienter le partenaire.
+            const oppBidIsMinor = oppBid.strain === 'C' || oppBid.strain === 'D';
+            const shapeOk = oppBidIsMinor
+                ? (lengths['S'] >= 3 && lengths['H'] >= 3)
+                : (otherSuits.every(s => lengths[s] >= 3) || otherSuits.filter(s => lengths[s] >= 4).length >= 2);
+            if (shapeOk) {
                 const call = 'X';
                 if (isCallLegal(history, call, seat)) return call;
             }
@@ -4958,8 +4969,17 @@ function decideRobotCall(seat, deal, history) {
             // promis dans cette couleur en redemandant autre chose que SA), "1SA" reste la
             // meilleure description — mieux qu'un passe qui n'exprime rien sur la main.
             const responseLengths = myResponseBid ? suitLengths(hand) : null;
+            const partnerRebidBid = parseBid(myPartnerBid.call);
+            // Voir échange avec Guillaume (session du 23 juillet, donne 2) : exclu si le
+            // partenaire a en fait SOUTENU ma propre couleur (même famille que
+            // myResponseBid.strain) plutôt que redemandé autre chose — dans ce cas, son
+            // enchère est une INVITE (accepter/décliner), pas une description de main
+            // équilibrée à améliorer. Convertir en SA reviendrait à ACCEPTER l'invite à
+            // tort avec une main minimale (6-10H) qui doit au contraire décliner
+            // (=passer, le filet par défaut plus bas s'en charge déjà correctement).
             const lowZoneFlatNoInsist = partnerOpeningBid && myResponseBid && !knowsGameZone
                 && myResponseBid.strain !== partnerOpeningBid.strain && myResponseBid.strain !== 'NT'
+                && partnerRebidBid && partnerRebidBid.strain !== myResponseBid.strain
                 && hcp >= 6 && hcp <= 10
                 && responseLengths[myResponseBid.strain] < 6
                 && isHandBalancedForNT(responseLengths);
@@ -4969,7 +4989,6 @@ function decideRobotCall(seat, deal, history) {
             // supérieur à la 1ère, au palier immédiatement au-dessus de ce qu'il faudrait
             // pour revenir à sa 1ère couleur) est forcing — le répondant NE DOIT PAS
             // passer, quelle que soit sa main, même minimale (voir donne 8).
-            const partnerRebidBid = parseBid(myPartnerBid.call);
             const partnerRebidIsReverse = partnerOpeningBid && partnerRebidBid && partnerRebidBid.strain !== 'NT'
                 && partnerRebidBid.strain !== partnerOpeningBid.strain
                 && STRAIN_RANK[partnerRebidBid.strain] > STRAIN_RANK[partnerOpeningBid.strain]
@@ -5000,6 +5019,26 @@ function decideRobotCall(seat, deal, history) {
                     explanation = `Fit connu à ${STRAIN_SYMBOL[partnerOpeningBid.strain]} (${responseLengths[partnerOpeningBid.strain]} cartes) avec l'ouverture du partenaire — corrige plutôt que de laisser jouer SA (${points})`;
                 } else {
                     explanation = `A déjà annoncé — passe (règle du tour unique)`;
+                }
+            } else if (partnerBidsCount === 1 && hcp >= 18) {
+                // Voir échange avec Guillaume (session du 23 juillet, donne 7) : le
+                // partenaire n'a fait qu'ouvrir puis passer (typiquement après une
+                // intervention adverse, laissant la décision au répondant) — mais avec
+                // une main aussi forte que celle-ci (18H+), le camp est de toute façon en
+                // zone de chelem quoi qu'ait dit le partenaire depuis (12+ de l'ouverture
+                // + 18+ de ma main = 30+). Pas question de laisser filer par un simple
+                // passe. S'il y a une belle longue (6+), on l'impose directement au
+                // palier de petit chelem — sinon, repli sur la manche à SA plutôt qu'un
+                // passe qui n'exprime rien sur une main pareille.
+                const lengths = suitLengths(hand);
+                const longestSuit = ['S', 'H', 'D', 'C'].reduce((best, s) => lengths[s] > lengths[best] ? s : best, 'S');
+                const slamCall = '6' + longestSuit;
+                if (lengths[longestSuit] >= 6 && isCallLegal(history, slamCall, seat)) {
+                    call = slamCall;
+                    explanation = `Main énorme (${hcp}H) avec une longue à ${STRAIN_SYMBOL[longestSuit]} (${lengths[longestSuit]} cartes) — impose sa couleur en zone de chelem plutôt que de laisser filer (${points})`;
+                } else if (isCallLegal(history, '3NT', seat)) {
+                    call = '3NT';
+                    explanation = `Main énorme (${hcp}H) mais pas de longue franche à imposer — repli sur la manche à SA plutôt qu'un passe (${points})`;
                 }
             } else if (lowZoneFlatNoInsist && partnerBidsCount === 2) {
                 const ntCall = parseBid(myPartnerBid.call).level + 'NT';
