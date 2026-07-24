@@ -3892,6 +3892,13 @@ function decideRobotResponse(hand, hcp, hl, partnerCall, seat, history, partnerP
     const suit = bid.strain;
     const partnerOpenedMinor = (suit === 'C' || suit === 'D');
 
+    // Voir échange avec Guillaume (session du 24 juillet, donnes 3 et 4) : calculé ici,
+    // dès le début, pour être réutilisé aussi par ownLongSuit ci-dessous (pas seulement
+    // par la section "nouvelle couleur" plus bas, qui l'utilisait déjà) — 13HL en
+    // concurrence (palier 2+ imposé, ou le partenaire est intervenu plutôt qu'ouvert),
+    // 11HL sinon. Voir sa définition complète plus bas pour le détail du raisonnement.
+    const newSuitThreshold = (bid.level >= 2 || partnerWasIntervening) ? 13 : 11;
+
     // Voir échange avec Guillaume (donne 2, session du 23 juillet) : les bots traitent
     // TOUS les contres comme des contres d'appel, jamais de contre punitif — trop subtil
     // à modéliser correctement. Donc pas de "passe de pénalité" en avance après un contre
@@ -3938,13 +3945,23 @@ function decideRobotResponse(hand, hcp, hl, partnerCall, seat, history, partnerP
     // plutôt que montrer 5 trèfles à soi). Seuil à 5+ (pas 6+, revu à la baisse après la
     // donne 6 où la couleur en question ne fait que 5 cartes) avec un écart d'au moins 2
     // cartes par rapport au fit — pour ne pas préférer une couleur juste "un peu plus
-    // longue" mais bien NETTEMENT meilleure. Priorité de LONGUEUR, pas de points (qu'on
-    // ait 8H ou 15H) — pas de seuil de points comme "longerSuit".
+    // longue" mais bien NETTEMENT meilleure.
+    //
+    // Voir échange avec Guillaume (session du 24 juillet, donnes 3 et 4) : "priorité de
+    // longueur, pas de points" ne vaut que pour une réponse encore BON MARCHÉ (palier 1,
+    // ou le palier minimal légal s'il est déjà à 2 sans que ce soit MON choix) — sans
+    // ça, une longue superbe pouvait forcer un engagement au palier 3 (ou un palier 2
+    // imposé par la concurrence) sans la moindre valeur, ce qui n'a plus rien d'anodin.
+    // Au-delà du palier minimal légal disponible, même seuil que pour une vraie nouvelle
+    // couleur (newSuitThreshold), par cohérence.
     const ownLongSuit = ['S', 'H', 'D', 'C'].find(s => s !== suit && lengths[s] >= 5 && lengths[s] >= lengths[suit] + 2);
     if (ownLongSuit) {
         for (let level = bid.level; level <= 7; level++) {
             const call = level + ownLongSuit;
-            if (isCallLegal(history, call, seat)) return call;
+            if (isCallLegal(history, call, seat)) {
+                if (level <= 1 || hl >= newSuitThreshold) return call;
+                break; // palier minimal légal déjà 2+ ET pas assez de points : pas la peine d'essayer plus haut, ce serait pire
+            }
         }
     }
 
@@ -4022,8 +4039,8 @@ function decideRobotResponse(hand, hcp, hl, partnerCall, seat, history, partnerP
     // seulement 11HL n'a "aucun espoir de manche" même dans le meilleur des cas (11+12 =
     // 23, sous la zone de manche) : ça force le partenaire à reparler pour rien. Seuil
     // relevé à 13HL dans ce cas — pile de quoi espérer la manche même si le partenaire
-    // n'a que le minimum de sa fourchette de barrage (13+12=25).
-    const newSuitThreshold = (bid.level >= 2 || partnerWasIntervening) ? 13 : 11;
+    // n'a que le minimum de sa fourchette de barrage (13+12=25). Voir sa définition tout
+    // en haut de la fonction (réutilisée par ownLongSuit).
     if (hl >= newSuitThreshold) {
         const newSuit = longestSuitPreferHigh(lengths);
         if (newSuit !== suit && lengths[newSuit] >= 4) {
@@ -4616,6 +4633,21 @@ function decideRobotOpenerRebid(hand, hcp, hl, myOpeningCall, partnerCall, seat,
     const partnerParsed = parseBid(partnerCall);
     const isRaiseOfMySuit = partnerParsed && partnerParsed.strain === myBid.strain;
 
+    // Voir échange avec Guillaume (session du 24 juillet, donne 7) : le partenaire a
+    // directement sauté à un contrat de MANCHE OU DE CHELEM dans une AUTRE couleur que la
+    // mienne (donc pas un simple soutien, voir isRaiseOfMySuit juste au-dessus) — sans
+    // mécanique de cue-bidding/contrôle pour juger d'un éventuel surplus à montrer (hors
+    // périmètre), le seul réflexe sûr est de PASSER : "un contrat nommé est un arrêt,
+    // sauf surplus qui justifie d'aller plus haut" (ses mots). Sans ce garde-fou, la
+    // suite du code traitait ce genre de saut comme une simple nouvelle couleur à bas
+    // niveau (voir isNewSuitResponse plus bas), qui cherchait alors à montrer MA propre
+    // plus longue au palier immédiatement supérieur — un non-sens à ce niveau, qui a fait
+    // déraper une main vers un 7♣ hasardeux sur le 6♦ du partenaire. NT exclu (4NT peut
+    // être Blackwood, question du partenaire — pas un simple contrat nommé à accepter).
+    if (partnerParsed && partnerParsed.level >= 4 && partnerParsed.strain !== myBid.strain && partnerParsed.strain !== 'NT') {
+        return 'PASS';
+    }
+
     // Loi des atouts (voir échange avec Guillaume, donne 4) : 6+ cartes dans SA propre
     // couleur, soutenue par le partenaire (3+ cartes garanties par son enchère, voir
     // decideRobotMajorSupport / le soutien mineur plus haut) → fit connu de 9+ cartes, qui
@@ -4627,7 +4659,13 @@ function decideRobotOpenerRebid(hand, hcp, hl, myOpeningCall, partnerCall, seat,
     // Guillaume, donne 2) : l'ouvreur de barrage a déjà tout dit à son premier tour — même
     // avec un fit connu et un soutien du partenaire, il ne reparle plus jamais de son
     // propre chef, quelle que soit la suite de l'enchère (relance adverse comprise).
-    if (isRaiseOfMySuit && lengths[myBid.strain] >= 6 && myBid.level === 1) {
+    // Voir échange avec Guillaume (session du 24 juillet, donne 5 — RÉGRESSION trouvée) :
+    // "&& hl < 18" en plus — sans ça, cette règle interceptait et renvoyait avant même
+    // d'atteindre le saut direct à la manche pour une main énorme (18HL+, voir plus bas) :
+    // "repousser d'un palier" a du sens pour une main modeste qui compète sur la
+    // distribution, pas pour plafonner une main qui sait DÉJÀ être en zone de manche à
+    // elle seule.
+    if (isRaiseOfMySuit && lengths[myBid.strain] >= 6 && myBid.level === 1 && hl < 18) {
         const call = (partnerParsed.level + 1) + myBid.strain;
         if (isCallLegal(history, call, seat)) return call;
     }
@@ -5023,8 +5061,15 @@ function decideRobotCall(seat, deal, history) {
             // supérieur à la 1ère, au palier immédiatement au-dessus de ce qu'il faudrait
             // pour revenir à sa 1ère couleur) est forcing — le répondant NE DOIT PAS
             // passer, quelle que soit sa main, même minimale (voir donne 8).
+            // Voir échange avec Guillaume (session du 24 juillet, donne 2 — RÉGRESSION
+            // trouvée) : "partnerRebidBid.strain !== myResponseBid.strain" en plus, sinon
+            // un simple SOUTIEN du partenaire à MA PROPRE couleur (ex. 1♦-1♥-2♥, où le
+            // partenaire relance juste ma couleur, jamais une 3ème) se faisait à tort
+            // passer pour un renverse — un renverse exige une VRAIE 3ème couleur, jamais
+            // une simple relance de celle du répondant.
             const partnerRebidIsReverse = partnerOpeningBid && partnerRebidBid && partnerRebidBid.strain !== 'NT'
                 && partnerRebidBid.strain !== partnerOpeningBid.strain
+                && partnerRebidBid.strain !== myResponseBid.strain
                 && STRAIN_RANK[partnerRebidBid.strain] > STRAIN_RANK[partnerOpeningBid.strain]
                 && partnerRebidBid.level === partnerOpeningBid.level + 1;
 
