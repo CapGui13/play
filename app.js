@@ -4660,12 +4660,16 @@ function decideRobotOpenerRebid(hand, hcp, hl, myOpeningCall, partnerCall, seat,
     // avec un fit connu et un soutien du partenaire, il ne reparle plus jamais de son
     // propre chef, quelle que soit la suite de l'enchère (relance adverse comprise).
     // Voir échange avec Guillaume (session du 24 juillet, donne 5 — RÉGRESSION trouvée) :
-    // "&& hl < 18" en plus — sans ça, cette règle interceptait et renvoyait avant même
-    // d'atteindre le saut direct à la manche pour une main énorme (18HL+, voir plus bas) :
-    // "repousser d'un palier" a du sens pour une main modeste qui compète sur la
-    // distribution, pas pour plafonner une main qui sait DÉJÀ être en zone de manche à
-    // elle seule.
-    if (isRaiseOfMySuit && lengths[myBid.strain] >= 6 && myBid.level === 1 && hl < 18) {
+    // "&& hl < 18" ajouté d'abord — sans ça, cette règle interceptait et renvoyait avant
+    // même d'atteindre le saut direct à la manche pour une main énorme (18HL+).
+    // Voir échange avec Guillaume (session du 24 juillet, donne 3 — MÊME BUG une seconde
+    // fois) : seuil resserré à "< 15" (pas 18) — la même interception se reproduisait pour
+    // la zone D'ESSAI (15-17HL, voir plus bas), qui n'atteignait jamais son propre code à
+    // cause de cette règle plus haut dans la fonction qui répondait déjà avant elle.
+    // "Repousser d'un palier" par pure sécurité distributionnelle n'a de sens que pour une
+    // main qui n'a justement RIEN de mieux à dire (< 15) — au-delà, l'essai ou le saut
+    // direct sont plus informatifs qu'un simple palier de sécurité.
+    if (isRaiseOfMySuit && lengths[myBid.strain] >= 6 && myBid.level === 1 && hl < 15) {
         const call = (partnerParsed.level + 1) + myBid.strain;
         if (isCallLegal(history, call, seat)) return call;
     }
@@ -4722,6 +4726,21 @@ function decideRobotOpenerRebid(hand, hcp, hl, myOpeningCall, partnerCall, seat,
             const call = '4' + myBid.strain;
             if (isCallLegal(history, call, seat)) return call;
         }
+    }
+
+    // Voir échange avec Guillaume (session du 24 juillet, donne 3) : ENCHÈRE D'ESSAI (2SA
+    // générique, pas un essai de couleur courte — pas encore implémenté) quand un fit
+    // majeur vient d'être trouvé par un soutien SIMPLE (palier 2) et que ma main est dans
+    // la zone D'ESPOIR de manche (15-17HL) — ni un minimum tout juste suffisant pour
+    // compéter (<15, filet PASS juste en dessous), ni déjà sûr d'être en zone de manche
+    // (18HL+, viser la manche directement, voir plus bas). Le partenaire répond ensuite
+    // mini (revient dans le fit au palier minimal) ou maxi (manche) selon ses propres
+    // points de soutien — voir la moitié symétrique de cette règle côté RÉPONDANT
+    // (wasTrialBidAsk, dans le traitement du 2e tour du répondant).
+    if (isRaiseOfMySuit && (myBid.strain === 'S' || myBid.strain === 'H') && myBid.level === 1
+        && partnerParsed.level === 2 && hl >= 15 && hl < 18) {
+        const call = '2NT';
+        if (isCallLegal(history, call, seat)) return call;
     }
 
     if (hl < 18) return 'PASS'; // seule une main nettement au-dessus d'une ouverture minimale rejustifie de reparler
@@ -5085,6 +5104,19 @@ function decideRobotCall(seat, deal, history) {
                 && myResponseBid.strain !== partnerOpeningBid.strain
                 && responseLengths && responseLengths[partnerOpeningBid.strain] >= fitThresholdInOpeningSuit;
 
+            // Voir échange avec Guillaume (session du 24 juillet, donne 3) : réponse
+            // MINI/MAXI à l'enchère d'ESSAI (2SA générique) du partenaire, après que j'ai
+            // moi-même simplement soutenu sa majeure au palier 2 — voir la moitié
+            // symétrique de cette règle dans decideRobotOpenerRebid (la main d'essai,
+            // 15-17HL). Mini (revient dans le fit au palier minimal, pas d'insistance) en
+            // dessous de 9 points de soutien (voir computeSupportPoints — HCP + 9ème
+            // atout + distribution, la même mesure que pour décider du soutien initial) ;
+            // maxi (manche) à partir de 9. Le cas 8 pile est ambigu (voir ses notes — "on
+            // implémentera le calcul avec les points KR plus tard") : traité en mini par
+            // simplification, pas encore de réévaluation plus fine.
+            const wasTrialBidAsk = myPartnerBid.call === '2NT' && openingSuitIsMajor
+                && myResponseBid && myResponseBid.strain === partnerOpeningBid.strain && myResponseBid.level === 2;
+
             // Voir échange avec Guillaume (session du 24 juillet, donne 4) : PRÉFÉRENCE
             // SIMPLE entre les deux couleurs (de vraies COULEURS, pas SA) montrées par le
             // partenaire — son ouverture ET sa redemande — prioritaire sur
@@ -5099,7 +5131,7 @@ function decideRobotCall(seat, deal, history) {
             if (partnerRebidIsSuit && hcp <= 9 && responseLengths) {
                 const openingLen = responseLengths[partnerOpeningBid.strain];
                 const rebidLen = responseLengths[partnerRebidBid.strain];
-                if (openingLen > rebidLen && openingLen >= 2) {
+                if (openingLen >= 2 && rebidLen < openingLen + 2) {
                     for (let level = partnerRebidBid.level; level <= 7; level++) {
                         const c = level + partnerOpeningBid.strain;
                         if (isCallLegal(history, c, seat)) { preferenceCall = c; break; }
@@ -5120,6 +5152,15 @@ function decideRobotCall(seat, deal, history) {
                     explanation = `Fit connu à ${STRAIN_SYMBOL[partnerOpeningBid.strain]} (${responseLengths[partnerOpeningBid.strain]} cartes) avec l'ouverture du partenaire — corrige plutôt que de laisser jouer SA (${points})`;
                 } else {
                     explanation = `A déjà annoncé — passe (règle du tour unique)`;
+                }
+            } else if (wasTrialBidAsk && partnerBidsCount === 2) {
+                const supportPts = computeSupportPoints(hand, partnerOpeningBid.strain, 5);
+                if (supportPts >= 9) {
+                    call = '4' + partnerOpeningBid.strain;
+                    explanation = `Maxi de mon soutien (${supportPts} points de soutien) — accepte l'essai, manche (${points})`;
+                } else {
+                    call = '3' + partnerOpeningBid.strain;
+                    explanation = `Mini de mon soutien (${supportPts} points de soutien) — décline l'essai, revient au palier minimal (${points})`;
                 }
             } else if (preferenceCall && partnerBidsCount === 2) {
                 call = preferenceCall;
@@ -5215,6 +5256,52 @@ function decideRobotCall(seat, deal, history) {
                 }
             }
         }
+
+        // Voir échange avec Guillaume (session du 24 juillet, donne 8, 2e partie) :
+        // réponse à la 4ème COULEUR FORCING du PARTENAIRE (lui a déjà montré 2 couleurs,
+        // j'en ai montré 1 — la 4ème, jamais annoncée par personne des deux côtés, est
+        // artificielle : une question sur l'arrêt dans cette couleur, pas une vraie
+        // couleur de sa part). Inconcevable de passer dessus. Avec l'arrêt (A, Rx+, Dxx+
+        // — un 3ème rond comme VXx n'en est PAS un, voir ses mots), SA. Sans arrêt mais
+        // avec 4+ cartes dans une couleur DÉJÀ montrée par le partenaire (fit connu),
+        // manche directe dans ce fit plutôt que d'insister sur SA sans arrêt.
+        if (call === 'PASS') {
+            const myPartnerLastBid2 = history.slice().reverse()
+                .find(e => partnershipOf(e.seat) === partnershipOf(seat) && e.seat !== seat && isBidCall(e.call));
+            const myPartnerEarlierBids = history.filter(e => partnershipOf(e.seat) === partnershipOf(seat) && e.seat !== seat && isBidCall(e.call) && e !== myPartnerLastBid2);
+            if (myPartnerLastBid2 && myPartnerEarlierBids.length >= 2) {
+                const lastParsed = parseBid(myPartnerLastBid2.call);
+                const myOwnSuits = new Set(myBids.map(b => parseBid(b.call).strain).filter(s => s !== 'NT'));
+                const partnerSuits = new Set(myPartnerEarlierBids.map(b => parseBid(b.call).strain).filter(s => s !== 'NT'));
+                const isFourthSuitForcing = lastParsed && lastParsed.strain !== 'NT'
+                    && !myOwnSuits.has(lastParsed.strain) && !partnerSuits.has(lastParsed.strain);
+                if (isFourthSuitForcing) {
+                    const askedSuit = lastParsed.strain;
+                    const lengths = suitLengths(hand);
+                    const cards = hand[askedSuit] || '';
+                    const hasStopper = cards.includes('A')
+                        || (cards.includes('K') && cards.length >= 2)
+                        || (cards.includes('Q') && cards.length >= 3);
+                    if (hasStopper) {
+                        const ntCall = lastParsed.level + 'NT';
+                        if (isCallLegal(history, ntCall, seat)) {
+                            call = ntCall;
+                            explanation = `Arrêt à ${STRAIN_SYMBOL[askedSuit]} — répond à la 4ème couleur forcing par SA (${points})`;
+                        }
+                    } else {
+                        const partnerKnownSuit = [...partnerSuits].find(s => lengths[s] >= 4);
+                        if (partnerKnownSuit) {
+                            const gameCall = '4' + partnerKnownSuit;
+                            if (isCallLegal(history, gameCall, seat)) {
+                                call = gameCall;
+                                explanation = `Pas d'arrêt à ${STRAIN_SYMBOL[askedSuit]}, mais fit connu à ${STRAIN_SYMBOL[partnerKnownSuit]} (${lengths[partnerKnownSuit]} cartes) — manche dans le fit plutôt que SA sans arrêt (${points})`;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         if (call === 'PASS') explanation = `A déjà annoncé ${myBids.length} fois — passe (règle du tour unique)`;
     } else {
         explanation = `A déjà annoncé ${myBids.length} fois — passe (règle du tour unique)`;
