@@ -4436,7 +4436,18 @@ function decideResponderContinuationAfterNewSuit(hand, hcp, hl, openingBid, myRe
     // voir plus bas.
     let zonePoints = hl;
     let fitSuit = null;
-    if (rebid.strain !== 'NT') {
+    if (rebid.strain !== 'NT' && rebid.strain === myResponseBid.strain) {
+        // Voir échange avec Guillaume (session du 25 juillet, donne 4 — nouveau bug) : le
+        // cas le plus évident de tous — le partenaire RELANCE DIRECTEMENT ma propre
+        // couleur (même famille que myResponseBid.strain), un vrai fit garanti — mais
+        // aucune des branches ci-dessous ne le détectait, toutes cherchant un fit dans
+        // une couleur DIFFÉRENTE de la mienne (l'ouverture du partenaire, ou une
+        // nouvelle couleur qu'il montre). Sans ce cas, une relance directe de ma
+        // majeure (même en zone de manche connue) atterrissait à tort sur un SA
+        // générique, ignorant le fit le plus évident possible.
+        fitSuit = myResponseBid.strain;
+        zonePoints = computeSupportPoints(hand, fitSuit, 3);
+    } else if (rebid.strain !== 'NT') {
         const openingIsMajor = openingBid.strain === 'S' || openingBid.strain === 'H';
         const rebidIsMajor = rebid.strain === 'S' || rebid.strain === 'H';
         if (openingIsMajor && lengths[openingBid.strain] + 5 >= 8) fitSuit = openingBid.strain;
@@ -5015,6 +5026,25 @@ function decideRobotOpenerRebid(hand, hcp, hl, myOpeningCall, partnerCall, seat,
         }
     }
 
+    // Voir échange avec Guillaume (session du 25 juillet, donne 5) : BICOLORE ÉCONOMIQUE
+    // — sur une redemande NATURELLE à 1SA du partenaire (dénie le fit), avec 5-4 dans
+    // deux couleurs (ma couleur d'ouverture 5+, une deuxième 4+), je montre toujours ma
+    // 2ème couleur au palier bon marché (2, sans saut) plutôt que de laisser filer sur
+    // 1SA. Note : implémentation provisoire (toute 2ème couleur 4+ montrable sans saut,
+    // quel que soit son rang) — à confirmer/préciser avec Guillaume si la définition
+    // exacte du "bicolore économique" est plus stricte (ex. seulement une couleur de
+    // rang inférieur à l'ouverture).
+    if (partnerCall === '1NT' && (myBid.strain === 'S' || myBid.strain === 'H')) {
+        const lengths = suitLengths(hand);
+        if (lengths[myBid.strain] >= 5) {
+            const secondSuit = ['C', 'D', 'H', 'S'].find(s => s !== myBid.strain && lengths[s] >= 4);
+            if (secondSuit) {
+                const call = '2' + secondSuit;
+                if (isCallLegal(history, call, seat)) return call;
+            }
+        }
+    }
+
     // Voir échange avec Guillaume (session du 24 juillet) : bascule sur HLD
     // (computeSupportPoints) dès que le partenaire soutient MA couleur directement — le
     // fit est alors connu avec certitude (au moins 3 cartes de soutien, voir
@@ -5312,6 +5342,29 @@ function decideRobotCall(seat, deal, history) {
             const wasReopeningDouble = doubleLast2.length === 2 && doubleLast2.every(e => isPass(e.call));
             call = decideDoublerFollowUp(hand, hcp, hl, myPartnerBid.call, seat, history, wasReopeningDouble);
             explanation = `Suite après contre, réponse ${formatCallForDisplay(myPartnerBid.call)} du partenaire (${points})`;
+        } else if (isDouble(myBids[0].call) && !myPartnerBid) {
+            // Voir échange avec Guillaume (session du 25 juillet, donne 7 — nouveau bug) :
+            // mon partenaire n'a fait que passer (aucune vraie annonce), MAIS les
+            // ADVERSAIRES ont continué d'enchérir depuis mon contre — mon contre "toute
+            // distribution" (19HL+, voir decideRobotIntervention) prévoyait justement de
+            // montrer ma vraie couleur au tour suivant, INDÉPENDAMMENT du silence du
+            // partenaire (qui n'a peut-être simplement rien eu à ajouter). Sans ce cas,
+            // ce plan restait lettre morte : plus aucune branche ne savait quoi faire
+            // quand ni le partenaire n'avait parlé, ni la situation n'était une réouverture
+            // sur ma propre ouverture (déjà couvert par wasOpening plus haut).
+            const lengths = suitLengths(hand);
+            const myLongSuitAfterDouble = longestSuitPreferHigh(lengths);
+            if (hl >= 19) {
+                for (let level = 1; level <= 7; level++) {
+                    const c = level + myLongSuitAfterDouble;
+                    if (isCallLegal(history, c, seat)) { call = c; break; }
+                }
+                explanation = call !== 'PASS'
+                    ? `Contre "toute distribution", partenaire silencieux mais adversaires reparlés — montre ma vraie couleur (${points})`
+                    : `A déjà annoncé — passe (règle du tour unique)`;
+            } else {
+                explanation = `A déjà annoncé — passe (règle du tour unique)`;
+            }
         } else if ((() => {
             const partnerFirstAction = history.find(e => partnershipOf(e.seat) === partnershipOf(seat) && e.seat !== seat && (isBidCall(e.call) || isDouble(e.call)));
             const partnerRebidNT = myPartnerBid && parseBid(myPartnerBid.call) && parseBid(myPartnerBid.call).strain === 'NT' && parseBid(myPartnerBid.call).level <= 2;
