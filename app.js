@@ -5085,6 +5085,28 @@ function decideRobotCall(seat, deal, history) {
                 && myResponseBid.strain !== partnerOpeningBid.strain
                 && responseLengths && responseLengths[partnerOpeningBid.strain] >= fitThresholdInOpeningSuit;
 
+            // Voir échange avec Guillaume (session du 24 juillet, donne 4) : PRÉFÉRENCE
+            // SIMPLE entre les deux couleurs (de vraies COULEURS, pas SA) montrées par le
+            // partenaire — son ouverture ET sa redemande — prioritaire sur
+            // lowZoneFlatNoInsist plus bas : avec une main minimale (jusqu'à 9H) et
+            // réellement plus de cartes dans l'ouverture que dans la redemande, y
+            // revenir (même un "semi-fit" 5/2) vaut mieux qu'inventer un SA sans arrêt
+            // confirmé dans la couleur adverse. Si au contraire la redemande est déjà la
+            // meilleure des deux, rien à faire ici — le passe par défaut plus bas
+            // l'accepte telle quelle, exactement ce qu'on veut.
+            const partnerRebidIsSuit = partnerRebidBid && partnerRebidBid.strain !== 'NT' && partnerRebidBid.strain !== partnerOpeningBid.strain;
+            let preferenceCall = null;
+            if (partnerRebidIsSuit && hcp <= 9 && responseLengths) {
+                const openingLen = responseLengths[partnerOpeningBid.strain];
+                const rebidLen = responseLengths[partnerRebidBid.strain];
+                if (openingLen > rebidLen && openingLen >= 2) {
+                    for (let level = partnerRebidBid.level; level <= 7; level++) {
+                        const c = level + partnerOpeningBid.strain;
+                        if (isCallLegal(history, c, seat)) { preferenceCall = c; break; }
+                    }
+                }
+            }
+
             if ((knowsGameZone || mustAnswerQuantitative) && partnerBidsCount === 2) {
                 call = decideResponderContinuationAfterNewSuit(hand, hcp, hl, partnerOpeningBid, myResponseBid, myPartnerBid.call, seat, history);
                 explanation = `Suite en zone de manche après ${formatCallForDisplay(myPartnerBid.call)} du partenaire (${points})`;
@@ -5099,6 +5121,9 @@ function decideRobotCall(seat, deal, history) {
                 } else {
                     explanation = `A déjà annoncé — passe (règle du tour unique)`;
                 }
+            } else if (preferenceCall && partnerBidsCount === 2) {
+                call = preferenceCall;
+                explanation = `Préférence simple vers l'ouverture du partenaire (${responseLengths[partnerOpeningBid.strain]} cartes, contre ${responseLengths[partnerRebidBid.strain]} dans sa redemande) plutôt qu'un SA sans arrêt confirmé (${points})`;
             } else if (partnerBidsCount === 1 && hcp >= 18) {
                 // Voir échange avec Guillaume (session du 23 juillet, donne 7) : le
                 // partenaire n'a fait qu'ouvrir puis passer (typiquement après une
@@ -5134,6 +5159,63 @@ function decideRobotCall(seat, deal, history) {
         } else {
             explanation = `A déjà annoncé — passe (règle du tour unique)`;
         }
+    } else if (myBids.length === 2) {
+        // Voir échange avec Guillaume (session du 24 juillet, donne 8 — "toujours pas
+        // résolu") : jusqu'ici, AUCUNE branche ne gérait un 3e tour d'enchère pour soi —
+        // ça retombait systématiquement sur le passe par défaut, quoi qu'il arrive. Gère
+        // ici UNIQUEMENT la suite d'un RENVERSE qu'on vient de faire SOI-MÊME (même
+        // définition que partnerRebidIsReverse plus haut, appliquée à ses 2 propres
+        // enchères cette fois) : un renverse est "auto-forcing" — celui qui l'a fait
+        // s'engage par avance à reparler encore une fois, même sur la réponse la plus
+        // économique du partenaire. Tout le reste d'un 3e tour (hors renverse) n'est pas
+        // encore couvert et retombe sur le passe par défaut, comme avant.
+        const myFirstBid = parseBid(myBids[0].call);
+        const mySecondBid = parseBid(myBids[1].call);
+        const iReversed = myFirstBid && mySecondBid && mySecondBid.strain !== 'NT'
+            && mySecondBid.strain !== myFirstBid.strain
+            && STRAIN_RANK[mySecondBid.strain] > STRAIN_RANK[myFirstBid.strain]
+            && mySecondBid.level === myFirstBid.level + 1;
+        const myPartnerLastBid = history.slice().reverse()
+            .find(e => partnershipOf(e.seat) === partnershipOf(seat) && isBidCall(e.call) && e !== myBids[0] && e !== myBids[1]);
+
+        if (iReversed && myPartnerLastBid) {
+            const lengths = suitLengths(hand);
+            // Voir échange avec Guillaume : 18HL était déjà le minimum requis pour FAIRE
+            // le renverse (voir ailleurs dans le moteur, la logique d'ouverture/rebid) —
+            // au-delà (main nettement plus forte, 20HL+ ici), la séquence est forcing de
+            // manche (12 mini du partenaire + 20 = 32, largement en zone) : on ne peut
+            // plus se contenter de répéter sa propre couleur (non forcing), il faut une
+            // enchère qui RESTE forcing.
+            const isExtraStrong = hl >= 20;
+            if (!isExtraStrong && lengths[myFirstBid.strain] >= 5) {
+                // Minimum du renverse : répète sa 1ère couleur (la plus longue), non
+                // forcing — le partenaire peut passer s'il n'a rien de plus.
+                for (let level = mySecondBid.level; level <= 7; level++) {
+                    const c = level + myFirstBid.strain;
+                    if (isCallLegal(history, c, seat)) { call = c; break; }
+                }
+                if (call !== 'PASS') explanation = `Minimum du renverse — répète sa couleur la plus longue plutôt que de laisser filer (${points})`;
+            } else if (isExtraStrong) {
+                // 4ème couleur forcing : la seule couleur pas encore annoncée par
+                // personne — signale des points de manche sans fit ni arrêt évident,
+                // sans s'engager sur une vraie couleur à soi. Un cran AU-DESSUS du
+                // palier minimal légal (pas le moins cher possible) : avec une main
+                // aussi extra-forte, mieux vaut lever toute ambiguïté sur le fait que la
+                // manche est acquise plutôt que de risquer un 4ème-couleur trop discret.
+                const allSuits = ['S', 'H', 'D', 'C'];
+                const partnerLastParsed = parseBid(myPartnerLastBid.call);
+                const usedSuits = new Set([myFirstBid.strain, mySecondBid.strain, partnerLastParsed && partnerLastParsed.strain]);
+                const fourthSuit = allSuits.find(s => !usedSuits.has(s));
+                if (fourthSuit) {
+                    for (let level = mySecondBid.level + 1; level <= 7; level++) {
+                        const c = level + fourthSuit;
+                        if (isCallLegal(history, c, seat)) { call = c; break; }
+                    }
+                    if (call !== 'PASS') explanation = `Main forcing de manche après son propre renverse, sans fit ni arrêt — 4ème couleur forcing (${points})`;
+                }
+            }
+        }
+        if (call === 'PASS') explanation = `A déjà annoncé ${myBids.length} fois — passe (règle du tour unique)`;
     } else {
         explanation = `A déjà annoncé ${myBids.length} fois — passe (règle du tour unique)`;
     }
