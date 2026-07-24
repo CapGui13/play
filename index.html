@@ -43,7 +43,7 @@
 <div id="chatPanel" class="chat-panel" style="display:none;">
     <div class="chat-panel-header">
         <span>💬 Chat</span>
-        <button type="button" class="btn btn-secondary btn-small" onclick="uiToggleChat()">Fermer ✕</button>
+        <button type="button" class="btn btn-secondary btn-small chat-panel-close-btn" onclick="uiToggleChat()">Fermer ✕</button>
     </div>
     <div id="roomBoard" class="room-board"></div>
     <div id="chatMessages" class="chat-messages"></div>
@@ -369,6 +369,12 @@
                      fixées par position (N/E/S/O), donc ça change qui joue quelle main à cet
                      instant précis, pas les cartes elles-mêmes ni l'historique déjà enchéri. -->
                 <button id="rotateSeatsBtn" type="button" class="btn btn-secondary btn-small" style="visibility:hidden; pointer-events:none;" onclick="uiRotateSeatsClockwise()"><span class="btn-label-full">🔄 Rotation 90°</span><span class="btn-label-short">🔄 Rotation</span></button>
+                <!-- Voir échange avec Guillaume (session du 24 juillet) : déplacé ici depuis
+                     hand-display-options — regroupé avec les autres actions réservées à
+                     l'hôte plutôt qu'isolé près des options d'affichage. Réservé à l'hôte —
+                     visibilité pilotée dans updateBoardControlVisibility, même traitement
+                     que "Rotation" juste au-dessus. -->
+                <button id="seatReorgBtn" type="button" class="btn btn-secondary btn-small" style="visibility:hidden; pointer-events:none;" onclick="uiOpenSeatReorgModal()"><span class="btn-label-full">🪑 Réorganiser les sièges</span><span class="btn-label-short">🪑 Sièges</span></button>
                 <!-- Visibilité gérée par updateBoardControlVisibility (host ou joueur assis) :
                      voir échange avec Guillaume — récupérer les donnes jouées de toute la session
                      (mains + enchère réelle + vulnérabilité) pour lui permettre de me faire des
@@ -403,12 +409,6 @@
                  (voir styles.css) pour laisser ce bouton filer à la ligne plutôt que hors
                  écran. -->
             <button id="ledgerNamesToggleBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" onclick="uiToggleLedgerNames()"><span class="btn-label-full">Noms des joueurs</span><span class="btn-label-short">Noms</span></button>
-            <!-- Voir échange avec Guillaume (session du 23 juillet) : déplacé ici (était
-                 dans game-actions), même format de bouton que "Noms des joueurs" juste au-
-                 dessus, sur la même ligne. Réservé à l'hôte — visibilité pilotée dans
-                 updateBoardControlVisibility, même traitement que "Rotation" dans
-                 game-actions. -->
-            <button id="seatReorgBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" style="visibility:hidden; pointer-events:none;" onclick="uiOpenSeatReorgModal()"><span class="btn-label-full">🪑 Réorganiser les sièges</span><span class="btn-label-short">🪑 Sièges</span></button>
         </div>
 
         <div class="game-content-row">
@@ -461,19 +461,22 @@
     </div>
 </div>
 
-<!-- Voir échange avec Guillaume (session du 23 juillet) : réorganisation complète des
+<!-- Voir échange avec Guillaume (session du 24 juillet) : réorganisation complète des
      sièges en cours de partie — même grille en croix que le salon, cliquable pour
      réassigner qui joue où, "Robot" y compris pour remettre un siège en jeu automatique.
      Fonctionne en BROUILLON (voir seatReorgDraft dans app.js) : les changements faits ici
-     ne s'appliquent qu'au clic sur "Valider", jamais en direct — "Fermer" a donc été
-     remplacé par "Valider", qui ferme ET applique en un seul geste. Cliquer hors de la
-     modale reste possible pour abandonner sans valider (voir
-     uiCloseSeatReorgModalOnBackdrop). -->
-<div id="seatReorgModal" class="modal-overlay" style="display:none;" onclick="uiCloseSeatReorgModalOnBackdrop(event)">
+     ne s'appliquent qu'au clic sur "Valider", jamais en direct. Ni "Fermer" ni un clic à
+     l'extérieur ne fonctionnent plus (pas de onclick sur l'overlay) — seuls "Valider" et
+     "Annuler" peuvent fermer la modale, pour éviter de la fermer par mégarde en pleine
+     réorganisation. -->
+<div id="seatReorgModal" class="modal-overlay" style="display:none;">
     <div class="modal-panel">
         <div class="modal-header">
             <h3>Réorganiser les sièges</h3>
-            <button type="button" class="btn btn-primary btn-small" onclick="uiValidateSeatReorg()">Valider</button>
+            <div class="modal-header-actions">
+                <button type="button" class="btn btn-primary btn-small" onclick="uiValidateSeatReorg()">Valider</button>
+                <button type="button" class="btn btn-secondary btn-small" onclick="uiCancelSeatReorg()">Annuler</button>
+            </div>
         </div>
         <div class="seat-reorg-content">
             <div id="seatReorgModalGrid" class="seat-assignment-grid"></div>

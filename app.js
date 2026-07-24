@@ -5563,6 +5563,11 @@ function undockChatFromScreen() {
 // bas (le chat étant ancré en bas de page), atterrissant en plein milieu du salon au lieu
 // du haut, sans qu'on ait rien demandé.
 function uiToggleChat(focusInput = true) {
+    // Voir échange avec Guillaume (session du 24 juillet) : le chat ne doit plus pouvoir
+    // être fermé sur desktop (seuil identique à celui du CSS, voir @media min-width:600px
+    // dans styles.css) — s'il est déjà ouvert et qu'on est sur desktop, cet appel n'a
+    // aucun effet (reste ouvert). Reste fermable sur mobile, où l'espace écran compte.
+    if (chatPanelOpen && window.innerWidth >= 600) return;
     chatPanelOpen = !chatPanelOpen;
     const panel = document.getElementById('chatPanel');
     // Voir échange avec Guillaume : fondu rapide plutôt qu'un affichage/masquage instantané
@@ -5690,14 +5695,15 @@ function uiChatInputKeydown(event) {
 function uiSendChatMessage() {
     const input = document.getElementById('chatInput');
     if (!input || !peerConn) return;
+    // Voir échange avec Guillaume (session du 24 juillet — "je ne suis plus dedans si je
+    // clique 2x") : remis AVANT la vérification du texte, pas après — sinon un clic sur
+    // "Envoyer" avec un champ déjà vide (ex. un second clic accidentel juste après le
+    // premier envoi) sortait du champ sans y revenir, contrairement à un clic avec du
+    // texte à envoyer.
+    input.focus();
     const text = input.value.trim().slice(0, 500);
     if (!text) return;
     input.value = '';
-    // Voir échange avec Guillaume : cliquer sur "Envoyer" déplace le focus sur le bouton
-    // lui-même — sans ce refocus explicite, il fallait recliquer dans le champ pour
-    // continuer à écrire. Sans effet quand l'envoi vient d'Entrée (voir
-    // uiChatInputKeydown) : le champ avait déjà le focus dans ce cas.
-    input.focus();
 
     const me = participants.find(p => p.id === myParticipantId);
     const msg = { type: 'chat', senderId: myParticipantId, senderName: me ? me.name : '?', text };
@@ -7405,8 +7411,10 @@ function checkForResumableHostSession() {
 }
 
 function uiDismissResumeSession() {
-    // Masque seulement pour cette visite (voir échange avec Guillaume) — ne supprime PAS
-    // la sauvegarde elle-même, au cas où la personne change d'avis et recharge la page.
+    // Voir échange avec Guillaume (session du 24 juillet) : clôture définitivement la
+    // partie — supprime la sauvegarde elle-même, pas seulement la bannière pour cette
+    // visite. Un rechargement ultérieur ne la reproposera plus.
+    clearHostGameStateStorage();
     const banner = document.getElementById('resumeSessionBanner');
     if (banner) banner.style.display = 'none';
 }

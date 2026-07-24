@@ -308,6 +308,13 @@ body.on-landing-screen .connection-bar {
         border: 1px solid var(--border);
         border-top: 2px solid var(--brass);
     }
+    /* Voir échange avec Guillaume (session du 24 juillet) : le chat ne doit plus pouvoir
+       être fermé sur desktop (voir aussi le garde-fou correspondant dans uiToggleChat,
+       app.js) — masque le bouton "Fermer" en conséquence, pour ne pas laisser un bouton
+       visible qui ne ferait rien. Reste fermable sur mobile, où l'espace écran compte. */
+    .chat-panel-close-btn {
+        display: none;
+    }
 }
 
 /* Variante "ancrée" (voir dockChatIntoGameScreen dans app.js) : utilisée uniquement sur
@@ -321,6 +328,11 @@ body.on-landing-screen .connection-bar {
     max-width: 100%;
     margin-top: 16px;
     box-shadow: none;
+    /* Voir échange avec Guillaume (session du 24 juillet) : même raisonnement que la
+       variante game-content-row plus bas — hauteur fixe pour forcer le défilement interne
+       de .chat-messages plutôt que de laisser le panneau grandir avec la conversation. */
+    height: 420px;
+    max-height: 420px;
 }
 
 @media (min-width: 600px) {
@@ -808,6 +820,14 @@ body.on-landing-screen .connection-bar {
     padding: 16px 20px;
     border-bottom: 1px solid var(--line);
     flex-shrink: 0;
+}
+
+/* Voir échange avec Guillaume (session du 24 juillet) : regroupe Valider/Annuler côte à
+   côte dans l'en-tête, plutôt que deux boutons isolés qui casseraient le
+   justify-content:space-between du header (titre à gauche, actions à droite). */
+.modal-header-actions {
+    display: flex;
+    gap: 8px;
 }
 
 .modal-header h3 {
@@ -1785,7 +1805,14 @@ button.kibitz-chip {
 .game-content-row .chat-panel.chat-panel-docked {
     width: 340px;
     flex-shrink: 0;
-    max-height: none;
+    /* Voir échange avec Guillaume (session du 24 juillet — "la fenêtre ne doit pas
+       s'étendre") : hauteur FIXE (pas max-height:none comme avant, qui le laissait
+       grandir indéfiniment avec la conversation) — même valeur que .hands-panel
+       (min-height:600px, voir syncHandsPanelMinHeight dans app.js), pour rester aligné
+       visuellement avec les deux autres modules. .chat-messages (flex:1 +
+       overflow-y:auto, déjà en place) prend alors le relais pour défiler en interne. */
+    height: 600px;
+    max-height: 600px;
     /* Voir échange avec Guillaume : annule le margin-top de .chat-panel-docked (pensé pour
        l'ancien empilement en bas d'écran) — ici le chat est un module côte à côte, ce
        retrait décalait son bord haut par rapport aux deux autres modules. */
