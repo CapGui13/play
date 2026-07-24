@@ -2334,6 +2334,20 @@ table.dd-table td.dd-secondary-contract {
     .all-hands-diagram .hand-W { grid-column: 1; grid-row: 2; }
     .all-hands-diagram .hand-E { grid-column: 2; grid-row: 2; }
     .all-hands-diagram .hand-S { grid-column: 1 / span 2; grid-row: 3; }
+    /* Voir échange avec Guillaume (session du 24 juillet — "K&R 13.85" coupé) : cases à
+       moitié largeur en 2 colonnes sur mobile — le badge K&R (white-space:nowrap par
+       défaut, voir .hand-hcp-badge) débordait hors de la case. Autoriser le retour à la
+       ligne (1ère tentative) donnait un rendu pire (coupure disgracieuse au milieu du
+       nombre, voir échange avec Guillaume) — corrigé en réduisant plutôt la taille/le
+       padding du badge pour qu'il tienne sur une seule ligne dans l'espace disponible. */
+    .all-hands-diagram .hand-hcp-badge {
+        font-size: 0.62rem;
+        padding: 1px 6px;
+        white-space: nowrap;
+    }
+    .all-hands-diagram .hand-card-title {
+        font-size: 0.82rem;
+    }
 }
 
 /* Boîte d'enchères */
