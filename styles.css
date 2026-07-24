@@ -2351,6 +2351,28 @@ table.dd-table td.dd-secondary-contract {
     .all-hands-diagram .hand-W { grid-column: 1; grid-row: 2; }
     .all-hands-diagram .hand-E { grid-column: 2; grid-row: 2; }
     .all-hands-diagram .hand-S { grid-column: 1 / span 2; grid-row: 3; }
+    /* Voir échange avec Guillaume (session du 24 juillet — "symboles et cartes devraient
+       être plus centrés") : Nord et Sud occupent 2x la largeur d'Ouest/Est sur mobile
+       (voir juste au-dessus, grid-column: 1 / span 2) — mais .card-line utilise une
+       grille "20px 1fr" qui étire la colonne des cartes sur toute la largeur
+       disponible, donc le BLOC des 4 lignes (symbole + cartes) reste collé à gauche
+       dans une case bien plus large que son propre contenu, au lieu de paraître centré
+       comme chez Ouest/Est. Recentré ici en ramenant .hand-cards à la largeur de son
+       propre contenu (plutôt que 100% de la case) puis en le centrant horizontalement.
+       Uniquement pour Nord/Sud : Ouest/Est, déjà à moitié largeur, n'ont pas ce souci. */
+    .all-hands-diagram .hand-N .hand-cards,
+    .all-hands-diagram .hand-S .hand-cards {
+        width: fit-content;
+        margin: 0 auto;
+    }
+    /* Voir échange avec Guillaume : la deuxième colonne devient alors "sur mesure"
+       plutôt que 1fr (qui ré-étirerait sinon chaque LIGNE individuellement, même une
+       fois .hand-cards lui-même recentré) — chaque ligne épouse juste la largeur du nom
+       de carte le plus long, pas la largeur de la case entière. */
+    .all-hands-diagram .hand-N .card-line,
+    .all-hands-diagram .hand-S .card-line {
+        grid-template-columns: 20px auto;
+    }
     /* Voir échange avec Guillaume (session du 24 juillet — "K&R 13.85" coupé) : cases à
        moitié largeur en 2 colonnes sur mobile — le badge K&R (white-space:nowrap par
        défaut, voir .hand-hcp-badge) débordait hors de la case. Autoriser le retour à la
