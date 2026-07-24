@@ -180,6 +180,16 @@ body.on-landing-screen .connection-bar {
    qu'il existe. Un seul display:none à retirer ici pour tout réactiver. */
 #connectionStatus { display: none; }
 
+@media (min-width: 600px) {
+    /* Voir échange avec Guillaume (session du 24 juillet — "l'icône du chat est inutile
+       sur desktop") : le chat étant désormais permanent (non fermable) à partir de
+       cette largeur, ce bouton flottant qui servait à l'ouvrir/fermer n'a plus lieu
+       d'être. */
+    #chatToggleBtn {
+        display: none !important;
+    }
+}
+
 .debug-toggle-btn {
     background: transparent;
     border: 1px solid var(--border);
@@ -313,6 +323,13 @@ body.on-landing-screen .connection-bar {
        app.js) — masque le bouton "Fermer" en conséquence, pour ne pas laisser un bouton
        visible qui ne ferait rien. Reste fermable sur mobile, où l'espace écran compte. */
     .chat-panel-close-btn {
+        display: none;
+    }
+    /* Voir échange avec Guillaume (session du 24 juillet — "la bande supérieure ne sert
+       à rien") : le bandeau "💬 Chat" lui-même n'apporte plus rien une fois "Fermer"
+       masqué juste au-dessus (plus aucun bouton dedans, juste un titre redondant avec le
+       contexte) — masqué en entier pour rendre cette hauteur aux messages. */
+    .chat-panel-header {
         display: none;
     }
 }

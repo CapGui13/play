@@ -5502,7 +5502,14 @@ function renderGameHeader() {
     // d'attente, plus du tout une fois la partie lancée — utile pourtant en cours de
     // route (inviter quelqu'un en plein milieu, ou simplement s'en souvenir).
     const roomCodeEl = document.getElementById('gameRoomCodeLabel');
-    if (roomCodeEl) roomCodeEl.textContent = currentRoomCode ? `Salle : ${currentRoomCode}` : '';
+    if (roomCodeEl) {
+        // Voir échange avec Guillaume (session du 24 juillet) : nom de l'hôte affiché à
+        // côté du code — utile pour un joueur (ou un kibitz) qui rejoint en cours de
+        // route et se demande qui héberge la partie.
+        const hostParticipant = participants.find(p => p.id === 'host');
+        const hostSuffix = hostParticipant ? ` · Hôte : ${hostParticipant.name}` : '';
+        roomCodeEl.textContent = currentRoomCode ? `Salle : ${currentRoomCode}${hostSuffix}` : '';
+    }
 }
 
 // ===== Chat =====
