@@ -2352,13 +2352,21 @@ table.dd-table td.dd-secondary-contract {
     .all-hands-diagram .hand-E { grid-column: 2; grid-row: 2; }
     .all-hands-diagram .hand-S { grid-column: 1 / span 2; grid-row: 3; }
     /* Voir échange avec Guillaume (session du 25 juillet — "rendu vide avec beaucoup
-       d'espace vide") : deux tentatives précédentes (colonne recentrée, puis grille 2x2)
-       toutes deux rejetées. Solution retenue : Nord/Sud utilisent exactement la MÊME
-       carte (taille, forme, disposition interne des 4 lignes) qu'Ouest/Est — aucune
-       règle spécifique ici, .hand-card garde son max-width:190px de base (voir plus
-       haut, hors media query) au lieu d'être élargie ou réorganisée. Seul justify-items
-       :center (déjà sur .all-hands-diagram) la centre dans sa rangée, plus large qu'une
-       case d'Ouest/Est mais dont la carte elle-même ne dépasse plus jamais 190px. */
+       d'espace vide") : plusieurs tentatives précédentes rejetées (colonne recentrée,
+       grille 2x2, puis 190px fixe en dur). Mesure précise sur capture d'écran (pixel par
+       pixel) : Ouest/Est ne font JAMAIS réellement 190px malgré leur propre max-width:
+       190px — leur COLONNE (1 des 2/3 du grid) est plus étroite que ça sur un écran de
+       téléphone, donc leur largeur réelle est celle de leur colonne (~134px mesurés),
+       pas le plafond théorique. En fixant Nord/Sud à 190px pile, je les rendais donc PLUS
+       LARGES qu'Ouest/Est en pratique, pas égaux. Corrigé en calculant la largeur d'UNE
+       SEULE colonne (leur propre case fait 2 colonnes + le gap entre elles) plutôt qu'une
+       valeur fixe — ça matche alors exactement, quelle que soit la largeur réelle de
+       l'écran. */
+    .all-hands-diagram .hand-card.hand-N,
+    .all-hands-diagram .hand-card.hand-S {
+        width: calc((100% - 10px) / 2) !important;
+        max-width: calc((100% - 10px) / 2) !important;
+    }
     /* Voir échange avec Guillaume (session du 24 juillet — "K&R 13.85" coupé) : cases à
        moitié largeur en 2 colonnes sur mobile — le badge K&R (white-space:nowrap par
        défaut, voir .hand-hcp-badge) débordait hors de la case. Autoriser le retour à la
