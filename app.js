@@ -4650,11 +4650,34 @@ function decideRobotResponseToDouble(hand, hcp, hl, doubleIndex, seat, history) 
     const bestSuit = candidates.reduce((best, s) => (lengths[s] > lengths[best] ? s : best), candidates[0]);
 
     // Voir échange avec Guillaume (donne 2, session du 23 juillet) : plus de "passe de
-    // pénalité" ici. Les bots traitent tous les contres comme des contres d'appel — jamais
-    // punitifs, trop subtil à modéliser correctement — donc on ne laisse jamais filer le
-    // contre du partenaire, quel que soit le nombre de points : on répond toujours dans
-    // l'une des couleurs non contrées (ancienne règle : 13H+ passait pour la défense,
-    // supprimée par cohérence).
+    // pénalité" ici pour un contre encore BON MARCHÉ (palier 1 toujours disponible) — les
+    // bots traitent tous les contres comme des contres d'appel, jamais punitifs, donc on
+    // ne laisse jamais filer le contre du partenaire quand ça ne coûte rien de répondre,
+    // même dans 3 cartes seulement, faute de meilleure enchère.
+    //
+    // Voir échange avec Guillaume (session du 25 juillet, donne 6, précisé encore) :
+    // NUANCE IMPORTANTE quand un ADVERSAIRE est intervenu depuis le contre, poussant la
+    // réponse la moins chère au palier 2 (comme ici) — le calcul change du tout au tout.
+    // Le contre ne garantit que 12H+ et pas forcément 4 cartes dans la couleur choisie
+    // (un contre "4♠3♥" par exemple) : monter au palier 2 dans une couleur de seulement
+    // 3 cartes n'a alors plus aucune justification, misfit évident. Seuils exacts (ses
+    // mots) : 4+ cartes → on répond toujours (le fit est réel, quel que soit le palier) ;
+    // avec seulement 3 cartes ET repoussé au palier 2, il faut au moins 8H pour un repli
+    // à SA (1SA montre 8-10H en réponse au contre) ; en dessous, le passe est la
+    // meilleure enchère — pas de raison de fabriquer une couleur dans seulement 3 cartes.
+    const bestLen = lengths[bestSuit];
+    let minLevelForBestSuit = null;
+    for (let level = 1; level <= 7; level++) {
+        if (isCallLegal(history, level + bestSuit, seat)) { minLevelForBestSuit = level; break; }
+    }
+    const pushedToLevel2Plus = bestLen < 4 && minLevelForBestSuit !== null && minLevelForBestSuit >= 2;
+    if (pushedToLevel2Plus) {
+        if (hcp >= 8) {
+            const ntCall = '1NT';
+            if (isCallLegal(history, ntCall, seat)) return ntCall;
+        }
+        return 'PASS';
+    }
 
     // Points de soutien (voir échange avec Guillaume, donne 4 : main de 8H comptée à 10
     // avec la courte) plutôt que HL brut — le contre du partenaire ne garantit pas de
@@ -5026,22 +5049,24 @@ function decideRobotOpenerRebid(hand, hcp, hl, myOpeningCall, partnerCall, seat,
         }
     }
 
-    // Voir échange avec Guillaume (session du 25 juillet, donne 5) : BICOLORE ÉCONOMIQUE
-    // — sur une redemande NATURELLE à 1SA du partenaire (dénie le fit), avec 5-4 dans
-    // deux couleurs (ma couleur d'ouverture 5+, une deuxième 4+), je montre toujours ma
-    // 2ème couleur au palier bon marché (2, sans saut) plutôt que de laisser filer sur
-    // 1SA. Note : implémentation provisoire (toute 2ème couleur 4+ montrable sans saut,
-    // quel que soit son rang) — à confirmer/préciser avec Guillaume si la définition
-    // exacte du "bicolore économique" est plus stricte (ex. seulement une couleur de
-    // rang inférieur à l'ouverture).
-    if (partnerCall === '1NT' && (myBid.strain === 'S' || myBid.strain === 'H')) {
-        const lengths = suitLengths(hand);
-        if (lengths[myBid.strain] >= 5) {
-            const secondSuit = ['C', 'D', 'H', 'S'].find(s => s !== myBid.strain && lengths[s] >= 4);
-            if (secondSuit) {
-                const call = '2' + secondSuit;
-                if (isCallLegal(history, call, seat)) return call;
-            }
+    // Voir échange avec Guillaume (session du 25 juillet, donne 5, précisé ensuite) :
+    // BICOLORE ÉCONOMIQUE — sur une redemande NATURELLE à 1SA du partenaire (dénie le
+    // fit), avec ma couleur d'ouverture 5+ et une DEUXIÈME couleur 4+ MOINS CHÈRE (rang
+    // inférieur — ex. 1♦ ouvert, redemande possible seulement en ♣ ; 1♥ ouvert, ♣ ou ♦ ;
+    // 1♠ ouvert, ♣, ♦ ou ♥), je la montre au palier 2 (pas de saut) — jusqu'à 18HL.
+    // À 19HL+, le même bicolore devient un BICOLORE À SAUT (palier 3, pas 2) — une main
+    // trop forte pour la version bon marché, qui insisterait sinon à tort sur un
+    // minimum. S'applique à N'IMPORTE QUELLE couleur d'ouverture (pas seulement les
+    // majeures) — une ouverture à trèfle (déjà la moins chère de toutes) n'a simplement
+    // aucune couleur plus chère à showrait economiquement, la recherche ne trouve donc
+    // jamais candidat pour elle, ce qui est le comportement voulu.
+    if (partnerCall === '1NT' && lengths[myBid.strain] >= 5) {
+        const cheaperSuits = ['S', 'H', 'D', 'C'].filter(s => s !== myBid.strain
+            && STRAIN_RANK[s] < STRAIN_RANK[myBid.strain] && lengths[s] >= 4);
+        if (cheaperSuits.length > 0) {
+            const secondSuit = cheaperSuits.reduce((best, s) => (lengths[s] > lengths[best] ? s : best), cheaperSuits[0]);
+            const call = (hl >= 19 ? '3' : '2') + secondSuit;
+            if (isCallLegal(history, call, seat)) return call;
         }
     }
 
@@ -5681,6 +5706,37 @@ function decideRobotCall(seat, deal, history) {
                     explanation = `Zone basse (6-10H), main plate, pas de 6ème pour imposer sa couleur — repli SA (${points})`;
                 } else {
                     explanation = `A déjà annoncé — passe (règle du tour unique)`;
+                }
+            } else if (partnerBidsCount === 2 && !preferenceCall
+                    && responseLengths[partnerOpeningBid.strain] < 3
+                    && (partnerRebidBid.strain === 'NT' || responseLengths[partnerRebidBid.strain] < 3)
+                    && hl >= 10) {
+                // Voir échange avec Guillaume (session du 25 juillet, donne 3) : mésentente
+                // TOTALE avec les deux couleurs du partenaire (ni son ouverture, ni sa
+                // redemande — sinon preferenceCall aurait déjà tranché) — évalué en HL,
+                // pas HCP brut, la distribution comptant pleinement en misfit (un 5-5
+                // vaut nettement plus que son HCP tout seul). La vraie enchère serait la
+                // 4ème couleur forcing pour préciser encore (hors périmètre, trop
+                // complexe pour une main sur plusieurs centaines) — on va directement au
+                // poids : 25H+ (avec le minimum d'ouverture) → 3SA, la manche est acquise
+                // malgré le misfit ; sinon, zone "limite" (10-11HL environ), 2SA montre
+                // cette force précise sans forcer.
+                if (hl + OPENING_MINIMUM >= GAME_ZONE_NT) {
+                    const call3NT = '3NT';
+                    if (isCallLegal(history, call3NT, seat)) {
+                        call = call3NT;
+                        explanation = `Mésentente avec les deux couleurs du partenaire, mais assez pour la manche au poids (${points})`;
+                    } else {
+                        explanation = `A déjà annoncé — passe (règle du tour unique)`;
+                    }
+                } else {
+                    const call2NT = '2NT';
+                    if (isCallLegal(history, call2NT, seat)) {
+                        call = call2NT;
+                        explanation = `Mésentente avec les deux couleurs du partenaire — montre une main limite sans forcer (${points})`;
+                    } else {
+                        explanation = `A déjà annoncé — passe (règle du tour unique)`;
+                    }
                 }
             } else {
                 explanation = `A déjà annoncé — passe (règle du tour unique)`;
