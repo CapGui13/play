@@ -14,7 +14,7 @@
 // À renseigner une fois l'endpoint déployé (voir api/session.js) — ex.
 // 'https://api-gen-beta.vercel.app' si tu l'ajoutes au même projet Vercel que le
 // générateur de donnes, ou l'URL d'un nouveau projet dédié.
-const SESSION_API_BASE = 'https://TON-PROJET.vercel.app';
+const SESSION_API_BASE = 'https://api-gen-beta.vercel.app';
 
 // Nombre de tentatives en cas d'échec réseau transitoire (même esprit que
 // MAX_INITIAL_CONNECT_RETRIES dans peer-connection.js) — un push cloud manqué n'est pas
