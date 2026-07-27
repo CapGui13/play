@@ -91,6 +91,20 @@
         <p id="connectingOverlayText">Connexion en cours…</p>
     </div>
 
+    <!-- Voir échange avec Guillaume : affiché juste avant de rejoindre une salle (bouton
+         "Rejoindre", ou lien direct ?room=XXXX) si aucun pseudo n'est encore enregistré sur
+         cet appareil — pour ne pas voir "Invité" traîner dans le relevé d'enchères et le
+         chat, notamment pour quelqu'un qui arrive directement en cours de partie (reprise
+         cloud) sans jamais passer par le salon, où ce champ existe déjà (myNameInput). -->
+    <div id="nicknamePromptOverlay" class="connecting-overlay" style="display:none;">
+        <div class="nickname-prompt-card">
+            <h2>Quel est votre pseudo ?</h2>
+            <p>Il sera visible par les autres joueurs de la partie.</p>
+            <input type="text" id="nicknamePromptInput" class="name-input" maxlength="20" placeholder="Votre prénom" enterkeyhint="go" onkeydown="uiNicknamePromptKeydown(event)">
+            <button type="button" class="btn btn-primary" onclick="uiConfirmNicknamePrompt()">Rejoindre</button>
+        </div>
+    </div>
+
     <!-- Écran d'accueil -->
     <section id="screen-landing" class="screen">
         <div class="felt-hero">
@@ -165,7 +179,7 @@
 
         <div id="lobbyRoomCodeBlock" style="display:none;">
             <input type="text" id="shareLinkInput" class="visually-hidden" readonly tabindex="-1" aria-hidden="true">
-            <button id="copyShareLinkBtn" class="btn btn-primary" onclick="uiCopyShareLink()">🔗 Copier lien de connexion</button>
+            <button id="copyShareLinkBtn" class="btn btn-primary" onclick="uiCopyShareLink(this)">🔗 Copier lien de connexion</button>
         </div>
 
         <div class="form-group form-group-name">

@@ -1651,11 +1651,60 @@ function uiJoinRoom() {
         showLandingError('Entrez un code à 4 chiffres.');
         return;
     }
-    chatMessages = [];
-    chatUnreadCount = 0;
-    updateChatUnreadBadge();
-    showConnectingOverlay('Connexion en cours…');
-    connectAsGuest(code, getReconnectToken(), savedNickname);
+    // Voir échange avec Guillaume (session asynchrone à deux — "il faudrait un truc qui lui
+    // demande de mettre son pseudo") : couvre à la fois un code tapé à la main ici ET un
+    // lien direct ?room=XXXX (voir DOMContentLoaded plus bas, qui appelle aussi uiJoinRoom)
+    // — un seul point de passage pour les deux façons d'arriver dans une salle.
+    ensureNicknameThenProceed(() => {
+        chatMessages = [];
+        chatUnreadCount = 0;
+        updateChatUnreadBadge();
+        showConnectingOverlay('Connexion en cours…');
+        connectAsGuest(code, getReconnectToken(), savedNickname);
+    });
+}
+
+// Demande le pseudo avant de rejoindre une salle, UNIQUEMENT si aucun n'est encore
+// enregistré sur cet appareil (voir savedNickname) — un joueur qui est déjà passé une fois
+// par ici (ou par le salon, voir myNameInput) ne revoit jamais cette question. `action` est
+// exécutée immédiatement si un pseudo existe déjà, ou différée jusqu'à validation de la
+// modale sinon (voir uiConfirmNicknamePrompt).
+let pendingJoinAfterNickname = null;
+function ensureNicknameThenProceed(action) {
+    if (savedNickname && savedNickname.trim()) {
+        action();
+        return;
+    }
+    pendingJoinAfterNickname = action;
+    const input = document.getElementById('nicknamePromptInput');
+    if (input) input.value = '';
+    const overlay = document.getElementById('nicknamePromptOverlay');
+    if (overlay) overlay.style.display = 'flex';
+    setTimeout(() => { if (input) input.focus(); }, 50);
+}
+
+function uiConfirmNicknamePrompt() {
+    const input = document.getElementById('nicknamePromptInput');
+    const trimmed = (input && input.value || '').trim();
+    if (!trimmed) {
+        if (input) input.focus();
+        return;
+    }
+    savedNickname = trimmed;
+    saveStringPref('bridgeBidNickname', trimmed);
+    const overlay = document.getElementById('nicknamePromptOverlay');
+    if (overlay) overlay.style.display = 'none';
+    const action = pendingJoinAfterNickname;
+    pendingJoinAfterNickname = null;
+    if (action) action();
+}
+
+// Même contournement que uiJoinCodeInputKeydown (double tap nécessaire sur clavier mobile) :
+// valider directement depuis la touche "Aller" du clavier virtuel.
+function uiNicknamePromptKeydown(event) {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    uiConfirmNicknamePrompt();
 }
 
 // Rejoint (ou re-rejoint) une salle en tant qu'invité, avec un jeton et un pseudo donnés.
@@ -1809,7 +1858,10 @@ function renderReconnectButton() {
 }
 
 let copyShareLinkTimeoutId = null;
-function uiCopyShareLink() {
+// `triggerBtn` : l'élément bouton qui vient de déclencher la copie, pour y afficher la
+// confirmation temporaire au bon endroit — repli sur le bouton du salon (copyShareLinkBtn)
+// si appelé sans argument, pour ne rien casser des appels existants.
+function uiCopyShareLink(triggerBtn) {
     const input = document.getElementById('shareLinkInput');
     input.select();
     input.setSelectionRange(0, 99999);
@@ -1818,12 +1870,13 @@ function uiCopyShareLink() {
     navigator.clipboard.writeText(input.value).then(() => {
         // Confirmation temporaire directement sur le bouton (pas de toast à part à
         // gérer) : le libellé change le temps d'un instant, puis revient à la normale.
-        const btn = document.getElementById('copyShareLinkBtn');
+        const btn = triggerBtn || document.getElementById('copyShareLinkBtn');
         if (!btn) return;
+        const originalLabel = btn.textContent;
         clearTimeout(copyShareLinkTimeoutId);
         btn.textContent = '✅ Lien copié !';
         copyShareLinkTimeoutId = setTimeout(() => {
-            btn.textContent = '🔗 Copier lien de connexion';
+            btn.textContent = originalLabel;
         }, 1800);
     }).catch(() => { /* échec silencieux (permission navigateur, etc.) : pas de fausse confirmation */ });
 }
@@ -6625,7 +6678,16 @@ function renderRoomBoard() {
         const p = participants.find(x => x.id === pid);
         if (!p) return '';
         const disconnectedTag = p.disconnected ? ' <span class="disconnected-tag">🔌</span>' : '';
-        const occupant = `${interactiveAvatarHtml(p.id)}${wizzableNameHtml(p)}${disconnectedTag}`;
+        // Voir échange avec Guillaume : bouton de copie du lien de connexion, juste après
+        // le nom de l'hôte — utile une fois la partie lancée (le salon a déjà le sien,
+        // voir copyShareLinkBtn), pour renvoyer le lien à un partenaire qui n'est pas
+        // encore là (voir le siège SEAT_PENDING plus haut). Réservé à l'hôte lui-même :
+        // ni un simple invité ni un kibitz n'a besoin (ni la possibilité utile) de
+        // repartager CE lien précis, et ça évite d'encombrer la vue de tout le monde.
+        const copyLinkBtn = (pid === 'host' && myRole === 'host')
+            ? ` <button type="button" id="roomBoardCopyLinkBtn" class="btn btn-secondary btn-small room-board-copy-link-btn" onclick="uiCopyShareLink(this)" title="Copier le lien de connexion à cette salle">🔗</button>`
+            : '';
+        const occupant = `${interactiveAvatarHtml(p.id)}${wizzableNameHtml(p)}${disconnectedTag}${copyLinkBtn}`;
         return `<div class="room-board-seat"><span class="room-board-seat-label">${seatsLabel}</span>${occupant}</div>`;
     }).filter(Boolean).join('');
 

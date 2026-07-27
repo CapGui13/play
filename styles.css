@@ -135,6 +135,37 @@ body {
     to { transform: rotate(360deg); }
 }
 
+/* Carte centrée de l'overlay #nicknamePromptOverlay (voir échange avec Guillaume) — même
+   fond assombri que .connecting-overlay (classe partagée), juste une carte au lieu d'un
+   spinner. */
+.nickname-prompt-card {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+    width: min(320px, 85vw);
+    background: var(--card);
+    border: 1px solid rgba(246, 241, 227, 0.15);
+    border-radius: 12px;
+    padding: 24px;
+    text-align: center;
+}
+
+.nickname-prompt-card h2 {
+    margin: 0;
+    font-size: 1.15rem;
+}
+
+.nickname-prompt-card p {
+    margin: 0 0 4px;
+    font-size: 0.85rem;
+    opacity: 0.75;
+}
+
+.nickname-prompt-card .name-input {
+    text-align: center;
+}
+
 /* Contour de focus clavier — accessibilité (tabulation) — plutôt que le contour bleu par
    défaut du navigateur, souvent invisible sur les fonds sombres de l'appli. `:focus-
    visible` (pas `:focus`) : ne s'affiche qu'à la navigation clavier, pas au clic/tap, qui
@@ -1627,6 +1658,14 @@ button.kibitz-chip {
     color: var(--text-muted, var(--text));
     opacity: 0.75;
     font-style: italic;
+}
+
+/* Bouton 🔗 compact à côté du nom de l'hôte dans le panneau de salle en cours de partie
+   (voir renderRoomBoard) — juste l'icône, pas de libellé, pour ne pas alourdir la ligne. */
+.room-board-copy-link-btn {
+    padding: 2px 8px;
+    font-size: 0.85rem;
+    line-height: 1;
 }
 
 .seat-box-name-row {
