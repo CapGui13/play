@@ -77,6 +77,9 @@ let prevSeatAssignmentSnapshot = null;
 let prevParticipantsDisconnectedSnapshot = null;
 
 let currentRoomCode = null; // pour uiReconnect() : on doit se souvenir du code utilisé pour rejoindre
+// Voir uiCreateRoom : nom du créateur d'origine, figé une fois pour toutes (jamais
+// réécrit par une reprise ou un transfert d'hôte) — voir renderGameHeader pour l'affichage.
+let roomCreatorName = null;
 
 // ===== Reprise automatique d'hôte par le sous-hôte (voir échange avec Guillaume, session
 // du 23 juillet) =====
@@ -1259,6 +1262,14 @@ function uiCreateRoom() {
     myRole = 'host';
     myParticipantId = 'host';
     participants = [{ id: 'host', name: savedNickname || 'Hôte' }];
+    // Voir échange avec Guillaume (session asynchrone à deux — "je ne veux pas de bascule
+    // d'hôte") : figé une seule fois, ici, à la création — jamais réécrit ensuite, y
+    // compris par une reprise cloud ou un transfert d'hôte (voir promoteSelfToHostAfterTakeover,
+    // uiResumeFromCloud). L'affichage "Hôte : X" (voir renderGameHeader) utilise TOUJOURS
+    // cette valeur plutôt que le participant technique 'host' du moment — qui, lui,
+    // continue de basculer en coulisses (nécessaire pour que d'autres puissent encore se
+    // connecter au même code), mais ne doit plus jamais se voir.
+    roomCreatorName = savedNickname || 'Hôte';
     seatAssignment = { N: null, E: null, S: null, W: null };
     guestIndexByToken = {};
     prevSeatAssignmentSnapshot = null;
@@ -1405,6 +1416,7 @@ function buildHostHandlers(onOpenExtra) {
                     // seulement à réception d'un futur lobby-state.
                     subHostId: computeSubHostId(),
                     hostReconnectToken: getReconnectToken(),
+                    roomCreatorName,
                     // Voir échange avec Guillaume (session du 23 juillet) : permet au client
                     // de distinguer un tout nouveau participant d'un simple retour de coupure
                     // (isReturning), pour n'ouvrir le chat automatiquement que dans le premier
@@ -2729,7 +2741,12 @@ function broadcastLobbyState() {
         seatAssignment,
         subHostId: computeSubHostId(),
         hostReconnectToken: getReconnectToken(),
-        autoPassSeats
+        autoPassSeats,
+        // Voir échange avec Guillaume ("je ne veux pas de bascule d'hôte") : sans ça, un
+        // simple invité ne connaît roomCreatorName que localement à l'hôte — jamais reçu,
+        // il retomberait sur le participant technique 'host' du moment pour l'affichage
+        // (voir renderGameHeader), ce qui recrée exactement le problème qu'on corrige.
+        roomCreatorName
     });
     // Voir échange avec Guillaume (session du 23 juillet — reprise via localStorage) :
     // couvre les sièges/participants/renommages, qui passent tous par cette fonction.
@@ -3219,7 +3236,8 @@ function uiStartGameAsHost() {
                 type: 'start-game',
                 deals, yourSeats: seatsForThisGuest, botSeats,
                 subHostId: computeSubHostId(),
-                hostReconnectToken: getReconnectToken()
+                hostReconnectToken: getReconnectToken(),
+                roomCreatorName
             }, guestIndex);
         });
 
@@ -3421,6 +3439,7 @@ function handlePeerData(msg, guestIndex) {
             // répond plus, justement).
             currentSubHostId = msg.subHostId || null;
             currentHostReconnectToken = msg.hostReconnectToken || null;
+            if (msg.roomCreatorName) roomCreatorName = msg.roomCreatorName;
             // Ce message est aussi renvoyé quand la connectivité change en pleine partie
             // (quelqu'un se (re)connecte) : on ne bascule à l'écran du salon que si la
             // partie n'a pas encore commencé, sinon ça arracherait un invité de sa table.
@@ -3475,6 +3494,7 @@ function handlePeerData(msg, guestIndex) {
             // (voir uiStartGameAsHost, qui les inclut désormais aussi dans ce message).
             currentSubHostId = msg.subHostId || null;
             currentHostReconnectToken = msg.hostReconnectToken || null;
+            if (msg.roomCreatorName) roomCreatorName = msg.roomCreatorName;
             hostPendingUndo = null;
             clearUndoUiState();
             enterGameScreen();
@@ -3495,6 +3515,7 @@ function handlePeerData(msg, guestIndex) {
             // équivalent dans 'start-game'.
             currentSubHostId = msg.subHostId || null;
             currentHostReconnectToken = msg.hostReconnectToken || null;
+            if (msg.roomCreatorName) roomCreatorName = msg.roomCreatorName;
             hostPendingUndo = null;
             clearUndoUiState();
             enterGameScreen();
@@ -6215,8 +6236,15 @@ function renderGameHeader() {
         // Voir échange avec Guillaume (session du 24 juillet) : nom de l'hôte affiché à
         // côté du code — utile pour un joueur (ou un kibitz) qui rejoint en cours de
         // route et se demande qui héberge la partie.
+        // Voir échange avec Guillaume ("je ne veux pas de bascule d'hôte") : roomCreatorName
+        // est figé une fois pour toutes à la création (voir uiCreateRoom) et ne bouge plus
+        // jamais, contrairement au participant technique 'host', qui lui peut changer de
+        // main (reprise cloud, sous-hôte) sans que ça doive se voir ici. Repli sur le
+        // participant 'host' actuel uniquement si roomCreatorName n'est pas encore défini
+        // (session en mémoire créée avant l'ajout de ce champ).
         const hostParticipant = participants.find(p => p.id === 'host');
-        const hostSuffix = hostParticipant ? ` · Hôte : ${hostParticipant.name}` : '';
+        const displayedHostName = roomCreatorName || (hostParticipant ? hostParticipant.name : null);
+        const hostSuffix = displayedHostName ? ` · Hôte : ${displayedHostName}` : '';
         roomCodeEl.textContent = currentRoomCode ? `Salle : ${currentRoomCode}${hostSuffix}` : '';
     }
     const headerCopyLinkBtn = document.getElementById('gameHeaderCopyLinkBtn');
@@ -8086,6 +8114,7 @@ function saveHostGameStateToStorage() {
         const payload = {
             roomCode: currentRoomCode,
             deals, boardIndex, seatAssignment, participants, autoPassSeats,
+            roomCreatorName,
             // Voir échange avec Guillaume (session du 23 juillet — "sauve aussi le chat") :
             // sans ça, la conversation repartait de zéro à chaque reprise, même s'il y
             // avait des messages échangés juste avant la fermeture de l'onglet.
@@ -8168,6 +8197,10 @@ function uiResumeHostSession() {
     auctionHistory = deals[boardIndex].auctionHistory;
     seatAssignment = saved.seatAssignment || { N: null, E: null, S: null, W: null };
     participants = saved.participants || [{ id: 'host', name: savedNickname || 'Hôte' }];
+    // Repli sur le participant 'host' actuel pour une sauvegarde antérieure à l'ajout de
+    // ce champ (voir échange avec Guillaume) — sans quoi une session déjà en cours au
+    // moment de la mise à jour du code perdrait ce nom au premier rechargement.
+    roomCreatorName = saved.roomCreatorName || (participants.find(p => p.id === 'host') || {}).name || 'Hôte';
     // Voir échange avec Guillaume (session du 23 juillet — "il apparaît toujours en
     // blanc alors qu'il est déconnecté") : le statut restauré reflète la DERNIÈRE
     // sauvegarde (où tout le monde pouvait très bien être connecté) — mais personne
@@ -8279,6 +8312,7 @@ function pushCloudGameState() {
     const state = {
         roomCode: currentRoomCode,
         deals, boardIndex, seatAssignment, participants, autoPassSeats, chatMessages,
+        roomCreatorName,
         // Voir promoteSelfToHostAfterTakeover : indispensable pour qu'un futur repreneur
         // sache reconnaître l'hôte actuel s'il revient un jour, exactement comme pour la
         // reprise par sous-hôte déjà en place.
@@ -8303,11 +8337,11 @@ function pushCloudGameState() {
     });
 }
 
-// Interroge le cloud pour ce code de salon et, si un état y est trouvé, affiche la
-// bannière de proposition de reprise plutôt que l'erreur "Aucune partie trouvée" habituelle
-// (voir onError/onTimeout dans buildGuestHandlers). Renvoie true si une proposition a
-// effectivement été affichée (pour que l'appelant sache s'il doit encore afficher son
-// propre message d'erreur ou non).
+// Interroge le cloud pour ce code de salon et, si un état y est trouvé, reprend
+// directement la partie (voir échange avec Guillaume : "reprendre automatiquement, sans
+// demander" — plus de bannière de confirmation intermédiaire). Renvoie true si une reprise
+// a effectivement été lancée (pour que l'appelant sache s'il doit encore afficher son
+// propre message d'erreur "Aucune partie trouvée" ou non).
 async function offerCloudResume(code) {
     if (typeof pullSessionState !== 'function') return false;
     let result;
@@ -8320,24 +8354,13 @@ async function offerCloudResume(code) {
     if (!result) return false; // rien en cloud pour ce code : comportement inchangé, laisse l'appelant afficher son erreur habituelle
 
     cloudResumeCandidate = result;
-    const nbDeals = (result.state && result.state.deals) ? result.state.deals.length : 0;
-    const minutesAgo = Math.max(0, Math.round((Date.now() - result.updatedAt) / 60000));
-    const timeLabel = minutesAgo === 0 ? "à l'instant" : `il y a ${minutesAgo} min`;
-    const details = document.getElementById('cloudResumeDetails');
-    if (details) details.textContent = `(salle ${code}, ${nbDeals} donnes, mise à jour ${timeLabel})`;
-    const banner = document.getElementById('cloudResumeBanner');
-    if (banner) banner.style.display = 'block';
+    showConnectingOverlay('Reprise de la partie…');
+    uiResumeFromCloud();
     return true;
 }
 
-function uiDismissCloudResume() {
-    cloudResumeCandidate = null;
-    const banner = document.getElementById('cloudResumeBanner');
-    if (banner) banner.style.display = 'none';
-}
-
-// Reprend effectivement la partie depuis l'état cloud proposé — voir le long commentaire
-// en tête de section pour la logique de revendication de siège.
+// Reprend effectivement la partie depuis l'état cloud trouvé par offerCloudResume — voir
+// le long commentaire en tête de section pour la logique de revendication de siège.
 function uiResumeFromCloud() {
     if (!cloudResumeCandidate) return;
     const st = cloudResumeCandidate.state;
@@ -8361,7 +8384,8 @@ function uiResumeFromCloud() {
     }
 
     if (!claimedSeat) {
-        uiDismissCloudResume();
+        cloudResumeCandidate = null;
+        hideConnectingOverlay();
         showLandingError("Aucun siège n'est disponible à reprendre dans cette salle (tous déjà occupés, aucun en attente d'un partenaire).");
         return;
     }
@@ -8378,6 +8402,10 @@ function uiResumeFromCloud() {
     // ma propre revendication de siège, cas 2 ci-dessus).
     autoPassSeats = SEATS.filter(seat => !seatAssignment[seat]);
     chatMessages = st.chatMessages || [];
+    // Voir échange avec Guillaume ("je ne veux pas de bascule d'hôte") : jamais recalculé
+    // depuis le participant 'host' technique du moment — toujours celui figé à la création
+    // (voir uiCreateRoom), avec repli pour une sauvegarde antérieure à l'ajout de ce champ.
+    roomCreatorName = st.roomCreatorName || (participants.find(p => p.id === 'host') || {}).name || 'Hôte';
 
     const oldHostToken = st.hostReconnectToken || null;
     const disconnectedAt = Date.now();
@@ -8390,8 +8418,8 @@ function uiResumeFromCloud() {
     prevSeatAssignmentSnapshot = null;
     prevParticipantsDisconnectedSnapshot = null;
     lastKnownCloudVersion = cloudResumeCandidate.version;
+    cloudResumeCandidate = null;
 
-    uiDismissCloudResume();
     hideConnectingOverlay();
     showConnectingOverlay('Reprise de la partie…');
 

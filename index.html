@@ -148,21 +148,6 @@
         </div>
         <div id="landingError" class="error-banner" style="display:none;"></div>
 
-        <!-- Voir échange avec Guillaume (session asynchrone à deux) : affichée quand le
-             code tapé (ou le lien ouvert) ne trouve personne en ligne SOUS ce code, mais
-             qu'un état de partie existe dans le cloud pour ce même code (voir
-             offerCloudResume/uiResumeFromCloud dans app.js) — permet à un partenaire de
-             reprendre la partie même si l'hôte n'est plus connecté depuis des heures. -->
-        <div id="cloudResumeBanner" class="resume-session-banner" style="display:none;">
-            <div class="resume-session-text">
-                🔄 Une partie est en cours dans cette salle <span id="cloudResumeDetails"></span>
-            </div>
-            <div class="resume-session-actions">
-                <button type="button" class="btn btn-primary btn-small" onclick="uiResumeFromCloud()">Reprendre la partie</button>
-                <button type="button" class="btn btn-secondary btn-small" onclick="uiDismissCloudResume()">Non merci</button>
-            </div>
-        </div>
-
         <!-- Affiché uniquement sur iOS (voir initIosLockScreenWarning dans app.js) : Safari
              suspend WebRTC quand l'app passe en arrière-plan ou que l'écran se verrouille —
              une vraie limitation d'iOS, pas un bug de l'appli. -->
