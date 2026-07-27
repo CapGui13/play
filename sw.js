@@ -20,6 +20,7 @@ const CORE_ASSETS = [
     './bidding-rules.js',
     './deal-parser.js',
     './peer-connection.js',
+    './session-storage.js',
     './manifest.json',
     './icons/icon-192.png',
     './icons/icon-512.png',

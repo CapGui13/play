@@ -1563,11 +1563,18 @@ function buildGuestHandlers() {
                 // bouton "Se reconnecter" de la barre de connexion (renderReconnectButton).
                 return;
             }
-            showScreen('screen-landing');
-            showLandingError(
-                "⚠️ La connexion n'a pas abouti après 45 secondes. Vérifie le code, que l'hôte est " +
-                "toujours connecté, et ouvre la console (F12) pour plus de détails avant de réessayer."
-            );
+            // Voir même logique que dans onError (cas 'peer-unavailable') : un timeout pur
+            // (parfois le seul signal reçu, selon l'aléa réseau) mérite la même proposition
+            // de reprise cloud avant de conclure à un échec.
+            const roomCodeAttempted = currentRoomCode;
+            offerCloudResume(roomCodeAttempted).then(offered => {
+                if (offered) return;
+                showScreen('screen-landing');
+                showLandingError(
+                    "⚠️ La connexion n'a pas abouti après 45 secondes. Vérifie le code, que l'hôte est " +
+                    "toujours connecté, et ouvre la console (F12) pour plus de détails avant de réessayer."
+                );
+            });
         },
         onData: handlePeerData,
         onError: (err) => {
@@ -1588,7 +1595,18 @@ function buildGuestHandlers() {
             if (!everConnectedAsGuest) {
                 if (!deals) showScreen('screen-landing');
                 if (err && err.type === 'peer-unavailable') {
-                    showLandingError("Aucune partie trouvée avec ce code. Vérifiez le code ou demandez à l'hôte de le repartager.");
+                    // Voir échange avec Guillaume (session asynchrone à deux) : ce cas
+                    // précis — personne ne répond sous ce code — est exactement celui d'un
+                    // partenaire qui revient des heures après le départ de l'hôte. Avant de
+                    // conclure "aucune partie", on regarde s'il existe un état sauvegardé
+                    // dans le cloud pour ce code (voir offerCloudResume) ; si oui, on
+                    // propose de reprendre plutôt que d'afficher une simple erreur.
+                    const roomCodeAttempted = currentRoomCode;
+                    offerCloudResume(roomCodeAttempted).then(offered => {
+                        if (!offered) {
+                            showLandingError("Aucune partie trouvée avec ce code. Vérifiez le code ou demandez à l'hôte de le repartager.");
+                        }
+                    });
                 } else {
                     showLandingError('Erreur de connexion : ' + ((err && (err.message || err.type)) || err));
                 }
@@ -7984,6 +8002,11 @@ const HOST_GAME_STATE_EXPIRY_MS = 6 * 60 * 60 * 1000; // 6h
 // débounce/throttle : ces événements sont d'ores et déjà peu fréquents à l'échelle
 // humaine (une enchère toutes les quelques secondes au plus), et écrire dans localStorage
 // est une opération synchrone rapide.
+//
+// Voir échange avec Guillaume (session asynchrone à deux) : pousse AUSSI vers le cloud
+// (voir pushCloudGameState) à chaque appel — un seul point d'accroche à tenir à jour pour
+// les deux formes de sauvegarde (même appareil via localStorage, n'importe quel appareil
+// via le cloud), plutôt que de dupliquer l'appel à chacun des call sites existants.
 function saveHostGameStateToStorage() {
     if (myRole !== 'host' || !deals || !currentRoomCode) return;
     try {
@@ -8001,6 +8024,7 @@ function saveHostGameStateToStorage() {
         // Quota localStorage dépassé, ou navigation privée stricte qui bloque l'écriture :
         // tant pis, la reprise ne sera simplement pas possible — rien d'autre n'est cassé.
     }
+    pushCloudGameState();
 }
 
 function clearHostGameStateStorage() {
@@ -8136,6 +8160,162 @@ function uiResumeHostSession() {
         }
     };
     newPeerConn.createRoom(6, saved.roomCode);
+}
+
+// ===== Reprise "à froid" depuis le cloud (session asynchrone à deux, voir échange avec
+// Guillaume) =====
+//
+// Généralise attemptSubHostTakeover/promoteSelfToHostAfterTakeover plus haut : ces deux-là
+// supposent un sous-hôte PRÉ-DÉSIGNÉ qui reprend juste après une coupure VIVE (l'un des
+// deux était déjà connecté quand ça a coupé). Ici, personne n'était forcément connecté
+// depuis des heures — on repart de l'état sauvegardé dans le cloud (voir
+// session-storage.js), jamais de la mémoire locale, et N'IMPORTE QUEL participant muni du
+// lien peut reprendre (voir échange avec Guillaume : "n'importe qui peut claim") — soit en
+// retrouvant son propre siège (son jeton de reconnexion y figure déjà), soit en
+// revendiquant le premier siège encore SEAT_PENDING.
+
+let lastKnownCloudVersion = 0; // dernier numéro de version cloud connu, pour le verrou optimiste (voir session-storage.js)
+let cloudResumeCandidate = null; // { version, updatedAt, state }, en attente de confirmation (voir offerCloudResume/uiResumeFromCloud)
+
+// Pousse l'état courant vers le cloud — voir l'unique point d'accroche dans
+// saveHostGameStateToStorage(), qui appelle ceci à chaque sauvegarde locale. En tâche de
+// fond (fire-and-forget) : un échec réseau ici ne doit jamais empêcher de continuer à
+// jouer localement (voir pushSessionState, qui gère déjà ses propres tentatives).
+function pushCloudGameState() {
+    if (myRole !== 'host' || !deals || !currentRoomCode) return;
+    if (typeof pushSessionState !== 'function') return; // session-storage.js pas chargé (ex. pas encore branché dans index.html) : no-op silencieux
+    const state = {
+        roomCode: currentRoomCode,
+        deals, boardIndex, seatAssignment, participants, autoPassSeats, chatMessages,
+        // Voir promoteSelfToHostAfterTakeover : indispensable pour qu'un futur repreneur
+        // sache reconnaître l'hôte actuel s'il revient un jour, exactement comme pour la
+        // reprise par sous-hôte déjà en place.
+        hostReconnectToken: getReconnectToken(),
+        savedAt: Date.now()
+    };
+    pushSessionState(currentRoomCode, state, lastKnownCloudVersion, {
+        onConflict: (current) => {
+            // Cas rare (voir session-storage.js) : quelqu'un d'autre a écrit entre-temps —
+            // on adopte simplement son numéro de version pour la prochaine tentative, sans
+            // rien réécrire nous-mêmes ici (le prochain point d'accroche s'en chargera).
+            if (current) lastKnownCloudVersion = current.version;
+        }
+    }).then(result => {
+        if (result) lastKnownCloudVersion = result.version;
+    });
+}
+
+// Interroge le cloud pour ce code de salon et, si un état y est trouvé, affiche la
+// bannière de proposition de reprise plutôt que l'erreur "Aucune partie trouvée" habituelle
+// (voir onError/onTimeout dans buildGuestHandlers). Renvoie true si une proposition a
+// effectivement été affichée (pour que l'appelant sache s'il doit encore afficher son
+// propre message d'erreur ou non).
+async function offerCloudResume(code) {
+    if (typeof pullSessionState !== 'function') return false;
+    let result;
+    try {
+        result = await pullSessionState(code);
+    } catch (e) {
+        pushDebugLog('Reprise cloud : le serveur de session n\'a pas répondu (' + ((e && e.message) || e) + ').');
+        return false;
+    }
+    if (!result) return false; // rien en cloud pour ce code : comportement inchangé, laisse l'appelant afficher son erreur habituelle
+
+    cloudResumeCandidate = result;
+    const nbDeals = (result.state && result.state.deals) ? result.state.deals.length : 0;
+    const minutesAgo = Math.max(0, Math.round((Date.now() - result.updatedAt) / 60000));
+    const timeLabel = minutesAgo === 0 ? "à l'instant" : `il y a ${minutesAgo} min`;
+    const details = document.getElementById('cloudResumeDetails');
+    if (details) details.textContent = `(salle ${code}, ${nbDeals} donnes, mise à jour ${timeLabel})`;
+    const banner = document.getElementById('cloudResumeBanner');
+    if (banner) banner.style.display = 'block';
+    return true;
+}
+
+function uiDismissCloudResume() {
+    cloudResumeCandidate = null;
+    const banner = document.getElementById('cloudResumeBanner');
+    if (banner) banner.style.display = 'none';
+}
+
+// Reprend effectivement la partie depuis l'état cloud proposé — voir le long commentaire
+// en tête de section pour la logique de revendication de siège.
+function uiResumeFromCloud() {
+    if (!cloudResumeCandidate) return;
+    const st = cloudResumeCandidate.state;
+    const codeToReclaim = st.roomCode || currentRoomCode;
+    const myToken = getReconnectToken();
+
+    // Cas 1 : je retrouve mon propre siège (j'ai déjà joué dans cette salle auparavant).
+    let claimedSeat = SEATS.find(seat => st.seatAssignment[seat] === myToken);
+
+    // Cas 2 : première fois — je revendique le premier siège encore en attente d'un
+    // partenaire (voir SEAT_PENDING). "N'importe qui peut claim" (voir échange avec
+    // Guillaume) : aucune vérification d'identité au-delà de "ce siège est encore libre".
+    if (!claimedSeat) {
+        claimedSeat = SEATS.find(seat => st.seatAssignment[seat] === SEAT_PENDING);
+        if (claimedSeat) {
+            st.seatAssignment[claimedSeat] = myToken;
+            if (!st.participants.some(p => p.id === myToken)) {
+                st.participants.push({ id: myToken, name: savedNickname || 'Joueur' });
+            }
+        }
+    }
+
+    if (!claimedSeat) {
+        uiDismissCloudResume();
+        showLandingError("Aucun siège n'est disponible à reprendre dans cette salle (tous déjà occupés, aucun en attente d'un partenaire).");
+        return;
+    }
+
+    // Restaure tout l'état en mémoire — même forme de payload que uiResumeHostSession(),
+    // juste une source différente (le cloud plutôt que le localStorage de CET appareil).
+    deals = st.deals;
+    boardIndex = st.boardIndex || 0;
+    if (!deals[boardIndex].auctionHistory) deals[boardIndex].auctionHistory = [];
+    auctionHistory = deals[boardIndex].auctionHistory;
+    seatAssignment = st.seatAssignment;
+    participants = st.participants || [];
+    // Recalculé plutôt que de faire confiance à st.autoPassSeats (qui peut dater d'avant
+    // ma propre revendication de siège, cas 2 ci-dessus).
+    autoPassSeats = SEATS.filter(seat => !seatAssignment[seat]);
+    chatMessages = st.chatMessages || [];
+
+    const oldHostToken = st.hostReconnectToken || null;
+    const disconnectedAt = Date.now();
+    participants.forEach(p => {
+        if (p.id !== myToken) { p.disconnected = true; p.disconnectedAt = disconnectedAt; }
+    });
+    guestIndexByToken = {};
+    hostPendingUndo = null;
+    hostTransferInProgress = false;
+    prevSeatAssignmentSnapshot = null;
+    prevParticipantsDisconnectedSnapshot = null;
+    lastKnownCloudVersion = cloudResumeCandidate.version;
+
+    uiDismissCloudResume();
+    hideConnectingOverlay();
+    showConnectingOverlay('Reprise de la partie…');
+
+    const newPeerConn = new BridgePeerConnection(buildHostHandlers(() => {
+        // Réutilise TEL QUEL le remappage d'identité déjà écrit pour la reprise par
+        // sous-hôte (voir promoteSelfToHostAfterTakeover) : mon jeton (déjà placé sur
+        // claimedSeat ci-dessus) devient 'host', et l'ancien 'host' devient identifiable
+        // par son propre jeton pour le cas où il revient un jour.
+        promoteSelfToHostAfterTakeover(myToken, oldHostToken, disconnectedAt);
+        hideConnectingOverlay();
+        enterGameScreen();
+        const missingDD = deals.filter(d => !d.par && !d.ddTable);
+        if (missingDD.length > 0) kickOffBackgroundDD(missingDD);
+        if (!chatPanelOpen) uiToggleChat(false);
+        saveHostGameStateToStorage();
+    }));
+    peerConn = newPeerConn;
+    newPeerConn.handlers.onError = (err) => {
+        hideConnectingOverlay();
+        showLandingError('Impossible de reprendre cette partie : ' + ((err && (err.message || err.type)) || err) + '. Réessaie dans un instant.');
+    };
+    newPeerConn.createRoom(6, codeToReclaim);
 }
 
 window.addEventListener('DOMContentLoaded', () => {
