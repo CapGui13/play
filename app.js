@@ -35,6 +35,17 @@ function formatStrainLabel(strain) {
     return (strain === 'NT' || strain === 'N') ? 'SA' : suitIconHtml(strain);
 }
 const SEAT_FULL_NAME = { N: 'Nord', E: 'Est', S: 'Sud', W: 'Ouest' };
+
+// Voir échange avec Guillaume (session asynchrone à deux) : troisième état possible pour
+// seatAssignment[seat], en plus de null (robot, auto-passe) et de l'id d'un participant
+// déjà connecté. 'PENDING' désigne un siège réservé à un futur partenaire qui n'est pas
+// encore venu — contrairement à un robot, ce siège N'auto-passe JAMAIS (voir
+// `!seatAssignment[seat]` un peu partout dans ce fichier pour calculer autoPassSeats :
+// une chaîne non vide comme 'PENDING' y est déjà exclue naturellement, aucun changement
+// nécessaire à ces endroits-là). Une fois que ce partenaire ouvre le lien de la salle et
+// revendique ce siège (voir claimPendingSeat), la valeur est remplacée par son propre
+// jeton de reconnexion, comme pour n'importe quel invité classique.
+const SEAT_PENDING = 'PENDING';
 // Abréviation d'un seul caractère à afficher (convention française : O, pas W) — les
 // clés internes restent N/E/S/W partout ailleurs (PBN, protocole réseau, etc.).
 const SEAT_ABBR_FR = { N: 'N', E: 'E', S: 'S', W: 'O' };
@@ -2054,17 +2065,24 @@ function buildSeatBoxesHtml(assignmentObj, onSelect, { enableDrag = false, withF
             // case entière, voir ondragover/ondrop plus bas), pour une prise en main
             // cohérente dans les deux sens. Uniquement sur la grille live (enableDrag) :
             // la modale de réorganisation n'a pas de glisser-déposer, seulement les menus.
-            const occupantP = assignedId ? participants.find(x => x.id === assignedId) : null;
+            const isPending = assignedId === SEAT_PENDING;
+            const occupantP = (assignedId && !isPending) ? participants.find(x => x.id === assignedId) : null;
             const boxDragAttrs = (enableDrag && occupantP) ? ` draggable="true" ondragstart="uiDragStartParticipant(event, '${assignedId}', '${seat}')"` : '';
             const dropAttrs = enableDrag ? ` ondragover="uiAllowDrop(event)" ondragenter="uiDragEnterTarget(event)" ondragleave="uiDragLeaveTarget(event)" ondrop="uiDropOnSeat(event, '${seat}')"` : '';
             const triggerContent = occupantP
                 ? `${avatarHtml(assignedId)}<span class="kibitz-chip-name">${escapeHtml(occupantP.name)}</span>`
-                : `<span class="mini-avatar mini-avatar-robot">🤖</span><span class="kibitz-chip-name">Robot</span>`;
+                : isPending
+                    ? `<span class="mini-avatar mini-avatar-pending">⏳</span><span class="kibitz-chip-name">En attente…</span>`
+                    : `<span class="mini-avatar mini-avatar-robot">🤖</span><span class="kibitz-chip-name">Robot</span>`;
 
             const robotOptionClass = assignedId ? '' : ' is-current';
+            const pendingOptionClass = isPending ? ' is-current' : '';
             const optionsHtml = [`
                 <div class="seat-dropdown-option${robotOptionClass}" onclick="${onSelect}('${seat}', ''); uiCloseSeatDropdowns();">
                     <span class="mini-avatar mini-avatar-robot">🤖</span><span>Robot</span>
+                </div>
+                <div class="seat-dropdown-option${pendingOptionClass}" onclick="${onSelect}('${seat}', '${SEAT_PENDING}'); uiCloseSeatDropdowns();">
+                    <span class="mini-avatar mini-avatar-pending">⏳</span><span>En attente d'un partenaire</span>
                 </div>
             `].concat(participants.map(p => {
                 const currentClass = p.id === assignedId ? ' is-current' : '';
@@ -2088,13 +2106,19 @@ function buildSeatBoxesHtml(assignmentObj, onSelect, { enableDrag = false, withF
                 </div>
             `;
         }
-        const p = participants.find(x => x.id === assignedId);
-        const name = p ? escapeHtml(p.name) : 'Robot';
+        const isPendingReadOnly = assignedId === SEAT_PENDING;
+        const p = (assignedId && !isPendingReadOnly) ? participants.find(x => x.id === assignedId) : null;
+        const name = p ? escapeHtml(p.name) : (isPendingReadOnly ? 'En attente…' : 'Robot');
+        const avatarMarkup = p
+            ? avatarHtml(assignedId)
+            : isPendingReadOnly
+                ? '<span class="mini-avatar mini-avatar-pending">⏳</span>'
+                : '<span class="mini-avatar mini-avatar-robot">🤖</span>';
         return `
             <div class="seat-box seat-pos-${seat}${flashClass}">
                 <span class="seat-box-label">${SEAT_FULL_NAME[seat]}</span>
                 <span class="seat-box-name-row">
-                    ${assignedId ? avatarHtml(assignedId) : '<span class="mini-avatar mini-avatar-robot">🤖</span>'}
+                    ${avatarMarkup}
                     <span class="seat-box-name">${name}</span>
                 </span>
             </div>
@@ -6554,9 +6578,16 @@ function renderRoomBoard() {
     });
 
     const seatRows = [...seatsByParticipant.keys()].map(pid => {
+        const seatsLabel = seatsByParticipant.get(pid).map(seatFullName).join(' + ');
+        // Voir échange avec Guillaume (session asynchrone à deux) : un siège 'PENDING'
+        // n'a pas de participant réel derrière (personne n'a encore ouvert le lien) — on
+        // l'affiche quand même ici, avec un badge dédié, plutôt que de le faire disparaître
+        // silencieusement comme un robot (ce n'en est pas un : l'enchère l'attend vraiment).
+        if (pid === SEAT_PENDING) {
+            return `<div class="room-board-seat"><span class="room-board-seat-label">${seatsLabel}</span><span class="mini-avatar mini-avatar-pending">⏳</span><span class="room-board-pending-label">En attente d'un partenaire</span></div>`;
+        }
         const p = participants.find(x => x.id === pid);
         if (!p) return '';
-        const seatsLabel = seatsByParticipant.get(pid).map(seatFullName).join(' + ');
         const disconnectedTag = p.disconnected ? ' <span class="disconnected-tag">🔌</span>' : '';
         const occupant = `${interactiveAvatarHtml(p.id)}${wizzableNameHtml(p)}${disconnectedTag}`;
         return `<div class="room-board-seat"><span class="room-board-seat-label">${seatsLabel}</span>${occupant}</div>`;
@@ -7461,6 +7492,7 @@ function renderUndoAskBanner() {
 
 function participantName(pid) {
     if (pid === 'host') return "L'hôte";
+    if (pid === SEAT_PENDING) return 'En attente…';
     const p = participants.find(x => x.id === pid);
     return p ? p.name : 'Un joueur';
 }

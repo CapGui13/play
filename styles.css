@@ -1614,6 +1614,21 @@ button.kibitz-chip {
     font-size: 0.75rem;
 }
 
+/* Siège 'PENDING' (voir SEAT_PENDING dans app.js) : réservé à un partenaire pas encore
+   venu, dans une session asynchrone à deux. Teinte ambrée distincte du robot (gris neutre)
+   pour signaler que ce siège attend vraiment quelqu'un, pas juste "personne n'y jouera". */
+.mini-avatar-pending {
+    background: rgba(230, 170, 60, 0.22) !important;
+    font-size: 0.75rem;
+}
+
+.room-board-pending-label {
+    font-size: 0.85rem;
+    color: var(--text-muted, var(--text));
+    opacity: 0.75;
+    font-style: italic;
+}
+
 .seat-box-name-row {
     display: flex;
     align-items: center;
