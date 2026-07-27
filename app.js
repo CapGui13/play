@@ -8250,6 +8250,18 @@ function uiResumeHostSession() {
 let lastKnownCloudVersion = 0; // dernier numéro de version cloud connu, pour le verrou optimiste (voir session-storage.js)
 let cloudResumeCandidate = null; // { version, updatedAt, state }, en attente de confirmation (voir offerCloudResume/uiResumeFromCloud)
 
+// Voir échange avec Guillaume (test du 27 juillet — "409 (Conflict)" en rafale) : plusieurs
+// enchères rapprochées déclenchaient plusieurs pushCloudGameState() EN PARALLÈLE, chacun
+// parti avec le même lastKnownCloudVersion lu avant que le précédent n'ait eu le temps de
+// se terminer et de le mettre à jour — d'où des conflits de version en cascade, y compris
+// après le tout premier envoi réussi. Un seul envoi à la fois : les appels reçus pendant
+// qu'un envoi est déjà en cours ne repartent pas immédiatement (ça ne ferait que déplacer
+// le même problème), ils marquent juste "il faudra renvoyer une fois celui-ci terminé" —
+// et un seul renvoi suffit, avec l'état ACTUEL relu à ce moment-là (pas la peine d'empiler
+// un envoi par clic intermédiaire, seul le dernier état compte).
+let cloudPushInFlight = false;
+let cloudPushQueued = false;
+
 // Pousse l'état courant vers le cloud — voir l'unique point d'accroche dans
 // saveHostGameStateToStorage(), qui appelle ceci à chaque sauvegarde locale. En tâche de
 // fond (fire-and-forget) : un échec réseau ici ne doit jamais empêcher de continuer à
@@ -8257,6 +8269,13 @@ let cloudResumeCandidate = null; // { version, updatedAt, state }, en attente de
 function pushCloudGameState() {
     if (myRole !== 'host' || !deals || !currentRoomCode) return;
     if (typeof pushSessionState !== 'function') return; // session-storage.js pas chargé (ex. pas encore branché dans index.html) : no-op silencieux
+
+    if (cloudPushInFlight) {
+        cloudPushQueued = true;
+        return;
+    }
+    cloudPushInFlight = true;
+
     const state = {
         roomCode: currentRoomCode,
         deals, boardIndex, seatAssignment, participants, autoPassSeats, chatMessages,
@@ -8268,13 +8287,19 @@ function pushCloudGameState() {
     };
     pushSessionState(currentRoomCode, state, lastKnownCloudVersion, {
         onConflict: (current) => {
-            // Cas rare (voir session-storage.js) : quelqu'un d'autre a écrit entre-temps —
-            // on adopte simplement son numéro de version pour la prochaine tentative, sans
-            // rien réécrire nous-mêmes ici (le prochain point d'accroche s'en chargera).
+            // Cas rare mais réel (voir plus haut) : quelqu'un (potentiellement nous-mêmes,
+            // via l'appel mis en file) a écrit entre-temps — on adopte son numéro de
+            // version pour la prochaine tentative.
             if (current) lastKnownCloudVersion = current.version;
         }
     }).then(result => {
         if (result) lastKnownCloudVersion = result.version;
+    }).finally(() => {
+        cloudPushInFlight = false;
+        if (cloudPushQueued) {
+            cloudPushQueued = false;
+            pushCloudGameState(); // renvoie une dernière fois avec l'état le plus frais
+        }
     });
 }
 
