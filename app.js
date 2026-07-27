@@ -1361,6 +1361,21 @@ function buildHostHandlers(onOpenExtra) {
                 const nickname = metadata && metadata.nickname;
                 p = { id: token, name: nickname || defaultParticipantName(token), disconnected: false, disconnectedAt: null };
                 participants.push(p);
+                // Voir échange avec Guillaume (session asynchrone à deux — "il faut lui
+                // attribuer un siège") : un nouvel arrivant qui trouve un siège encore
+                // SEAT_PENDING le revendique automatiquement, ici même, à la connexion —
+                // sans ça, il fallait que l'hôte soit PRÉSENT au moment précis où son
+                // partenaire se connecte pour l'y placer à la main, ce qui annulait tout
+                // l'intérêt de pouvoir jouer en différé. Couvre à la fois le cas où l'hôte
+                // est encore en ligne à ce moment-là ET la reprise cloud (uiResumeFromCloud
+                // fait la même chose pour SA propre connexion, mais un autre participant qui
+                // arriverait ensuite passe forcément par ici).
+                const pendingSeat = SEATS.find(seat => seatAssignment[seat] === SEAT_PENDING);
+                if (pendingSeat) {
+                    seatAssignment[pendingSeat] = token;
+                    autoPassSeats = SEATS.filter(seat => !seatAssignment[seat]);
+                    pushDebugLog(`Siège ${pendingSeat} en attente → attribué automatiquement à ${p.name} (${token.slice(0, 10)}…).`);
+                }
             } else {
                 p.disconnected = false;
                 p.disconnectedAt = null;
@@ -1400,7 +1415,10 @@ function buildHostHandlers(onOpenExtra) {
 
             broadcastLobbyState();
             renderLobby();
-            if (deals) renderBoard();
+            if (deals) {
+                renderBoard();
+                saveHostGameStateToStorage();
+            }
         },
         onPeerDisconnected: (guestIndex) => {
             // Voir échange avec Guillaume (session du 23 juillet — même souci que
