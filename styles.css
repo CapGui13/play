@@ -1842,11 +1842,16 @@ button.kibitz-chip {
     color: var(--text-muted);
 }
 
+.game-room-code-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 2px;
+}
+
 .game-room-code-label {
-    display: block;
     font-size: 0.78rem;
     color: var(--text-muted);
-    margin-top: 2px;
     font-family: var(--font-mono);
     letter-spacing: 0.03em;
 }

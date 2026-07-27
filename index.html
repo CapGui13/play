@@ -387,7 +387,15 @@
                     <button id="skipNextBoardBtn" class="btn btn-secondary btn-small board-nav-btn" onclick="uiHostSkipNextBoard()" title="Donne suivante">▶</button>
                 </div>
                 <span id="dealerVulnLabel" class="dealer-vuln-label"></span>
-                <span id="gameRoomCodeLabel" class="game-room-code-label"></span>
+                <div class="game-room-code-row">
+                    <span id="gameRoomCodeLabel" class="game-room-code-label"></span>
+                    <!-- Voir échange avec Guillaume : réservé à l'hôte (visibilité basculée
+                         dans renderGameHeader) — repartager le lien de connexion en pleine
+                         partie, utile notamment pour un siège encore en attente d'un
+                         partenaire (voir SEAT_PENDING). Réutilise le même lien déjà généré
+                         pour le salon (shareLinkInput/uiCopyShareLink), pas de duplication. -->
+                    <button type="button" id="gameHeaderCopyLinkBtn" class="btn btn-secondary btn-small room-board-copy-link-btn" style="display:none;" onclick="uiCopyShareLink(this)" title="Copier le lien de connexion à cette salle">🔗</button>
+                </div>
             </div>
             <div class="game-actions">
                 <button id="requestUndoBtn" class="btn btn-secondary btn-small" onclick="uiRequestUndo()"><span class="btn-label-full">↩️ Demander un undo</span><span class="btn-label-short">↩️ Undo</span></button>

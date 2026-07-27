@@ -6219,6 +6219,8 @@ function renderGameHeader() {
         const hostSuffix = hostParticipant ? ` · Hôte : ${hostParticipant.name}` : '';
         roomCodeEl.textContent = currentRoomCode ? `Salle : ${currentRoomCode}${hostSuffix}` : '';
     }
+    const headerCopyLinkBtn = document.getElementById('gameHeaderCopyLinkBtn');
+    if (headerCopyLinkBtn) headerCopyLinkBtn.style.display = (myRole === 'host') ? '' : 'none';
 }
 
 // ===== Chat =====
@@ -6678,16 +6680,7 @@ function renderRoomBoard() {
         const p = participants.find(x => x.id === pid);
         if (!p) return '';
         const disconnectedTag = p.disconnected ? ' <span class="disconnected-tag">🔌</span>' : '';
-        // Voir échange avec Guillaume : bouton de copie du lien de connexion, juste après
-        // le nom de l'hôte — utile une fois la partie lancée (le salon a déjà le sien,
-        // voir copyShareLinkBtn), pour renvoyer le lien à un partenaire qui n'est pas
-        // encore là (voir le siège SEAT_PENDING plus haut). Réservé à l'hôte lui-même :
-        // ni un simple invité ni un kibitz n'a besoin (ni la possibilité utile) de
-        // repartager CE lien précis, et ça évite d'encombrer la vue de tout le monde.
-        const copyLinkBtn = (pid === 'host' && myRole === 'host')
-            ? ` <button type="button" id="roomBoardCopyLinkBtn" class="btn btn-secondary btn-small room-board-copy-link-btn" onclick="uiCopyShareLink(this)" title="Copier le lien de connexion à cette salle">🔗</button>`
-            : '';
-        const occupant = `${interactiveAvatarHtml(p.id)}${wizzableNameHtml(p)}${disconnectedTag}${copyLinkBtn}`;
+        const occupant = `${interactiveAvatarHtml(p.id)}${wizzableNameHtml(p)}${disconnectedTag}`;
         return `<div class="room-board-seat"><span class="room-board-seat-label">${seatsLabel}</span>${occupant}</div>`;
     }).filter(Boolean).join('');
 
