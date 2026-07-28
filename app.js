@@ -8443,38 +8443,31 @@ async function uiResumeHostSession() {
     prevSeatAssignmentSnapshot = null;
     prevParticipantsDisconnectedSnapshot = null;
 
-    showConnectingOverlay('Reprise de votre partie…');
-    const newPeerConn = new BridgePeerConnection(buildHostHandlers(() => {
-        hideConnectingOverlay();
-        enterGameScreen();
-        // Voir échange avec Guillaume (session du 23 juillet — "le DD n'est plus
-        // calculé") : le calcul du double mort tourne en arrière-plan via un appel
-        // réseau (voir kickOffBackgroundDD) — s'il n'était pas encore terminé au moment
-        // de la fermeture de l'onglet, cet appel a été abandonné avec lui, et rien ne le
-        // relance tout seul. On relance ici pour toute donne encore sans résultat.
-        const missingDD = deals.filter(d => !d.par && !d.ddTable);
-        if (missingDD.length > 0) kickOffBackgroundDD(missingDD);
-        // Voir échange avec Guillaume (session du 23 juillet — "le chat qui était
-        // ouvert... est fermé") : rouvert par défaut à la reprise, comme pour un joueur
-        // qui rejoint en cours de partie (voir le handler 'resync').
-        if (!chatPanelOpen) uiToggleChat(false);
-        saveHostGameStateToStorage(); // remet savedAt à jour tout de suite
-    }));
-    peerConn = newPeerConn;
-    newPeerConn.handlers.onError = (err) => {
-        hideConnectingOverlay();
-        if (err && err.type === 'unavailable-id') {
-            // Voir échange avec Guillaume : quelqu'un d'autre (probablement le sous-hôte,
-            // voir promoteSelfToHostAfterTakeover) a déjà repris ce code entre-temps — la
-            // partie continue très probablement déjà sans nous. Rejoindre comme simple
-            // invité, avec notre propre jeton, nous y réintègre proprement.
-            showLandingError("Impossible de reprendre : ce code est déjà utilisé (quelqu'un d'autre a peut-être repris la partie entre-temps). Tentative de connexion comme invité…");
-            connectAsGuest(saved.roomCode, getReconnectToken(), savedNickname);
-        } else {
-            showLandingError('Impossible de reprendre la partie : ' + ((err && (err.message || err.type)) || err));
-        }
-    };
-    newPeerConn.createRoom(6, saved.roomCode);
+    // Voir échange avec Guillaume ("Impossible de reprendre : ce code est déjà utilisé") :
+    // cette reprise "même appareil" n'a pas plus besoin d'un vrai pair PeerJS que la
+    // reprise cloud (voir uiResumeFromCloud) — inutile de retenter d'occuper le même
+    // identifiant de salle sur le serveur de signalisation, avec le risque qu'il reste
+    // "coincé" (bribes d'une inscription précédente pas encore expirée côté serveur) et
+    // fasse échouer la reprise avec 'unavailable-id', de façon persistante à chaque
+    // nouvel essai. Si un partenaire ouvre le lien plus tard, il fera lui-même sa propre
+    // reprise cloud, sans jamais avoir besoin de se relier en direct à ce pair.
+    if (peerConn) peerConn.destroy();
+    peerConn = new NullPeerConnection();
+
+    hideConnectingOverlay();
+    enterGameScreen();
+    // Voir échange avec Guillaume (session du 23 juillet — "le DD n'est plus calculé") :
+    // le calcul du double mort tourne en arrière-plan via un appel réseau (voir
+    // kickOffBackgroundDD) — s'il n'était pas encore terminé au moment de la fermeture de
+    // l'onglet, cet appel a été abandonné avec lui, et rien ne le relance tout seul. On
+    // relance ici pour toute donne encore sans résultat.
+    const missingDD = deals.filter(d => !d.par && !d.ddTable);
+    if (missingDD.length > 0) kickOffBackgroundDD(missingDD);
+    // Voir échange avec Guillaume (session du 23 juillet — "le chat qui était ouvert...
+    // est fermé") : rouvert par défaut à la reprise, comme pour un joueur qui rejoint en
+    // cours de partie (voir le handler 'resync').
+    if (!chatPanelOpen) uiToggleChat(false);
+    saveHostGameStateToStorage(); // remet savedAt à jour tout de suite
 }
 
 // ===== Reprise "à froid" depuis le cloud (session asynchrone à deux, voir échange avec
