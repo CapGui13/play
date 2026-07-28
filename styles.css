@@ -916,6 +916,56 @@ body.on-landing-screen .connection-bar {
     width: min(640px, 100%);
 }
 
+/* Voir échange avec Guillaume (session asynchrone à deux) : liste scrollable, une ligne
+   cliquable par donne — le modal-panel parent gère déjà le défilement au-delà de sa
+   max-height (voir .modal-panel), pas besoin de le redéclarer ici. */
+.board-overview-list {
+    padding: 12px 20px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.board-overview-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    width: 100%;
+    padding: 10px 14px;
+    background: var(--bid-button);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    font-family: var(--font-body);
+    font-size: 0.9rem;
+    text-align: left;
+    cursor: pointer;
+}
+
+.board-overview-row:hover {
+    background: rgba(246, 241, 227, 0.12);
+}
+
+.board-overview-row.is-current {
+    border-color: var(--brass);
+}
+
+.board-overview-number {
+    font-family: var(--font-display);
+    font-weight: 600;
+    flex-shrink: 0;
+}
+
+.board-overview-status {
+    font-size: 0.85rem;
+    text-align: right;
+}
+
+.board-overview-status.is-pending { color: var(--text-muted); }
+.board-overview-status.is-waiting { color: var(--warn-amber); }
+.board-overview-status.is-done { color: #7fbf7f; }
+
 .deal-preview-board {
     padding: 14px 0;
     border-bottom: 1px solid var(--line);

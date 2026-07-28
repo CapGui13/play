@@ -383,6 +383,12 @@
                 </div>
             </div>
             <div class="game-actions">
+                <!-- Voir échange avec Guillaume (session asynchrone à deux) : accessible à
+                     tout le monde (pas réservé à l'hôte, contrairement aux boutons
+                     suivants) — utile pour se repérer d'un coup d'œil dans une session
+                     jouée à son rythme sur plusieurs jours, sans avoir à naviguer donne
+                     par donne pour savoir où en est chacune. -->
+                <button id="boardOverviewBtn" type="button" class="btn btn-secondary btn-small" onclick="uiOpenBoardOverview()"><span class="btn-label-full">📋 Vue d'ensemble</span><span class="btn-label-short">📋 Donnes</span></button>
                 <button id="requestUndoBtn" class="btn btn-secondary btn-small" onclick="uiRequestUndo()"><span class="btn-label-full">↩️ Demander un undo</span><span class="btn-label-short">↩️ Undo</span></button>
                 <button id="resetAuctionBtn" class="btn btn-secondary btn-small" onclick="uiResetAuction()"><span class="btn-label-full">↺ Recommencer l'enchère</span><span class="btn-label-short">↺ Recommencer</span></button>
                 <!-- Réservé à l'hôte (voir updateBoardControlVisibility) : voir échange avec
@@ -503,6 +509,21 @@
         <div class="seat-reorg-content">
             <div id="seatReorgModalGrid" class="seat-assignment-grid"></div>
         </div>
+    </div>
+</div>
+
+<!-- Voir échange avec Guillaume (session asynchrone à deux — "écran récapitulatif de
+     toutes les donnes") : un coup d'œil sur l'état de chaque donne (contrat atteint, passée,
+     en attente de qui) sans avoir à les parcourir une par une avec les flèches ◀▶. -->
+<div id="boardOverviewModal" class="modal-overlay" style="display:none;" onclick="uiCloseBoardOverviewOnBackdrop(event)">
+    <div class="modal-panel">
+        <div class="modal-header">
+            <h3>Vue d'ensemble des donnes</h3>
+            <div class="modal-header-actions">
+                <button type="button" class="btn btn-secondary btn-small" onclick="uiCloseBoardOverview()">Fermer</button>
+            </div>
+        </div>
+        <div id="boardOverviewList" class="board-overview-list"></div>
     </div>
 </div>
 

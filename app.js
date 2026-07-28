@@ -7903,6 +7903,68 @@ function uiHostSkipPrevBoard() {
     gotoBoard(boardIndex - 1);
 }
 
+// Voir échange avec Guillaume (session asynchrone à deux — "écran récapitulatif de toutes
+// les donnes") : statut de chaque donne en un coup d'œil, sans avoir à les parcourir une
+// par une. Accessible à tout le monde (lecture), mais seul l'hôte peut s'en servir pour
+// sauter directement à une donne (voir uiJumpToBoardFromOverview) — même règle que les
+// flèches ◀▶ existantes, réservées à l'hôte.
+function renderBoardOverview() {
+    const listEl = document.getElementById('boardOverviewList');
+    if (!listEl || !deals) return;
+    listEl.innerHTML = deals.map((deal, idx) => {
+        const hist = deal.auctionHistory || [];
+        let statusHtml;
+        if (hist.length === 0) {
+            statusHtml = `<span class="board-overview-status is-pending">Pas encore commencée</span>`;
+        } else if (isPassedOut(hist)) {
+            statusHtml = `<span class="board-overview-status is-done">Donne passée</span>`;
+        } else if (isAuctionOver(hist)) {
+            const contract = determineContract(hist);
+            statusHtml = `<span class="board-overview-status is-done">Terminée : ${contract.contractString} par ${seatFullName(contract.declarer)}</span>`;
+        } else {
+            const turnSeat = currentTurnSeat(deal.dealer, hist);
+            const occupantId = seatAssignment[turnSeat];
+            const occupantLabel = !occupantId
+                ? 'un robot'
+                : (occupantId === SEAT_PENDING ? 'un partenaire pas encore arrivé' : participantName(occupantId));
+            statusHtml = `<span class="board-overview-status is-waiting">En attente de ${seatFullName(turnSeat)} (${occupantLabel})</span>`;
+        }
+        const activeClass = idx === boardIndex ? ' is-current' : '';
+        return `
+            <button type="button" class="board-overview-row${activeClass}" onclick="uiJumpToBoardFromOverview(${idx})">
+                <span class="board-overview-number">Donne ${deal.board != null ? deal.board : idx + 1}</span>
+                ${statusHtml}
+            </button>
+        `;
+    }).join('');
+}
+
+function uiOpenBoardOverview() {
+    if (!deals) return;
+    renderBoardOverview();
+    const modal = document.getElementById('boardOverviewModal');
+    if (modal) modal.style.display = 'flex';
+}
+
+function uiCloseBoardOverview() {
+    const modal = document.getElementById('boardOverviewModal');
+    if (modal) modal.style.display = 'none';
+}
+
+function uiCloseBoardOverviewOnBackdrop(evt) {
+    if (evt.target.id === 'boardOverviewModal') uiCloseBoardOverview();
+}
+
+function uiJumpToBoardFromOverview(idx) {
+    uiCloseBoardOverview();
+    // Même règle que les flèches ◀▶ existantes : seul l'hôte pilote la navigation entre
+    // donnes (voir renderBoardSkipControls) — un invité peut consulter la vue d'ensemble,
+    // pas s'en servir pour déplacer tout le monde.
+    if (myRole !== 'host') return;
+    if (idx === boardIndex) return;
+    gotoBoard(idx);
+}
+
 function renderBoardSkipControls() {
     const prevBtn = document.getElementById('prevBoardBtn');
     const nextBtn = document.getElementById('skipNextBoardBtn');
@@ -8431,7 +8493,12 @@ function uiResumeFromCloud() {
     // Restaure tout l'état en mémoire — même forme de payload que uiResumeHostSession(),
     // juste une source différente (le cloud plutôt que le localStorage de CET appareil).
     deals = st.deals;
-    boardIndex = st.boardIndex || 0;
+    // Voir échange avec Guillaume : toujours la donne 1, jamais st.boardIndex — celui-ci
+    // reflète juste la DERNIÈRE donne où le joueur précédent s'est arrêté (souvent en
+    // pleine avancée, voir les flèches ◀▶ utilisables même en pleine enchère), pas un point
+    // de départ pertinent pour quelqu'un qui arrive et doit parcourir toutes les donnes
+    // depuis le début pour y jouer ses propres tours.
+    boardIndex = 0;
     if (!deals[boardIndex].auctionHistory) deals[boardIndex].auctionHistory = [];
     auctionHistory = deals[boardIndex].auctionHistory;
     seatAssignment = st.seatAssignment;
