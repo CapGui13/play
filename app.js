@@ -3232,30 +3232,58 @@ function uiStartGameAsHost() {
         clearUndoUiState();
 
         const botSeats = SEATS.filter(seat => !seatAssignment[seat]);
-        mySeats = SEATS.filter(seat => seatAssignment[seat] === 'host');
         autoPassSeats = botSeats;
         advanceRobotBidsOnAllBoards(boardIndex); // voir échange avec Guillaume — prérequis d'"avance rapide"/"vue d'ensemble"
+
+        // Voir échange avec Guillaume ("je veux 2 modes : live / différé") : le signal est
+        // déjà là, sans rien ajouter à l'interface — un siège encore SEAT_PENDING au
+        // moment du lancement ne peut signifier qu'une chose, personne d'autre n'est
+        // censé être présent tout de suite. Ce choix est figé pour toute la durée de la
+        // salle (pas de bascule en cours de route, voir échange avec Guillaume).
+        const isDeferredMode = SEATS.some(seat => seatAssignment[seat] === SEAT_PENDING);
+
+        if (isDeferredMode) {
+            // Voir échange avec Guillaume : jamais de connexion PeerJS pour ce mode, dès
+            // le lancement — pas seulement en cas de reprise (voir uiResumeFromCloud/
+            // uiResumeHostSession, qui appliquent déjà ce principe). Migration "host" ->
+            // mon vrai jeton une seule fois ici, pour que cette salle n'ait plus jamais
+            // besoin de la notion d'hôte réseau de toute sa durée (promoteSelfToHostAfterTakeover
+            // et le transfert d'hôte restent des mécanismes du mode live, jamais de celui-ci).
+            const myToken = getReconnectToken();
+            SEATS.forEach(seat => { if (seatAssignment[seat] === 'host') seatAssignment[seat] = myToken; });
+            const hostParticipant = participants.find(p => p.id === 'host');
+            if (hostParticipant) hostParticipant.id = myToken;
+            myParticipantId = myToken;
+            mySeats = SEATS.filter(seat => seatAssignment[seat] === myToken);
+            roomCreatorToken = myToken;
+            if (peerConn) peerConn.destroy();
+            peerConn = new NullPeerConnection();
+        } else {
+            // Mode live, entièrement inchangé : tout le monde est déjà assis (humain ou
+            // robot) au moment de lancer — vrai pair PeerJS déjà en place depuis le salon,
+            // hôte avec tous ses privilèges habituels.
+            mySeats = SEATS.filter(seat => seatAssignment[seat] === 'host');
+            participants.filter(p => p.id !== 'host' && !p.disconnected).forEach(p => {
+                const guestIndex = guestIndexForParticipant(p.id);
+                if (guestIndex == null) return;
+                const seatsForThisGuest = SEATS.filter(seat => seatAssignment[seat] === p.id);
+                // Voir échange avec Guillaume (session du 23 juillet — "rien ne se
+                // déclenche") : subHostId/hostReconnectToken inclus ICI aussi, pas
+                // seulement dans broadcastLobbyState ('lobby-state') — sans ça, un invité
+                // qui ne recevait plus jamais de lobby-state entre le lancement et une
+                // éventuelle coupure de l'hôte ne connaissait jamais le sous-hôte
+                // désigné, et la reprise automatique ne se déclenchait donc jamais.
+                peerConn.send({
+                    type: 'start-game',
+                    deals, yourSeats: seatsForThisGuest, botSeats,
+                    subHostId: computeSubHostId(),
+                    hostReconnectToken: getReconnectToken(),
+                    roomCreatorName
+                }, guestIndex);
+            });
+        }
+
         saveHostGameStateToStorage(); // première sauvegarde, voir échange avec Guillaume (session du 23 juillet)
-
-        participants.filter(p => p.id !== 'host' && !p.disconnected).forEach(p => {
-            const guestIndex = guestIndexForParticipant(p.id);
-            if (guestIndex == null) return;
-            const seatsForThisGuest = SEATS.filter(seat => seatAssignment[seat] === p.id);
-            // Voir échange avec Guillaume (session du 23 juillet — "rien ne se déclenche")
-            // : subHostId/hostReconnectToken inclus ICI aussi, pas seulement dans
-            // broadcastLobbyState ('lobby-state') — sans ça, un invité qui ne recevait
-            // plus jamais de lobby-state entre le lancement et une éventuelle coupure de
-            // l'hôte ne connaissait jamais le sous-hôte désigné, et la reprise
-            // automatique ne se déclenchait donc jamais.
-            peerConn.send({
-                type: 'start-game',
-                deals, yourSeats: seatsForThisGuest, botSeats,
-                subHostId: computeSubHostId(),
-                hostReconnectToken: getReconnectToken(),
-                roomCreatorName
-            }, guestIndex);
-        });
-
         enterGameScreen();
     };
 
