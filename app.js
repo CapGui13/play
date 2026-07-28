@@ -7749,7 +7749,12 @@ function humanOpponentsFor(requesterId, targetSeat) {
     const ids = new Set();
     opposing.forEach(seat => {
         const pid = seatAssignment[seat];
-        if (pid && pid !== requesterId) ids.add(pid);
+        // Voir échange avec Guillaume : SEAT_PENDING est une chaîne non vide (donc "vraie"
+        // au sens JS) mais ne représente PERSONNE de réellement présent — sans cette
+        // exclusion, un camp adverse encore en attente d'un partenaire aurait fait
+        // patienter indéfiniment (jusqu'au délai de 20s) une demande d'undo qui aurait dû
+        // s'auto-approuver comme face à des robots.
+        if (pid && pid !== SEAT_PENDING && pid !== requesterId) ids.add(pid);
     });
     return Array.from(ids);
 }
@@ -7836,7 +7841,15 @@ function hostHandleUndoRequest(msg) {
     // L'hôte peut annuler unilatéralement, sans validation du camp d'en face (voir échange
     // avec Guillaume) — l'hôte arbitre déjà toute la table (undo d'un simple joueur assis
     // reste soumis à l'accord de l'adversaire humain, lui, via humanOpponentsFor plus bas).
-    if (msg.requesterId === 'host') {
+    //
+    // Voir échange avec Guillaume ("2 modes : live / différé") : en mode différé,
+    // myParticipantId (et donc requesterId ici) n'est JAMAIS la chaîne littérale 'host' —
+    // c'est le vrai jeton du créateur (voir roomCreatorToken, figé à la création/au
+    // lancement, jamais réécrit). Sans ce second cas, un créateur en mode différé perdait
+    // son droit d'arbitrage unilatéral — récupéré de façon incidente uniquement quand
+    // humanOpponentsFor renvoyait une liste vide (adversaires robots), mais pas dans une
+    // configuration où l'un des deux camps opposés serait un autre humain.
+    if (msg.requesterId === 'host' || msg.requesterId === roomCreatorToken) {
         applyUndoAsHost({ boardIndex: msg.boardIndex, requesterId: msg.requesterId, historyLengthAtRequest: msg.historyLengthAtRequest, targetIndex });
         return;
     }
