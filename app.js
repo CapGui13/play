@@ -80,6 +80,12 @@ let currentRoomCode = null; // pour uiReconnect() : on doit se souvenir du code 
 // Voir uiCreateRoom : nom du créateur d'origine, figé une fois pour toutes (jamais
 // réécrit par une reprise ou un transfert d'hôte) — voir renderGameHeader pour l'affichage.
 let roomCreatorName = null;
+// Idem pour son jeton de reconnexion — sert UNIQUEMENT à reconnaître le créateur d'origine
+// quand il revient via uiResumeFromCloud (voir échange avec Guillaume — "on n'est plus
+// obligé de passer par le P2P") : ses sièges peuvent encore être étiquetés littéralement
+// 'host' (reliquat de sa session live d'origine), et c'est ce jeton qui permet de les
+// migrer vers son vrai jeton dès son premier retour asynchrone.
+let roomCreatorToken = null;
 
 // ===== Reprise automatique d'hôte par le sous-hôte (voir échange avec Guillaume, session
 // du 23 juillet) =====
@@ -1270,6 +1276,7 @@ function uiCreateRoom() {
     // continue de basculer en coulisses (nécessaire pour que d'autres puissent encore se
     // connecter au même code), mais ne doit plus jamais se voir.
     roomCreatorName = savedNickname || 'Hôte';
+    roomCreatorToken = getReconnectToken();
     seatAssignment = { N: null, E: null, S: null, W: null };
     guestIndexByToken = {};
     prevSeatAssignmentSnapshot = null;
@@ -7984,6 +7991,12 @@ function initServiceWorker() {
 function tryAutoApplyUpdate() {
     if (!pendingSwRegistration || !pendingSwRegistration.waiting) return;
     if (peerConn) return;
+    // Voir échange avec Guillaume (session asynchrone à deux — "ça saute comme si j'avais
+    // refresh" pendant la saisie du pseudo) : entre l'ouverture du lien et la validation du
+    // pseudo, peerConn n'existe pas ENCORE (voir ensureNicknameThenProceed) — sans ce
+    // garde-fou, une mise à jour détectée pile à ce moment-là rechargeait la page sous les
+    // doigts de la personne en train de taper, avant même la moindre tentative de connexion.
+    if (pendingJoinAfterNickname) return;
     pendingSwRegistration.waiting.postMessage('skipWaiting');
 }
 
@@ -8114,7 +8127,7 @@ function saveHostGameStateToStorage() {
         const payload = {
             roomCode: currentRoomCode,
             deals, boardIndex, seatAssignment, participants, autoPassSeats,
-            roomCreatorName,
+            roomCreatorName, roomCreatorToken,
             // Voir échange avec Guillaume (session du 23 juillet — "sauve aussi le chat") :
             // sans ça, la conversation repartait de zéro à chaque reprise, même s'il y
             // avait des messages échangés juste avant la fermeture de l'onglet.
@@ -8201,6 +8214,10 @@ function uiResumeHostSession() {
     // ce champ (voir échange avec Guillaume) — sans quoi une session déjà en cours au
     // moment de la mise à jour du code perdrait ce nom au premier rechargement.
     roomCreatorName = saved.roomCreatorName || (participants.find(p => p.id === 'host') || {}).name || 'Hôte';
+    // Repli sur getReconnectToken() : une reprise via uiResumeHostSession se fait
+    // forcément depuis le MÊME appareil que la création (localStorage), donc le créateur
+    // d'origine est nécessairement celui qui recharge ici.
+    roomCreatorToken = saved.roomCreatorToken || getReconnectToken();
     // Voir échange avec Guillaume (session du 23 juillet — "il apparaît toujours en
     // blanc alors qu'il est déconnecté") : le statut restauré reflète la DERNIÈRE
     // sauvegarde (où tout le monde pouvait très bien être connecté) — mais personne
@@ -8312,7 +8329,7 @@ function pushCloudGameState() {
     const state = {
         roomCode: currentRoomCode,
         deals, boardIndex, seatAssignment, participants, autoPassSeats, chatMessages,
-        roomCreatorName,
+        roomCreatorName, roomCreatorToken,
         // Voir promoteSelfToHostAfterTakeover : indispensable pour qu'un futur repreneur
         // sache reconnaître l'hôte actuel s'il revient un jour, exactement comme pour la
         // reprise par sous-hôte déjà en place.
@@ -8367,7 +8384,20 @@ function uiResumeFromCloud() {
     const codeToReclaim = st.roomCode || currentRoomCode;
     const myToken = getReconnectToken();
 
-    // Cas 1 : je retrouve mon propre siège (j'ai déjà joué dans cette salle auparavant).
+    // Cas 0 : je suis le créateur d'origine de la salle qui revient — ses sièges peuvent
+    // encore être étiquetés littéralement 'host', reliquat de sa session live d'origine
+    // (voir uiCreateRoom). Migration une fois pour toutes vers mon vrai jeton : après ça,
+    // plus jamais besoin de cette étiquette spéciale pour retrouver ma place. Repli sur
+    // hostReconnectToken pour une salle créée avant l'ajout de roomCreatorToken.
+    const creatorToken = st.roomCreatorToken || st.hostReconnectToken || null;
+    if (creatorToken && myToken === creatorToken) {
+        SEATS.filter(seat => st.seatAssignment[seat] === 'host')
+            .forEach(seat => { st.seatAssignment[seat] = myToken; });
+        const legacyHostParticipant = st.participants.find(p => p.id === 'host');
+        if (legacyHostParticipant) legacyHostParticipant.id = myToken;
+    }
+
+    // Cas 1 : je retrouve mon propre siège (déjà joué ici auparavant, ou migré ci-dessus).
     let claimedSeat = SEATS.find(seat => st.seatAssignment[seat] === myToken);
 
     // Cas 2 : première fois — je revendique le premier siège encore en attente d'un
@@ -8390,6 +8420,14 @@ function uiResumeFromCloud() {
         return;
     }
 
+    // Voir échange avec Guillaume ("on n'est plus obligé de passer par le P2P") : aucune
+    // connexion PeerJS n'est ouverte pour une reprise asynchrone — voir NullPeerConnection
+    // dans peer-connection.js. Tous les appels peerConn.send(...)/etc. disséminés dans le
+    // reste du fichier (mode live, inchangé) continuent de s'exécuter tels quels ; ils ne
+    // font simplement plus rien, faute d'invité à qui parler.
+    if (peerConn) peerConn.destroy();
+    peerConn = new NullPeerConnection();
+
     // Restaure tout l'état en mémoire — même forme de payload que uiResumeHostSession(),
     // juste une source différente (le cloud plutôt que le localStorage de CET appareil).
     deals = st.deals;
@@ -8402,16 +8440,22 @@ function uiResumeFromCloud() {
     // ma propre revendication de siège, cas 2 ci-dessus).
     autoPassSeats = SEATS.filter(seat => !seatAssignment[seat]);
     chatMessages = st.chatMessages || [];
-    // Voir échange avec Guillaume ("je ne veux pas de bascule d'hôte") : jamais recalculé
-    // depuis le participant 'host' technique du moment — toujours celui figé à la création
-    // (voir uiCreateRoom), avec repli pour une sauvegarde antérieure à l'ajout de ce champ.
     roomCreatorName = st.roomCreatorName || (participants.find(p => p.id === 'host') || {}).name || 'Hôte';
+    roomCreatorToken = creatorToken || myToken;
 
-    const oldHostToken = st.hostReconnectToken || null;
     const disconnectedAt = Date.now();
     participants.forEach(p => {
         if (p.id !== myToken) { p.disconnected = true; p.disconnectedAt = disconnectedAt; }
     });
+
+    // Voir échange avec Guillaume ("je ne veux pas de bascule d'hôte") : myParticipantId
+    // reste MON PROPRE jeton — jamais renommé en la chaîne littérale 'host'. myRole='host'
+    // ici sert uniquement à m'accorder le contrôle local complet (navigation de donne,
+    // arbitrage d'undo — voir canControlBoard et consorts), pas une identité à endosser.
+    myRole = 'host';
+    myParticipantId = myToken;
+    mySeats = SEATS.filter(seat => seatAssignment[seat] === myParticipantId);
+    currentRoomCode = codeToReclaim;
     guestIndexByToken = {};
     hostPendingUndo = null;
     hostTransferInProgress = false;
@@ -8421,27 +8465,11 @@ function uiResumeFromCloud() {
     cloudResumeCandidate = null;
 
     hideConnectingOverlay();
-    showConnectingOverlay('Reprise de la partie…');
-
-    const newPeerConn = new BridgePeerConnection(buildHostHandlers(() => {
-        // Réutilise TEL QUEL le remappage d'identité déjà écrit pour la reprise par
-        // sous-hôte (voir promoteSelfToHostAfterTakeover) : mon jeton (déjà placé sur
-        // claimedSeat ci-dessus) devient 'host', et l'ancien 'host' devient identifiable
-        // par son propre jeton pour le cas où il revient un jour.
-        promoteSelfToHostAfterTakeover(myToken, oldHostToken, disconnectedAt);
-        hideConnectingOverlay();
-        enterGameScreen();
-        const missingDD = deals.filter(d => !d.par && !d.ddTable);
-        if (missingDD.length > 0) kickOffBackgroundDD(missingDD);
-        if (!chatPanelOpen) uiToggleChat(false);
-        saveHostGameStateToStorage();
-    }));
-    peerConn = newPeerConn;
-    newPeerConn.handlers.onError = (err) => {
-        hideConnectingOverlay();
-        showLandingError('Impossible de reprendre cette partie : ' + ((err && (err.message || err.type)) || err) + '. Réessaie dans un instant.');
-    };
-    newPeerConn.createRoom(6, codeToReclaim);
+    enterGameScreen();
+    const missingDD = deals.filter(d => !d.par && !d.ddTable);
+    if (missingDD.length > 0) kickOffBackgroundDD(missingDD);
+    if (!chatPanelOpen) uiToggleChat(false);
+    saveHostGameStateToStorage();
 }
 
 window.addEventListener('DOMContentLoaded', () => {

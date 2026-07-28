@@ -610,3 +610,32 @@ class BridgePeerConnection {
         if (this.peer) this.peer.destroy();
     }
 }
+
+// Voir échange avec Guillaume (session asynchrone à deux — "on n'est plus obligé de passer
+// par le P2P") : implémente EXACTEMENT la même interface publique que BridgePeerConnection
+// (send/sendExcept/destroy/isConnected/manualReconnect/conns/signalingOpen), mais sans
+// jamais contacter le serveur de signalisation PeerJS ni ouvrir la moindre connexion —
+// aucun invité ne peut se relier à une session qui utilise ce stub, et c'est voulu :
+// personne d'autre n'est censé en attendre une pendant une reprise purement asynchrone.
+//
+// Utilisé UNIQUEMENT par uiResumeFromCloud() (app.js), à la place de
+// `new BridgePeerConnection(...)` + `createRoom()`. Grâce à cette interface identique,
+// aucun des nombreux appels `peerConn.send(...)` / `peerConn.isConnected()` / etc. déjà
+// disséminés dans app.js (mode live, inchangé) n'a besoin d'être modifié ou protégé par un
+// test supplémentaire : ils continuent de s'exécuter tels quels, et ne font simplement plus
+// rien de concret ici, faute d'interlocuteur.
+class NullPeerConnection {
+    constructor() {
+        this.conns = [];
+        this.role = 'host';
+        this.roomCode = null;
+        this.signalingOpen = true; // jamais "déconnecté" : il n'y a rien à connecter
+    }
+    send() { /* personne à qui parler */ }
+    sendExcept() { /* personne à qui parler */ }
+    isConnected() { return true; } // pas de bannière "reconnexion" à afficher pour un rôle qui n'a jamais été 'guest' ici
+    manualReconnect() { return false; } // rien à reconnecter
+    destroy() { /* rien à fermer */ }
+    createRoom() { /* jamais appelé : voir uiResumeFromCloud, qui instancie directement ce stub */ }
+    joinRoom() { /* idem */ }
+}
