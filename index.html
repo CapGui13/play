@@ -370,6 +370,12 @@
                     <button id="prevBoardBtn" class="btn btn-secondary btn-small board-nav-btn" onclick="uiHostSkipPrevBoard()" title="Donne précédente">◀</button>
                     <span id="boardNumberLabel" class="board-number-label"></span>
                     <button id="skipNextBoardBtn" class="btn btn-secondary btn-small board-nav-btn" onclick="uiHostSkipNextBoard()" title="Donne suivante">▶</button>
+                    <!-- Voir échange avec Guillaume (session asynchrone à deux) : saute
+                         directement à la première donne où c'est mon tour d'enchérir —
+                         utile pour reprendre une session jouée en différé sans avoir à
+                         repasser une par une par toutes les donnes déjà closes de mon côté.
+                         Réservé à l'hôte, même règle que les flèches ◀▶ voisines. -->
+                    <button id="fastForwardBoardBtn" type="button" class="btn btn-secondary btn-small board-nav-btn" onclick="uiFastForwardToMyTurn()" title="Avancer jusqu'à mon prochain tour">▶▶</button>
                 </div>
                 <span id="dealerVulnLabel" class="dealer-vuln-label"></span>
                 <div class="game-room-code-row">

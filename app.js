@@ -440,13 +440,20 @@ function uiToggleLedgerNames() {
     if (deals) renderAuctionLedger();
 }
 
-// Réservé à l'hôte : révèle les 4 mains à tout moment pendant la partie, même en pleine
-// enchère (utile pour vérifier une donne, aider un débutant en direct, etc.). Purement
-// local — jamais envoyé aux autres joueurs, qui ne voient toujours que ce qu'ils sont
-// censés voir. Voir checkAuctionEnd, qui force l'affichage du diagramme des 4 mains tant
-// que ce réglage est actif, indépendamment de l'état de l'enchère.
+// Réservé à l'hôte QUI N'OCCUPE AUCUN SIÈGE (mode "maître du jeu" à 3, voir isKibbitz) :
+// révèle les 4 mains à tout moment pendant la partie, même en pleine enchère (utile pour
+// vérifier une donne, aider un débutant en direct, etc.). Purement local — jamais envoyé
+// aux autres joueurs, qui ne voient toujours que ce qu'ils sont censés voir.
+//
+// Voir échange avec Guillaume (session asynchrone à deux — "le joueur B se retrouve avec
+// la possibilité d'utiliser les privilèges, ex: regarder les 4 mains") : myRole==='host'
+// ne suffit PLUS à lui seul depuis la reprise cloud (uiResumeFromCloud), puisque celui qui
+// reprend une salle abandonnée devient 'host' tout en occupant réellement un siège — lui
+// laisser ce privilège reviendrait à le laisser tricher sur sa propre main. isKibbitz()
+// (aucun siège occupé) est le bon critère : vrai pour un hôte "maître du jeu" classique qui
+// ne joue aucune main, faux pour quiconque a des cartes devant lui, hôte ou non.
 function uiToggleHostSeeAllHands() {
-    if (myRole !== 'host') return;
+    if (myRole !== 'host' || !isKibbitz()) return;
     hostSeeAllHands = !hostSeeAllHands;
     saveBoolPref('bridgeBidHostSeeAllHands', hostSeeAllHands);
     renderHandDisplayOptionButtons();
@@ -465,7 +472,7 @@ function renderHandDisplayOptionButtons() {
 
     const hostSeeAllBtn = document.getElementById('hostSeeAllHandsBtn');
     if (hostSeeAllBtn) {
-        hostSeeAllBtn.style.display = myRole === 'host' ? '' : 'none';
+        hostSeeAllBtn.style.display = (myRole === 'host' && isKibbitz()) ? '' : 'none';
         hostSeeAllBtn.classList.toggle('is-active', hostSeeAllHands);
     }
 }
@@ -3227,6 +3234,7 @@ function uiStartGameAsHost() {
         const botSeats = SEATS.filter(seat => !seatAssignment[seat]);
         mySeats = SEATS.filter(seat => seatAssignment[seat] === 'host');
         autoPassSeats = botSeats;
+        advanceRobotBidsOnAllBoards(boardIndex); // voir échange avec Guillaume — prérequis d'"avance rapide"/"vue d'ensemble"
         saveHostGameStateToStorage(); // première sauvegarde, voir échange avec Guillaume (session du 23 juillet)
 
         participants.filter(p => p.id !== 'host' && !p.disconnected).forEach(p => {
@@ -6055,6 +6063,50 @@ function decideRobotCall(seat, deal, history) {
 //
 // Seul l'hôte calcule et injecte les annonces des robots (pour ne jamais les déclencher en
 // double), puis les diffuse comme n'importe quelle annonce.
+
+// Voir échange avec Guillaume (session asynchrone à deux — prérequis du bouton "avance
+// rapide" et de la "vue d'ensemble") : fait avancer les enchères des sièges robots sur UNE
+// donne précise, qu'elle soit affichée à l'écran ou non — contrairement à maybeRobotBid()
+// ci-dessous, qui lui reste inchangé et n'agit que sur `auctionHistory` (la donne
+// actuellement affichée), avec son petit délai visuel de 300ms. Ici, pas de délai ni de
+// rendu : on écrit directement dans `deal.auctionHistory`, pour que même une donne jamais
+// "visitée" reflète correctement où elle en est réellement (jusqu'au tour d'un humain ou
+// d'un siège encore en attente d'un partenaire, voir SEAT_PENDING — jamais au-delà, c'est
+// exactement le point de blocage voulu).
+function advanceRobotBidsOnBoard(idx) {
+    if (!deals || !deals[idx]) return;
+    const deal = deals[idx];
+    if (!deal.auctionHistory) deal.auctionHistory = [];
+    const hist = deal.auctionHistory;
+    let safety = 0; // garde-fou, largement au-delà de toute enchère réelle possible
+    while (!isAuctionOver(hist) && safety < 60) {
+        const turnSeat = currentTurnSeat(deal.dealer, hist);
+        if (!autoPassSeats.includes(turnSeat)) break;
+        let call, explanation;
+        if (robotBiddingMode === 'passOnly') {
+            call = 'PASS';
+            explanation = 'Mode « passe en boucle » activé';
+        } else {
+            ({ call, explanation } = decideRobotCall(turnSeat, deal, hist));
+        }
+        hist.push(explanation ? { seat: turnSeat, call, explanation } : { seat: turnSeat, call });
+        safety++;
+    }
+}
+
+// Applique advanceRobotBidsOnBoard à toutes les donnes — sauf, si précisé, celle
+// actuellement affichée (`excludeIdx`), pour lui laisser son animation habituelle via
+// maybeRobotBid() une fois entré sur l'écran de jeu (voir uiStartGameAsHost,
+// uiResumeHostSession, uiResumeFromCloud). Idempotent : sans effet sur une donne déjà
+// entièrement avancée, donc sûr à rappeler après n'importe quelle restauration d'état.
+function advanceRobotBidsOnAllBoards(excludeIdx) {
+    if (!deals) return;
+    deals.forEach((_, idx) => {
+        if (idx === excludeIdx) return;
+        advanceRobotBidsOnBoard(idx);
+    });
+}
+
 function maybeRobotBid() {
     if (myRole !== 'host') return;
     if (!autoPassSeats || autoPassSeats.length === 0) return;
@@ -7453,7 +7505,7 @@ function checkAuctionEnd() {
     // kibbitz, lui, voit toujours les 4 mains dès le début (voir renderMyHands) — pas
     // besoin d'attendre la fin de l'enchère ni une action de l'hôte, puisqu'il n'est
     // assis à aucun siège et ne peut donc rien "tricher" en les voyant.
-    const hostForcedReveal = myRole === 'host' && hostSeeAllHands;
+    const hostForcedReveal = myRole === 'host' && isKibbitz() && hostSeeAllHands;
     const showAllHandsEarly = hostForcedReveal || isKibbitz();
 
     if (!auctionOver) {
@@ -7965,13 +8017,44 @@ function uiJumpToBoardFromOverview(idx) {
     gotoBoard(idx);
 }
 
+// Voir échange avec Guillaume (session asynchrone à deux — bouton "avance rapide") :
+// saute directement à la première donne où c'est le tour d'un de MES sièges et où
+// l'enchère n'est pas terminée — pense à avancer les robots au passage (voir
+// advanceRobotBidsOnBoard), au cas où une donne n'aurait pas encore été touchée depuis un
+// chargement antérieur à ce correctif. Réservé à l'hôte, même règle que ◀▶ et la vue
+// d'ensemble.
+function uiFastForwardToMyTurn() {
+    if (myRole !== 'host' || !deals) return;
+    for (let idx = 0; idx < deals.length; idx++) {
+        advanceRobotBidsOnBoard(idx);
+        const hist = deals[idx].auctionHistory || [];
+        if (isAuctionOver(hist)) continue;
+        const turnSeat = currentTurnSeat(deals[idx].dealer, hist);
+        if (mySeats.includes(turnSeat)) {
+            if (idx !== boardIndex) gotoBoard(idx);
+            return;
+        }
+    }
+    // Aucune donne ne m'attend pour l'instant (tout est déjà fait de mon côté, ou terminé
+    // partout) : message clair plutôt que de ne rien faire silencieusement.
+    pushDebugLog("Avance rapide : aucune donne n'attend une de mes annonces pour l'instant.");
+    const label = document.getElementById('boardNumberLabel');
+    if (label) {
+        const original = label.textContent;
+        label.textContent = 'Rien à enchérir pour l\'instant';
+        setTimeout(() => { label.textContent = original; }, 2200);
+    }
+}
+
 function renderBoardSkipControls() {
     const prevBtn = document.getElementById('prevBoardBtn');
     const nextBtn = document.getElementById('skipNextBoardBtn');
+    const fastForwardBtn = document.getElementById('fastForwardBoardBtn');
     if (!prevBtn || !nextBtn) return;
     const isHost = myRole === 'host';
     prevBtn.style.display = isHost ? '' : 'none';
     nextBtn.style.display = isHost ? '' : 'none';
+    if (fastForwardBtn) fastForwardBtn.style.display = isHost ? '' : 'none';
     if (!isHost || !deals) return;
     prevBtn.disabled = boardIndex <= 0;
     nextBtn.disabled = boardIndex >= deals.length - 1;
@@ -8026,9 +8109,24 @@ function initServiceWorker() {
     // (après skipWaiting), recharger pour utiliser les nouveaux fichiers plutôt que ceux
     // encore en mémoire depuis avant la mise à jour. Protégé par un drapeau : cet
     // événement peut en théorie se déclencher plusieurs fois.
+    //
+    // Voir échange avec Guillaume ("ça glitch comme si j'avais pressé F5" pendant la
+    // saisie du pseudo, reproduit sur PC/Chrome sans émulateur) : CE listener-ci n'était
+    // pas protégé par le même garde-fou que tryAutoApplyUpdate() plus bas. Il peut se
+    // déclencher tout seul, à l'initiative du NAVIGATEUR (pas de notre fait), dès le tout
+    // premier chargement d'un onglet flambant neuf si une version plus récente était déjà
+    // "en attente" suite à un déploiement précédent (fréquent ce soir, vu le nombre de
+    // déploiements coup sur coup) — rechargeant la page inconditionnellement, pile pendant
+    // que quelqu'un tape son pseudo. Même principe de report ici : si ce n'est pas sûr de
+    // recharger maintenant, on le note et on réessaie via le même sondage périodique.
     let reloadedForUpdate = false;
+    let controllerChangeReloadPending = false;
     navigator.serviceWorker.addEventListener('controllerchange', () => {
         if (reloadedForUpdate) return;
+        if (peerConn || pendingJoinAfterNickname) {
+            controllerChangeReloadPending = true;
+            return;
+        }
         reloadedForUpdate = true;
         window.location.reload();
     });
@@ -8037,8 +8135,16 @@ function initServiceWorker() {
     // est active (voir tryAutoApplyUpdate ci-dessous), elle reste en attente sans jamais
     // relancer d'elle-même — ce sondage périodique retente régulièrement, pour l'appliquer
     // dès qu'on revient à un moment sûr (plus aucune salle active) sans dépendre uniquement
-    // d'un changement d'écran pour s'en rendre compte.
-    setInterval(tryAutoApplyUpdate, 30000);
+    // d'un changement d'écran pour s'en rendre compte. Couvre aussi le rattrapage du
+    // controllerchange différé juste au-dessus.
+    setInterval(() => {
+        if (controllerChangeReloadPending && !reloadedForUpdate && !peerConn && !pendingJoinAfterNickname) {
+            reloadedForUpdate = true;
+            window.location.reload();
+            return;
+        }
+        tryAutoApplyUpdate();
+    }, 30000);
 }
 
 // Voir échange avec Guillaume : plus de bannière "Nouvelle version disponible" à cliquer,
@@ -8294,6 +8400,7 @@ function uiResumeHostSession() {
         }
     });
     autoPassSeats = saved.autoPassSeats || [];
+    advanceRobotBidsOnAllBoards(boardIndex); // voir échange avec Guillaume — idempotent, couvre une sauvegarde antérieure à ce correctif
     // Voir échange avec Guillaume (session du 23 juillet — "sauve aussi le chat") :
     // restaure la conversation telle qu'elle était juste avant la fermeture de l'onglet.
     chatMessages = saved.chatMessages || [];
@@ -8506,6 +8613,7 @@ function uiResumeFromCloud() {
     // Recalculé plutôt que de faire confiance à st.autoPassSeats (qui peut dater d'avant
     // ma propre revendication de siège, cas 2 ci-dessus).
     autoPassSeats = SEATS.filter(seat => !seatAssignment[seat]);
+    advanceRobotBidsOnAllBoards(boardIndex); // voir échange avec Guillaume — prérequis d'"avance rapide"/"vue d'ensemble"
     chatMessages = st.chatMessages || [];
     roomCreatorName = st.roomCreatorName || (participants.find(p => p.id === 'host') || {}).name || 'Hôte';
     roomCreatorToken = creatorToken || myToken;

@@ -51,7 +51,16 @@ async function pushSessionState(roomCode, state, expectedVersion, { onConflict, 
         const resp = await fetch(sessionApiUrl(roomCode), {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ state, expectedVersion })
+            body: JSON.stringify({ state, expectedVersion }),
+            // Voir échange avec Guillaume (session asynchrone à deux — "aucune des
+            // enchères de B n'a été enregistrée") : sans ça, fermer l'onglet juste après
+            // une enchère peut couper cette requête en plein vol avant qu'elle n'atteigne
+            // le serveur — un push "tire et oublie" normalement invisible pour l'interface,
+            // mais qui ne survit alors tout simplement pas à la fermeture. `keepalive`
+            // demande explicitement au navigateur de laisser la requête se terminer même
+            // si la page se ferme entre-temps (limite ~64 Ko côté navigateur — largement
+            // suffisant pour une session de plusieurs dizaines de donnes).
+            keepalive: true
         });
 
         if (resp.status === 409) {
