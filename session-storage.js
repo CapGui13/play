@@ -24,14 +24,20 @@ const SESSION_PUSH_RETRIES = 2;
 const SESSION_PUSH_RETRY_DELAY_MS = 1000;
 
 function sessionApiUrl(roomCode) {
-    return `${SESSION_API_BASE}/api/session?code=${encodeURIComponent(roomCode)}`;
+    // Voir échange avec Guillaume ("A a récupéré une version périmée") : le paramètre
+    // `_` (horodatage, jamais le même deux fois) rend chaque appel visuellement unique
+    // pour n'importe quel cache qui ignorerait les en-têtes ci-dessous (certains proxys/
+    // extensions le font) — en plus de `cache: 'no-store'` sur le fetch lui-même et de
+    // l'en-tête Cache-Control renvoyé par l'API (voir api/session.js). Trois filets
+    // redondants pour un seul bug, mais celui-ci a fait perdre des enchères entières.
+    return `${SESSION_API_BASE}/api/session?code=${encodeURIComponent(roomCode)}&_=${Date.now()}`;
 }
 
 // Récupère le dernier état connu pour ce code de salon.
 // Renvoie { version, updatedAt, state } si trouvé, ou null si rien n'est encore sauvegardé
 // pour ce code (404 — cas normal pour une toute nouvelle salle qui n'a encore rien poussé).
 async function pullSessionState(roomCode) {
-    const resp = await fetch(sessionApiUrl(roomCode), { method: 'GET' });
+    const resp = await fetch(sessionApiUrl(roomCode), { method: 'GET', cache: 'no-store' });
     if (resp.status === 404) return null;
     if (!resp.ok) throw new Error(`pullSessionState: HTTP ${resp.status}`);
     return resp.json();
