@@ -8365,11 +8365,34 @@ function uiDismissResumeSession() {
 // réclame le même code de salle (voir createRoom(cap, forcedRoomCode), déjà construit
 // pour la reprise automatique par le sous-hôte — même mécanisme, ici déclenché
 // volontairement par l'hôte lui-même plutôt qu'automatiquement par quelqu'un d'autre).
-function uiResumeHostSession() {
+//
+// Voir échange avec Guillaume ("les enchères de B n'apparaissent toujours pas") : cette
+// sauvegarde LOCALE ne reflète que ce que CET appareil savait au moment de sa fermeture —
+// elle ignore tout ce qu'un partenaire a pu enchérir depuis, sur un autre appareil, via le
+// cloud (voir pushCloudGameState, qui écrit à chaque action, sur TOUS les appareils qui
+// jouent). Avant de s'y fier, on vérifie donc si une version plus récente existe dans le
+// cloud pour ce même code — si oui, c'est elle qui l'emporte (voir uiResumeFromCloud),
+// exactement comme si on avait ouvert le lien de partage plutôt que rechargé cet onglet.
+async function uiResumeHostSession() {
     const saved = readResumableHostState();
     if (!saved) {
         checkForResumableHostSession(); // périmée entre-temps : remet la bannière à jour (la masque)
         return;
+    }
+
+    if (typeof pullSessionState === 'function') {
+        try {
+            const cloudResult = await pullSessionState(saved.roomCode);
+            const cloudSavedAt = cloudResult && cloudResult.state ? (cloudResult.state.savedAt || 0) : -1;
+            if (cloudResult && cloudSavedAt > (saved.savedAt || 0)) {
+                cloudResumeCandidate = cloudResult;
+                uiResumeFromCloud();
+                return;
+            }
+        } catch (e) {
+            // Cloud injoignable (hors-ligne, panne passagère...) : tant pis, on continue
+            // avec la sauvegarde locale ci-dessous plutôt que de bloquer la reprise.
+        }
     }
 
     deals = saved.deals;
@@ -8711,9 +8734,16 @@ window.addEventListener('DOMContentLoaded', () => {
         url.searchParams.delete('room');
         window.history.replaceState(null, '', url.toString());
     } else if (roomMatchesResumable) {
-        // Rien à faire ici : la bannière de reprise est déjà affichée (voir
-        // checkForResumableHostSession plus haut), c'est à la personne de cliquer
-        // "Reprendre la partie" — pas de tentative automatique de rejoindre en invité.
+        // Voir échange avec Guillaume ("je devrais être versé directement dedans") : le
+        // lien pointe explicitement vers CETTE salle, sur l'appareil qui en est bien
+        // l'hôte légitime — aucune ambiguïté à lever, contrairement à un code tapé à la
+        // main sans certitude d'être le bon. On masque la bannière (elle ferait
+        // doublon) et on reprend directement, via uiResumeHostSession() — désormais
+        // consciente du cloud (voir plus bas), donc jamais périmée même si un partenaire
+        // a enchéri depuis un autre appareil entre-temps.
+        const banner = document.getElementById('resumeSessionBanner');
+        if (banner) banner.style.display = 'none';
+        uiResumeHostSession();
     } else if (room && navigator.onLine) {
         document.getElementById('joinCodeInput').value = room.toUpperCase();
         uiJoinRoom();
