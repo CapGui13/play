@@ -8418,9 +8418,24 @@ function uiDismissResumeSession() {
 // sauvegarde LOCALE ne reflète que ce que CET appareil savait au moment de sa fermeture —
 // elle ignore tout ce qu'un partenaire a pu enchérir depuis, sur un autre appareil, via le
 // cloud (voir pushCloudGameState, qui écrit à chaque action, sur TOUS les appareils qui
-// jouent). Avant de s'y fier, on vérifie donc si une version plus récente existe dans le
-// cloud pour ce même code — si oui, c'est elle qui l'emporte (voir uiResumeFromCloud),
-// exactement comme si on avait ouvert le lien de partage plutôt que rechargé cet onglet.
+// jouent).
+//
+// Voir échange avec Guillaume ("l'enchère de B n'apparaît toujours pas", répété plusieurs
+// fois malgré des correctifs par ailleurs réels) : la VRAIE cause de fond était ici — une
+// comparaison d'horodatage entre le cloud et cette sauvegarde locale. Le défaut : cette
+// sauvegarde locale se remet à jour TOUTE SEULE à chaque reprise sur cet appareil, y
+// compris via ce chemin local lui-même (voir saveHostGameStateToStorage en fin de
+// fonction) — dès la première fois où ce chemin se déclenche, pour n'importe quelle
+// raison, son horodatage devient "maintenant" et reste alors indéfiniment plus récent que
+// n'importe quelle écriture antérieure de B, même authentiquement plus à jour en contenu.
+// Un cercle qui se referme sur lui-même, sans jamais pouvoir se rouvrir tout seul.
+//
+// Plus de comparaison d'horodatage du tout : pour une salle où la persistance cloud
+// existe, le cloud est TOUJOURS au moins aussi à jour que cette sauvegarde locale
+// (chaque sauvegarde locale part de toute façon aussi vers le cloud en même temps, voir
+// pushCloudGameState) — il l'emporte systématiquement dès qu'il est joignable. La
+// sauvegarde locale ne sert plus que de filet si le cloud est injoignable (hors-ligne,
+// panne passagère) ou n'a jamais rien reçu pour ce code.
 async function uiResumeHostSession() {
     const saved = readResumableHostState();
     if (!saved) {
@@ -8431,8 +8446,7 @@ async function uiResumeHostSession() {
     if (typeof pullSessionState === 'function') {
         try {
             const cloudResult = await pullSessionState(saved.roomCode);
-            const cloudSavedAt = cloudResult && cloudResult.state ? (cloudResult.state.savedAt || 0) : -1;
-            if (cloudResult && cloudSavedAt > (saved.savedAt || 0)) {
+            if (cloudResult) {
                 cloudResumeCandidate = cloudResult;
                 uiResumeFromCloud();
                 return;
