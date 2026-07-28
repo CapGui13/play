@@ -2787,11 +2787,18 @@ function renderHostTransferWidget() {
     if (!widget) return;
 
     const isHost = myRole === 'host';
-    const eligible = isHost && !deals
+    // Voir échange avec Guillaume ("pas de raison de transférer l'hôte en différé") : un
+    // siège encore SEAT_PENDING dans le salon signale déjà clairement une salle qui
+    // s'apprête à devenir différée au lancement (voir isDeferredMode dans
+    // uiStartGameAsHost) — transférer l'hôte à ce moment-là n'a pas plus de sens que
+    // pendant la partie elle-même, puisque c'est celui qui tient le rôle d'hôte AU
+    // LANCEMENT qui devient le créateur figé de la salle (voir roomCreatorToken).
+    const hasPendingSeat = SEATS.some(seat => seatAssignment[seat] === SEAT_PENDING);
+    const eligible = isHost && !deals && !hasPendingSeat
         ? participants.filter(p => p.id !== myParticipantId && !p.disconnected)
         : [];
 
-    if (!isHost || deals) {
+    if (!isHost || deals || hasPendingSeat) {
         widget.style.display = 'none';
         uiCloseTransferMenu();
         return;
@@ -8469,8 +8476,16 @@ async function uiResumeHostSession() {
     // restaure la conversation telle qu'elle était juste avant la fermeture de l'onglet.
     chatMessages = saved.chatMessages || [];
     myRole = 'host';
-    myParticipantId = 'host';
-    mySeats = SEATS.filter(seat => seatAssignment[seat] === 'host');
+    // Voir échange avec Guillaume ("je réouvre en A, kibbitz") : depuis la séparation
+    // live/différé, une salle DIFFÉRÉE n'utilise plus jamais la chaîne littérale 'host'
+    // dans seatAssignment (remplacée par mon vrai jeton dès le lancement, voir
+    // uiStartGameAsHost) — seule une salle LIVE l'utilise encore. Sans cette
+    // distinction, chercher seatAssignment[seat] === 'host' sur une salle différée ne
+    // trouvait plus jamais mon siège, me faisant apparaître comme kibbitz.
+    const myToken = getReconnectToken();
+    const isLegacyHostRoom = SEATS.some(seat => seatAssignment[seat] === 'host') || participants.some(p => p.id === 'host');
+    myParticipantId = isLegacyHostRoom ? 'host' : myToken;
+    mySeats = SEATS.filter(seat => seatAssignment[seat] === myParticipantId);
     currentRoomCode = saved.roomCode;
     guestIndexByToken = {};
     hostPendingUndo = null;
@@ -8567,10 +8582,13 @@ function pushCloudGameState() {
 
     pushSessionState(currentRoomCode, buildCloudStatePayload(), lastKnownCloudVersion, {
         onConflict: (current) => {
-            // Cas rare mais réel (voir plus haut) : quelqu'un (potentiellement nous-mêmes,
-            // via l'appel mis en file) a écrit entre-temps — on adopte son numéro de
-            // version pour la prochaine tentative.
+            // Voir échange avec Guillaume ("aucune diff" entre avant/après B — écriture
+            // perdue) : adopter le nouveau numéro de version ne sert à rien tout seul —
+            // sans renvoyer nos propres changements AVEC ce numéro corrigé, ils étaient
+            // purement perdus. cloudPushQueued force ce renvoi via le .finally() juste
+            // en dessous, dès que ce cycle-ci se termine.
             if (current) lastKnownCloudVersion = current.version;
+            cloudPushQueued = true;
         }
     }).then(result => {
         if (result) lastKnownCloudVersion = result.version;
@@ -8578,7 +8596,7 @@ function pushCloudGameState() {
         cloudPushInFlight = false;
         if (cloudPushQueued) {
             cloudPushQueued = false;
-            pushCloudGameState(); // renvoie une dernière fois avec l'état le plus frais
+            pushCloudGameState(); // renvoie avec l'état le plus frais et/ou le numéro corrigé
         }
     });
 }
