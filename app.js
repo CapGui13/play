@@ -8485,6 +8485,19 @@ let cloudPushQueued = false;
 // saveHostGameStateToStorage(), qui appelle ceci à chaque sauvegarde locale. En tâche de
 // fond (fire-and-forget) : un échec réseau ici ne doit jamais empêcher de continuer à
 // jouer localement (voir pushSessionState, qui gère déjà ses propres tentatives).
+function buildCloudStatePayload() {
+    return {
+        roomCode: currentRoomCode,
+        deals, boardIndex, seatAssignment, participants, autoPassSeats, chatMessages,
+        roomCreatorName, roomCreatorToken,
+        // Voir promoteSelfToHostAfterTakeover : indispensable pour qu'un futur repreneur
+        // sache reconnaître l'hôte actuel s'il revient un jour, exactement comme pour la
+        // reprise par sous-hôte déjà en place.
+        hostReconnectToken: getReconnectToken(),
+        savedAt: Date.now()
+    };
+}
+
 function pushCloudGameState() {
     if (myRole !== 'host' || !deals || !currentRoomCode) return;
     if (typeof pushSessionState !== 'function') return; // session-storage.js pas chargé (ex. pas encore branché dans index.html) : no-op silencieux
@@ -8495,17 +8508,7 @@ function pushCloudGameState() {
     }
     cloudPushInFlight = true;
 
-    const state = {
-        roomCode: currentRoomCode,
-        deals, boardIndex, seatAssignment, participants, autoPassSeats, chatMessages,
-        roomCreatorName, roomCreatorToken,
-        // Voir promoteSelfToHostAfterTakeover : indispensable pour qu'un futur repreneur
-        // sache reconnaître l'hôte actuel s'il revient un jour, exactement comme pour la
-        // reprise par sous-hôte déjà en place.
-        hostReconnectToken: getReconnectToken(),
-        savedAt: Date.now()
-    };
-    pushSessionState(currentRoomCode, state, lastKnownCloudVersion, {
+    pushSessionState(currentRoomCode, buildCloudStatePayload(), lastKnownCloudVersion, {
         onConflict: (current) => {
             // Cas rare mais réel (voir plus haut) : quelqu'un (potentiellement nous-mêmes,
             // via l'appel mis en file) a écrit entre-temps — on adopte son numéro de
@@ -8522,6 +8525,21 @@ function pushCloudGameState() {
         }
     });
 }
+
+// Voir échange avec Guillaume ("les enchères de B n'apparaissent toujours pas") : le
+// `keepalive` ajouté précédemment protège une requête déjà EN COURS, mais pas une requête
+// qui n'a encore jamais été émise — or c'est exactement ce qui peut arriver avec la file
+// d'attente ci-dessus (cloudPushQueued) : si l'onglet se ferme pendant qu'un envoi attend
+// simplement son tour, ce tour peut ne jamais venir, la page étant coupée avant même que
+// ce code n'ait la moindre chance de s'exécuter. Ce filet de sécurité est indépendant de
+// cette file : déclenché explicitement à la fermeture/mise en arrière-plan de l'onglet
+// (voir 'pagehide' plus bas), il relit l'état à cet instant précis et l'envoie une
+// dernière fois, sans jamais attendre son tour derrière un envoi en cours.
+window.addEventListener('pagehide', () => {
+    if (myRole !== 'host' || !deals || !currentRoomCode) return;
+    if (typeof pushSessionState !== 'function') return;
+    pushSessionState(currentRoomCode, buildCloudStatePayload(), lastKnownCloudVersion);
+});
 
 // Interroge le cloud pour ce code de salon et, si un état y est trouvé, reprend
 // directement la partie (voir échange avec Guillaume : "reprendre automatiquement, sans
