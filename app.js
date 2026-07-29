@@ -8669,19 +8669,28 @@ function pushCloudGameState() {
 // temps, comme en plein test), il fallait recharger la page pour s'en apercevoir. Ce
 // sondage périodique relit le cloud toutes les quelques secondes et applique s'il y a du
 // nouveau, sans jamais avoir besoin d'un F5.
-const DEFERRED_POLL_INTERVAL_MS = 2000;
+// Voir échange avec Guillaume ("j'aimerais que ce soit quasi instantané") : le vrai temps
+// réel vient maintenant de Pusher (voir subscribeToSessionUpdates dans
+// realtime-updates.js), déclenché par le serveur à chaque écriture réussie. Ce sondage
+// redevient un simple FILET DE SECOURS (au cas où un événement Pusher se perdrait —
+// coupure passagère, etc.), d'où un intervalle bien plus large que quand il portait toute
+// la réactivité à lui seul.
+const DEFERRED_POLL_INTERVAL_MS = 20000;
 let deferredPollIntervalId = null;
 
 // Démarre le sondage — sans effet s'il tourne déjà (évite d'empiler plusieurs minuteurs
 // si appelé plusieurs fois, ex. depuis uiStartGameAsHost ET uiResumeFromCloud dans la
 // même session). Voir stopDeferredPolling pour l'arrêt (mode live, ou changement de rôle).
 function startDeferredPolling() {
+    if (typeof subscribeToSessionUpdates === 'function' && currentRoomCode) {
+        subscribeToSessionUpdates(currentRoomCode, pollCloudForUpdates);
+    }
     if (deferredPollIntervalId) return;
     deferredPollIntervalId = setInterval(pollCloudForUpdates, DEFERRED_POLL_INTERVAL_MS);
-    // Voir échange avec Guillaume ("ça ne pourrait pas être plus rapide ?") : en plus du
-    // sondage régulier, un sondage immédiat dès que l'onglet redevient actif — pas la
-    // peine d'attendre jusqu'à 2s de plus si on vient de revenir dessus après être allé
-    // voir ailleurs (autre onglet, autre appli).
+    // Sondage immédiat dès que l'onglet redevient actif — pas la peine d'attendre le
+    // prochain sondage si on vient de revenir dessus après être allé voir ailleurs (autre
+    // onglet, autre appli). Toujours utile même avec Pusher : un onglet en arrière-plan
+    // peut voir sa connexion WebSocket suspendue par le navigateur.
     document.addEventListener('visibilitychange', onVisibilityChangeForDeferredPolling);
 }
 
@@ -8690,6 +8699,7 @@ function onVisibilityChangeForDeferredPolling() {
 }
 
 function stopDeferredPolling() {
+    if (typeof unsubscribeFromSessionUpdates === 'function') unsubscribeFromSessionUpdates();
     if (deferredPollIntervalId) {
         clearInterval(deferredPollIntervalId);
         deferredPollIntervalId = null;
@@ -8836,7 +8846,6 @@ function uiResumeFromCloud() {
     // font simplement plus rien, faute d'invité à qui parler.
     if (peerConn) peerConn.destroy();
     peerConn = new NullPeerConnection();
-    startDeferredPolling();
 
     // Restaure tout l'état en mémoire — même forme de payload que uiResumeHostSession(),
     // juste une source différente (le cloud plutôt que le localStorage de CET appareil).
@@ -8872,6 +8881,7 @@ function uiResumeFromCloud() {
     myParticipantId = myToken;
     mySeats = SEATS.filter(seat => seatAssignment[seat] === myParticipantId);
     currentRoomCode = codeToReclaim;
+    startDeferredPolling();
     guestIndexByToken = {};
     hostPendingUndo = null;
     hostTransferInProgress = false;

@@ -21,23 +21,25 @@ const CORE_ASSETS = [
     './deal-parser.js',
     './peer-connection.js',
     './session-storage.js',
+    './realtime-updates.js',
     './manifest.json',
     './icons/icon-192.png',
     './icons/icon-512.png',
     './icons/apple-icon-180.png'
 ];
 
-// Ressources externes (CDN PeerJS, feuille de style Google Fonts) : utiles hors-ligne,
-// mais pas strictement critiques et hors de notre contrôle (CORS, disponibilité). Mises en
-// cache en best-effort (voir Promise.allSettled dans 'install') pour qu'un échec sur l'une
-// d'elles ne bloque pas l'installation du reste. Note : la feuille de style Google Fonts
-// référence elle-même des fichiers de police (.woff2) dont l'URL exacte n'est connue qu'à
-// la lecture de son contenu — impossible de les pré-cacher ici à l'avance. Ils seront mis
-// en cache au fil de l'eau par le gestionnaire 'fetch' ci-dessous, dès leur premier
-// chargement réel (mais resteront indisponibles hors-ligne tant que ce premier chargement
-// n'a pas eu lieu au moins une fois).
+// Ressources externes (CDN PeerJS, CDN Pusher, feuille de style Google Fonts) : utiles
+// hors-ligne, mais pas strictement critiques et hors de notre contrôle (CORS,
+// disponibilité). Mises en cache en best-effort (voir Promise.allSettled dans 'install')
+// pour qu'un échec sur l'une d'elles ne bloque pas l'installation du reste. Note : la
+// feuille de style Google Fonts référence elle-même des fichiers de police (.woff2) dont
+// l'URL exacte n'est connue qu'à la lecture de son contenu — impossible de les pré-cacher
+// ici à l'avance. Ils seront mis en cache au fil de l'eau par le gestionnaire 'fetch'
+// ci-dessous, dès leur premier chargement réel (mais resteront indisponibles hors-ligne
+// tant que ce premier chargement n'a pas eu lieu au moins une fois).
 const EXTERNAL_ASSETS = [
     'https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js',
+    'https://js.pusher.com/8.4/pusher.min.js',
     'https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Work+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap'
 ];
 
@@ -112,7 +114,7 @@ self.addEventListener('activate', (event) => {
 // (l'API de session cloud, voir session-storage.js) est ajouté pour la même raison que
 // peerjs.com, mais un cran plus grave — voir le commentaire sur `ignoreSearch` un peu
 // plus bas, qui explique le mécanisme exact.
-const NEVER_CACHE_HOSTS = ['peerjs.com', 'vercel.app'];
+const NEVER_CACHE_HOSTS = ['peerjs.com', 'vercel.app', 'pusher.com'];
 
 function shouldNeverCache(url) {
     try {

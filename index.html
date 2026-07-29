@@ -534,10 +534,16 @@
 </div>
 
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<!-- Voir échange avec Guillaume ("j'aimerais que ce soit quasi instantané") : Pusher
+     Channels, pour la diffusion en temps réel du mode différé (voir realtime-updates.js
+     ci-dessous). Chargé même si le compte n'est pas encore configuré : subscribeToSessionUpdates
+     s'en aperçoit et ne fait simplement rien (le sondage périodique prend le relais seul). -->
+<script src="https://js.pusher.com/8.4/pusher.min.js"></script>
 <script src="bidding-rules.js"></script>
 <script src="deal-parser.js"></script>
 <script src="peer-connection.js"></script>
 <script src="session-storage.js"></script>
+<script src="realtime-updates.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
