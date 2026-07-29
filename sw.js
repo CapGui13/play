@@ -106,7 +106,13 @@ self.addEventListener('activate', (event) => {
 // identifiant déjà utilisé (et donc déjà pris côté serveur) au lieu d'en demander un
 // nouveau, provoquant une erreur "ID is taken" empêchant toute connexion. On laisse donc
 // ce domaine passer sans jamais l'intercepter ni le mettre en cache.
-const NEVER_CACHE_HOSTS = ['peerjs.com'];
+//
+// Voir échange avec Guillaume (session asynchrone à deux — "l'enchère du partenaire
+// n'apparaît pas", des heures à chercher) : la VRAIE cause de fond, ici. `vercel.app`
+// (l'API de session cloud, voir session-storage.js) est ajouté pour la même raison que
+// peerjs.com, mais un cran plus grave — voir le commentaire sur `ignoreSearch` un peu
+// plus bas, qui explique le mécanisme exact.
+const NEVER_CACHE_HOSTS = ['peerjs.com', 'vercel.app'];
 
 function shouldNeverCache(url) {
     try {
@@ -123,9 +129,27 @@ self.addEventListener('fetch', (event) => {
     if (!request.url.startsWith('http')) return;
     if (shouldNeverCache(request.url)) return; // laisse passer sans intercepter (voir ci-dessus)
 
+    // Voir échange avec Guillaume : `ignoreSearch: true` ci-dessous ignore délibérément
+    // tout ce qui suit le "?" dans l'URL pour retrouver une entrée en cache — pratique
+    // pour les fichiers de l'appli elle-même (un éventuel "?v=..." de cache-busting
+    // manuel ne doit pas créer une seconde entrée), mais catastrophique appliqué à un
+    // appel d'API : `/api/session?code=1234` et `/api/session?code=5678` partagent alors
+    // la MÊME entrée de cache, ignorant totalement le code de salle demandé — première
+    // requête mise en cache, TOUTES les suivantes (n'importe quel code, n'importe quel
+    // paramètre anti-cache ajouté côté client) reçoivent cette même vieille réponse.
+    // NEVER_CACHE_HOSTS protège déjà l'hôte de l'API en le laissant filer sans jamais
+    // l'intercepter — mais on se protège ICI AUSSI d'un même mécanisme sur un futur appel
+    // externe qu'on aurait oublié d'y ajouter : ignoreSearch ne s'applique plus qu'aux
+    // requêtes de MÊME ORIGINE que le site (nos propres fichiers), jamais à un appel vers
+    // un autre domaine.
+    const isSameOrigin = (() => {
+        try { return new URL(request.url).origin === self.location.origin; }
+        catch (e) { return false; }
+    })();
+
     event.respondWith(
         (async () => {
-            const cached = await caches.match(request, { ignoreSearch: true });
+            const cached = await caches.match(request, { ignoreSearch: isSameOrigin });
             if (cached) return cached;
 
             try {
