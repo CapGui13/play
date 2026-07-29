@@ -8110,14 +8110,18 @@ function uiJumpToBoardFromOverview(idx) {
 }
 
 // Voir échange avec Guillaume (session asynchrone à deux — bouton "avance rapide") :
-// saute directement à la première donne où c'est le tour d'un de MES sièges et où
-// l'enchère n'est pas terminée — pense à avancer les robots au passage (voir
-// advanceRobotBidsOnBoard), au cas où une donne n'aurait pas encore été touchée depuis un
-// chargement antérieur à ce correctif. Réservé à l'hôte, même règle que ◀▶ et la vue
-// d'ensemble.
+// saute à la prochaine donne où c'est le tour d'un de MES sièges, en CONTINUANT dans
+// l'ordre numérique à partir de la donne actuelle plutôt que de repartir de la donne 1 —
+// une donne plus loin dans l'ordre (ex. la 7 après avoir fini la 6) est prioritaire sur
+// une donne plus tôt (ex. la 2), qu'on ne retrouve qu'en bouclant si rien de plus proche
+// n'attend. Avance les robots au passage (voir advanceRobotBidsOnBoard), au cas où une
+// donne n'aurait pas encore été touchée depuis un chargement antérieur à ce correctif.
+// Réservé à l'hôte, même règle que ◀▶ et la vue d'ensemble.
 function uiFastForwardToMyTurn() {
     if (myRole !== 'host' || !deals) return;
-    for (let idx = 0; idx < deals.length; idx++) {
+    const n = deals.length;
+    for (let offset = 1; offset <= n; offset++) {
+        const idx = (boardIndex + offset) % n;
         advanceRobotBidsOnBoard(idx);
         const hist = deals[idx].auctionHistory || [];
         if (isAuctionOver(hist)) continue;
@@ -8127,15 +8131,12 @@ function uiFastForwardToMyTurn() {
             return;
         }
     }
-    // Aucune donne ne m'attend pour l'instant (tout est déjà fait de mon côté, ou terminé
-    // partout) : message clair plutôt que de ne rien faire silencieusement.
+    // Aucune donne ne m'attend nulle part (tout est déjà fait de mon côté, ou terminé
+    // partout) : plutôt qu'un message qui disparaît sans donner de vue d'ensemble, on
+    // ouvre directement la vue d'ensemble — elle montre précisément pourquoi (tout
+    // terminé, ou en attente d'un partenaire/robot ailleurs).
     pushDebugLog("Avance rapide : aucune donne n'attend une de mes annonces pour l'instant.");
-    const label = document.getElementById('boardNumberLabel');
-    if (label) {
-        const original = label.textContent;
-        label.textContent = 'Rien à enchérir pour l\'instant';
-        setTimeout(() => { label.textContent = original; }, 2200);
-    }
+    uiOpenBoardOverview();
 }
 
 function renderBoardSkipControls() {
