@@ -3308,6 +3308,7 @@ function uiStartGameAsHost() {
             roomCreatorToken = myToken;
             if (peerConn) peerConn.destroy();
             peerConn = new NullPeerConnection();
+            startDeferredPolling();
         } else {
             // Mode live, entièrement inchangé : tout le monde est déjà assis (humain ou
             // robot) au moment de lancer — vrai pair PeerJS déjà en place depuis le salon,
@@ -8566,6 +8567,7 @@ async function uiResumeHostSession() {
     // reprise cloud, sans jamais avoir besoin de se relier en direct à ce pair.
     if (peerConn) peerConn.destroy();
     peerConn = new NullPeerConnection();
+    startDeferredPolling();
 
     hideConnectingOverlay();
     enterGameScreen();
@@ -8658,6 +8660,84 @@ function pushCloudGameState() {
     });
 }
 
+// ===== Sondage périodique du cloud (mode différé uniquement) =====
+//
+// Voir échange avec Guillaume ("B est dans la partie, mais n'apparaît pas chez A tant
+// qu'on ne rafraîchit pas") : conséquence directe et attendue de l'absence de P2P en mode
+// différé — rien ne prévient A en direct quand B agit, puisqu'il n'y a plus de canal live
+// du tout. Si A garde son onglet ouvert PENDANT que B agit ailleurs (les deux en même
+// temps, comme en plein test), il fallait recharger la page pour s'en apercevoir. Ce
+// sondage périodique relit le cloud toutes les quelques secondes et applique s'il y a du
+// nouveau, sans jamais avoir besoin d'un F5.
+const DEFERRED_POLL_INTERVAL_MS = 6000;
+let deferredPollIntervalId = null;
+
+// Démarre le sondage — sans effet s'il tourne déjà (évite d'empiler plusieurs minuteurs
+// si appelé plusieurs fois, ex. depuis uiStartGameAsHost ET uiResumeFromCloud dans la
+// même session). Voir stopDeferredPolling pour l'arrêt (mode live, ou changement de rôle).
+function startDeferredPolling() {
+    if (deferredPollIntervalId) return;
+    deferredPollIntervalId = setInterval(pollCloudForUpdates, DEFERRED_POLL_INTERVAL_MS);
+}
+
+function stopDeferredPolling() {
+    if (deferredPollIntervalId) {
+        clearInterval(deferredPollIntervalId);
+        deferredPollIntervalId = null;
+    }
+}
+
+async function pollCloudForUpdates() {
+    // Ne sonde qu'en mode différé (voir NullPeerConnection) — le mode live a son propre
+    // canal en direct (PeerJS), bien plus réactif, et n'a besoin de rien de tout ça.
+    if (myRole !== 'host' || !currentRoomCode || !(peerConn instanceof NullPeerConnection)) return;
+    // Ne sonde pas pendant qu'on est nous-mêmes en train d'écrire (voir pushCloudGameState)
+    // — pas la peine de relire ce qu'on vient tout juste d'envoyer.
+    if (cloudPushInFlight || cloudPushQueued) return;
+    if (typeof pullSessionState !== 'function') return;
+
+    try {
+        const result = await pullSessionState(currentRoomCode);
+        if (!result || result.version <= lastKnownCloudVersion) return; // rien de neuf
+        applyCloudUpdate(result);
+    } catch (e) {
+        // Panne réseau passagère : tant pis, on retentera au prochain sondage.
+    }
+}
+
+// Applique un état plus récent trouvé par le sondage, SANS repartir de zéro comme le fait
+// uiResumeFromCloud (on est déjà en jeu, pas besoin de revendiquer un siège ni de
+// recalculer l'identité — seulement d'absorber ce qui a changé ailleurs).
+function applyCloudUpdate(result) {
+    const st = result.state;
+    deals = st.deals;
+    seatAssignment = st.seatAssignment || seatAssignment;
+    participants = st.participants || participants;
+    autoPassSeats = SEATS.filter(seat => !seatAssignment[seat]);
+    chatMessages = st.chatMessages || [];
+    // Voir échange avec Guillaume : la sauvegarde qu'on vient de lire reflète le point de
+    // vue de la dernière personne à avoir écrit — elle nous marque, NOUS, comme
+    // déconnectés de son point de vue. On corrige immédiatement pour ne pas s'afficher
+    // soi-même comme "déconnecté".
+    const myEntry = participants.find(p => p.id === myParticipantId);
+    if (myEntry) myEntry.disconnected = false;
+    mySeats = SEATS.filter(seat => seatAssignment[seat] === myParticipantId);
+    lastKnownCloudVersion = result.version;
+
+    // Ne touche jamais boardIndex ici : on ne fait pas sauter A d'une donne à l'autre
+    // sous ses pieds pendant qu'il regarde — seul un geste explicite de sa part (flèches,
+    // vue d'ensemble, avance rapide) doit déplacer la donne affichée.
+    if (!deals[boardIndex]) boardIndex = 0;
+    if (!deals[boardIndex].auctionHistory) deals[boardIndex].auctionHistory = [];
+    auctionHistory = deals[boardIndex].auctionHistory;
+
+    renderBoard();
+    if (chatPanelOpen) {
+        renderRoomBoard();
+        renderChat();
+    }
+}
+
 // Voir échange avec Guillaume ("les enchères de B n'apparaissent toujours pas") : le
 // `keepalive` ajouté précédemment protège une requête déjà EN COURS, mais pas une requête
 // qui n'a encore jamais été émise — or c'est exactement ce qui peut arriver avec la file
@@ -8746,6 +8826,7 @@ function uiResumeFromCloud() {
     // font simplement plus rien, faute d'invité à qui parler.
     if (peerConn) peerConn.destroy();
     peerConn = new NullPeerConnection();
+    startDeferredPolling();
 
     // Restaure tout l'état en mémoire — même forme de payload que uiResumeHostSession(),
     // juste une source différente (le cloud plutôt que le localStorage de CET appareil).
