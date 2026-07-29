@@ -77,6 +77,14 @@ let prevSeatAssignmentSnapshot = null;
 let prevParticipantsDisconnectedSnapshot = null;
 
 let currentRoomCode = null; // pour uiReconnect() : on doit se souvenir du code utilisé pour rejoindre
+// Voir échange avec Guillaume (session asynchrone à deux — "connexion en cours en
+// boucle") : incrémenté à chaque connectAsGuest(), permet à un minuteur programmé par un
+// essai précédent de se reconnaître périmé si un nouvel essai a pris le relais entre-temps.
+let guestJoinAttemptToken = 0;
+// Délai avant de tenter la reprise cloud EN PARALLÈLE de la tentative de connexion directe
+// (voir connectAsGuest) — largement suffisant pour laisser une vraie connexion live
+// s'établir normalement, mais bien plus court que le délai d'abandon de 45s.
+const EARLY_CLOUD_CHECK_DELAY_MS = 4000;
 // Voir uiCreateRoom : nom du créateur d'origine, figé une fois pour toutes (jamais
 // réécrit par une reprise ou un transfert d'hôte) — voir renderGameHeader pour l'affichage.
 let roomCreatorName = null;
@@ -1526,6 +1534,11 @@ function buildHostHandlers(onOpenExtra) {
 // Construit les handlers PeerJS côté invité — partagés entre uiJoinRoom (première
 // connexion) et uiReconnect (après une coupure), pour ne pas dupliquer la logique.
 function buildGuestHandlers() {
+    // Voir connectAsGuest : capture la valeur au moment de la création de CES handlers,
+    // pour que onError/onTimeout puissent reconnaître un essai devenu périmé (un nouveau
+    // connectAsGuest() ayant démarré entre-temps) et ne pas dupliquer une bascule cloud
+    // déjà déclenchée par ailleurs (voir le setTimeout de vérification en parallèle).
+    const myAttemptToken = guestJoinAttemptToken;
     return {
         onOpen: (role, roomCode) => {
             document.getElementById('lobbyRoomCodeInline').textContent = `(code ${roomCode})`;
@@ -1602,6 +1615,7 @@ function buildGuestHandlers() {
         },
         onTimeout: () => {
             hideConnectingOverlay();
+            if (myAttemptToken !== guestJoinAttemptToken) return; // un nouvel essai a pris le relais entre-temps
             if (deals) {
                 // On était déjà en jeu : pas de retour à l'écran d'accueil, on laisse le
                 // bouton "Se reconnecter" de la barre de connexion (renderReconnectButton).
@@ -1623,6 +1637,7 @@ function buildGuestHandlers() {
         onData: handlePeerData,
         onError: (err) => {
             hideConnectingOverlay();
+            if (myAttemptToken !== guestJoinAttemptToken) return; // un nouvel essai a pris le relais entre-temps
             // Voir échange avec Guillaume ("je suis ressorti du salon, puis 'Lost connection
             // to server' en retapant un code") : une erreur peut désormais survenir bien
             // après un premier join réussi — notamment quand la tentative de reconnexion
@@ -1645,9 +1660,16 @@ function buildGuestHandlers() {
                     // conclure "aucune partie", on regarde s'il existe un état sauvegardé
                     // dans le cloud pour ce code (voir offerCloudResume) ; si oui, on
                     // propose de reprendre plutôt que d'afficher une simple erreur.
+                    //
+                    // Voir aussi le setTimeout de vérification en parallèle dans
+                    // connectAsGuest : si CETTE erreur arrive après coup (identifiant pas
+                    // encore expiré côté serveur au moment de la tentative, voir
+                    // EARLY_CLOUD_CHECK_DELAY_MS) et que la bascule cloud a déjà abouti
+                    // entre-temps (`deals` déjà rempli), inutile de la refaire.
+                    if (deals) return;
                     const roomCodeAttempted = currentRoomCode;
                     offerCloudResume(roomCodeAttempted).then(offered => {
-                        if (!offered) {
+                        if (!offered && !deals) {
                             showLandingError("Aucune partie trouvée avec ce code. Vérifiez le code ou demandez à l'hôte de le repartager.");
                         }
                     });
@@ -1756,9 +1778,30 @@ function connectAsGuest(code, token, nickname) {
     prevParticipantsDisconnectedSnapshot = null;
     lobbyChatAutoOpened = false;
 
+    // Voir plus bas (setTimeout de vérification cloud en parallèle) : incrémenté ICI,
+    // avant la construction des handlers, pour qu'ils capturent la bonne valeur et
+    // puissent reconnaître un essai devenu périmé si un nouveau connectAsGuest() démarre
+    // entre-temps.
+    const attemptToken = ++guestJoinAttemptToken;
     peerConn = new BridgePeerConnection(buildGuestHandlers());
     pushDebugLog(`Connexion au salon ${code} avec le jeton ${token.slice(0, 10)}…`);
     peerConn.joinRoom(code, { reconnectToken: token, nickname: nickname });
+
+    // Voir échange avec Guillaume ("connexion en cours en boucle" quand A vient tout juste
+    // de lancer en mode différé) : dans ce mode, il n'y a jamais personne à trouver en
+    // direct (voir NullPeerConnection) — mais l'identifiant de salle peut mettre quelques
+    // secondes à expirer officiellement côté serveur de signalisation après sa destruction,
+    // retardant l'erreur "peer-unavailable" habituelle (normalement quasi instantanée)
+    // jusqu'au délai d'abandon complet de 45s (voir CONNECTION_TIMEOUT_MS). Plutôt que
+    // d'attendre cet échec, on tente la bascule cloud EN PARALLÈLE, après un court délai —
+    // le garde ci-dessous (attemptToken, et !everConnectedAsGuest/!deals) évite tout
+    // conflit si la connexion directe aboutit entre-temps (mode live) ou si un nouvel
+    // essai a déjà pris le relais.
+    setTimeout(() => {
+        if (attemptToken !== guestJoinAttemptToken) return; // un nouvel essai a pris le relais
+        if (everConnectedAsGuest || deals) return; // déjà résolu (en direct, ou déjà en jeu) : rien à faire
+        offerCloudResume(code);
+    }, EARLY_CLOUD_CHECK_DELAY_MS);
 }
 
 // Reconnexion après coupure : même code de salon, même jeton (localStorage) — l'hôte
