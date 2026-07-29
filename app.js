@@ -8669,7 +8669,7 @@ function pushCloudGameState() {
 // temps, comme en plein test), il fallait recharger la page pour s'en apercevoir. Ce
 // sondage périodique relit le cloud toutes les quelques secondes et applique s'il y a du
 // nouveau, sans jamais avoir besoin d'un F5.
-const DEFERRED_POLL_INTERVAL_MS = 6000;
+const DEFERRED_POLL_INTERVAL_MS = 2000;
 let deferredPollIntervalId = null;
 
 // Démarre le sondage — sans effet s'il tourne déjà (évite d'empiler plusieurs minuteurs
@@ -8678,6 +8678,15 @@ let deferredPollIntervalId = null;
 function startDeferredPolling() {
     if (deferredPollIntervalId) return;
     deferredPollIntervalId = setInterval(pollCloudForUpdates, DEFERRED_POLL_INTERVAL_MS);
+    // Voir échange avec Guillaume ("ça ne pourrait pas être plus rapide ?") : en plus du
+    // sondage régulier, un sondage immédiat dès que l'onglet redevient actif — pas la
+    // peine d'attendre jusqu'à 2s de plus si on vient de revenir dessus après être allé
+    // voir ailleurs (autre onglet, autre appli).
+    document.addEventListener('visibilitychange', onVisibilityChangeForDeferredPolling);
+}
+
+function onVisibilityChangeForDeferredPolling() {
+    if (document.visibilityState === 'visible') pollCloudForUpdates();
 }
 
 function stopDeferredPolling() {
@@ -8685,6 +8694,7 @@ function stopDeferredPolling() {
         clearInterval(deferredPollIntervalId);
         deferredPollIntervalId = null;
     }
+    document.removeEventListener('visibilitychange', onVisibilityChangeForDeferredPolling);
 }
 
 async function pollCloudForUpdates() {
