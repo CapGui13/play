@@ -559,7 +559,7 @@ function decideRobotResponse(hand, hcp, hl, partnerCall, seat, history, partnerP
     // son palier), on bascule en HLD (mêmes seuils 15/19), et en dessous de 15 mais avec
     // un fit 9ème+ et 8H+, la loi des atouts prime (relance d'un palier, pas d'espoir de
     // manche mais bon palier de sécurité).
-    if (bid.level >= 2 && partnerBidWasOpening) {
+    if (bid.level >= 2 && bid.strain !== 'NT' && partnerBidWasOpening) {
         return decideResponseToWeakTwo(hand, hcp, hl, bid, seat, history);
     }
 
@@ -589,6 +589,11 @@ function decideRobotResponse(hand, hcp, hl, partnerCall, seat, history, partnerP
         // pour faire le Texas (le plancher de l'ouvreur, 20HL au minimum même pour un
         // simple 2SA direct, garantit la manche dès qu'on y ajoute un minimum chez soi).
         const fiveCardMajor = ['S', 'H'].find(s => lengths[s] >= 5);
+        // Voir échange avec Guillaume (session du 30 juillet) : hl>=5 suffit déjà pour
+        // TOUT 2SA (direct comme "super 2SA") — même le plancher le plus bas possible
+        // (20, pour un vrai 2SA direct) combiné à 5HL atteint la zone de manche (25).
+        // Pas besoin d'un seuil différent pour le "super 2SA" : celui-ci a un plancher
+        // encore plus haut, donc a fortiori toujours couvert par ce même seuil.
         if (fiveCardMajor && (bid.level === 1 || hl >= 5)) {
             const transferAsk = fiveCardMajor === 'H' ? 'D' : 'H';
             const call = lv1 + transferAsk;
@@ -1754,7 +1759,19 @@ function decideOpenerRebidAfterNewSuit(hand, hcp, hl, myBid, partnerParsed, seat
     // renverser, la main est en réalité régulière et déjà traitée ci-dessus). Un bicolore
     // économique au palier 1, comme 1♣ puis 1♠, n'est JAMAIS un reverse, quel que soit le
     // rang des couleurs (voir échange avec Guillaume, donnes 5 et 6).
-    const candidates = ['S', 'H', 'D', 'C'].filter(s => s !== myBid.strain && s !== partnerParsed.strain && lengths[s] >= 4);
+    // Voir échange avec Guillaume (donne 3, session du 30 juillet — même famille que le
+    // bug déjà corrigé dans decideRobotResponse) : jamais une couleur déjà annoncée par
+    // un ADVERSAIRE parmi les candidates — même avec 4+ cartes chez moi, la nommer
+    // ressemblerait à tort à un cue-bid (demande d'arrêt dans SA couleur) plutôt qu'à un
+    // vrai bicolore personnel.
+    const opponentSuitsForBicolore = new Set();
+    history.forEach(e => {
+        if (isBidCall(e.call) && partnershipOf(e.seat) !== partnershipOf(seat)) {
+            const p = parseBid(e.call);
+            if (p && p.strain !== 'NT') opponentSuitsForBicolore.add(p.strain);
+        }
+    });
+    const candidates = ['S', 'H', 'D', 'C'].filter(s => s !== myBid.strain && s !== partnerParsed.strain && !opponentSuitsForBicolore.has(s) && lengths[s] >= 4);
     let secondSuit = null;
     let secondSuitLevel = null;
     for (const s of candidates) {
@@ -1773,6 +1790,26 @@ function decideOpenerRebidAfterNewSuit(hand, hcp, hl, myBid, partnerParsed, seat
     if (secondSuit) {
         const call = secondSuitLevel + secondSuit;
         if (isCallLegal(history, call, seat)) return call;
+    }
+
+    // Voir échange avec Guillaume (donne 3, session du 30 juillet, précisé) : aucun
+    // bicolore trouvé (les couleurs candidates étaient soit trop courtes, soit exclues
+    // car déjà annoncées par l'adversaire, voir opponentSuitsForBicolore ci-dessus) —
+    // dans le silence adverse, cette main aurait montré son bicolore cher directement ;
+    // ici elle ne peut plus, il faut une enchère de substitution. Si ma main n'a AUCUNE
+    // chicane/singleton ET un arrêt dans au moins une des couleurs adverses exclues,
+    // "2SA" (18-19HL, main semi-régulière) est ce substitut — une vraie fourchette
+    // bornée, pas juste un plancher.
+    if (!secondSuit) {
+        const noShortnessForNT = ['S', 'H', 'D', 'C'].every(s => lengths[s] >= 2);
+        const hasStopperInExcludedSuit = Array.from(opponentSuitsForBicolore).some(s => {
+            const cards = hand[s] || '';
+            return lengths[s] >= 2 && ['A', 'K', 'Q'].some(r => cards.includes(r));
+        });
+        if (noShortnessForNT && hasStopperInExcludedSuit && hl >= 18 && hl <= 19) {
+            const call = '2NT';
+            if (isCallLegal(history, call, seat)) return call;
+        }
     }
 
     // Voir échange avec Guillaume (outil de simulation, session du 30 juillet — bug
@@ -2454,7 +2491,7 @@ function decideRobotCall(seat, deal, history) {
             && (partnerFirstBidForCRM.call === '2C' || partnerFirstBidForCRM.call === '2D')
             && myPartnerBid && myPartnerBid.call === '2NT';
         if (wasStrongOpeningCRMThenNT) {
-            let callAfterStrongNT = decideRobotResponse(hand, hcp, hl, '2NT', seat, history, false, false, true, false);
+            let callAfterStrongNT = decideRobotResponse(hand, hcp, hl, '2NT', seat, history, false, false, false, false);
             // Voir échange avec Guillaume (session du 30 juillet — bug critique trouvé,
             // donne 6) : ce "2SA" est TOUJOURS forcing de manche (l'ouverture de 2♣/2♦
             // l'était déjà) — jamais question de passer, quelle que soit la main,
