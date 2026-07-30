@@ -2131,7 +2131,15 @@ function decideRobotCall(seat, deal, history) {
         // un non-sens (cue-bid dans sa couleur alors que mon 1SA avait déjà promis l'arrêt).
         const priorPartnerActionForDoubleResp = history.slice(0, myBidIndex).reverse()
             .find(e => partnershipOf(e.seat) === partnershipOf(seat) && (isBidCall(e.call) || isDouble(e.call)));
-        const myBidWasResponseToPartnerDouble = priorPartnerActionForDoubleResp && isDouble(priorPartnerActionForDoubleResp.call);
+        // Voir échange avec Guillaume (outil de simulation, session du 30 juillet — bug
+        // trouvé : Ouest sautait au chelem sur la propre manche de son partenaire) : cette
+        // suite n'a de sens QUE pour le "1SA réponse au contre de réveil" précis (10-12H,
+        // arrêt déjà promis, voir decideRobotResponseToDouble) — pas pour n'importe quelle
+        // réponse naturelle au contre (une couleur, ex. "2D"), qui suit déjà sa propre
+        // logique correcte par ailleurs (voir decideDoublerFollowUp) et n'a pas besoin
+        // qu'on la refasse ici.
+        const myBidWasResponseToPartnerDouble = priorPartnerActionForDoubleResp && isDouble(priorPartnerActionForDoubleResp.call)
+            && myBids[0].call === '1NT';
 
         if (myBidWasResponseToPartnerDouble && myPartnerBid) {
             // Le contre de réveil du partenaire s'engage dès 8H SANS LIMITE HAUTE — mes
@@ -2142,11 +2150,21 @@ function decideRobotCall(seat, deal, history) {
             if (partnerSuitAfterDouble && partnerSuitAfterDouble.strain !== 'NT' && lengthsForDoubleFollow[partnerSuitAfterDouble.strain] >= 3) {
                 const isMajorFollow = partnerSuitAfterDouble.strain === 'S' || partnerSuitAfterDouble.strain === 'H';
                 const gameLevelFollow = isMajorFollow ? 4 : 5;
-                for (let level = Math.max(gameLevelFollow, partnerSuitAfterDouble.level); level <= 7; level++) {
-                    const c = level + partnerSuitAfterDouble.strain;
-                    if (isCallLegal(history, c, seat)) { call = c; break; }
+                const targetLevelFollow = Math.max(gameLevelFollow, partnerSuitAfterDouble.level);
+                // Voir échange avec Guillaume (bug trouvé via simulation) : si le
+                // partenaire a DÉJÀ atteint (ou dépassé) ce palier de lui-même, il n'y a
+                // rien à ajouter — chercher "la prochaine case légale" à partir de là
+                // sauterait au chelem par accident (la case de la manche est déjà prise
+                // par SA propre enchère, pas une vraie main de chelem chez moi).
+                if (targetLevelFollow > partnerSuitAfterDouble.level) {
+                    for (let level = targetLevelFollow; level <= 7; level++) {
+                        const c = level + partnerSuitAfterDouble.strain;
+                        if (isCallLegal(history, c, seat)) { call = c; break; }
+                    }
+                    if (call !== 'PASS') explanation = `Fit trouvé avec la couleur du partenaire après son contre de réveil — manche (${points})`;
+                } else {
+                    explanation = `Le partenaire a déjà atteint la manche de son côté — passe (${points})`;
                 }
-                if (call !== 'PASS') explanation = `Fit trouvé avec la couleur du partenaire après son contre de réveil — manche (${points})`;
             } else {
                 for (let level = 3; level <= 7; level++) {
                     const c = level + 'NT';
@@ -2257,9 +2275,19 @@ function decideRobotCall(seat, deal, history) {
             // sait gérer. Hors de ce cas précis, pas de suite pour le répondant (voir
             // échange avec Guillaume — 4ème couleur forcing mis de côté, chantier plus
             // large ; ici on reste sur la version simple : fit majeur connu ou SA direct).
-            const partnerOpeningEntry = history.slice(0, myBidIndex).find(e => isBidCall(e.call));
+            // Voir échange avec Guillaume (outil de simulation, session du 30 juillet —
+            // bug trouvé : Ouest sautait au chelem après une réponse au contre de son
+            // propre partenaire) : cette recherche ne filtrait pas par camp — elle
+            // remontait jusqu'à la toute première enchère de TOUTE la table, y compris
+            // celle de l'ADVERSAIRE (l'ouverture qu'Est vient de contrer, par exemple).
+            // Filtre ajouté : seule une vraie ouverture de MON PROPRE camp compte ici — si
+            // aucune (ex. mon camp n'a fait qu'un contre, jamais une vraie ouverture), tout
+            // ce bloc (pensé pour "le partenaire a ouvert, j'ai répondu") doit rester
+            // inerte plutôt que de mal interpréter la séquence.
+            const partnerOpeningEntry = history.slice(0, myBidIndex).find(e => isBidCall(e.call) && partnershipOf(e.seat) === partnershipOf(seat));
             const partnerOpeningBid = partnerOpeningEntry ? parseBid(partnerOpeningEntry.call) : null;
             const myResponseBid = parseBid(myBids[0].call);
+            if (partnerOpeningBid) {
 
             // Suite après un 2♣ fort artificiel (voir échange avec Guillaume, donne 4) :
             // ma seule annonce précédente était un simple relais d'attente (2♦, ne dit
@@ -2674,6 +2702,9 @@ function decideRobotCall(seat, deal, history) {
             } else {
                 explanation = `A déjà annoncé — passe (règle du tour unique)`;
             }
+            }
+            } else {
+                explanation = `Pas de vraie ouverture de mon propre camp dans cette séquence (ex. réponse au contre du partenaire plutôt qu'à une ouverture, voir échange avec Guillaume) — passe (${points})`;
             }
         } else if (wasOpening && !myPartnerBid) {
             // Voir échange avec Guillaume (session du 24 juillet, donne 5) : mon
