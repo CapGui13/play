@@ -18,6 +18,7 @@ const CORE_ASSETS = [
     './styles.css',
     './app.js',
     './bidding-rules.js',
+    './bidding-engine.js',
     './deal-parser.js',
     './peer-connection.js',
     './session-storage.js',
