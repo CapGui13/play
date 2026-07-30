@@ -2475,7 +2475,15 @@ function decideRobotCall(seat, deal, history) {
         // réponse du partenaire, ce n'est plus forcément la toute dernière annonce de
         // l'enchère, mais elle reste valable à traiter).
         const myBidIndex = history.indexOf(myBids[0]);
-        const wasOpening = history.slice(0, myBidIndex).every(entry => isPass(entry.call));
+        // Voir échange avec Guillaume (outil de simulation, session du 30 juillet — bug
+        // trouvé : Sud passait sur le Stayman de son propre partenaire après avoir
+        // réouvert à 1SA) : "wasOpening" vérifiait à tort que TOUTE l'enchère avant ma
+        // première annonce était passe — ce qui exclut à tort une réouverture (Ouest a
+        // ouvert, deux passes, MOI je réouvre à 1SA : ma première annonce EST une vraie
+        // ouverture pour mon propre camp, même si un adversaire a parlé avant). Ce qui
+        // compte vraiment : aucune annonce de MON PROPRE CAMP (moi ou mon partenaire)
+        // avant la mienne — peu importe ce que l'adversaire a fait.
+        const wasOpening = !history.slice(0, myBidIndex).some(entry => partnershipOf(entry.seat) === partnershipOf(seat) && isBidCall(entry.call));
         const myPartnerBid = history.slice().reverse()
             .find(e => partnershipOf(e.seat) === partnershipOf(seat) && isBidCall(e.call) && e !== myBids[0]);
 
@@ -2486,9 +2494,19 @@ function decideRobotCall(seat, deal, history) {
         // EXACTEMENT comme une ouverture à SA pour la suite — Stayman/Texas déjà en
         // place, réutilisés tels quels plutôt que de mal interpréter la séquence via la
         // logique générique de suite du répondant plus bas.
+        // Voir échange avec Guillaume (outil de simulation, session du 30 juillet — bug
+        // trouvé : des chelems complètement absurdes après une ouverture normale de 1P,
+        // réponse naturelle en 2K du partenaire) : chercher le premier bid du partenaire
+        // et vérifier juste sa CHAÎNE ("2C"/"2D") ne suffit pas — un simple "2♦" en
+        // réponse naturelle à MON ouverture matche la même chaîne sans être du tout une
+        // ouverture forte. Vérification ajoutée : ce premier bid doit être le TOUT
+        // PREMIER appel de l'enchère entière (rien que des passes avant), sinon ce n'est
+        // clairement pas une ouverture.
         const partnerFirstBidForCRM = history.find(e => partnershipOf(e.seat) === partnershipOf(seat) && e.seat !== seat && isBidCall(e.call));
+        const partnerFirstBidForCRMWasRealOpening = partnerFirstBidForCRM
+            && history.slice(0, history.indexOf(partnerFirstBidForCRM)).every(e => isPass(e.call));
         const wasStrongOpeningCRMThenNT = partnerFirstBidForCRM
-            && (partnerFirstBidForCRM.call === '2C' || partnerFirstBidForCRM.call === '2D')
+            && partnerFirstBidForCRMWasRealOpening && (partnerFirstBidForCRM.call === '2C' || partnerFirstBidForCRM.call === '2D')
             && myPartnerBid && myPartnerBid.call === '2NT';
         if (wasStrongOpeningCRMThenNT) {
             let callAfterStrongNT = decideRobotResponse(hand, hcp, hl, '2NT', seat, history, false, false, false, false);
@@ -2507,6 +2525,63 @@ function decideRobotCall(seat, deal, history) {
                 }
             }
             return { call: callAfterStrongNT, explanation: `Stayman/Texas sur le "2SA" naturel de l'ouvreur après l'ouverture forte — jamais de passe, forcing de manche (${points})` };
+        }
+
+        // Voir échange avec Guillaume (outil de simulation, session du 30 juillet — "il
+        // faut vraiment résoudre ça") : PENDANT du cas ci-dessus, mais quand l'ouvreur du
+        // 2♣/2♦ a montré sa PROPRE couleur (main irrégulière, voir
+        // decideOpenerRebidAfterStrongDiamond) plutôt que "2SA" — toujours forcing de
+        // manche, jamais de repli en dessous. Priorité : fit connu (3+ cartes) dans SA
+        // couleur → manche directe dedans (points de soutien pour juger un chelem
+        // éventuel) ; sinon MA PROPRE couleur si assez longue/belle (même règle que
+        // partout ailleurs ce soir, 7+ ou 6+ avec chicane+belle couleur) → manche
+        // directe dedans ; sinon 3SA en tout dernier recours — jamais un simple repli
+        // sous la manche comme "3P, zone basse" (qui n'a aucun sens ici, la zone basse
+        // n'existe pas sur une ouverture forcing de manche).
+        const wasStrongOpeningCRMThenSuit = partnerFirstBidForCRM
+            && partnerFirstBidForCRMWasRealOpening && (partnerFirstBidForCRM.call === '2C' || partnerFirstBidForCRM.call === '2D')
+            && myPartnerBid && myPartnerBid.call !== '2NT' && isBidCall(myPartnerBid.call);
+        if (wasStrongOpeningCRMThenSuit) {
+            const lengthsForCRMSuit = suitLengths(hand);
+            const partnerSuitBid = parseBid(myPartnerBid.call);
+            let callAfterCRMSuit = null;
+
+            if (partnerSuitBid.strain !== 'NT' && lengthsForCRMSuit[partnerSuitBid.strain] >= 3) {
+                const supportPointsForCRMSuit = computeSupportPoints(hand, partnerSuitBid.strain, 4);
+                const openerFloor = partnerFirstBidForCRM.call === '2D' ? 24 : 22;
+                const isMajorForCRMSuit = partnerSuitBid.strain === 'S' || partnerSuitBid.strain === 'H';
+                let targetLevelForCRMSuit = isMajorForCRMSuit ? 4 : 5;
+                if (supportPointsForCRMSuit + openerFloor >= SLAM_ZONE_SMALL) targetLevelForCRMSuit = 6;
+                for (let level = Math.max(targetLevelForCRMSuit, partnerSuitBid.level); level <= 7; level++) {
+                    const c = level + partnerSuitBid.strain;
+                    if (isCallLegal(history, c, seat)) { callAfterCRMSuit = c; break; }
+                }
+            } else {
+                const ownSuitForCRM = ['S', 'H'].find(s => {
+                    const len = lengthsForCRMSuit[s];
+                    if (len >= 7) return true;
+                    if (len === 6) {
+                        const hasOutsideSingleton = ['S', 'H', 'D', 'C'].some(s2 => s2 !== s && lengthsForCRMSuit[s2] === 1);
+                        const cardsHere = hand[s] || '';
+                        const topHonors = ['A', 'K', 'Q'].filter(r => cardsHere.includes(r)).length;
+                        return hasOutsideSingleton && topHonors >= 2;
+                    }
+                    return false;
+                });
+                if (ownSuitForCRM) {
+                    for (let level = 4; level <= 7; level++) {
+                        const c = level + ownSuitForCRM;
+                        if (isCallLegal(history, c, seat)) { callAfterCRMSuit = c; break; }
+                    }
+                }
+            }
+            if (!callAfterCRMSuit) {
+                for (let level = 3; level <= 7; level++) {
+                    const c = level + 'NT';
+                    if (isCallLegal(history, c, seat)) { callAfterCRMSuit = c; break; }
+                }
+            }
+            return { call: callAfterCRMSuit || 'PASS', explanation: `Suite après que l'ouvreur du 2♣/2♦ ait montré sa propre couleur — toujours forcing de manche, jamais de repli en dessous (${points})` };
         }
 
         // Voir échange avec Guillaume (donne 1, session du 30 juillet) : mon partenaire
@@ -2569,10 +2644,21 @@ function decideRobotCall(seat, deal, history) {
                 }
                 if (call !== 'PASS') explanation = `Pas de fit franc avec la couleur du partenaire — manche à SA, l'arrêt est déjà promis par mon 1SA (${points})`;
             }
-        } else if (wasOpening && !myPartnerBid && myPartnerDouble) {
+        } else if (wasOpening && !myPartnerBid && myPartnerDouble && !isDouble(myBids[0].call)) {
             call = decideOpenerResponseToPartnerDouble(hand, hcp, hl, history.indexOf(myPartnerDouble), seat, history);
             explanation = `Réponse au contre du partenaire après intervention adverse — obligation de donner le fit (${points})`;
-        } else if (wasOpening && myPartnerBid) {
+        } else if (wasOpening && myPartnerBid && !isDouble(myBids[0].call)) {
+            // Voir échange avec Guillaume (outil de simulation, session du 30 juillet —
+            // régression trouvée juste après le correctif de wasOpening plus haut) : le
+            // nouveau calcul de wasOpening (qui reconnaît maintenant une réouverture
+            // comme une vraie "ouverture" pour la suite) reconnaissait par erreur AUSSI
+            // un simple CONTRE comme "mon ouverture" dès lors qu'aucune annonce de mon
+            // camp ne le précédait — cette branche appelait alors decideRobotOpenerRebid
+            // avec un contre en guise d'"ouverture", qui échoue silencieusement
+            // (parseBid('X') renvoie null) et retombe sur un passe. Exclusion ajoutée :
+            // cette branche ne concerne que de VRAIES enchères chiffrées comme première
+            // annonce — un contre a sa propre branche dédiée plus bas (isDouble(myBids[0])).
+            //
             // Un adversaire est-il reparlé depuis la réponse du partenaire (voir échange
             // avec Guillaume, donne 6) ? Si oui, la règle "reparle toujours après une
             // nouvelle couleur" ne s'applique plus — une fois la concurrence entrée en
@@ -3165,12 +3251,55 @@ function decideRobotCall(seat, deal, history) {
         // passe — sur une enchère forcing du partenaire (un transfert l'est toujours,
         // le temps d'un tour), passer est formellement interdit tant qu'aucun adversaire
         // n'a repris la parole entre-temps.
-        if ((myBids[0].call === '2C' || myBids[0].call === '2D') && myBids[1].call === '2NT') {
+        // Voir échange avec Guillaume (outil de simulation, session du 30 juillet) :
+        // même garde-fou que pour partnerFirstBidForCRMWasRealOpening plus bas — myBids[0]
+        // doit être le TOUT PREMIER appel de l'enchère entière, sinon "2C"/"2D" pourrait
+        // être une réponse naturelle coïncidant avec cette chaîne, pas une vraie ouverture.
+        const myBid0IndexForCRM = history.indexOf(myBids[0]);
+        const myBids0WasRealOpening = history.slice(0, myBid0IndexForCRM).every(e => isPass(e.call));
+        if (myBids0WasRealOpening && (myBids[0].call === '2C' || myBids[0].call === '2D') && myBids[1].call === '2NT') {
             const myPartnerBidForTransfer = history.slice().reverse()
                 .find(e => partnershipOf(e.seat) === partnershipOf(seat) && e.seat !== seat && isBidCall(e.call));
             if (myPartnerBidForTransfer) {
                 const callAfterTransferAsk = decideRobotOpenerRebid(hand, hcp, hl, '2NT', myPartnerBidForTransfer.call, seat, history, false);
                 return { call: callAfterTransferAsk, explanation: `Complétion mécanique de Stayman/Texas sur mon propre "2SA" après l'ouverture forte — jamais de passe sur une enchère forcing (${points})` };
+            }
+        }
+
+        // Voir échange avec Guillaume (outil de simulation, session du 30 juillet —
+        // pendant côté RÉPONDANT du cas juste au-dessus) : mon 1er bid était le relais
+        // forcing (2♦ sur 2♣, ou ma réponse CRM sur 2♦), mon 2e bid était MON PROPRE
+        // Texas/Stayman sur le "2SA" naturel du partenaire, et il vient de le compléter.
+        // Sans ce cas, ça retombait sur "règle du tour unique" — passe — ignorant que le
+        // plancher de l'ouvreur est énorme ici (22 minimum pour 2♣, 24 pour 2♦), donc
+        // quasiment toujours la manche au minimum une fois le fit confirmé par la
+        // complétion.
+        const partnerBidsForCRM = history.filter(e => partnershipOf(e.seat) === partnershipOf(seat) && e.seat !== seat && isBidCall(e.call));
+        const partnerBid0WasRealOpeningForCRM = partnerBidsForCRM.length > 0
+            && history.slice(0, history.indexOf(partnerBidsForCRM[0])).every(e => isPass(e.call));
+        if (partnerBidsForCRM.length >= 3 && partnerBid0WasRealOpeningForCRM
+            && (partnerBidsForCRM[0].call === '2C' || partnerBidsForCRM[0].call === '2D')
+            && partnerBidsForCRM[1].call === '2NT') {
+            const myTransferAskBid = parseBid(myBids[1].call);
+            const partnerCompletionBid = parseBid(partnerBidsForCRM[2].call);
+            if (myTransferAskBid && partnerCompletionBid && partnerCompletionBid.strain !== 'NT') {
+                const fitSuit = partnerCompletionBid.strain;
+                const supportPointsForFit = computeSupportPoints(hand, fitSuit, 2);
+                const openerMinHl = partnerBidsForCRM[0].call === '2D' ? 24 : 22;
+                const isMajorFit = fitSuit === 'S' || fitSuit === 'H';
+                const gameLevel = isMajorFit ? 4 : 5;
+                if (supportPointsForFit + openerMinHl >= (isMajorFit ? GAME_ZONE_MAJOR : GAME_ZONE_MINOR)) {
+                    for (let level = gameLevel; level <= 7; level++) {
+                        const c = level + fitSuit;
+                        if (isCallLegal(history, c, seat)) { call = c; break; }
+                    }
+                    explanation = call !== 'PASS'
+                        ? `Suite de mon propre Texas après ouverture forte du partenaire — manche acquise (${points})`
+                        : `A déjà annoncé ${myBids.length} fois — passe (règle du tour unique)`;
+                } else {
+                    explanation = `A déjà annoncé ${myBids.length} fois — passe (règle du tour unique)`;
+                }
+                return { call, explanation };
             }
         }
 
