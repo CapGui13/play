@@ -4199,6 +4199,21 @@ function decideRobotResponse(hand, hcp, hl, partnerCall, seat, history, partnerP
     // 11HL sinon. Voir sa définition complète plus bas pour le détail du raisonnement.
     const newSuitThreshold = (bid.level >= 2 || partnerWasIntervening) ? 13 : 11;
 
+    // Voir échange avec Guillaume (donne 1, session du 30 juillet) : jamais choisir comme
+    // "ma nouvelle couleur" une couleur DÉJÀ annoncée par un ADVERSAIRE (ouverture,
+    // intervention, ou une redemande) — même si c'est ma plus longue chez moi, la nommer
+    // (souvent forcée à un palier plus haut, faute de place au palier de l'adversaire)
+    // ressemblerait à tort à un cue-bid (annonce conventionnelle dans LEUR couleur), pas à
+    // une vraie couleur personnelle — et masquerait une meilleure option ailleurs
+    // (typiquement un contre négatif, voir decideRobotCall).
+    const opponentSuits = new Set();
+    history.forEach(e => {
+        if (isBidCall(e.call) && partnershipOf(e.seat) !== partnershipOf(seat)) {
+            const p = parseBid(e.call);
+            if (p && p.strain !== 'NT') opponentSuits.add(p.strain);
+        }
+    });
+
     // Voir échange avec Guillaume (donne 2, session du 23 juillet) : les bots traitent
     // TOUS les contres comme des contres d'appel, jamais de contre punitif — trop subtil
     // à modéliser correctement. Donc pas de "passe de pénalité" en avance après un contre
@@ -4220,7 +4235,7 @@ function decideRobotResponse(hand, hcp, hl, partnerCall, seat, history, partnerP
     // tour. Avec 12+ (zone de manche connue, plusieurs tours possibles pour tout montrer)
     // ET une couleur de 5+ cartes plus longue que la majeure trouvée, on montre la longue
     // d'abord — plus informatif qu'une majeure 4ème qui ne dit rien sur la vraie forme.
-    const major4 = partnerOpenedMinor ? ['H', 'S'].find(s => lengths[s] >= 4) : null;
+    const major4 = partnerOpenedMinor ? ['H', 'S'].find(s => lengths[s] >= 4 && !opponentSuits.has(s)) : null;
     const longerSuit = hcp >= 12 && major4
         ? ['S', 'H', 'D', 'C'].find(s => s !== suit && lengths[s] >= 5 && lengths[s] > lengths[major4])
         : null;
@@ -4254,7 +4269,7 @@ function decideRobotResponse(hand, hcp, hl, partnerCall, seat, history, partnerP
     // imposé par la concurrence) sans la moindre valeur, ce qui n'a plus rien d'anodin.
     // Au-delà du palier minimal légal disponible, même seuil que pour une vraie nouvelle
     // couleur (newSuitThreshold), par cohérence.
-    const ownLongSuit = ['S', 'H', 'D', 'C'].find(s => s !== suit && lengths[s] >= 5 && lengths[s] >= lengths[suit] + 2);
+    const ownLongSuit = ['S', 'H', 'D', 'C'].find(s => s !== suit && !opponentSuits.has(s) && lengths[s] >= 5 && lengths[s] >= lengths[suit] + 2);
     if (ownLongSuit) {
         for (let level = bid.level; level <= 7; level++) {
             const call = level + ownLongSuit;
@@ -4367,7 +4382,10 @@ function decideRobotResponse(hand, hcp, hl, partnerCall, seat, history, partnerP
     // n'a que le minimum de sa fourchette de barrage (13+12=25). Voir sa définition tout
     // en haut de la fonction (réutilisée par ownLongSuit).
     if (hl >= newSuitThreshold) {
-        const newSuit = longestSuitPreferHigh(lengths);
+        const newSuitCandidates = ['S', 'H', 'D', 'C'].filter(s => s !== suit && !opponentSuits.has(s) && lengths[s] >= 4);
+        const newSuit = newSuitCandidates.length > 0
+            ? newSuitCandidates.reduce((best, s) => (lengths[s] > lengths[best] ? s : best), newSuitCandidates[0])
+            : longestSuitPreferHigh(lengths); // filet : plus aucune couleur "propre" 4+ (rarissime)
         if (newSuit !== suit && lengths[newSuit] >= 4) {
             for (let level = bid.level; level <= 7; level++) {
                 const call = level + newSuit;
@@ -4542,12 +4560,17 @@ function decideRobotIntervention(hand, hcp, hl, seat, history, dealVulnerable, i
         // et on ne le fait au palier 2 qu'avec une dizaine de points". JAMAIS au palier 3+
         // (donne 7, règle générale et explicite) — boucle bornée à 2, contrairement au
         // reste du moteur qui va jusqu'à 7.
+        //
+        // Voir échange avec Guillaume (donne 6, session du 30 juillet, précisé après
+        // test) : HL (longueur comprise), pas HCP brut — son exemple ("9H+1L") ne passait
+        // le seuil du palier 2 qu'une fois la longueur comptée (9+1=10), pas en HCP pur
+        // (9 < 10). Erreur de ma part au premier passage, corrigée ici.
         if (hasReopenSuit) {
             for (let level = 1; level <= 2; level++) {
                 const call = level + reopenSuit;
                 if (isCallLegal(history, call, seat)) {
-                    const minHcp = level === 1 ? 8 : 10;
-                    if (hcp >= minHcp) return call;
+                    const minHl = level === 1 ? 8 : 10;
+                    if (hl >= minHl) return call;
                     break; // le palier suivant serait encore plus exigeant, inutile de continuer
                 }
             }
@@ -4973,13 +4996,30 @@ function decideDoublerFollowUp(hand, hcp, hl, partnerResponseCall, seat, history
     return 'PASS';
 }
 
-function decideRobotResponseToDouble(hand, hcp, hl, doubleIndex, seat, history) {
+function decideRobotResponseToDouble(hand, hcp, hl, doubleIndex, seat, history, wasReopeningDouble) {
     const lengths = suitLengths(hand);
     let doubledSuit = null;
     for (let i = doubleIndex - 1; i >= 0; i--) {
         if (isBidCall(history[i].call)) { doubledSuit = parseBid(history[i].call).strain; break; }
     }
     if (!doubledSuit || doubledSuit === 'NT') return 'PASS'; // sécurité, ne devrait pas arriver
+
+    // Voir échange avec Guillaume (donne 4, session du 30 juillet) : réponse "1SA" au
+    // contre de RÉVEIL — montre 10-12H, avec un arrêt dans la couleur contrée et pas de
+    // majeure 4ème franche à préférer (le X de réveil démarre à 8H, voir
+    // decideRobotIntervention ; cette réponse-ci en précise la moitié haute). Priorité
+    // sur la recherche d'une couleur plus bas : mieux vaut ça qu'une majeure courte (3
+    // cartes) choisie seulement parce que c'est "la plus longue chez soi" parmi des choix
+    // tous médiocres. Ne s'applique QUE sur un contre de réveil — un contre d'appel
+    // DIRECT classique n'a pas cette convention précise.
+    if (wasReopeningDouble) {
+        const hasStopper = ['A', 'K', 'Q', 'J', 'T'].filter(r => (hand[doubledSuit] || '').includes(r)).length >= 2;
+        const hasFourCardMajor = ['S', 'H'].some(s => lengths[s] >= 4);
+        if (hcp >= 10 && hcp <= 12 && hasStopper && !hasFourCardMajor) {
+            const call = '1NT';
+            if (isCallLegal(history, call, seat)) return call;
+        }
+    }
 
     // Voir échange avec Guillaume (session du 25 juillet, donne 6 — nouveau bug) : exclut
     // aussi toute couleur déjà annoncée par un ADVERSAIRE depuis le contre (ex. leur
@@ -5572,7 +5612,15 @@ function decideRobotCall(seat, deal, history) {
             if (opponentInterveningAfterDouble && hcp < 6) {
                 explanation = `Libéré de l'obligation de répondre (un adversaire a repris la parole depuis le contre) — pas assez de jeu pour répondre librement (${points})`;
             } else {
-                call = decideRobotResponseToDouble(hand, hcp, hl, doubleIndex, seat, history);
+                // Voir échange avec Guillaume (donne 4, session du 30 juillet) : le contre
+                // du partenaire était-il fait en RÉVEIL (2 passes juste avant, précédées
+                // d'une vraie annonce adverse) ? Même détection que pour
+                // decideDoublerFollowUp (wasReopeningDouble) — nécessaire pour la réponse
+                // "1SA" à ce contre précis, qui n'a de sens QUE dans ce cas (voir
+                // decideRobotResponseToDouble).
+                const doubleLast2ForReopen = history.slice(Math.max(0, doubleIndex - 2), doubleIndex);
+                const wasReopeningDoubleResponse = doubleLast2ForReopen.length === 2 && doubleLast2ForReopen.every(e => isPass(e.call));
+                call = decideRobotResponseToDouble(hand, hcp, hl, doubleIndex, seat, history, wasReopeningDoubleResponse);
                 explanation = `Réponse au contre du partenaire (${points})`;
             }
         } else {
@@ -5615,6 +5663,27 @@ function decideRobotCall(seat, deal, history) {
                     if (unshownSuits.length === 2 && unshownSuits.every(s => lengths[s] >= 4)) {
                         call = 'X';
                         explanation = `Contre protecteur (4ème main) : 8H+ et 4+ cartes dans les 2 couleurs restantes (${points})`;
+                    }
+                }
+
+                // Voir échange avec Guillaume (donne 1, session du 30 juillet) : CONTRE
+                // NÉGATIF / Sputnik — cas complémentaire du contre protecteur ci-dessus
+                // (celui-ci exige un adversaire AVANT le partenaire, celui-là un adversaire
+                // JUSTE APRÈS, la situation la plus courante — RHO intervient directement
+                // sur l'ouverture du partenaire). Avant de chercher une enchère naturelle
+                // (qui pourrait à tort tomber sur LEUR couleur, voir l'exclusion ajoutée
+                // dans decideRobotResponse), un contre mérite considération dès qu'il reste
+                // au moins une couleur pas encore montrée où j'ai 4+ cartes, avec 8H+ (même
+                // plancher que les autres contres de ce type). Priorité sur l'enchère
+                // naturelle : placé avant le "if (call !== 'X')" plus bas, pas après.
+                if (call !== 'X' && myPartnerBid !== lastBid && isCallLegal(history, 'X', seat)) {
+                    const lengthsForNegDouble = suitLengths(hand);
+                    const shownSuitsForNegDouble = new Set([partnerBidInfo.strain, parseBid(lastBid.call).strain]);
+                    const unshownSuitsForNegDouble = ['S', 'H', 'D', 'C'].filter(s => !shownSuitsForNegDouble.has(s));
+                    const negDoubleSuits = unshownSuitsForNegDouble.filter(s => lengthsForNegDouble[s] >= 4);
+                    if (negDoubleSuits.length > 0 && hcp >= 8) {
+                        call = 'X';
+                        explanation = `Contre négatif : 4+ cartes dans ${negDoubleSuits.map(s => STRAIN_SYMBOL[s]).join('/')} (${points})`;
                     }
                 }
 
