@@ -1280,6 +1280,25 @@ function decideResponderContinuationAfterNewSuit(hand, hcp, hl, openingBid, myRe
         if ((ownLen >= 7 || goodEnoughAt6) && hl + OPENING_MINIMUM >= GAME_ZONE_NT) {
             fitSuit = ownSuit;
             zonePoints = hl;
+        } else if (ownLen >= 6) {
+            // Voir échange avec Guillaume (donne 8, précisé, session du 30 juillet) : la
+            // manche n'est pas certaine ici (zone limite — on n'est arrivé jusque-là que
+            // parce que knowsGameZone a déjà validé 12HL+ ailleurs), mais ma couleur 6+
+            // mérite mieux qu'un repli SA générique — saut d'un cran par rapport au
+            // palier minimal légal pour proposer la manche, le partenaire tranchera avec
+            // sa propre réserve. Le palier minimal lui-même (sans saut) porterait à tort
+            // le sens "zone basse, 6-9H" (voir le repli correspondant dans
+            // decideRobotCall, hors de cette fonction).
+            let minLevel = null;
+            for (let level = 1; level <= 7; level++) {
+                if (isCallLegal(history, level + ownSuit, seat)) { minLevel = level; break; }
+            }
+            if (minLevel !== null) {
+                for (let level = minLevel + 1; level <= 7; level++) {
+                    const call = level + ownSuit;
+                    if (isCallLegal(history, call, seat)) return call;
+                }
+            }
         }
     }
 
@@ -2902,22 +2921,17 @@ function decideRobotCall(seat, deal, history) {
 
             // Voir échange avec Guillaume (donne 8, session du 30 juillet) : avant de me
             // rabattre sur une simple préférence entre les 2 couleurs du partenaire (ci-
-            // dessus), ma PROPRE couleur déjà montrée mérite d'être répétée si elle est
-            // assez longue/belle — plus descriptif qu'une préférence qui ignore ma vraie
-            // main. 7+ cartes suffit seule ; 6 cartes exige un singleton ailleurs (valeur
-            // de ruff) ET une belle couleur (2+ gros honneurs A/R/D) pour compenser.
+            // dessous), ma PROPRE couleur déjà montrée (6+ cartes) mérite d'être répétée
+            // au palier minimal — plus descriptif qu'une préférence qui ignore ma vraie
+            // main. Uniquement la zone basse (6-9H) ici : dès 10H+ avec un fit 6ème+,
+            // hl atteint déjà 12+ (bonus de longueur inclus) et knowsGameZone intercepte
+            // AVANT ce bloc — voir decideResponderContinuationAfterNewSuit pour la suite
+            // (conclusion à la manche, ou saut d'invite si la manche n'est pas certaine).
             let ownSuitRepeatCall = null;
-            if ((myResponseBid.strain === 'S' || myResponseBid.strain === 'H') && responseLengths) {
-                const ownLen = responseLengths[myResponseBid.strain];
-                const hasOutsideSingleton = ['S', 'H', 'D', 'C'].some(s => s !== myResponseBid.strain && responseLengths[s] === 1);
-                const ownSuitCards = hand[myResponseBid.strain] || '';
-                const topHonors = ['A', 'K', 'Q'].filter(r => ownSuitCards.includes(r)).length;
-                const goodEnoughAt6 = ownLen === 6 && hasOutsideSingleton && topHonors >= 2;
-                if (ownLen >= 7 || goodEnoughAt6) {
-                    for (let level = partnerRebidBid.level; level <= 7; level++) {
-                        const c = level + myResponseBid.strain;
-                        if (isCallLegal(history, c, seat)) { ownSuitRepeatCall = c; break; }
-                    }
+            if ((myResponseBid.strain === 'S' || myResponseBid.strain === 'H') && responseLengths && responseLengths[myResponseBid.strain] >= 6) {
+                for (let level = partnerRebidBid.level; level <= 7; level++) {
+                    const c = level + myResponseBid.strain;
+                    if (isCallLegal(history, c, seat)) { ownSuitRepeatCall = c; break; }
                 }
             }
 
@@ -2980,7 +2994,7 @@ function decideRobotCall(seat, deal, history) {
                 }
             } else if (ownSuitRepeatCall && partnerBidsCount === 2) {
                 call = ownSuitRepeatCall;
-                explanation = `Belle couleur assez longue chez moi (${responseLengths[myResponseBid.strain]} cartes) — je la répète plutôt qu'une préférence entre les couleurs du partenaire (${points})`;
+                explanation = `Zone basse (6-9H) avec ma couleur déjà montrée (${responseLengths[myResponseBid.strain]} cartes) — je la répète au palier minimal (${points})`;
             } else if (preferenceCall && partnerBidsCount === 2) {
                 call = preferenceCall;
                 explanation = `Préférence simple vers l'ouverture du partenaire (${responseLengths[partnerOpeningBid.strain]} cartes, contre ${responseLengths[partnerRebidBid.strain]} dans sa redemande) plutôt qu'un SA sans arrêt confirmé (${points})`;
