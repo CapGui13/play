@@ -5296,11 +5296,18 @@ function decideOpenerRebidAfterNewSuit(hand, hcp, hl, myBid, partnerParsed, seat
 function decideOpenerRebidAfterWeakTwoForcing(hand, hcp, hl, myBid, partnerParsed, seat, history) {
     const lengths = suitLengths(hand);
 
-    if (lengths[partnerParsed.strain] >= 3 && hl >= 11) {
-        const gameLevel = (partnerParsed.strain === 'S' || partnerParsed.strain === 'H') ? 4 : 5;
-        for (let level = Math.max(gameLevel, partnerParsed.level); level <= 7; level++) {
-            const call = level + partnerParsed.strain;
-            if (isCallLegal(history, call, seat)) return call;
+    // Voir échange avec Guillaume ("HL avant un fit, HLD après", session du 30 juillet) :
+    // fit de 3+ cartes confirmé dans la couleur du partenaire (sa réponse forcing) —
+    // points de SOUTIEN (HLD), pas HL brut. 4+ cartes garanties chez le partenaire, comme
+    // toute réponse en changement de couleur dans ce moteur (jamais 5+ promis).
+    if (lengths[partnerParsed.strain] >= 3) {
+        const supportPointsForWeakTwo = computeSupportPoints(hand, partnerParsed.strain, 4);
+        if (supportPointsForWeakTwo >= 11) {
+            const gameLevel = (partnerParsed.strain === 'S' || partnerParsed.strain === 'H') ? 4 : 5;
+            for (let level = Math.max(gameLevel, partnerParsed.level); level <= 7; level++) {
+                const call = level + partnerParsed.strain;
+                if (isCallLegal(history, call, seat)) return call;
+            }
         }
     }
 
@@ -5397,31 +5404,11 @@ function decideRobotOpenerRebid(hand, hcp, hl, myOpeningCall, partnerCall, seat,
         return 'PASS';
     }
 
-    // Loi des atouts (voir échange avec Guillaume, donne 4) : 6+ cartes dans SA propre
-    // couleur, soutenue par le partenaire (3+ cartes garanties par son enchère, voir
-    // decideRobotMajorSupport / le soutien mineur plus haut) → fit connu de 9+ cartes, qui
-    // suffit à repousser d'un palier indépendamment des points d'honneur (la sécurité
-    // distributionnelle prime sur le compte de points). Se déclenche AVANT tout seuil de
-    // points, y compris pour une main d'ouverture minimale — et reste valable même si un
-    // adversaire est intervenu depuis (la sécurité distributionnelle ne dépend pas de ça).
-    // EXCLU si MA PROPRE ouverture était déjà un barrage (palier 2+, voir échange avec
-    // Guillaume, donne 2) : l'ouvreur de barrage a déjà tout dit à son premier tour — même
-    // avec un fit connu et un soutien du partenaire, il ne reparle plus jamais de son
-    // propre chef, quelle que soit la suite de l'enchère (relance adverse comprise).
-    // Voir échange avec Guillaume (session du 24 juillet, donne 5 — RÉGRESSION trouvée) :
-    // "&& hl < 18" ajouté d'abord — sans ça, cette règle interceptait et renvoyait avant
-    // même d'atteindre le saut direct à la manche pour une main énorme (18HL+).
-    // Voir échange avec Guillaume (session du 24 juillet, donne 3 — MÊME BUG une seconde
-    // fois) : seuil resserré à "< 15" (pas 18) — la même interception se reproduisait pour
-    // la zone D'ESSAI (15-17HL, voir plus bas), qui n'atteignait jamais son propre code à
-    // cause de cette règle plus haut dans la fonction qui répondait déjà avant elle.
-    // "Repousser d'un palier" par pure sécurité distributionnelle n'a de sens que pour une
-    // main qui n'a justement RIEN de mieux à dire (< 15) — au-delà, l'essai ou le saut
-    // direct sont plus informatifs qu'un simple palier de sécurité.
-    if (isRaiseOfMySuit && lengths[myBid.strain] >= 6 && myBid.level === 1 && hl < 15) {
-        const call = (partnerParsed.level + 1) + myBid.strain;
-        if (isCallLegal(history, call, seat)) return call;
-    }
+    // Voir échange avec Guillaume ("la loi des atouts n'est pas une question de points",
+    // session du 30 juillet) : ce garde-fou est maintenant traité plus bas, comme un
+    // repli purement basé sur le nombre d'atouts connus (voir juste avant le passe final
+    // de la branche isRaiseOfMySuit) — plus de seuil HL ici, qui n'aurait jamais dû
+    // exister pour une règle qui ne parle pas de points du tout.
 
     // Barrage/ouverture faible du partenaire (palier 2+, voir decideRobotOpening) : une
     // réponse en NOUVELLE couleur y est déjà forcing un tour sans qu'un saut ne soit
@@ -5541,7 +5528,32 @@ function decideRobotOpenerRebid(hand, hcp, hl, myOpeningCall, partnerCall, seat,
             const call = '6' + myBid.strain;
             if (isCallLegal(history, call, seat)) return call;
         }
-        if (supportPoints < 18) return 'PASS'; // main modeste (soutien simple déjà géré par la loi des atouts/l'essai plus haut) — rien de plus à ajouter ici
+        if (supportPoints < 18) {
+            // Voir échange avec Guillaume ("la loi des atouts n'est pas une question de
+            // points, mais juste d'appliquer la loi des atouts", session du 30 juillet) :
+            // ni espoir de manche (l'essai plus haut ne s'est pas déclenché) ni assez pour
+            // viser la manche directement (supportPoints<18) — le seul repli restant est
+            // purement le nombre total d'atouts CONNUS entre les deux mains, indépendamment
+            // des points : 9 -> palier 3, 10 -> palier 4, 11 -> palier 5. Aucun seuil de
+            // points n'est nécessaire : les deux joueurs du camp ont forcément déjà un
+            // minimum de jeu chacun, puisqu'il a fallu qu'ils parlent tous les deux pour
+            // connaître ce fit. EXCLU pour une ouverture de barrage (palier 2+, voir
+            // échange avec Guillaume, donne 2) : son ouvreur a déjà tout dit à son premier
+            // tour, il ne reparle plus jamais de son propre chef.
+            if (myBid.level === 1) {
+                const partnerGuaranteedLength = 3; // soutien simple : 3+ garanties, jamais plus précis ici
+                const totalTrumps = lengths[myBid.strain] + partnerGuaranteedLength;
+                let safetyLevel = null;
+                if (totalTrumps >= 11) safetyLevel = 5;
+                else if (totalTrumps >= 10) safetyLevel = 4;
+                else if (totalTrumps >= 9) safetyLevel = 3;
+                if (safetyLevel !== null) {
+                    const call = Math.max(safetyLevel, partnerParsed.level) + myBid.strain;
+                    if (isCallLegal(history, call, seat)) return call;
+                }
+            }
+            return 'PASS'; // main modeste (soutien simple), pas assez d'atouts connus non plus pour un repli de sécurité
+        }
 
         // Fit confirmé et main d'ouverture nettement excédentaire (18HLD+) : la manche est
         // quasiment automatique. Simplification volontaire : pas de vraie enchère de
