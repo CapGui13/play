@@ -2847,9 +2847,22 @@ function decideRobotCall(seat, deal, history) {
                         // Voir échange avec Guillaume ("la séquence doit continuer jusqu'à
                         // ce qu'on se rende compte de ce qu'il en est") : manche pas
                         // certaine (dépend d'où le partenaire se situe dans sa fourchette)
-                        // mais possible — on continue (invite au palier 3) plutôt que de
-                        // passer à l'aveugle.
-                        call = '3' + partnerReplyBid.strain;
+                        // mais possible — on continue (invite) plutôt que de passer à
+                        // l'aveugle.
+                        //
+                        // Voir échange avec Guillaume (outil de simulation, session du 30
+                        // juillet — bug trouvé) : "palier 3" en dur ne marche que pour un
+                        // Stayman sur 1SA (relais au palier 2, complétion au palier 2,
+                        // invite au palier 3 — cohérent) — sur un 2SA direct (relais au
+                        // palier 3, complétion au palier 3 déjà), la même case est déjà
+                        // prise par la complétion du partenaire, rendant l'invite illégale
+                        // et faisant planter silencieusement sur un passe. Un cran
+                        // au-dessus de SA complétion, toujours, quel que soit le palier de
+                        // départ.
+                        for (let level = partnerReplyBid.level + 1; level <= 7; level++) {
+                            const c = level + partnerReplyBid.strain;
+                            if (isCallLegal(history, c, seat)) { call = c; break; }
+                        }
                         explanation = `Fit trouvé après Stayman, zone de manche possible (pas certaine) — continue pour savoir (${points})`;
                     } else {
                         explanation = `Fit trouvé après Stayman, pas assez pour la manche même dans le meilleur des cas — passe (${points})`;
@@ -2859,7 +2872,19 @@ function decideRobotCall(seat, deal, history) {
                         call = '3NT';
                         explanation = `Pas de majeure trouvée après Stayman, assez de points (${myPoints}) — manche certaine à SA (${points})`;
                     } else if (myPoints + openerMaxHl >= zone) {
-                        call = '2NT';
+                        // Voir échange avec Guillaume (outil de simulation, session du 30
+                        // juillet — même bug que juste au-dessus) : "2SA" en dur ne marche
+                        // que sur un Stayman de 1SA (dénégation à 2♦, "2SA" légal juste
+                        // au-dessus) — sur un Stayman de 2SA direct (dénégation déjà à
+                        // 3♦), "2SA" est illégal (palier déjà dépassé) ; le palier légal
+                        // le plus proche y est alors directement "3SA" (aucun palier
+                        // intermédiaire n'existe entre les deux dans ce cas précis — la
+                        // main d'ouverture est déjà si haute que l'invite et la manche se
+                        // confondent structurellement).
+                        for (let level = partnerReplyBid.level; level <= 7; level++) {
+                            const c = level + 'NT';
+                            if (isCallLegal(history, c, seat)) { call = c; break; }
+                        }
                         explanation = `Pas de majeure trouvée après Stayman, zone de manche possible (pas certaine) — invite à SA (${points})`;
                     } else {
                         explanation = `Pas de majeure trouvée après Stayman, pas assez pour la manche même dans le meilleur des cas — passe (${points})`;
@@ -3310,6 +3335,40 @@ function decideRobotCall(seat, deal, history) {
         // sens de traiter ça comme une suite de renverse ou autre chose.
         const myLastBidCheck = history.slice().reverse().find(e => partnershipOf(e.seat) === partnershipOf(seat) && isBidCall(e.call));
         const myPartnerLastBidCheck = history.slice().reverse().find(e => partnershipOf(e.seat) === partnershipOf(seat) && e.seat !== seat && isBidCall(e.call));
+
+        // Voir échange avec Guillaume (outil de simulation, session du 30 juillet) : le
+        // partenaire a-t-il SAUTÉ en répétant SA PROPRE couleur déjà montrée (pas la
+        // mienne, pas un soutien) — invite classique montrant une réserve, jamais une
+        // simple redemande minimale. Sans cette reconnaissance, ça retombait sur "règle
+        // du tour unique" — passe — même avec une main d'ouverture largement au-dessus
+        // du minimum qui devrait accepter. Seuil (16HL) : jugement propre, pas une
+        // fourchette précise donnée par Guillaume — main "nettement" au-dessus du
+        // minimum d'ouverture, à ajuster si trop généreux ou trop strict en pratique.
+        const partnerFirstBidForJumpCheck = history.find(e => partnershipOf(e.seat) === partnershipOf(seat) && e.seat !== seat && isBidCall(e.call));
+        if (myPartnerLastBidCheck && partnerFirstBidForJumpCheck && myPartnerLastBidCheck !== partnerFirstBidForJumpCheck) {
+            const partnerFirstParsed = parseBid(partnerFirstBidForJumpCheck.call);
+            const partnerLastParsed = parseBid(myPartnerLastBidCheck.call);
+            if (partnerFirstParsed && partnerLastParsed && partnerFirstParsed.strain === partnerLastParsed.strain) {
+                const historyBeforePartnerLast = history.slice(0, history.indexOf(myPartnerLastBidCheck));
+                let naturalLevelForJumpCheck = null;
+                for (let level = 1; level <= 7; level++) {
+                    if (isCallLegal(historyBeforePartnerLast, level + partnerLastParsed.strain, myPartnerLastBidCheck.seat)) { naturalLevelForJumpCheck = level; break; }
+                }
+                const wasJumpRepeat = naturalLevelForJumpCheck !== null && partnerLastParsed.level > naturalLevelForJumpCheck;
+                if (wasJumpRepeat && hl >= 16) {
+                    const isMajorForJump = partnerLastParsed.strain === 'S' || partnerLastParsed.strain === 'H';
+                    const gameLevelForJump = isMajorForJump ? 4 : 5;
+                    for (let level = Math.max(gameLevelForJump, partnerLastParsed.level); level <= 7; level++) {
+                        const c = level + partnerLastParsed.strain;
+                        if (isCallLegal(history, c, seat)) { call = c; break; }
+                    }
+                    if (call !== 'PASS') {
+                        return { call, explanation: `Saut du partenaire dans sa propre couleur — invite acceptée avec ma réserve (${points})` };
+                    }
+                }
+            }
+        }
+
         if (myPartnerLastBidCheck && myPartnerLastBidCheck.call === '2NT') {
             const partnerIdx = history.indexOf(myPartnerLastBidCheck);
             const last2 = history.slice(Math.max(0, partnerIdx - 2), partnerIdx);
