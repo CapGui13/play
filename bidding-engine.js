@@ -218,17 +218,24 @@ function decideRobotOpening(hand, hcp, hl, dealVulnerable, seat) {
     if (hl >= 20 && hl <= 21 && balanced) return '2NT';
 
     // 2♦ FORCING DE MANCHE (voir échange avec Guillaume, session du 30 juillet — CRM
-    // moderne) : main régulière 24HL+, OU main de 4 perdantes (souvent un unicolore 6+,
-    // voir computeLoserCount) — le palier au-dessus du 2♣ juste en dessous. Vérifié EN
-    // PREMIER (priorité sur le 2♣, qui couvre une main moins extrême).
-    if ((hl >= 24 && balanced) || losers <= 4) return '2D';
+    // moderne, précisé après une session de test catastrophique) : main régulière
+    // 24HL+, OU main de 4 perdantes avec un VRAI unicolore (6+ cartes). Le compte de
+    // perdantes n'a de sens QUE sur un vrai unicolore — sur une main semi-régulière (ex.
+    // 5422), il peut donner un chiffre trompeusement bas sans que la main soit
+    // réellement assez forte (donne 3 : 17H/18HL comptait à tort 5 perdantes, "pas de
+    // vrai unicolore"). Même avec un vrai unicolore, le compte seul peut encore
+    // sous-estimer une main trop faible (donne 5 : 10H avec un bon 6ème à Cœur comptait
+    // aussi 5 perdantes) — un plancher de points reste nécessaire, le compte de
+    // perdantes n'affinant qu'à la marge, jamais à la place des points.
+    const hasGenuineSuit = ['S', 'H', 'D', 'C'].some(s => lengths[s] >= 6);
+    if ((hl >= 24 && balanced) || (hasGenuineSuit && losers <= 4 && hcp >= 18)) return '2D';
 
     // 2♣ fort artificiel (forcing) : main régulière 22-23HL (voir échange avec Guillaume,
-    // donne 4), OU main de 5 perdantes (voir échange avec Guillaume, session du 30
-    // juillet) — un "super 2SA" annoncé en deux temps (2♣ puis 2SA au rebid si régulière,
-    // ou sa couleur si un unicolore, voir decideRobotOpenerRebid) plutôt qu'un 2SA direct
-    // qui plafonnerait à tort la main à 20-21.
-    if ((hl >= 22 && hl <= 23 && balanced) || losers === 5) return '2C';
+    // donne 4), OU main de 5 perdantes avec un vrai unicolore ET un plancher de points
+    // (même garde-fou que ci-dessus) — un "super 2SA" annoncé en deux temps (2♣ puis 2SA
+    // au rebid si régulière, ou sa couleur si un unicolore, voir decideRobotOpenerRebid)
+    // plutôt qu'un 2SA direct qui plafonnerait à tort la main à 20-21.
+    if ((hl >= 22 && hl <= 23 && balanced) || (hasGenuineSuit && losers === 5 && hcp >= 15)) return '2C';
 
     // Barrages faibles (système "majeure 5ème") : 6 cartes à une majeure au palier 2
     // ("2 faible"), 7 cartes au palier 3, 8 cartes au palier 4 — toujours la couleur la
@@ -2447,8 +2454,22 @@ function decideRobotCall(seat, deal, history) {
             && (partnerFirstBidForCRM.call === '2C' || partnerFirstBidForCRM.call === '2D')
             && myPartnerBid && myPartnerBid.call === '2NT';
         if (wasStrongOpeningCRMThenNT) {
-            const callAfterStrongNT = decideRobotResponse(hand, hcp, hl, '2NT', seat, history, false, false, true, false);
-            return { call: callAfterStrongNT, explanation: `Stayman/Texas sur le "2SA" naturel de l'ouvreur après l'ouverture forte (${points})` };
+            let callAfterStrongNT = decideRobotResponse(hand, hcp, hl, '2NT', seat, history, false, false, true, false);
+            // Voir échange avec Guillaume (session du 30 juillet — bug critique trouvé,
+            // donne 6) : ce "2SA" est TOUJOURS forcing de manche (l'ouverture de 2♣/2♦
+            // l'était déjà) — jamais question de passer, quelle que soit la main,
+            // contrairement à un vrai 2SA direct (20-21) où passer reste une sortie
+            // légitime avec une main assez faible. La logique générique de réponse à
+            // 2SA (pensée pour un vrai 2SA, pas un "super" 2SA) ne le sait pas — si elle
+            // en arrive au passe, on le remplace par le minimum garanti de la manche
+            // (3SA, faute de fit connu par ailleurs).
+            if (callAfterStrongNT === 'PASS') {
+                for (let level = 3; level <= 7; level++) {
+                    const c = level + 'NT';
+                    if (isCallLegal(history, c, seat)) { callAfterStrongNT = c; break; }
+                }
+            }
+            return { call: callAfterStrongNT, explanation: `Stayman/Texas sur le "2SA" naturel de l'ouvreur après l'ouverture forte — jamais de passe, forcing de manche (${points})` };
         }
 
         // Voir échange avec Guillaume (donne 1, session du 30 juillet) : mon partenaire
@@ -2660,7 +2681,7 @@ function decideRobotCall(seat, deal, history) {
             );
 
             if (wasStrongTwoClubsRelay && myPartnerBid.call === '2NT') {
-                call = decideRobotResponse(hand, hcp, hl, '2NT', seat, history, false);
+                call = decideRobotResponse(hand, hcp, hl, '2NT', seat, history, false, false, false, false);
                 explanation = `Réponse au 2SA (22-23HL) après relais 2♦ sur 2♣ fort (${points})`;
             } else if (wasMinorTransferAsk) {
                 const lengths = suitLengths(hand);
@@ -3341,7 +3362,7 @@ if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         GAME_ZONE_NT, GAME_ZONE_MAJOR, GAME_ZONE_MINOR, SLAM_ZONE_SMALL, SLAM_ZONE_GRAND,
         OPENING_MINIMUM, SIMPLE_RAISE_MINIMUM,
-        computeHandHcp, computeHandHL, computeSupportPoints,
+        computeHandHcp, computeHandHL, computeSupportPoints, computeLoserCount,
         suitLengths, isHandBalancedForNT, longestSuitPreferHigh, isSeatVulnerable,
         estimateAuctionSideMinPoints,
         decideRobotCall
