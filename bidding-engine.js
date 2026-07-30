@@ -1275,9 +1275,17 @@ function decideDoublerFollowUp(hand, hcp, hl, partnerResponseCall, seat, history
         if (supportPoints >= 15) {
             const isMajor = responseBid.strain === 'S' || responseBid.strain === 'H';
             const gameLevel = isMajor ? 4 : 5;
-            for (let level = Math.max(gameLevel, responseBid.level); level <= 7; level++) {
-                const call = level + responseBid.strain;
-                if (isCallLegal(history, call, seat)) return call;
+            // Voir échange avec Guillaume (outil de simulation, session du 30 juillet —
+            // bug trouvé, même famille que le "6D" déjà corrigé ailleurs) : si le
+            // partenaire a DÉJÀ atteint (ou dépassé) ce palier de manche de lui-même,
+            // chercher "la prochaine case légale" à partir de là sauterait au chelem par
+            // accident (mes 15+ points de soutien ne suffisent pas au chelem tout seuls,
+            // voir les deux vérifications juste au-dessus qui auraient déjà répondu sinon).
+            if (responseBid.level < gameLevel) {
+                for (let level = gameLevel; level <= 7; level++) {
+                    const call = level + responseBid.strain;
+                    if (isCallLegal(history, call, seat)) return call;
+                }
             }
         }
     }
@@ -2794,6 +2802,38 @@ function decideRobotCall(seat, deal, history) {
         // encore couvert et retombe sur le passe par défaut, comme avant.
         const myFirstBid = parseBid(myBids[0].call);
         const mySecondBid = parseBid(myBids[1].call);
+
+        // Voir échange avec Guillaume (outil de simulation, session du 30 juillet) : mon
+        // ouverture était-elle "1SA", ma 2e annonce une réponse Stayman montrant une
+        // majeure (2C demandé par le partenaire), et il vient de SOUTENIR cette majeure
+        // en invite (sans sauter directement à la manche) ? Avant cette correction,
+        // AUCUNE branche ne répondait à cette invite précise — ça tombait sur le passe
+        // par défaut, quel que soit mon HCP dans ma fourchette de 1SA déjà connue.
+        const myPartnerLastBidForStaymanInvite = history.slice().reverse()
+            .find(e => partnershipOf(e.seat) === partnershipOf(seat) && isBidCall(e.call) && e !== myBids[0] && e !== myBids[1]);
+        const partnerInviteParsed = myPartnerLastBidForStaymanInvite ? parseBid(myPartnerLastBidForStaymanInvite.call) : null;
+        const wasStaymanMajorThenInvite = myFirstBid && myFirstBid.strain === 'NT' && myFirstBid.level === 1
+            && mySecondBid && (mySecondBid.strain === 'H' || mySecondBid.strain === 'S') && mySecondBid.level === 2
+            && partnerInviteParsed && partnerInviteParsed.strain === mySecondBid.strain
+            && partnerInviteParsed.level === mySecondBid.level + 1;
+
+        if (wasStaymanMajorThenInvite) {
+            // Fourchette de 1SA déjà connue (15-17) — pas besoin de recalculer en
+            // points de soutien ici, MA main est déjà entièrement connue de moi-même :
+            // haut de fourchette (16+), j'accepte l'invite ; bas (15), je décline.
+            if (hcp >= 16) {
+                for (let level = 4; level <= 7; level++) {
+                    const c = level + mySecondBid.strain;
+                    if (isCallLegal(history, c, seat)) { call = c; break; }
+                }
+                explanation = call !== 'PASS'
+                    ? `Invite du partenaire après Stayman, haut de ma fourchette de 1SA (${points}) — accepte, manche`
+                    : `A déjà annoncé ${myBids.length} fois — passe (règle du tour unique)`;
+            } else {
+                explanation = `Invite du partenaire après Stayman, bas de ma fourchette de 1SA (${points}) — décline, reste au palier d'invite`;
+            }
+            return { call, explanation };
+        }
 
         // Voir échange avec Guillaume (donne 7, session du 30 juillet) : ma 2ème annonce
         // a-t-elle directement SOUTENU la couleur nommée par le partenaire en réponse
