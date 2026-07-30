@@ -1511,6 +1511,28 @@ function decideOpenerRebidAfterNewSuit(hand, hcp, hl, myBid, partnerParsed, seat
         if (isCallLegal(history, call, seat)) return call;
     }
 
+    // Voir échange avec Guillaume (outil de simulation, session du 30 juillet — bug
+    // trouvé : une main de 18H/20HL avec 6 cartes à sa couleur d'ouverture, sans fit, sans
+    // bicolore ni forme régulière à montrer, redemandait au palier minimal comme
+    // n'importe quelle main faible — empêchant ensuite le partenaire d'évaluer
+    // correctement une invite ultérieure, faute d'avoir jamais appris cette réserve).
+    // Avec une vraie 6ème+ carte ET assez de réserve (16HL+), un SAUT dans ma propre
+    // couleur montre cette force — le partenaire pourra alors correctement soutenir ou
+    // relancer une invite plus tard. En dessous, la redemande reste au palier minimal
+    // (main vraiment limitée, rien à ajouter) — voir le filet juste en dessous.
+    if (lengths[myBid.strain] >= 6 && hl >= 16) {
+        let naturalLevelForRepeat = null;
+        for (let level = 1; level <= 7; level++) {
+            if (isCallLegal(history, level + myBid.strain, seat)) { naturalLevelForRepeat = level; break; }
+        }
+        if (naturalLevelForRepeat !== null) {
+            for (let level = naturalLevelForRepeat + 1; level <= 7; level++) {
+                const call = level + myBid.strain;
+                if (isCallLegal(history, call, seat)) return call;
+            }
+        }
+    }
+
     // "Moins mauvaise enchère" (voir échange avec Guillaume) : tant que personne d'autre
     // n'est intervenu, une réponse en changement de couleur est forcing — on ne doit
     // JAMAIS passer ici, même sans option pleinement satisfaisante. Répéter sa couleur
@@ -2811,7 +2833,16 @@ function decideRobotCall(seat, deal, history) {
             }
             return { call, explanation };
         }
-        const iReversed = myFirstBid && mySecondBid && mySecondBid.strain !== 'NT'
+        // Voir échange avec Guillaume (outil de simulation, session du 30 juillet — bug
+        // trouvé, même famille que les précédents ce soir) : iReversed se contente de
+        // comparer les rangs/paliers de mes deux annonces, sans vérifier que la 2e était
+        // bien une VRAIE redemande naturelle — si elle était en réalité ma réponse au
+        // contre du partenaire (voir decideOpenerResponseToPartnerDouble), la même
+        // signature de rang/palier peut se produire sans être un renverse du tout.
+        const mySecondBidWasResponseToPartnerDouble = history
+            .slice(history.indexOf(myBids[0]) + 1, history.indexOf(myBids[1]))
+            .some(e => isDouble(e.call) && partnershipOf(e.seat) === partnershipOf(seat));
+        const iReversed = !mySecondBidWasResponseToPartnerDouble && myFirstBid && mySecondBid && mySecondBid.strain !== 'NT'
             && mySecondBid.strain !== myFirstBid.strain
             && STRAIN_RANK[mySecondBid.strain] > STRAIN_RANK[myFirstBid.strain]
             && mySecondBid.level === myFirstBid.level + 1;
@@ -2830,11 +2861,30 @@ function decideRobotCall(seat, deal, history) {
             if (!isExtraStrong && lengths[myFirstBid.strain] >= 5) {
                 // Minimum du renverse : répète sa 1ère couleur (la plus longue), non
                 // forcing — le partenaire peut passer s'il n'a rien de plus.
-                for (let level = mySecondBid.level; level <= 7; level++) {
-                    const c = level + myFirstBid.strain;
-                    if (isCallLegal(history, c, seat)) { call = c; break; }
+                //
+                // Voir échange avec Guillaume (outil de simulation, session du 30
+                // juillet — bug trouvé, même famille que le "6D" corrigé plus tôt) : le
+                // partenaire a-t-il DÉJÀ répondu par un contrat de manche ou mieux (ex.
+                // 3SA) ? Si oui, ce n'est plus une "préférence non forcing" — s'échapper
+                // vers ma propre couleur remplacerait un contrat déjà bon par un pire,
+                // uniquement parce que c'était "la prochaine case légale" (peu importe
+                // que cette case soit elle-même en dessous du palier de manche DANS MA
+                // couleur — ce qui compte, c'est que le partenaire a DÉJÀ conclu).
+                const partnerBidAlready = parseBid(myPartnerLastBid.call);
+                const partnerAlreadyAtGame = partnerBidAlready && (
+                    (partnerBidAlready.strain === 'NT' && partnerBidAlready.level >= 3)
+                    || ((partnerBidAlready.strain === 'S' || partnerBidAlready.strain === 'H') && partnerBidAlready.level >= 4)
+                    || (partnerBidAlready.strain !== 'NT' && partnerBidAlready.strain !== 'S' && partnerBidAlready.strain !== 'H' && partnerBidAlready.level >= 5)
+                );
+                if (!partnerAlreadyAtGame) {
+                    for (let level = mySecondBid.level; level <= 7; level++) {
+                        const c = level + myFirstBid.strain;
+                        if (isCallLegal(history, c, seat)) { call = c; break; }
+                    }
+                    if (call !== 'PASS') explanation = `Minimum du renverse — répète sa couleur la plus longue plutôt que de laisser filer (${points})`;
+                } else {
+                    explanation = `Le partenaire a déjà répondu par un contrat de manche ou mieux — passe (${points})`;
                 }
-                if (call !== 'PASS') explanation = `Minimum du renverse — répète sa couleur la plus longue plutôt que de laisser filer (${points})`;
             } else if (isExtraStrong) {
                 // 4ème couleur forcing : la seule couleur pas encore annoncée par
                 // personne — signale des points de manche sans fit ni arrêt évident,
