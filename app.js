@@ -4236,7 +4236,7 @@ function decideRobotResponse(hand, hcp, hl, partnerCall, seat, history, partnerP
     // ET une couleur de 5+ cartes plus longue que la majeure trouvée, on montre la longue
     // d'abord — plus informatif qu'une majeure 4ème qui ne dit rien sur la vraie forme.
     const major4 = partnerOpenedMinor ? ['H', 'S'].find(s => lengths[s] >= 4 && !opponentSuits.has(s)) : null;
-    const longerSuit = hcp >= 12 && major4
+    const longerSuit = hl >= 12 && major4
         ? ['S', 'H', 'D', 'C'].find(s => s !== suit && lengths[s] >= 5 && lengths[s] > lengths[major4])
         : null;
     if (hl >= 6 && partnerOpenedMinor && major4 && !longerSuit) {
@@ -5163,12 +5163,19 @@ function decideOpenerRebidAfterNewSuit(hand, hcp, hl, myBid, partnerParsed, seat
     // Mêmes zones que pour les ouvertures : 12-14H = soutien simple (palier minimal
     // légal) ; 15-17H = invite (palier 3) ; 18H+ = manche directe (palier 4 pour une
     // majeure, 5 pour une mineure).
+    // Voir échange avec Guillaume ("HL avant un fit, HLD après — jamais de retour au HCP
+    // brut", session du 30 juillet) : même bug que celui déjà corrigé dans
+    // decideOpenerResponseToPartnerDouble — un fit de 4+ cartes vient d'être confirmé
+    // (lengths[partnerParsed.strain]>=4 ci-dessus), donc c'est en points de SOUTIEN
+    // (HLD, chicane/distribution comprises pour CETTE couleur d'atout précise) qu'il faut
+    // évaluer la suite, plus en HCP brut.
     if (lengths[partnerParsed.strain] >= 4) {
         const fitSuit = partnerParsed.strain;
         const isMajorFit = fitSuit === 'S' || fitSuit === 'H';
+        const supportPointsForFit = computeSupportPoints(hand, fitSuit, 4);
         let targetLevel = partnerParsed.level;
-        if (hcp >= 18) targetLevel = isMajorFit ? 4 : 5;
-        else if (hcp >= 15) targetLevel = 3;
+        if (supportPointsForFit >= 18) targetLevel = isMajorFit ? 4 : 5;
+        else if (supportPointsForFit >= 15) targetLevel = 3;
 
         for (let level = Math.max(targetLevel, partnerParsed.level); level <= 7; level++) {
             const call = level + fitSuit;
@@ -6014,7 +6021,7 @@ function decideRobotCall(seat, deal, history) {
 
             const knowsGameZone = partnerOpeningBid && myResponseBid
                 && partnerOpeningBid.level === 1 && myResponseBid.strain !== partnerOpeningBid.strain
-                && myResponseBid.strain !== 'NT' && hcp >= 12;
+                && myResponseBid.strain !== 'NT' && hl >= 12;
 
             // Voir échange avec Guillaume (donne 5, session du 30 juillet) : incohérence
             // trouvée en creusant — un vrai "2/1" (changement de couleur du répondant au
@@ -6198,14 +6205,16 @@ function decideRobotCall(seat, deal, history) {
                     explanation = `Mini de mon soutien (${supportPts} points de soutien) — décline l'essai, revient au palier minimal (${points})`;
                 }
             } else if (isPartnerRaiseOfMyResponse && partnerBidsCount === 2) {
-                // Voir échange avec Guillaume (donne 7) : le soutien direct du partenaire à
-                // MA propre couleur (sans saut) montre 12-14H — mêmes seuils que la loi des
-                // atouts/l'essai côté ouvreur (voir isRaiseOfMySuit dans
-                // decideRobotOpenerRebid) : sous 11H, ma main est déjà décrite au tour
-                // précédent, rien de plus à ajouter ; 11-12H (zone d'espoir, juste sous la
-                // manche connue), enchère d'essai (2SA générique) ; 13H+ combiné au 12-14
-                // du partenaire atteint déjà la zone de manche, on y va directement.
-                if (hcp >= 13) {
+                // Voir échange avec Guillaume ("HL avant un fit, HLD après", session du 30
+                // juillet) : le partenaire vient de SOUTENIR directement ma couleur — un
+                // fit est confirmé, donc points de SOUTIEN (HLD), pas HCP brut comme dans
+                // ma première version de cette branche (bug trouvé au même audit que celui
+                // qui a corrigé decideOpenerRebidAfterNewSuit). Mêmes seuils qu'ailleurs
+                // pour un soutien direct sans saut (12-14H de sa part) : sous 15 points de
+                // soutien, ma main est déjà décrite, rien de plus à ajouter ; 15-17,
+                // enchère d'essai (2SA générique) ; 18+, manche directe.
+                const supportPointsForRaise = computeSupportPoints(hand, myResponseBid.strain, 4);
+                if (supportPointsForRaise >= 18) {
                     const isMajor = myResponseBid.strain === 'S' || myResponseBid.strain === 'H';
                     const gameLevel = isMajor ? 4 : 5;
                     for (let level = Math.max(gameLevel, partnerRebidBid.level); level <= 7; level++) {
@@ -6213,9 +6222,9 @@ function decideRobotCall(seat, deal, history) {
                         if (isCallLegal(history, c, seat)) { call = c; break; }
                     }
                     explanation = call !== 'PASS'
-                        ? `Soutien direct du partenaire (12-14H) — assez de jeu pour viser la manche (${points})`
+                        ? `Soutien direct du partenaire (12-14H) — assez de points de soutien pour viser la manche (${points})`
                         : `A déjà annoncé — passe (règle du tour unique)`;
-                } else if (hcp >= 11 && partnerRebidBid.level === 2 && isCallLegal(history, '2NT', seat)) {
+                } else if (supportPointsForRaise >= 15 && partnerRebidBid.level === 2 && isCallLegal(history, '2NT', seat)) {
                     call = '2NT';
                     explanation = `Soutien direct du partenaire (12-14H) — enchère d'essai, juste sous la manche connue (${points})`;
                 } else {
