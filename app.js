@@ -4354,7 +4354,16 @@ function decideRobotResponse(hand, hcp, hl, partnerCall, seat, history, partnerP
             const call = '6' + suit;
             if (isCallLegal(history, call, seat)) return call;
         }
-        const raiseLevel = bid.level + (supportPoints >= 10 ? 2 : 1);
+        // Voir échange avec Guillaume (donne 6, session du 30 juillet) : un réveil
+        // NATUREL sans saut (celui-ci, comme tous les réveils naturels de ce moteur —
+        // voir decideRobotIntervention) dénie en général 14H+ chez le partenaire — jamais
+        // question de sauter en réponse, quels que soient MES propres points de soutien.
+        // Distinct d'une vraie ouverture (qui n'a pas ce plafond) : seul un réveil (ou une
+        // intervention, moins définie mais tout aussi non illimitée dans ce moteur) porte
+        // cette restriction.
+        const raiseLevel = (partnerBidWasReopening || partnerWasIntervening)
+            ? bid.level + 1
+            : bid.level + (supportPoints >= 10 ? 2 : 1);
         // Voir échange avec Guillaume, donne 8 (session du 22 juillet) : cherche le
         // palier légal le plus proche à PARTIR de raiseLevel, plutôt qu'un seul essai
         // précis — une intervention adverse (ex. un barrage) peut avoir rendu ce palier
@@ -4891,14 +4900,20 @@ function decideOpenerResponseToPartnerDouble(hand, hcp, hl, doubleIndex, seat, h
     if (candidates.length === 0) candidates = ['S', 'H', 'D', 'C'];
     const fitSuit = candidates.reduce((best, s) => (lengths[s] > lengths[best] ? s : best), candidates[0]);
 
-    // Échelle classique, comme pour n'importe quel fit confirmé par une annonce du
-    // partenaire (voir decideOpenerRebidAfterNewSuit) : mon minimum d'ouverture (12+) est
-    // déjà connu du partenaire, donc c'est MA main qui détermine s'il faut pousser au-delà
-    // du minimum que montre son contre.
-    let targetLevel;
-    if (hcp >= 18) targetLevel = 4;
-    else if (hcp >= 15) targetLevel = 3;
-    else targetLevel = 1;
+    // Voir échange avec Guillaume (donne 1, session du 30 juillet, précisé après test) :
+    // le contre du partenaire promet 8H+ SANS LIMITE HAUTE — un simple palier fixe selon
+    // mon HCP brut (l'ancienne version) ignorait complètement ma propre distribution une
+    // fois le fit connu (chicane, longueurs 6ème/5ème...) et le fait que la concurrence
+    // adverse peut déjà avoir consommé la place des paliers bas, faussant "palier minimum
+    // = main minimale". Bascule sur les points de SOUTIEN (HLD, chicane/longueur
+    // comprises maintenant que le fit est identifié — voir computeSupportPoints),
+    // combinés au plancher du contre (8), comparés aux vraies zones de manche/chelem du
+    // moteur (mêmes constantes qu'ailleurs) — pas un palier arbitraire.
+    const partnerFloor = 8;
+    const supportPoints = computeSupportPoints(hand, fitSuit, 4);
+    const isMajor = fitSuit === 'S' || fitSuit === 'H';
+    const gameZone = isMajor ? GAME_ZONE_MAJOR : GAME_ZONE_MINOR;
+    const gameLevel = isMajor ? 4 : 5;
 
     let minLegalLevel = null;
     for (let level = 1; level <= 7; level++) {
@@ -4906,8 +4921,22 @@ function decideOpenerResponseToPartnerDouble(hand, hcp, hl, doubleIndex, seat, h
     }
     if (minLegalLevel === null) return 'PASS';
 
+    if (supportPoints + partnerFloor >= SLAM_ZONE_GRAND) {
+        const call = '7' + fitSuit;
+        if (isCallLegal(history, call, seat)) return call;
+    }
+    if (supportPoints + partnerFloor >= SLAM_ZONE_SMALL) {
+        const call = '6' + fitSuit;
+        if (isCallLegal(history, call, seat)) return call;
+    }
+
+    let targetLevel;
+    if (supportPoints + partnerFloor >= gameZone) targetLevel = gameLevel; // manche acquise avec le plancher du contre
+    else if (supportPoints >= 15) targetLevel = 3; // invite : nettement au-dessus d'une ouverture minimale
+    else targetLevel = 1; // minimum
+
     for (let level = Math.max(targetLevel, minLegalLevel); level <= 7; level++) {
-        const call = level + fitSuit;
+        const call = fitSuit === 'NT' ? level + 'NT' : level + fitSuit;
         if (isCallLegal(history, call, seat)) return call;
     }
     return 'PASS';
@@ -5761,7 +5790,40 @@ function decideRobotCall(seat, deal, history) {
         const myPartnerDouble = history.slice().reverse()
             .find(e => partnershipOf(e.seat) === partnershipOf(seat) && isDouble(e.call) && e !== myBids[0]);
 
-        if (wasOpening && !myPartnerBid && myPartnerDouble) {
+        // Voir échange avec Guillaume (donne 4, session du 30 juillet) : mon UNIQUE
+        // annonce précédente (myBids[0]) était-elle elle-même une réponse au contre du
+        // partenaire (ex. "1SA" en réponse à son contre de réveil, voir
+        // decideRobotResponseToDouble) plutôt qu'une vraie réponse à une ouverture ? Sans
+        // cette détection, ce cas tombait dans la branche générique "!wasOpening &&
+        // myPartnerBid" plus bas, qui suppose à tort que le tout premier bid de l'enchère
+        // est l'ouverture DU PARTENAIRE — ici c'est celle de l'ADVERSAIRE (West), menant à
+        // un non-sens (cue-bid dans sa couleur alors que mon 1SA avait déjà promis l'arrêt).
+        const priorPartnerActionForDoubleResp = history.slice(0, myBidIndex).reverse()
+            .find(e => partnershipOf(e.seat) === partnershipOf(seat) && (isBidCall(e.call) || isDouble(e.call)));
+        const myBidWasResponseToPartnerDouble = priorPartnerActionForDoubleResp && isDouble(priorPartnerActionForDoubleResp.call);
+
+        if (myBidWasResponseToPartnerDouble && myPartnerBid) {
+            // Le contre de réveil du partenaire s'engage dès 8H SANS LIMITE HAUTE — mes
+            // 10-12H déjà montrés (via 1SA) suffisent pour viser la manche dès qu'il a
+            // assez insisté pour montrer une vraie couleur ici (voir decideDoublerFollowUp).
+            const partnerSuitAfterDouble = parseBid(myPartnerBid.call);
+            const lengthsForDoubleFollow = suitLengths(hand);
+            if (partnerSuitAfterDouble && partnerSuitAfterDouble.strain !== 'NT' && lengthsForDoubleFollow[partnerSuitAfterDouble.strain] >= 3) {
+                const isMajorFollow = partnerSuitAfterDouble.strain === 'S' || partnerSuitAfterDouble.strain === 'H';
+                const gameLevelFollow = isMajorFollow ? 4 : 5;
+                for (let level = Math.max(gameLevelFollow, partnerSuitAfterDouble.level); level <= 7; level++) {
+                    const c = level + partnerSuitAfterDouble.strain;
+                    if (isCallLegal(history, c, seat)) { call = c; break; }
+                }
+                if (call !== 'PASS') explanation = `Fit trouvé avec la couleur du partenaire après son contre de réveil — manche (${points})`;
+            } else {
+                for (let level = 3; level <= 7; level++) {
+                    const c = level + 'NT';
+                    if (isCallLegal(history, c, seat)) { call = c; break; }
+                }
+                if (call !== 'PASS') explanation = `Pas de fit franc avec la couleur du partenaire — manche à SA, l'arrêt est déjà promis par mon 1SA (${points})`;
+            }
+        } else if (wasOpening && !myPartnerBid && myPartnerDouble) {
             call = decideOpenerResponseToPartnerDouble(hand, hcp, hl, history.indexOf(myPartnerDouble), seat, history);
             explanation = `Réponse au contre du partenaire après intervention adverse — obligation de donner le fit (${points})`;
         } else if (wasOpening && myPartnerBid) {
