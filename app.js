@@ -6002,30 +6002,85 @@ function decideRobotCall(seat, deal, history) {
                         : `Texas mineur complété, main régulière en zone de chelem (${points})`;
                 }
             } else if (wasStaymanAsk) {
-                const openerMinHcp = partnerOpeningBid.level === 1 ? 15 : 20;
+                const openerMinHl = partnerOpeningBid.level === 1 ? 15 : 20;
+                const openerMaxHl = partnerOpeningBid.level === 1 ? 17 : 21;
                 const partnerReplyBid = parseBid(myPartnerBid.call);
                 const lengths = suitLengths(hand);
                 const majorFit = (partnerReplyBid.strain === 'H' || partnerReplyBid.strain === 'S')
                     && lengths[partnerReplyBid.strain] >= 4;
-                if (majorFit && hcp + openerMinHcp >= 25) {
-                    call = '4' + partnerReplyBid.strain;
-                    explanation = `Fit trouvé après Stayman, manche (${points})`;
-                } else if (majorFit) {
-                    explanation = `Fit trouvé après Stayman, pas assez pour la manche — passe (${points})`;
-                } else if (hcp + openerMinHcp >= 25) {
-                    call = '3NT';
-                    explanation = `Pas de majeure trouvée après Stayman, manche à SA (${points})`;
+                // Voir échange avec Guillaume ("zone de manche possible/certaine", session
+                // du 30 juillet) : un fit de 4+ cartes trouvé via Stayman est un vrai fit
+                // connu — points de SOUTIEN (HLD), pas HCP brut. Sans fit (on file vers SA
+                // à la place), on reste en HL (aucun fit à réévaluer). Zone de manche du
+                // SEF adaptée : GAME_ZONE_MAJOR (27, fit connu) ou GAME_ZONE_NT (25, sans
+                // fit) — jamais un seuil fixe unique pour les deux cas.
+                const myPoints = majorFit ? computeSupportPoints(hand, partnerReplyBid.strain, 4) : hl;
+                const zone = majorFit ? GAME_ZONE_MAJOR : GAME_ZONE_NT;
+                if (majorFit) {
+                    if (myPoints + openerMinHl >= zone) {
+                        call = '4' + partnerReplyBid.strain;
+                        explanation = `Fit trouvé après Stayman, assez de points de soutien (${myPoints}) — manche certaine (${points})`;
+                    } else if (myPoints + openerMaxHl >= zone) {
+                        // Voir échange avec Guillaume ("la séquence doit continuer jusqu'à
+                        // ce qu'on se rende compte de ce qu'il en est") : manche pas
+                        // certaine (dépend d'où le partenaire se situe dans sa fourchette)
+                        // mais possible — on continue (invite au palier 3) plutôt que de
+                        // passer à l'aveugle.
+                        call = '3' + partnerReplyBid.strain;
+                        explanation = `Fit trouvé après Stayman, zone de manche possible (pas certaine) — continue pour savoir (${points})`;
+                    } else {
+                        explanation = `Fit trouvé après Stayman, pas assez pour la manche même dans le meilleur des cas — passe (${points})`;
+                    }
                 } else {
-                    explanation = `Pas de majeure trouvée après Stayman, pas assez pour la manche — passe (${points})`;
+                    if (myPoints + openerMinHl >= zone) {
+                        call = '3NT';
+                        explanation = `Pas de majeure trouvée après Stayman, assez de points (${myPoints}) — manche certaine à SA (${points})`;
+                    } else if (myPoints + openerMaxHl >= zone) {
+                        call = '2NT';
+                        explanation = `Pas de majeure trouvée après Stayman, zone de manche possible (pas certaine) — invite à SA (${points})`;
+                    } else {
+                        explanation = `Pas de majeure trouvée après Stayman, pas assez pour la manche même dans le meilleur des cas — passe (${points})`;
+                    }
                 }
             } else if (wasJacobyTransferAsk) {
-                const openerMinHcp = partnerOpeningBid.level === 1 ? 15 : 20;
-                if (hcp + openerMinHcp >= 25) {
-                    const major = myAskBid.strain === 'D' ? 'H' : 'S';
+                // Voir échange avec Guillaume ("zone de manche possible/certaine", session
+                // du 30 juillet — exemple concret : chicane ignorée après un Texas) : le
+                // transfert confirme DÉJÀ un fit (5+ cartes chez le partenaire dans cette
+                // majeure) — points de SOUTIEN (HLD, chicane/singleton compris), jamais
+                // HCP brut comme avant (qui ignorait par exemple une chicane entière).
+                // GAME_ZONE_MAJOR (27, fit connu), pas un seuil fixe à 25 emprunté à SA.
+                const major = myAskBid.strain === 'D' ? 'H' : 'S';
+                // Voir échange avec Guillaume ("la rectification d'un Texas ne promet pas
+                // du tout un fit", session du 30 juillet) : la rectification est un geste
+                // MÉCANIQUE et forcé (l'ouvreur DOIT compléter, quelle que soit sa main
+                // dans cette couleur) — contrairement à un soutien ou une réponse Stayman,
+                // qui sont un vrai choix du partenaire montrant sa longueur réelle. Les 5+
+                // cartes du transfert sont les MIENNES, jamais celles du partenaire — donc
+                // pas de vraie garantie de longueur chez lui à utiliser pour le bonus du
+                // 9ème atout. Seul plancher connu : un SA équilibré n'a normalement pas de
+                // chicane/singleton, donc au moins 2 cartes partout — plancher prudent,
+                // pas une vraie promesse de fit.
+                const supportPointsForTransfer = computeSupportPoints(hand, major, 2);
+                const openerMinHl = partnerOpeningBid.level === 1 ? 15 : 20;
+                const openerMaxHl = partnerOpeningBid.level === 1 ? 17 : 21;
+
+                if (supportPointsForTransfer + openerMinHl >= GAME_ZONE_MAJOR) {
                     call = '4' + major;
-                    explanation = `Assez de points après le transfert, manche (${points})`;
+                    explanation = `Assez de points de soutien après le transfert (${supportPointsForTransfer}) — manche certaine (${points})`;
+                } else if (supportPointsForTransfer + openerMaxHl >= GAME_ZONE_MAJOR) {
+                    // Voir échange avec Guillaume : manche pas certaine (dépend d'où le
+                    // partenaire se situe dans sa fourchette 15-17/20-21) mais possible —
+                    // on continue au lieu de passer : relance au palier 3 dans la majeure,
+                    // le partenaire tranchera (minimum -> s'arrête, maximum -> manche).
+                    for (let level = 3; level <= 7; level++) {
+                        const c = level + major;
+                        if (isCallLegal(history, c, seat)) { call = c; break; }
+                    }
+                    explanation = call !== 'PASS'
+                        ? `Zone de manche possible (pas certaine) après le transfert — continue pour savoir (${points})`
+                        : `A déjà annoncé — passe (règle du tour unique)`;
                 } else {
-                    explanation = `Transfert complété, pas assez pour la manche — passe (${points})`;
+                    explanation = `Transfert complété, pas assez pour la manche même dans le meilleur des cas — passe (${points})`;
                 }
             } else {
             const responseLengths = myResponseBid ? suitLengths(hand) : null;
