@@ -469,33 +469,29 @@ function decideResponseToStrongDiamond(hand, seat, history) {
     return 'PASS';
 }
 
-// Voir échange avec Guillaume (session du 30 juillet) : suite de l'ouvreur de 2♦ après la
-// réponse CRM du partenaire. Version SIMPLIFIÉE — pas de vraie enchère de contrôle
-// intermédiaire (façon Blackwood) : l'ouvreur conclut directement à partir du nombre
-// total d'As connus (les siens + ceux que la réponse du partenaire indique) : 4 As ->
-// chelem tenté d'emblée (grand si tout va bien), 3 -> petit chelem, sinon -> manche.
-// Couleur : SA si ma main est régulière, sinon ma plus longue (souvent un unicolore, voir
-// l'ouverture elle-même).
+// Voir échange avec Guillaume (session du 30 juillet, précisé après test) : l'ouvreur ne
+// cherche PAS le chelem lui-même après la réponse CRM — il a déjà tout dit en ouvrant de
+// 2♦ (peu de levées, le partenaire peut avoir 0H), donc il redemande simplement sa main
+// NATURELLEMENT ("2SA" si régulière — montre juste 24HL+, forcing — ou sa plus longue
+// sinon), quelle que soit la réponse CRM entendue. C'est au PARTENAIRE de prendre les
+// devants ensuite s'il a des réserves à exploiter (Stayman/Texas sur ce "2SA", voir
+// decideRobotCall — la rectification d'un Texas ici EST fittée, contrairement à un
+// Texas sur 1SA, car 24HL+ régulière garantit quasiment un support quelque part).
 function decideOpenerRebidAfterStrongDiamond(hand, seat, history, responseCall) {
     const lengths = suitLengths(hand);
     const balanced = isHandBalancedForNT(lengths);
-    const myAceCount = ['S', 'H', 'D', 'C'].filter(s => (hand[s] || '').includes('A')).length;
+    const responseParsed = parseBid(responseCall);
+    const minLevel = responseParsed ? responseParsed.level : 2;
 
-    let partnerAceCount = 0;
-    if (responseCall === '2S' || responseCall === '3C' || responseCall === '3D') partnerAceCount = 1;
-    else if (responseCall === '3H' || responseCall === '3S' || responseCall === '3NT') partnerAceCount = 2;
-    else if (responseCall === '4NT') partnerAceCount = 3;
-
-    const totalAces = myAceCount + partnerAceCount;
-    const strain = balanced ? 'NT' : longestSuitPreferHigh(lengths);
-    const gameLevel = strain === 'NT' ? 3 : ((strain === 'S' || strain === 'H') ? 4 : 5);
-
-    let targetLevel = gameLevel;
-    if (totalAces >= 4) targetLevel = 7;
-    else if (totalAces === 3) targetLevel = 6;
-
-    for (let level = targetLevel; level <= 7; level++) {
-        const call = strain === 'NT' ? level + 'NT' : level + strain;
+    if (balanced) {
+        for (let level = minLevel; level <= 7; level++) {
+            const call = level + 'NT';
+            if (isCallLegal(history, call, seat)) return call;
+        }
+    }
+    const suit = longestSuitPreferHigh(lengths);
+    for (let level = minLevel; level <= 7; level++) {
+        const call = level + suit;
         if (isCallLegal(history, call, seat)) return call;
     }
     return 'PASS';
@@ -577,8 +573,16 @@ function decideRobotResponse(hand, hcp, hl, partnerCall, seat, history, partnerP
         // n'existe pas" de sauter plus haut) — c'est la suite du répondant après la
         // complétion (déclenchée depuis decideRobotCall) qui juge ensuite s'il y a assez
         // pour la manche.
+        //
+        // Voir échange avec Guillaume (session du 30 juillet, précisé après test) :
+        // distinction cruciale entre 1SA et 2SA/"super 2SA" (2♣/2♦ puis 2SA, voir
+        // decideOpenerRebidAfterStrongDiamond) — sur 1SA, le Texas est purement
+        // mécanique, faisable avec 0H (aucune condition ici, voir plus bas). Sur 2SA (ou
+        // super 2SA), la rectification EST fittée : il faut déjà les points de manche
+        // pour faire le Texas (le plancher de l'ouvreur, 20HL au minimum même pour un
+        // simple 2SA direct, garantit la manche dès qu'on y ajoute un minimum chez soi).
         const fiveCardMajor = ['S', 'H'].find(s => lengths[s] >= 5);
-        if (fiveCardMajor) {
+        if (fiveCardMajor && (bid.level === 1 || hl >= 5)) {
             const transferAsk = fiveCardMajor === 'H' ? 'D' : 'H';
             const call = lv1 + transferAsk;
             if (isCallLegal(history, call, seat)) return call;
@@ -1254,6 +1258,28 @@ function decideResponderContinuationAfterNewSuit(hand, hcp, hl, openingBid, myRe
         if (lengths[myResponseBid.strain] >= 6) {
             fitSuit = myResponseBid.strain;
             zonePoints = computeSupportPoints(hand, fitSuit, 2);
+        }
+    }
+
+    // Voir échange avec Guillaume (donne 8, session du 30 juillet) : toujours pas de fit
+    // trouvé nulle part (ni dans l'ouverture, ni dans la redemande du partenaire, ni via
+    // un déni explicite à SA ci-dessus) — MA PROPRE couleur, si assez longue et de bonne
+    // qualité, mérite d'être jouée unilatéralement plutôt que de finir sur un SA
+    // générique. Sans savoir combien de cartes le partenaire y a réellement (aucun déni
+    // ni confirmation ici, contrairement au cas SA ci-dessus), on reste en HL BRUT — pas
+    // de points de soutien, qui supposeraient à tort une longueur connue chez lui : 7+
+    // cartes suffit seule ; 6 cartes exige EN PLUS un singleton ailleurs (valeur de ruff)
+    // et une belle couleur (2+ gros honneurs A/R/D) pour compenser la longueur manquante.
+    if (!fitSuit && (myResponseBid.strain === 'S' || myResponseBid.strain === 'H')) {
+        const ownSuit = myResponseBid.strain;
+        const ownLen = lengths[ownSuit];
+        const hasOutsideSingleton = ['S', 'H', 'D', 'C'].some(s => s !== ownSuit && lengths[s] === 1);
+        const ownSuitCards = hand[ownSuit] || '';
+        const topHonors = ['A', 'K', 'Q'].filter(r => ownSuitCards.includes(r)).length;
+        const goodEnoughAt6 = ownLen === 6 && hasOutsideSingleton && topHonors >= 2;
+        if ((ownLen >= 7 || goodEnoughAt6) && hl + OPENING_MINIMUM >= GAME_ZONE_NT) {
+            fitSuit = ownSuit;
+            zonePoints = hl;
         }
     }
 
@@ -2390,6 +2416,22 @@ function decideRobotCall(seat, deal, history) {
         const myPartnerBid = history.slice().reverse()
             .find(e => partnershipOf(e.seat) === partnershipOf(seat) && isBidCall(e.call) && e !== myBids[0]);
 
+        // Voir échange avec Guillaume (session du 30 juillet — CRM moderne) : ma seule
+        // annonce précédente était-elle une réponse CRM à l'ouverture forte du partenaire
+        // (2♣/2♦), et vient-il de redemander "2SA" naturellement (montrant sa vraie
+        // force, voir decideOpenerRebidAfterStrongDiamond) ? Ce "2SA" fonctionne alors
+        // EXACTEMENT comme une ouverture à SA pour la suite — Stayman/Texas déjà en
+        // place, réutilisés tels quels plutôt que de mal interpréter la séquence via la
+        // logique générique de suite du répondant plus bas.
+        const partnerFirstBidForCRM = history.find(e => partnershipOf(e.seat) === partnershipOf(seat) && e.seat !== seat && isBidCall(e.call));
+        const wasStrongOpeningCRMThenNT = partnerFirstBidForCRM
+            && (partnerFirstBidForCRM.call === '2C' || partnerFirstBidForCRM.call === '2D')
+            && myPartnerBid && myPartnerBid.call === '2NT';
+        if (wasStrongOpeningCRMThenNT) {
+            const callAfterStrongNT = decideRobotResponse(hand, hcp, hl, '2NT', seat, history, false, false, true, false);
+            return { call: callAfterStrongNT, explanation: `Stayman/Texas sur le "2SA" naturel de l'ouvreur après l'ouverture forte (${points})` };
+        }
+
         // Voir échange avec Guillaume (donne 1, session du 30 juillet) : mon partenaire
         // a-t-il répondu à MON OUVERTURE par un CONTRE plutôt qu'une vraie enchère
         // chiffrée (négatif façon Sputnik, après l'intervention d'un adversaire) ?
@@ -2858,6 +2900,27 @@ function decideRobotCall(seat, deal, history) {
                 }
             }
 
+            // Voir échange avec Guillaume (donne 8, session du 30 juillet) : avant de me
+            // rabattre sur une simple préférence entre les 2 couleurs du partenaire (ci-
+            // dessus), ma PROPRE couleur déjà montrée mérite d'être répétée si elle est
+            // assez longue/belle — plus descriptif qu'une préférence qui ignore ma vraie
+            // main. 7+ cartes suffit seule ; 6 cartes exige un singleton ailleurs (valeur
+            // de ruff) ET une belle couleur (2+ gros honneurs A/R/D) pour compenser.
+            let ownSuitRepeatCall = null;
+            if ((myResponseBid.strain === 'S' || myResponseBid.strain === 'H') && responseLengths) {
+                const ownLen = responseLengths[myResponseBid.strain];
+                const hasOutsideSingleton = ['S', 'H', 'D', 'C'].some(s => s !== myResponseBid.strain && responseLengths[s] === 1);
+                const ownSuitCards = hand[myResponseBid.strain] || '';
+                const topHonors = ['A', 'K', 'Q'].filter(r => ownSuitCards.includes(r)).length;
+                const goodEnoughAt6 = ownLen === 6 && hasOutsideSingleton && topHonors >= 2;
+                if (ownLen >= 7 || goodEnoughAt6) {
+                    for (let level = partnerRebidBid.level; level <= 7; level++) {
+                        const c = level + myResponseBid.strain;
+                        if (isCallLegal(history, c, seat)) { ownSuitRepeatCall = c; break; }
+                    }
+                }
+            }
+
             if ((knowsGameZone || mustAnswerQuantitative || knowsGameZoneViaFit || was2over1GameForcing) && partnerBidsCount === 2) {
                 call = decideResponderContinuationAfterNewSuit(hand, hcp, hl, partnerOpeningBid, myResponseBid, myPartnerBid.call, seat, history);
                 explanation = `Suite en zone de manche après ${formatCallForDisplay(myPartnerBid.call)} du partenaire (${points})`;
@@ -2915,6 +2978,9 @@ function decideRobotCall(seat, deal, history) {
                 } else {
                     explanation = `Soutien direct du partenaire (12-14H) — pas assez pour insister, on reste là (${points})`;
                 }
+            } else if (ownSuitRepeatCall && partnerBidsCount === 2) {
+                call = ownSuitRepeatCall;
+                explanation = `Belle couleur assez longue chez moi (${responseLengths[myResponseBid.strain]} cartes) — je la répète plutôt qu'une préférence entre les couleurs du partenaire (${points})`;
             } else if (preferenceCall && partnerBidsCount === 2) {
                 call = preferenceCall;
                 explanation = `Préférence simple vers l'ouverture du partenaire (${responseLengths[partnerOpeningBid.strain]} cartes, contre ${responseLengths[partnerRebidBid.strain]} dans sa redemande) plutôt qu'un SA sans arrêt confirmé (${points})`;
