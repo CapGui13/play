@@ -2483,7 +2483,22 @@ function decideRobotCall(seat, deal, history) {
         // ouverture pour mon propre camp, même si un adversaire a parlé avant). Ce qui
         // compte vraiment : aucune annonce de MON PROPRE CAMP (moi ou mon partenaire)
         // avant la mienne — peu importe ce que l'adversaire a fait.
-        const wasOpening = !history.slice(0, myBidIndex).some(entry => partnershipOf(entry.seat) === partnershipOf(seat) && isBidCall(entry.call));
+        //
+        // Voir échange avec Guillaume (outil de simulation, session du 30 juillet — bug
+        // trouvé DANS ce même correctif : une simple INTERVENTION directe, ex. "1P" sur
+        // l'ouverture adverse de "1K" sans le moindre passe entre les deux, se faisait
+        // AUSSI compter à tort comme "mon ouverture" par ce même calcul — provoquant un
+        // contre-sens total plus tard (traité comme un ouvreur répondant au contre du
+        // partenaire, au lieu d'un intervenant). Précision ajoutée : en plus de "aucune
+        // annonce de mon camp avant", il faut aussi qu'AUCUN adversaire n'ait parlé JUSTE
+        // AVANT ma première annonce sans un passe entre les deux — une réouverture est
+        // TOUJOURS précédée d'un passe (le mien ou celui d'un adversaire) juste avant
+        // elle ; une intervention directe, elle, suit immédiatement l'enchère adverse,
+        // sans aucun passe intercalé.
+        const historyBeforeMyFirstBid = history.slice(0, myBidIndex);
+        const noPartnershipBidBefore = !historyBeforeMyFirstBid.some(entry => partnershipOf(entry.seat) === partnershipOf(seat) && isBidCall(entry.call));
+        const immediatelyPrecededByPass = historyBeforeMyFirstBid.length === 0 || isPass(historyBeforeMyFirstBid[historyBeforeMyFirstBid.length - 1].call);
+        const wasOpening = noPartnershipBidBefore && immediatelyPrecededByPass;
         const myPartnerBid = history.slice().reverse()
             .find(e => partnershipOf(e.seat) === partnershipOf(seat) && isBidCall(e.call) && e !== myBids[0]);
 
