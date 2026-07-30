@@ -139,6 +139,25 @@ function computeHandHL(hand) {
     return computeHandHcp(hand) + lengthPoints;
 }
 
+// Compte de PERDANTES (méthode standard "Losing Trick Count") — voir échange avec
+// Guillaume (session du 30 juillet, ouvertures fortes) : jamais implémenté jusqu'ici. Ne
+// regarde que les 3 premières cartes de chaque couleur (une 4ème+ carte ne compte jamais,
+// même faible) : chacune qui n'est ni As, ni Roi, ni Dame est une perdante. Une chicane
+// (0 carte) donne 0 perdante dans cette couleur ; un singleton As ou un doubleton AR en
+// donnent 0 aussi. Version volontairement simple (pas de demi-perdantes façon NLTC) —
+// suffisante pour juger une ouverture forte, pas pour un jeu de la carte fin.
+function computeLoserCount(hand) {
+    let losers = 0;
+    ['S', 'H', 'D', 'C'].forEach(suit => {
+        const ranks = hand[suit] || '';
+        const relevantLen = Math.min(ranks.length, 3);
+        for (let i = 0; i < relevantLen; i++) {
+            if (!'AKQ'.includes(ranks[i])) losers++;
+        }
+    });
+    return losers;
+}
+
 // Points de "soutien" (voir échange avec Guillaume, donne 2 — la terminologie "HLD" du
 // SEF signifie H + Longueur OU Distribution selon le contexte, pas les deux à la fois sur
 // la même main) : quand on soutient une couleur du partenaire dont la longueur est
@@ -186,13 +205,11 @@ function decideOpeningSuit(lengths) {
 }
 
 // Décision d'OUVERTURE (personne n'a encore annoncé quoi que ce soit dans cette donne).
-// Seuils repris de la fiche "Ouvertures" du SEF (voir échange avec Guillaume), simplifiée
-// pour l'essentiel — sans 2♣ fort indéterminé ni 2♦ forcing de manche (main exceptionnelle
-// hors barème, laissée à une ouverture au palier 1 par défaut, faute d'implémenter tout un
-// système de relais pour une main sur plusieurs centaines).
+// Seuils repris de la fiche "Ouvertures" du SEF (voir échange avec Guillaume).
 function decideRobotOpening(hand, hcp, hl, dealVulnerable, seat) {
     const lengths = suitLengths(hand);
     const balanced = isHandBalancedForNT(lengths);
+    const losers = computeLoserCount(hand);
 
     // 1SA : exception SEF explicite, on compte ici en H purs, pas en HL.
     if (hcp >= 15 && hcp <= 17 && balanced) return '1NT';
@@ -200,13 +217,18 @@ function decideRobotOpening(hand, hcp, hl, dealVulnerable, seat) {
     // nuance non reprise ici par simplicité).
     if (hl >= 20 && hl <= 21 && balanced) return '2NT';
 
-    // 2♣ fort artificiel (forcing) : main régulière 22-23HL, au-delà de la fourchette du
-    // 2SA direct (voir échange avec Guillaume, donne 4) — un "super 2SA" annoncé en deux
-    // temps (2♣ puis 2SA au rebid, voir decideRobotOpenerRebid) plutôt qu'un 2SA direct
-    // qui plafonnerait à tort la main à 20-21. Volontairement borné à CE seul cas (main
-    // RÉGULIÈRE) : un 2♣ fort avec une main irrégulière nécessiterait tout un système de
-    // relais/réponses par couleur, hors de portée ici (voir "Limites connues" du README).
-    if (hl >= 22 && hl <= 23 && balanced) return '2C';
+    // 2♦ FORCING DE MANCHE (voir échange avec Guillaume, session du 30 juillet — CRM
+    // moderne) : main régulière 24HL+, OU main de 4 perdantes (souvent un unicolore 6+,
+    // voir computeLoserCount) — le palier au-dessus du 2♣ juste en dessous. Vérifié EN
+    // PREMIER (priorité sur le 2♣, qui couvre une main moins extrême).
+    if ((hl >= 24 && balanced) || losers <= 4) return '2D';
+
+    // 2♣ fort artificiel (forcing) : main régulière 22-23HL (voir échange avec Guillaume,
+    // donne 4), OU main de 5 perdantes (voir échange avec Guillaume, session du 30
+    // juillet) — un "super 2SA" annoncé en deux temps (2♣ puis 2SA au rebid si régulière,
+    // ou sa couleur si un unicolore, voir decideRobotOpenerRebid) plutôt qu'un 2SA direct
+    // qui plafonnerait à tort la main à 20-21.
+    if ((hl >= 22 && hl <= 23 && balanced) || losers === 5) return '2C';
 
     // Barrages faibles (système "majeure 5ème") : 6 cartes à une majeure au palier 2
     // ("2 faible"), 7 cartes au palier 3, 8 cartes au palier 4 — toujours la couleur la
@@ -351,6 +373,134 @@ function decideRobotMajorSupport(hand, hcp, hl, bid, seat, history) {
 // la dernière de toute l'enchère, sans intervention adverse entre les deux). `hcp` et
 // `partnerPromises5Plus` sont utilisés uniquement pour le soutien (voir plus bas) — voir
 // échange avec Guillaume.
+// Voir échange avec Guillaume (session du 30 juillet, donne 5) : réponse du répondant à un
+// vrai BARRAGE (2/3/4 faible). Principe central, aux antipodes de ce qu'on pensait
+// d'abord : SANS fit (mésentente avec l'atout du partenaire — même une chicane dans SA
+// propre couleur, voir la donne 5 elle-même), seul le HCP BRUT compte, car le barreur
+// plafonne à 10H (2 palier), 11H (3), 12H (4) — jamais de HLD ici, la distribution ne sert
+// à rien si on ne va pas jouer dans cette couleur. AVEC un fit, on bascule en points de
+// SOUTIEN (HLD, chicane dans une AUTRE couleur devient un vrai atout) : un fit se compte
+// sur 8 CARTES À EUX DEUX, jamais un seuil de longueur fixe chez moi seul — dépend de ce
+// que CE barrage promet réellement selon son palier (6 à 2, 7 à 3, 8 à 4).
+function decideResponseToWeakTwo(hand, hcp, hl, bid, seat, history) {
+    const lengths = suitLengths(hand);
+    const barragePromisedLength = bid.level + 4;
+    const totalTrumps = lengths[bid.strain] + barragePromisedLength;
+    const hasFit = totalTrumps >= 8;
+    const isMajor = bid.strain === 'S' || bid.strain === 'H';
+    const gameLevel = isMajor ? 4 : 5;
+
+    if (hasFit) {
+        const supportPoints = computeSupportPoints(hand, bid.strain, barragePromisedLength);
+        if (supportPoints >= 19) {
+            for (let level = gameLevel; level <= 7; level++) {
+                const call = level + bid.strain;
+                if (isCallLegal(history, call, seat)) return call;
+            }
+        }
+        if (supportPoints >= 15) {
+            const call = '2NT';
+            if (isCallLegal(history, call, seat)) return call;
+        }
+        // En dessous de 15 points de soutien : pas d'espoir de manche. Loi des atouts —
+        // fit 9ème+ (3+ cartes réelles au-delà du plancher promis) ET 8H+ : relance d'un
+        // palier (sécurité distributionnelle). Sinon, déjà au bon palier, rien à ajouter.
+        if (hcp >= 8 && totalTrumps >= 9) {
+            const call = (bid.level + 1) + bid.strain;
+            if (isCallLegal(history, call, seat)) return call;
+        }
+        return 'PASS';
+    }
+
+    // Pas de fit : HCP brut, le barreur plafonne (10H à 2, 11H à 3, 12H à 4 — voir
+    // decideRobotOpening pour ces mêmes plafonds côté ouverture).
+    if (hcp >= 19) {
+        const call = '3NT';
+        if (isCallLegal(history, call, seat)) return call;
+    }
+    if (hcp >= 15) {
+        const call = '2NT';
+        if (isCallLegal(history, call, seat)) return call;
+    }
+    return 'PASS';
+}
+
+// Voir échange avec Guillaume (session du 30 juillet — CRM moderne) : réponse à
+// l'ouverture de 2♦ forcing de manche. Priorité ABSOLUE à l'annonce des As (jamais les
+// points d'abord) :
+//   2♣ = pas d'As ; 2♠ = 1 As majeur (♥ ou ♠, sans préciser lequel) ; 2SA = du jeu sans
+//   As (2 Rois ou 8H+) ; 3♣ = As de ♣ ; 3♦ = As de ♦ ; 3♥ = 2 As même couleur (rouges
+//   ♥/♦ ou noirs ♠/♣) ; 3♠ = 2 As même rang (majeurs ♥/♠ ou mineurs ♦/♣) ; 3SA = 2 As
+//   mélangés (ni même rang ni même couleur). 3+ As : cas non couvert explicitement par
+//   l'échelle (qui s'arrête à 2) — choix pragmatique, "4SA" direct plutôt que de forcer
+//   une catégorie à 2 As qui ne correspondrait pas.
+function decideResponseToStrongDiamond(hand, seat, history) {
+    const hcp = computeHandHcp(hand);
+    const aceSuits = ['S', 'H', 'D', 'C'].filter(s => (hand[s] || '').includes('A'));
+    const kingCount = ['S', 'H', 'D', 'C'].filter(s => (hand[s] || '').includes('K')).length;
+
+    if (aceSuits.length === 0) {
+        const call = (kingCount >= 2 || hcp >= 8) ? '2NT' : '2H';
+        if (isCallLegal(history, call, seat)) return call;
+        return 'PASS';
+    }
+    if (aceSuits.length === 1) {
+        const suit = aceSuits[0];
+        let call;
+        if (suit === 'S' || suit === 'H') call = '2S';
+        else if (suit === 'C') call = '3C';
+        else call = '3D';
+        if (isCallLegal(history, call, seat)) return call;
+        return 'PASS';
+    }
+    if (aceSuits.length === 2) {
+        const [a, b] = aceSuits;
+        const isRed = s => s === 'H' || s === 'D';
+        const isMajor = s => s === 'S' || s === 'H';
+        let call;
+        if (isRed(a) === isRed(b)) call = '3H';
+        else if (isMajor(a) === isMajor(b)) call = '3S';
+        else call = '3NT';
+        if (isCallLegal(history, call, seat)) return call;
+        return 'PASS';
+    }
+    const call = '4NT';
+    if (isCallLegal(history, call, seat)) return call;
+    return 'PASS';
+}
+
+// Voir échange avec Guillaume (session du 30 juillet) : suite de l'ouvreur de 2♦ après la
+// réponse CRM du partenaire. Version SIMPLIFIÉE — pas de vraie enchère de contrôle
+// intermédiaire (façon Blackwood) : l'ouvreur conclut directement à partir du nombre
+// total d'As connus (les siens + ceux que la réponse du partenaire indique) : 4 As ->
+// chelem tenté d'emblée (grand si tout va bien), 3 -> petit chelem, sinon -> manche.
+// Couleur : SA si ma main est régulière, sinon ma plus longue (souvent un unicolore, voir
+// l'ouverture elle-même).
+function decideOpenerRebidAfterStrongDiamond(hand, seat, history, responseCall) {
+    const lengths = suitLengths(hand);
+    const balanced = isHandBalancedForNT(lengths);
+    const myAceCount = ['S', 'H', 'D', 'C'].filter(s => (hand[s] || '').includes('A')).length;
+
+    let partnerAceCount = 0;
+    if (responseCall === '2S' || responseCall === '3C' || responseCall === '3D') partnerAceCount = 1;
+    else if (responseCall === '3H' || responseCall === '3S' || responseCall === '3NT') partnerAceCount = 2;
+    else if (responseCall === '4NT') partnerAceCount = 3;
+
+    const totalAces = myAceCount + partnerAceCount;
+    const strain = balanced ? 'NT' : longestSuitPreferHigh(lengths);
+    const gameLevel = strain === 'NT' ? 3 : ((strain === 'S' || strain === 'H') ? 4 : 5);
+
+    let targetLevel = gameLevel;
+    if (totalAces >= 4) targetLevel = 7;
+    else if (totalAces === 3) targetLevel = 6;
+
+    for (let level = targetLevel; level <= 7; level++) {
+        const call = strain === 'NT' ? level + 'NT' : level + strain;
+        if (isCallLegal(history, call, seat)) return call;
+    }
+    return 'PASS';
+}
+
 function decideRobotResponse(hand, hcp, hl, partnerCall, seat, history, partnerPromises5Plus, partnerWasIntervening, partnerBidWasOpening, partnerBidWasReopening) {
     const lengths = suitLengths(hand);
     const bid = parseBid(partnerCall);
@@ -386,6 +536,28 @@ function decideRobotResponse(hand, hcp, hl, partnerCall, seat, history, partnerP
     if (partnerCall === '2C' && partnerBidWasOpening) {
         const call = '2D';
         if (isCallLegal(history, call, seat)) return call;
+    }
+
+    // Voir échange avec Guillaume (session du 30 juillet — CRM moderne) : réponse au 2♦
+    // FORCING DE MANCHE — AVANT le dispatch barrage juste en dessous (même forme
+    // générique : palier 2+, ouverture) qui l'intercepterait sinon à tort. Échelle
+    // dédiée, voir decideResponseToStrongDiamond : priorité absolue à l'annonce des As.
+    if (partnerCall === '2D' && partnerBidWasOpening) {
+        return decideResponseToStrongDiamond(hand, seat, history);
+    }
+
+    // Voir échange avec Guillaume (session du 30 juillet, précisant la donne 5) : réponse
+    // à un vrai BARRAGE (2/3/4 faible, jamais 2♣ qui est déjà traité ci-dessus comme le
+    // 2♣ fort artificiel) — échelle dédiée, voir decideResponseToWeakTwo. Remplace
+    // entièrement l'ancien traitement dispersé (soutien majeur générique, seuils "3+
+    // cartes = fitté" faux) par le principe qu'il a précisé : SANS fit, seul le HCP brut
+    // compte (le barreur plafonne, 15H=essai, 19H=manche) ; AVEC un fit (8 cartes à eux
+    // deux, jamais un seuil fixe de longueur — dépend de ce que CE barrage promet selon
+    // son palier), on bascule en HLD (mêmes seuils 15/19), et en dessous de 15 mais avec
+    // un fit 9ème+ et 8H+, la loi des atouts prime (relance d'un palier, pas d'espoir de
+    // manche mais bon palier de sécurité).
+    if (bid.level >= 2 && partnerBidWasOpening) {
+        return decideResponseToWeakTwo(hand, hcp, hl, bid, seat, history);
     }
 
     if (bid.strain === 'NT') {
@@ -559,9 +731,18 @@ function decideRobotResponse(hand, hcp, hl, partnerCall, seat, history, partnerP
     if ((suit === 'S' || suit === 'H') && bid.level === 1) {
         const majorSupport = decideRobotMajorSupport(hand, hcp, hl, bid, seat, history);
         if (majorSupport) return majorSupport;
-    } else if ((suit === 'S' || suit === 'H') && bid.level >= 2 && lengths[suit] >= 3) {
-        const call = (bid.level + 1) + suit;
-        if (isCallLegal(history, call, seat)) return call;
+    } else if ((suit === 'S' || suit === 'H') && bid.level >= 2) {
+        // Voir échange avec Guillaume ("fitté = 8 cartes dans la ligne, pas 3 cartes
+        // fixe", session du 30 juillet) : un barrage promet une longueur qui croît avec
+        // le palier (6 à 2, 7 à 3, 8 à 4 — même convention que le reste du moteur, voir
+        // OPENING_MINIMUM/SIMPLE_RAISE_MINIMUM pour l'esprit similaire côté points). Le
+        // fit se compte sur le VRAI total (ma longueur + celle promise), jamais sur un
+        // seuil fixe qui ignorerait combien le partenaire a réellement annoncé.
+        const barragePromisedLength = bid.level + 4;
+        if (lengths[suit] + barragePromisedLength >= 8) {
+            const call = (bid.level + 1) + suit;
+            if (isCallLegal(history, call, seat)) return call;
+        }
     }
 
     // Voir échange avec Guillaume, donne 3 (session du 22 juillet) : la même idée
@@ -1159,6 +1340,29 @@ function decideOpenerResponseToPartnerDouble(hand, hcp, hl, doubleIndex, seat, h
     if (candidates.length === 0) candidates = ['S', 'H', 'D', 'C'];
     const fitSuit = candidates.reduce((best, s) => (lengths[s] > lengths[best] ? s : best), candidates[0]);
 
+    // Voir échange avec Guillaume (donne 3, session du 30 juillet) : si AUCUNE des
+    // couleurs candidates n'atteint 4 cartes chez moi, il n'y a pas de vrai fit à offrir
+    // (2 cartes ne suffisent pas) — forcer quand même l'une des deux au palier 3 n'a pas
+    // de sens. Critère de "régularité" volontairement plus large qu'isHandBalancedForNT
+    // ici (qui exige au plus UN doubleton, pensé pour une vraie ouverture/rebid à SA) :
+    // ce qui compte pour justifier SA à la place d'un fit inexistant, c'est l'absence de
+    // chicane/singleton, pas la stricte régularité — une main 2-2-4-5 (deux doubletons)
+    // reste parfaitement jouable à SA une fois qu'on sait qu'aucun fit de 4+ n'existe.
+    const hasRealFit = candidates.some(s => lengths[s] >= 4);
+    const noShortness = ['S', 'H', 'D', 'C'].every(s => lengths[s] >= 2);
+    if (!hasRealFit && noShortness) {
+        if (hl + 8 >= GAME_ZONE_NT) {
+            const call = '3NT';
+            if (isCallLegal(history, call, seat)) return call;
+        }
+        if (hl >= 15) {
+            const call = '2NT';
+            if (isCallLegal(history, call, seat)) return call;
+        }
+        const call = '1NT';
+        if (isCallLegal(history, call, seat)) return call;
+    }
+
     // Voir échange avec Guillaume (donne 1, session du 30 juillet, précisé après test) :
     // le contre du partenaire promet 8H+ SANS LIMITE HAUTE — un simple palier fixe selon
     // mon HCP brut (l'ancienne version) ignorait complètement ma propre distribution une
@@ -1692,12 +1896,30 @@ function decideRobotOpenerRebid(hand, hcp, hl, myOpeningCall, partnerCall, seat,
         return 'PASS'; // aucune demande reconnue : rien d'autre géré ici (1SA/2SA déjà bien décrits par ailleurs)
     }
 
-    // Rebid après un 2♣ fort artificiel (voir échange avec Guillaume, donne 4) : "2SA"
-    // pour préciser 22-23HL équilibrée, quelle que soit la réponse relais du partenaire
-    // (toujours "2D", voir decideRobotResponse) — placé AVANT la branche barrage/2 faible
-    // plus bas, qui l'intercepterait sinon à tort (même forme générique : palier 2+,
-    // réponse en couleur différente).
+    // Suite de l'ouvreur après 2♦ forcing de manche (voir échange avec Guillaume, session
+    // du 30 juillet — CRM moderne) : conclut directement à partir de la réponse CRM du
+    // partenaire, voir decideOpenerRebidAfterStrongDiamond. Placé AVANT le 2♣ et le
+    // barrage plus bas (même forme générique : palier 2+, réponse en couleur différente).
+    if (myOpeningCall === '2D') {
+        return decideOpenerRebidAfterStrongDiamond(hand, seat, history, partnerCall);
+    }
+
+    // Rebid après un 2♣ fort artificiel (voir échange avec Guillaume, donne 4, précisé
+    // session du 30 juillet) : "2SA" pour préciser 22-23HL équilibrée, OU sa propre
+    // couleur (la plus longue) si la main a en fait été ouverte via le compte de
+    // perdantes (main irrégulière, typiquement un unicolore) — quelle que soit la réponse
+    // relais du partenaire (toujours "2D", voir decideRobotResponse). Placé AVANT la
+    // branche barrage/2 faible plus bas, qui l'intercepterait sinon à tort (même forme
+    // générique : palier 2+, réponse en couleur différente).
     if (myOpeningCall === '2C') {
+        const lengthsForStrongRebid = suitLengths(hand);
+        if (!isHandBalancedForNT(lengthsForStrongRebid)) {
+            const suit = longestSuitPreferHigh(lengthsForStrongRebid);
+            for (let level = 2; level <= 7; level++) {
+                const call = level + suit;
+                if (isCallLegal(history, call, seat)) return call;
+            }
+        }
         const call = '2NT';
         if (isCallLegal(history, call, seat)) return call;
         return 'PASS'; // filet de sécurité, ne devrait pas arriver (2SA est toujours légal ici)
@@ -1761,6 +1983,28 @@ function decideRobotOpenerRebid(hand, hcp, hl, myOpeningCall, partnerCall, seat,
     // au palier 1 (voir plus bas).
     if (myBid.level >= 2 && partnerParsed && partnerParsed.strain !== myBid.strain && partnerParsed.strain !== 'NT') {
         return decideOpenerRebidAfterWeakTwoForcing(hand, hcp, hl, myBid, partnerParsed, seat, history);
+    }
+
+    // Voir échange avec Guillaume (session du 30 juillet, donne 5) : le partenaire
+    // vient de répondre à MON PROPRE barrage par "2SA" (l'essai généralisé, voir
+    // decideResponseToWeakTwo) — ni fit ni espoir de manche certains de son côté, il me
+    // demande où je me situe dans ma propre fourchette de barrage (8-12HL, quel que soit
+    // le palier). Haut de fourchette (11-12HL) : j'accepte, manche. Bas (8-10HL) : je
+    // décline, retour dans ma couleur au palier minimal.
+    if (myBid.level >= 2 && partnerParsed && partnerParsed.strain === 'NT' && partnerParsed.level === 2) {
+        const isMajorBarrage = myBid.strain === 'S' || myBid.strain === 'H';
+        const gameLevelBarrage = isMajorBarrage ? 4 : 5;
+        if (hl >= 11) {
+            for (let level = gameLevelBarrage; level <= 7; level++) {
+                const call = level + myBid.strain;
+                if (isCallLegal(history, call, seat)) return call;
+            }
+        }
+        for (let level = partnerParsed.level; level <= 7; level++) {
+            const call = level + myBid.strain;
+            if (isCallLegal(history, call, seat)) return call;
+        }
+        return 'PASS';
     }
 
     // Réponse en changement de couleur forcing (voir échange avec Guillaume, donnes 1 et
@@ -2056,24 +2300,28 @@ function decideRobotCall(seat, deal, history) {
                     }
                 }
 
-                // Voir échange avec Guillaume (donne 1, session du 30 juillet) : CONTRE
-                // NÉGATIF / Sputnik — cas complémentaire du contre protecteur ci-dessus
-                // (celui-ci exige un adversaire AVANT le partenaire, celui-là un adversaire
-                // JUSTE APRÈS, la situation la plus courante — RHO intervient directement
-                // sur l'ouverture du partenaire). Avant de chercher une enchère naturelle
-                // (qui pourrait à tort tomber sur LEUR couleur, voir l'exclusion ajoutée
-                // dans decideRobotResponse), un contre mérite considération dès qu'il reste
-                // au moins une couleur pas encore montrée où j'ai 4+ cartes, avec 8H+ (même
-                // plancher que les autres contres de ce type). Priorité sur l'enchère
-                // naturelle : placé avant le "if (call !== 'X')" plus bas, pas après.
+                // Voir échange avec Guillaume (donne 1, session du 30 juillet, précisé
+                // donne 3) : CONTRE NÉGATIF / Sputnik — cas complémentaire du contre
+                // protecteur ci-dessus (celui-ci exige un adversaire AVANT le partenaire,
+                // celui-là un adversaire JUSTE APRÈS, la situation la plus courante — RHO
+                // intervient directement sur l'ouverture du partenaire). "On ne joue pas
+                // la collante" (voir échange avec Guillaume) : le contre ne montre JAMAIS
+                // les deux majeures à la fois, et ne sert QUE quand aucune couleur
+                // candidate n'est annonçable nature au palier 1 — dès qu'au moins une
+                // l'est, on l'annonce directement (la moins chère si plusieurs le sont),
+                // jamais de contre. C'est ce qui rend le contre Sputnik possible (après une
+                // intervention à 1♠ précisément : plus rien d'annonçable en dessous) mais
+                // l'exclut par exemple après 1♦-(1♣), où "1♠" reste disponible et doit être
+                // dit directement.
                 if (call !== 'X' && myPartnerBid !== lastBid && isCallLegal(history, 'X', seat)) {
                     const lengthsForNegDouble = suitLengths(hand);
                     const shownSuitsForNegDouble = new Set([partnerBidInfo.strain, parseBid(lastBid.call).strain]);
                     const unshownSuitsForNegDouble = ['S', 'H', 'D', 'C'].filter(s => !shownSuitsForNegDouble.has(s));
                     const negDoubleSuits = unshownSuitsForNegDouble.filter(s => lengthsForNegDouble[s] >= 4);
-                    if (negDoubleSuits.length > 0 && hcp >= 8) {
+                    const canShowAnySuitNaturally = negDoubleSuits.some(s => isCallLegal(history, '1' + s, seat));
+                    if (negDoubleSuits.length > 0 && hcp >= 8 && !canShowAnySuitNaturally) {
                         call = 'X';
-                        explanation = `Contre négatif : 4+ cartes dans ${negDoubleSuits.map(s => STRAIN_SYMBOL[s]).join('/')} (${points})`;
+                        explanation = `Contre négatif : aucune couleur annonçable au palier 1 (${negDoubleSuits.map(s => STRAIN_SYMBOL[s]).join('/')} bloquée(s)) (${points})`;
                     }
                 }
 
