@@ -3153,6 +3153,27 @@ function decideRobotCall(seat, deal, history) {
             explanation = `A déjà annoncé — passe (règle du tour unique)`;
         }
     } else if (myBids.length === 2) {
+        // Voir échange avec Guillaume (session du 30 juillet — "Ouest passe sur le
+        // Texas, ça n'a aucun sens") : mon ouverture était-elle 2♣/2♦ (fort), ma 2e
+        // annonce un "2SA" naturel (voir decideOpenerRebidAfterStrongDiamond), et le
+        // partenaire vient-il de faire un appel Stayman/transfert dessus ? Ce "2SA"
+        // fonctionne alors EXACTEMENT comme une ouverture à SA pour la complétion —
+        // réutilise directement decideRobotOpenerRebid (le mécanisme de complétion y
+        // est purement mécanique, ne regarde jamais quelle était ma vraie ouverture
+        // d'origine) plutôt que de laisser tomber ça dans une des branches génériques
+        // ci-dessous, qui ne reconnaissent pas du tout ce cas et retombaient sur un
+        // passe — sur une enchère forcing du partenaire (un transfert l'est toujours,
+        // le temps d'un tour), passer est formellement interdit tant qu'aucun adversaire
+        // n'a repris la parole entre-temps.
+        if ((myBids[0].call === '2C' || myBids[0].call === '2D') && myBids[1].call === '2NT') {
+            const myPartnerBidForTransfer = history.slice().reverse()
+                .find(e => partnershipOf(e.seat) === partnershipOf(seat) && e.seat !== seat && isBidCall(e.call));
+            if (myPartnerBidForTransfer) {
+                const callAfterTransferAsk = decideRobotOpenerRebid(hand, hcp, hl, '2NT', myPartnerBidForTransfer.call, seat, history, false);
+                return { call: callAfterTransferAsk, explanation: `Complétion mécanique de Stayman/Texas sur mon propre "2SA" après l'ouverture forte — jamais de passe sur une enchère forcing (${points})` };
+            }
+        }
+
         // Voir échange avec Guillaume (session du 25 juillet, donne 1) : réponse à
         // l'APPEL AUX MINEURES en réveil du partenaire (voir la même règle dans
         // decideRobotResponse pour un 1er tour) — ici pour un 3ème tour, quand j'ai déjà
