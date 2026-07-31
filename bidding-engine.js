@@ -1625,6 +1625,52 @@ function decideDoublerFollowUp(hand, hcp, hl, partnerResponseCall, seat, history
             }
         }
     }
+
+    // Voir échange avec Guillaume (donne 2, 2e jeu, session du 31 juillet) : au-delà de
+    // tout ce qui précède — mon camp doit-il de toute façon jouer la manche (mon HCP
+    // propre + le plancher d'ouverture du partenaire atteint GAME_ZONE_NT) ? Si oui, je
+    // ne peux JAMAIS me contenter d'un simple passe ici : je dois produire une enchère
+    // forcing ou conclure directement à la manche. Ordre de priorité (ses mots) :
+    // 1) une vraie couleur à moi, annonçable naturellement — mais tout changement de
+    //    couleur au palier 2 promet formellement 5+ cartes, jamais moins ;
+    // 2) SA si j'ai l'arrêt dans la couleur adverse (celle-là même que mon contre visait) ;
+    // 3) à défaut, cue-bid dans cette couleur adverse ("j'ai de quoi jouer la manche,
+    //    mais ni couleur ni arrêt") — MÊME si j'ai un fit pour la couleur du partenaire,
+    //    puisqu'aucune enchère de soutien direct de ce moteur ne montre cette fourchette
+    //    précise (11-14H) : le bloc juste au-dessus ne couvre que 15+ points de soutien.
+    if (hcp + OPENING_MINIMUM >= GAME_ZONE_NT) {
+        const myDoubleEntry = history.find(e => e.seat === seat && isDouble(e.call));
+        const myDoubleIndex = myDoubleEntry ? history.indexOf(myDoubleEntry) : -1;
+        const doubledBid = myDoubleIndex > 0 ? parseBid(history[myDoubleIndex - 1].call) : null;
+        const opponentSuit = doubledBid ? doubledBid.strain : null;
+
+        if (opponentSuit) {
+            const alreadyShownSuits = new Set([opponentSuit, responseBid.strain]);
+            const naturalSuit = ['S', 'H', 'D', 'C'].find(s => !alreadyShownSuits.has(s) && lengths[s] >= 5);
+            if (naturalSuit) {
+                for (let level = 2; level <= 7; level++) {
+                    const call = level + naturalSuit;
+                    if (isCallLegal(history, call, seat)) return call;
+                }
+            }
+
+            const cardsInOpponentSuit = hand[opponentSuit] || '';
+            const hasStopperInOpponentSuit = cardsInOpponentSuit.includes('A')
+                || (cardsInOpponentSuit.includes('K') && cardsInOpponentSuit.length >= 2)
+                || (cardsInOpponentSuit.includes('Q') && cardsInOpponentSuit.length >= 3);
+            if (hasStopperInOpponentSuit) {
+                for (let level = 2; level <= 7; level++) {
+                    const call = level + 'NT';
+                    if (isCallLegal(history, call, seat)) return call;
+                }
+            }
+
+            for (let level = 2; level <= 7; level++) {
+                const call = level + opponentSuit;
+                if (isCallLegal(history, call, seat)) return call;
+            }
+        }
+    }
     return 'PASS';
 }
 
@@ -3762,9 +3808,20 @@ function decideRobotCall(seat, deal, history) {
                     if (isCallLegal(historyBeforePartnerLast, level + partnerLastParsed.strain, myPartnerLastBidCheck.seat)) { naturalLevelForJumpCheck = level; break; }
                 }
                 const wasJumpRepeat = naturalLevelForJumpCheck !== null && partnerLastParsed.level > naturalLevelForJumpCheck;
-                if (wasJumpRepeat && hl >= 16) {
-                    const isMajorForJump = partnerLastParsed.strain === 'S' || partnerLastParsed.strain === 'H';
-                    const gameLevelForJump = isMajorForJump ? 4 : 5;
+                // Voir échange avec Guillaume (donnes 1 et 4, 1er jeu, session du 31
+                // juillet — "expliquer/que veut dire 5♠ en Ouest ?") : bug trouvé en
+                // expliquant ces deux donnes — ce bloc ne vérifiait jamais que le saut du
+                // partenaire restait EN DESSOUS du palier de manche. Un saut qui atteint
+                // déjà la manche (ex. 4♠ direct dans une couleur 7-8ème) n'est plus une
+                // invite à "accepter" avec de la réserve — le partenaire vient de
+                // CONCLURE, pas de proposer. Résultat sans ce garde-fou : Ouest relançait
+                // à 5♠ avec seulement 2 cartes (donne 1) voire un singleton (donne 4) à
+                // Pique, sur la seule foi de ses propres 16HL+, sans le moindre rapport
+                // avec un vrai fit. Seule une VRAIE invite (le saut s'arrête avant la
+                // manche, comme 1♠-3♠ qui attend 4♠) doit déclencher cette acceptation.
+                const isMajorForJump = partnerLastParsed.strain === 'S' || partnerLastParsed.strain === 'H';
+                const gameLevelForJump = isMajorForJump ? 4 : 5;
+                if (wasJumpRepeat && hl >= 16 && partnerLastParsed.level < gameLevelForJump) {
                     for (let level = Math.max(gameLevelForJump, partnerLastParsed.level); level <= 7; level++) {
                         const c = level + partnerLastParsed.strain;
                         if (isCallLegal(history, c, seat)) { call = c; break; }
