@@ -728,7 +728,20 @@ function decideRobotResponse(hand, hcp, hl, partnerCall, seat, history, partnerP
                 // fonction (voir hl>=6 quelques lignes plus bas) : la longueur seule ne
                 // suffit jamais à justifier de parler avec une main qui n'a strictement
                 // rien à montrer nulle part.
-                if ((level <= 1 && hl >= 6) || hl >= newSuitThreshold) return call;
+                //
+                // Voir échange avec Guillaume (donne 3, 2e jeu, session du 31 juillet —
+                // "dans une main trop faible pour passer par un changement de couleur")
+                // : le plancher "bon marché" (hl>=6 au palier 1) suppose une réponse à
+                // une OUVERTURE, où une nouvelle couleur au palier 1 reste d'engagement
+                // limité pour le partenaire. En réponse à une INTERVENTION, on a établi
+                // ailleurs (voir decideForcingResponseToInterventionAnswer) qu'une
+                // nouvelle couleur est FORCING quel que soit le palier — le plancher
+                // "bon marché" n'a alors plus de sens : avec un fit ET une main trop
+                // faible pour imposer une suite au partenaire, il faut soutenir
+                // directement plutôt que de forcer avec une couleur personnelle plus
+                // longue mais non fittée. Seul newSuitThreshold (déjà relevé à 13 pour
+                // une intervention) doit compter ici.
+                if ((level <= 1 && hl >= 6 && !partnerWasIntervening) || hl >= newSuitThreshold) return call;
                 break; // palier minimal légal déjà 2+ ET pas assez de points : pas la peine d'essayer plus haut, ce serait pire
             }
         }
@@ -1134,8 +1147,24 @@ function decideRobotIntervention(hand, hcp, hl, seat, history, dealVulnerable, i
     // c'est subi, pas choisi pour gêner l'adversaire). Une intervention à la mineure
     // forcée au palier 2+ passe systématiquement par le seuil normal plus bas (12H+,
     // 6 cartes) — plus exigeant que la fourchette de barrage (8-12HL).
+    //
+    // Voir échange avec Guillaume (donne 14, session du 31 juillet) : le MÊME défaut
+    // existe aussi pour une MAJEURE — "les critères d'intervention au palier de 2 SANS
+    // SAUT sont toujours les mêmes" (ses mots). Si l'adversaire a ouvert d'une couleur
+    // de rang supérieur à la mienne (ex. 1♠, moi hearts), le palier 1 dans ma couleur
+    // n'est tout simplement PAS DISPONIBLE — le palier 2 est alors SUBI, pas choisi,
+    // exactement comme pour une mineure, et ne doit jamais bénéficier du seuil permissif
+    // du barrage (8-12HL) : il doit passer par le seuil normal, plus exigeant, plus bas.
+    // Calcule donc le palier NATUREL (le plus bas légalement possible) avant de décider
+    // si sauter à 2 est un vrai choix (palier naturel = 1) ou une couleur simplement
+    // forcée au palier 2 (palier naturel déjà 2, rien à sauter par-dessus).
+    let naturalLevelForBarrage = null;
+    for (let level = 1; level <= 7; level++) {
+        if (isCallLegal(history, level + suit, seat)) { naturalLevelForBarrage = level; break; }
+    }
+    const isGenuineJumpToTwo = naturalLevelForBarrage === 1;
     const hasOtherFourCardSuit = ['S', 'H', 'D', 'C'].some(s => s !== suit && lengths[s] >= 4);
-    if ((suit === 'S' || suit === 'H') && hl <= 12 && lengths[suit] >= 6 && !hasOtherFourCardSuit) {
+    if ((suit === 'S' || suit === 'H') && hl <= 12 && lengths[suit] >= 6 && !hasOtherFourCardSuit && isGenuineJumpToTwo) {
         for (let level = 2; level <= 7; level++) {
             const call = level + suit;
             if (isCallLegal(history, call, seat)) return call;
@@ -1151,11 +1180,14 @@ function decideRobotIntervention(hand, hcp, hl, seat, history, dealVulnerable, i
     }
     if (chosenLevel === null) return 'PASS';
 
-    // Voir échange avec Guillaume : une intervention forcée au palier 2 (ou plus, ex.
-    // après plusieurs enchères adverses) exige davantage qu'au palier 1 — 12H en H purs
-    // (pas HL) et une couleur plus longue (6+ cartes) — sinon on s'abstient plutôt que de
-    // s'engager trop haut sur une main ou une couleur insuffisante.
-    if (chosenLevel >= 2 && (hcp < 12 || lengths[suit] < 6)) return 'PASS';
+    // Voir échange avec Guillaume (précisé donne 5, session du 31 juillet — "il a 11H et
+    // une couleur 6ème donc 13HL, c'est largement suffisant") : une intervention forcée
+    // au palier 2 (ou plus) exige davantage qu'au palier 1 — mais en HL (longueur
+    // comprise), pas en HCP brut comme avant : une longue couleur (6+, déjà exigée par
+    // ailleurs) compense une partie du déficit en points secs, exactement comme partout
+    // ailleurs dans ce moteur où HL est la mesure de référence pour juger si une main a
+    // "assez" pour un palier donné.
+    if (chosenLevel >= 2 && (hl < 12 || lengths[suit] < 6)) return 'PASS';
 
     return chosenLevel + suit;
 }
@@ -1934,6 +1966,37 @@ function decideOpenerResponseToSplinter(hand, hcp, hl, myBid, partnerParsed, sea
     return 'PASS';
 }
 
+// Voir échange avec Guillaume (donne 5, session du 31 juillet — "il n'y a aucune raison de
+// passer sur une enchère de cue-bid, le bot le fait beaucoup trop") : réponse de l'OUVREUR
+// à la suite du répondant après avoir complété MÉCANIQUEMENT un Texas MINEUR (voir
+// wasMinorTransferAsk dans decideRobotResponse, et le rebid mécanique correspondant dans
+// decideRobotOpenerRebid) — cette complétion ne disait RIEN sur ma main. Sa suite ici (une
+// couleur = sa courte, ou "SA" = main régulière, voir wasMinorTransferAsk) EST la première
+// fois qu'il montre une vraie valeur au-delà du transfert (6+ cartes déjà garanties dans la
+// mineure) : jamais un simple contrat à passer, la manche dans cette mineure est acquise au
+// minimum. Même mécanique que decideOpenerResponseToSplinter juste au-dessus (honneurs
+// dévalués dans sa courte, chelem jugé sur un plancher partenaire prudent de 13).
+function decideOpenerResponseAfterMinorTransferContinuation(hand, shownMinor, partnerShortSuit, seat, history) {
+    let supportPoints = computeSupportPoints(hand, shownMinor, 6);
+
+    if (partnerShortSuit) {
+        const shortSuitCards = hand[partnerShortSuit] || '';
+        const hasAceThere = shortSuitCards.includes('A');
+        const hasWastedHonor = !hasAceThere && (shortSuitCards.includes('K') || shortSuitCards.includes('Q'));
+        if (hasWastedHonor) supportPoints -= 3;
+    }
+
+    let targetLevel = 5;
+    if (supportPoints + 13 >= SLAM_ZONE_GRAND) targetLevel = 7;
+    else if (supportPoints + 13 >= SLAM_ZONE_SMALL) targetLevel = 6;
+
+    for (let level = targetLevel; level <= 7; level++) {
+        const call = level + shownMinor;
+        if (isCallLegal(history, call, seat)) return call;
+    }
+    return 'PASS';
+}
+
 function decideRobotOpenerRebid(hand, hcp, hl, myOpeningCall, partnerCall, seat, history, opponentIntervened) {
     const myBid = parseBid(myOpeningCall);
     if (!myBid) return 'PASS';
@@ -2299,6 +2362,227 @@ function decideRobotOpenerRebid(hand, hcp, hl, myOpeningCall, partnerCall, seat,
 // terminée — dans n'importe quelle partie de bridge, personne ne reparle plus à ce
 // stade, quelle que soit la force de sa main. maybeRobotBid (plus bas) vérifie déjà
 // isAuctionOver avant même de solliciter cette fonction.
+// Voir échange avec Guillaume (session du 31 juillet — correction complète de cap après un
+// premier essai hors-sujet) : LA vraie définition retenue pour ce chantier, celle qui
+// compte pour le moteur — "on se fout des cue-bids de contrôle en vue d'un chelem, les
+// bots sont censés aller au chelem au poids" (ses mots) : un cue-bid dans une couleur
+// annoncée par le camp ADVERSE est SYSTÉMATIQUEMENT un cue-bid — jamais une couleur à
+// jouer, jamais ambigu à reconnaître (contrairement à mon 1er essai, qui devinait une
+// enchère de contrôle sur un critère structurel fragile). Fait avant 3SA, il demande
+// l'arrêt dans cette couleur en vue d'y jouer la manche à SA (voir donne 2, 2e jeu : "il
+// devrait maintenant demander l'arrêt via un cue-bid à 2C [2♥ dans sa notation P/C/K/T,
+// pas 2♣]").
+//
+// Cette fonction ne couvre que le côté RÉPONSE (ne jamais passer dessus) — décider quand
+// le bot doit lui-même ÉMETTRE un tel cue-bid plutôt que de passer (le vrai bug de la
+// donne 2) est un chantier à part, plus large (juger qu'aucune autre enchère naturelle ne
+// convient mieux), pas traité ici.
+function decideResponseToOpponentSuitCuebid(hand, seat, history) {
+    const partnerBids = history.filter(e => partnershipOf(e.seat) === partnershipOf(seat) && e.seat !== seat && isBidCall(e.call));
+    if (partnerBids.length === 0) return null;
+
+    const lastEntry = partnerBids[partnerBids.length - 1];
+    // Vérifie qu'AUCUN adversaire n'a repris la parole depuis (même prudence qu'ailleurs
+    // dans ce fichier pour un contre du partenaire, voir "opponentInterveningAfterDouble")
+    // — sans quoi la pression forcing initiale peut être retombée.
+    const partnerBidIndex = history.indexOf(lastEntry);
+    const opponentSpokeAfter = history.slice(partnerBidIndex + 1).some(e => isBidCall(e.call) || isDouble(e.call));
+    if (opponentSpokeAfter) return null;
+
+    const lastParsed = parseBid(lastEntry.call);
+    if (!lastParsed || lastParsed.strain === 'NT') return null;
+
+    const opponentSuits = new Set(history.filter(e => partnershipOf(e.seat) !== partnershipOf(seat) && isBidCall(e.call))
+        .map(b => parseBid(b.call).strain).filter(s => s && s !== 'NT'));
+    if (!opponentSuits.has(lastParsed.strain)) return null; // pas la couleur adverse : pas ce motif-ci
+
+    // "Fait avant 3SA" (ses mots) : au-delà, on ne demande plus un arrêt pour aller vers
+    // SA, la manche à SA elle-même serait déjà dépassée — hors périmètre de ce motif précis.
+    if (bidRank(lastEntry.call) >= bidRank('3NT')) return null;
+
+    // Arrêt réel dans la couleur demandée : As, Roi accompagné (Rx+), ou Dame doublement
+    // accompagnée (Dxx+) — même exigence que pour la 4ème couleur forcing plus haut dans
+    // ce fichier (un 3ème rond nu du genre Vxx n'en est pas un).
+    const cards = hand[lastParsed.strain] || '';
+    const hasStopper = cards.includes('A')
+        || (cards.includes('K') && cards.length >= 2)
+        || (cards.includes('Q') && cards.length >= 3);
+
+    if (hasStopper) {
+        for (let level = lastParsed.level; level <= 7; level++) {
+            const c = level + 'NT';
+            if (isCallLegal(history, c, seat)) {
+                return { call: c, explanation: `Arrêt à ${STRAIN_SYMBOL[lastParsed.strain]} — répond au cue-bid du partenaire (demande d'arrêt) par SA` };
+            }
+        }
+    }
+
+    // Pas d'arrêt : "enchère poubelle" pour économiser de l'espace (voir échange avec
+    // Guillaume, donne 2) — jamais un passe (le cue-bid reste forcing), mais jamais non
+    // plus une couleur nouvelle qui engagerait plus loin : on répète, au palier légal le
+    // plus bas, une couleur DÉJÀ montrée par notre camp (moi ou le partenaire), en
+    // préférant la mienne (je connais mieux ma propre main) puis celle du partenaire.
+    const myOwnBids = history.filter(e => e.seat === seat && isBidCall(e.call));
+    const myOwnSuits = [...new Set(myOwnBids.map(b => parseBid(b.call).strain).filter(s => s && s !== 'NT'))];
+    const partnerSuits = [...new Set(partnerBids.slice(0, -1).map(b => parseBid(b.call).strain).filter(s => s && s !== 'NT'))];
+    const candidateSuits = [...myOwnSuits, ...partnerSuits];
+    for (let level = 1; level <= 7; level++) {
+        for (const suit of candidateSuits) {
+            const c = level + suit;
+            if (isCallLegal(history, c, seat)) {
+                return { call: c, explanation: `Pas d'arrêt à ${STRAIN_SYMBOL[lastParsed.strain]} — enchère poubelle pour économiser de l'espace, jamais de passe sur un cue-bid` };
+            }
+        }
+    }
+    return null; // aucune couleur à nous déjà montrée : filet de sécurité, laisse l'appelant décider (hors périmètre volontaire)
+}
+
+// Voir échange avec Guillaume (session du 31 juillet — "je veux un mécanisme unifié") :
+// suite forcing du partenaire après que j'ai mécaniquement complété son Texas MINEUR
+// (voir wasMinorTransferAsk dans decideRobotResponse, et le rebid mécanique
+// correspondant dans decideRobotOpenerRebid — toujours au palier "ouverture+2", en ♣ ou
+// ♦). Reconstruit ici la détection depuis zéro (autonome, comme les autres entrées du
+// registre) plutôt que de dépendre de variables déjà calculées dans decideRobotCall.
+function decideForcingResponseTexasMineurContinuation(hand, seat, history) {
+    const myBids = history.filter(e => e.seat === seat && isBidCall(e.call));
+    if (myBids.length !== 2) return null;
+    const myFirstBid = parseBid(myBids[0].call);
+    const mySecondBid = parseBid(myBids[1].call);
+    const wasMinorTransferCompletion = myFirstBid && myFirstBid.strain === 'NT'
+        && mySecondBid && (mySecondBid.strain === 'C' || mySecondBid.strain === 'D')
+        && mySecondBid.level === myFirstBid.level + 2;
+    if (!wasMinorTransferCompletion) return null;
+
+    const myPartnerLastBid = history.slice().reverse()
+        .find(e => partnershipOf(e.seat) === partnershipOf(seat) && isBidCall(e.call) && e !== myBids[0] && e !== myBids[1]);
+    if (!myPartnerLastBid) return null;
+    const continuation = parseBid(myPartnerLastBid.call);
+    if (!continuation || continuation.strain === mySecondBid.strain) return null;
+
+    const partnerShortSuit = continuation.strain !== 'NT' ? continuation.strain : null;
+    const call = decideOpenerResponseAfterMinorTransferContinuation(hand, mySecondBid.strain, partnerShortSuit, seat, history);
+    if (call === 'PASS') return null;
+    return { call, explanation: `Suite forcing après Texas mineur complété — manche minimum à ${STRAIN_SYMBOL[mySecondBid.strain]}` };
+}
+
+// Voir échange avec Guillaume (donne 3, session du 31 juillet, généralisé ensuite — "il
+// faut vraiment travailler les enchères forcing/non-forcing") : ma toute première
+// annonce était une VRAIE intervention directe (précédée immédiatement d'une annonce
+// adverse, sans passe intercalé — exclut ouverture ET réouverture), et le partenaire y
+// répond en NOUVELLE couleur. Règle retenue (ses mots) : une telle réponse est forcing —
+// 8H+ chez lui, sans limite supérieure — TANT QU'IL N'A PAS DÉJÀ PASSÉ depuis mon
+// intervention (un réveil après un premier passe n'a pas cette même force).
+function decideForcingResponseToInterventionAnswer(hand, seat, history) {
+    const myBids = history.filter(e => e.seat === seat && isBidCall(e.call));
+    if (myBids.length !== 1) return null;
+    const myFirstBidParsed = parseBid(myBids[0].call);
+    if (!myFirstBidParsed || myFirstBidParsed.strain === 'NT') return null;
+
+    const myBidIndex = history.indexOf(myBids[0]);
+    const precededByOpponentBidDirectly = myBidIndex > 0
+        && isBidCall(history[myBidIndex - 1].call)
+        && partnershipOf(history[myBidIndex - 1].seat) !== partnershipOf(seat);
+    if (!precededByOpponentBidDirectly) return null; // ouverture ou réouverture, pas une intervention directe
+
+    const myPartnerBid = history.slice().reverse()
+        .find(e => partnershipOf(e.seat) === partnershipOf(seat) && isBidCall(e.call) && e !== myBids[0]);
+    if (!myPartnerBid) return null;
+
+    const partnerBidIdx = history.indexOf(myPartnerBid);
+    const partnerAlreadyPassedBefore = history.slice(myBidIndex + 1, partnerBidIdx)
+        .some(e => e.seat === myPartnerBid.seat && isPass(e.call));
+    if (partnerAlreadyPassedBefore) return null;
+
+    const partnerRespParsed = parseBid(myPartnerBid.call);
+    const isNewSuitResponse = partnerRespParsed
+        && partnerRespParsed.strain !== myFirstBidParsed.strain && partnerRespParsed.strain !== 'NT';
+    if (!isNewSuitResponse) return null;
+
+    const lengths = suitLengths(hand);
+    const partnerSuit = partnerRespParsed.strain;
+    const mySuit = myFirstBidParsed.strain;
+
+    if (lengths[partnerSuit] >= 3) {
+        // Soutien connu (3+, plancher garanti pour une intervention) : points de
+        // soutien, zone de manche adaptée — mais sans plancher connu chez le partenaire
+        // au-delà du minimum d'intervention (8HL) puisque sa réponse ne dit rien de
+        // bornée ("8H+, sans limite supérieure") — repli sur le soutien minimal si la
+        // zone n'est pas acquise avec ce seul plancher bas.
+        const supportPts = computeSupportPoints(hand, partnerSuit, 4);
+        const isMajor = partnerSuit === 'S' || partnerSuit === 'H';
+        const zone = isMajor ? GAME_ZONE_MAJOR : GAME_ZONE_MINOR;
+        const gameLevel = isMajor ? 4 : 5;
+        if (supportPts + 8 >= zone) {
+            for (let level = gameLevel; level <= 7; level++) {
+                const c = level + partnerSuit;
+                if (isCallLegal(history, c, seat)) {
+                    return { call: c, explanation: `Réponse forcing du partenaire à mon intervention, assez de points de soutien (${supportPts}) — manche` };
+                }
+            }
+        }
+        for (let level = 1; level <= 7; level++) {
+            const c = level + partnerSuit;
+            if (isCallLegal(history, c, seat)) {
+                return { call: c, explanation: `Réponse forcing du partenaire à mon intervention — soutien minimal, jamais de passe sur une enchère forcing` };
+            }
+        }
+    } else if (lengths[mySuit] >= 6) {
+        // Pas de fit chez lui, mais ma propre couleur d'intervention est longue (6+) :
+        // la répéter montre l'extra-longueur sans s'engager plus loin.
+        for (let level = 1; level <= 7; level++) {
+            const c = level + mySuit;
+            if (isCallLegal(history, c, seat)) {
+                return { call: c, explanation: `Réponse forcing du partenaire à mon intervention, pas de fit chez lui — répète ma couleur (${lengths[mySuit]} cartes)` };
+            }
+        }
+    } else {
+        // Ni fit ni extra-longueur : repli le plus prudent — simple préférence au
+        // palier minimal dans sa couleur, faute de mieux.
+        for (let level = 1; level <= 7; level++) {
+            const c = level + partnerSuit;
+            if (isCallLegal(history, c, seat)) {
+                return { call: c, explanation: `Réponse forcing du partenaire à mon intervention, ni fit ni extra-longueur — préférence minimale` };
+            }
+        }
+    }
+    return null;
+}
+
+// ===== Mécanisme UNIFIÉ de détection du caractère forcing =====
+//
+// Voir échange avec Guillaume (session du 31 juillet — "je veux un mécanisme unifié") :
+// centralise ici, sous forme de registre, TOUTES les situations où ce moteur reconnaît
+// une enchère du partenaire comme forcing — jusqu'ici recréées ad hoc à plusieurs
+// endroits différents du fichier (Texas mineur, cue-bid adverse, réponse à
+// intervention), avec le risque de refaire la même erreur (retomber sur "passe" par
+// défaut) à chaque nouveau cas non prévu. Chaque motif est une entrée indépendante et
+// testable, sous la forme d'une simple fonction (hand, seat, history) => {call,
+// explanation} | null — decideForcingFallback les essaie dans l'ordre et s'arrête à la
+// première qui reconnaît la situation ET produit une réponse légale.
+//
+// Ce mécanisme n'est qu'un FILET DE SECOURS, appelé une seule fois en tout dernier
+// recours dans decideRobotCall (voir plus bas) : il ne s'active que si la logique
+// spécifique à la séquence (le gros du fichier, au-dessus) n'a déjà rien produit (call
+// encore à 'PASS'). Il ne remplace jamais un calcul déjà plus précis fait ailleurs — et
+// ne couvre, pour l'instant, que les motifs listés ci-dessus : ce n'est pas un
+// classificateur exhaustif de TOUTE enchère forcing possible (un renverse, un 2/1, un
+// splinter, etc. sont déjà correctement gérés par leurs propres branches dédiées et
+// n'ont pas besoin de repasser par ici) — plutôt l'endroit où ajouter le PROCHAIN motif
+// forcing découvert manquant, à un seul endroit, au lieu de le disperser.
+const FORCING_PATTERNS = [
+    { name: 'texas_mineur_complete', respond: decideForcingResponseTexasMineurContinuation },
+    { name: 'cuebid_couleur_adverse', respond: decideResponseToOpponentSuitCuebid },
+    { name: 'reponse_a_intervention', respond: decideForcingResponseToInterventionAnswer }
+];
+
+function decideForcingFallback(hand, seat, history) {
+    for (const pattern of FORCING_PATTERNS) {
+        const result = pattern.respond(hand, seat, history);
+        if (result) return result;
+    }
+    return null;
+}
+
 function decideRobotCall(seat, deal, history) {
     const hand = deal.hands[seat];
     const hcp = computeHandHcp(hand);
@@ -2404,15 +2688,38 @@ function decideRobotCall(seat, deal, history) {
                 // dit directement.
                 if (call !== 'X' && myPartnerBid !== lastBid && isCallLegal(history, 'X', seat)) {
                     const lengthsForNegDouble = suitLengths(hand);
-                    const shownSuitsForNegDouble = new Set([partnerBidInfo.strain, parseBid(lastBid.call).strain]);
+                    const opponentOvercallSuitForNegDouble = parseBid(lastBid.call).strain;
+                    const shownSuitsForNegDouble = new Set([partnerBidInfo.strain, opponentOvercallSuitForNegDouble]);
                     const unshownSuitsForNegDouble = ['S', 'H', 'D', 'C'].filter(s => !shownSuitsForNegDouble.has(s));
                     const negDoubleSuits = unshownSuitsForNegDouble.filter(s => lengthsForNegDouble[s] >= 4);
                     const canShowAnySuitNaturally = negDoubleSuits.some(s => isCallLegal(history, '1' + s, seat));
-                    if (negDoubleSuits.length > 0 && hcp >= 8 && !canShowAnySuitNaturally) {
+                    // Voir échange avec Guillaume (donne 2, 1er jeu, session du 31 juillet
+                    // — "Ouest n'a aucune raison de contrer, puisqu'il a les Coeurs [la
+                    // couleur même de l'adversaire] / il doit passer en attendant un
+                    // contre de réveil du partenaire") : le contre négatif ne dit RIEN sur
+                    // une éventuelle longueur dans la couleur de l'ADVERSAIRE lui-même —
+                    // ce garde-fou manquait entièrement. Avec une vraie longueur là-dedans
+                    // (4+ cartes), le contre ne décrit plus correctement la main (on
+                    // préfère laisser faire, quitte à compter sur un contre de réveil du
+                    // partenaire s'il a la distribution pour ça) — jamais un contre
+                    // négatif dans ce cas, quelles que soient les autres couleurs.
+                    const tooLongInOpponentSuit = lengthsForNegDouble[opponentOvercallSuitForNegDouble] >= 4;
+                    // Voir échange avec Guillaume (donne 16, session du 31 juillet — "ça
+                    // promet formellement 4 cartes à Coeur") : quand une des couleurs
+                    // encore muettes est une MAJEURE, le contre négatif la promet
+                    // SPÉCIFIQUEMENT (4+ cartes) — il ne suffit pas qu'une mineure muette
+                    // quelconque atteigne 4+ cartes pendant que la majeure reste courte.
+                    // Sans majeure muette (les deux restantes sont des mineures), la
+                    // règle d'origine (n'importe laquelle des deux suffit) reste valable.
+                    const unbidMajorsForNegDouble = unshownSuitsForNegDouble.filter(s => s === 'S' || s === 'H');
+                    const majorsPromiseSatisfied = unbidMajorsForNegDouble.length === 0
+                        || unbidMajorsForNegDouble.every(s => lengthsForNegDouble[s] >= 4);
+                    if (negDoubleSuits.length > 0 && hcp >= 8 && !canShowAnySuitNaturally && !tooLongInOpponentSuit && majorsPromiseSatisfied) {
                         call = 'X';
                         explanation = `Contre négatif : aucune couleur annonçable au palier 1 (${negDoubleSuits.map(s => STRAIN_SYMBOL[s]).join('/')} bloquée(s)) (${points})`;
                     }
                 }
+
 
                 if (call !== 'X') {
                 // Voir échange avec Guillaume (règle du fit) : le partenaire a-t-il
@@ -2763,6 +3070,13 @@ function decideRobotCall(seat, deal, history) {
                 explanation = `Le partenaire a contré puis redemandé SA (13-16H) — pas assez pour viser plus haut, on reste là (${points})`;
             }
         } else if (!wasOpening && myPartnerBid) {
+            // Voir échange avec Guillaume (session du 31 juillet — "je veux un mécanisme
+            // unifié") : le cas "ma 1ère annonce était une intervention, le partenaire y
+            // répond en nouvelle couleur (forcing)" vit maintenant dans le registre
+            // FORCING_PATTERNS (voir decideForcingFallback, filet universel appelé en
+            // toute fin de decideRobotCall) plutôt qu'ici en ligne — ça évite d'avoir
+            // cette logique dupliquée/scindée entre deux endroits différents du fichier.
+
             // Suis-je dans une séquence où je sais être en zone de manche (voir échange
             // avec Guillaume) ? Il faut que MA première annonce ait été une réponse en
             // CHANGEMENT DE COULEUR (peu importe le palier, 1 ou 2 — pas un soutien, pas
@@ -2786,6 +3100,8 @@ function decideRobotCall(seat, deal, history) {
             const partnerOpeningBid = partnerOpeningEntry ? parseBid(partnerOpeningEntry.call) : null;
             const myResponseBid = parseBid(myBids[0].call);
             if (partnerOpeningBid) {
+
+
 
             // Suite après un 2♣ fort artificiel (voir échange avec Guillaume, donne 4) :
             // ma seule annonce précédente était un simple relais d'attente (2♦, ne dit
@@ -3301,6 +3617,39 @@ function decideRobotCall(seat, deal, history) {
             const myPartnerBidForTransfer = history.slice().reverse()
                 .find(e => partnershipOf(e.seat) === partnershipOf(seat) && e.seat !== seat && isBidCall(e.call));
             if (myPartnerBidForTransfer) {
+                // Voir échange avec Guillaume (donne 4, 2e jeu, session du 31 juillet —
+                // "pourquoi est-ce que Ouest rectifie le Texas ?") : contrairement à un
+                // Texas sur un VRAI 1SA (où la complétion est toujours purement
+                // mécanique, quelle que soit la main — la manche n'est pas encore
+                // acquise, aucune raison de dévier), ici l'ouverture forte (22+/24+) a
+                // DÉJÀ garanti la manche à elle seule. La rectification n'a donc plus
+                // besoin d'être aveugle : si j'ai le fit (3+ cartes, le partenaire en
+                // promet 5), je complète normalement ; SINON, je dis 3SA directement —
+                // jamais une couleur sans le moindre support, puisque la manche est de
+                // toute façon acquise par ailleurs. Concerne uniquement un vrai
+                // TRANSFERT MAJEUR (3♦→♥, 3♥→♠) ; Stayman et transfert mineur restent
+                // purement mécaniques comme avant (aucune ambiguïté de fit à trancher).
+                const partnerAskParsedForTexasFit = parseBid(myPartnerBidForTransfer.call);
+                const isMajorTransferAskForFit = partnerAskParsedForTexasFit
+                    && (partnerAskParsedForTexasFit.strain === 'D' || partnerAskParsedForTexasFit.strain === 'H')
+                    && partnerAskParsedForTexasFit.level === 3;
+                if (isMajorTransferAskForFit) {
+                    const transferredSuitForFit = partnerAskParsedForTexasFit.strain === 'D' ? 'H' : 'S';
+                    const lengthsForTexasFit = suitLengths(hand);
+                    if (lengthsForTexasFit[transferredSuitForFit] >= 3) {
+                        const mechanicalCall = partnerAskParsedForTexasFit.level + transferredSuitForFit;
+                        if (isCallLegal(history, mechanicalCall, seat)) {
+                            return { call: mechanicalCall, explanation: `Texas fitté (${lengthsForTexasFit[transferredSuitForFit]} cartes à ${STRAIN_SYMBOL[transferredSuitForFit]}) après l'ouverture forte — complète normalement (${points})` };
+                        }
+                    } else {
+                        for (let level = 3; level <= 7; level++) {
+                            const c = level + 'NT';
+                            if (isCallLegal(history, c, seat)) {
+                                return { call: c, explanation: `Texas SANS fit (${lengthsForTexasFit[transferredSuitForFit]} carte(s) à ${STRAIN_SYMBOL[transferredSuitForFit]}) après l'ouverture forte — 3SA plutôt qu'une couleur sans support, la manche est de toute façon déjà acquise (${points})` };
+                            }
+                        }
+                    }
+                }
                 const callAfterTransferAsk = decideRobotOpenerRebid(hand, hcp, hl, '2NT', myPartnerBidForTransfer.call, seat, history, false);
                 return { call: callAfterTransferAsk, explanation: `Complétion mécanique de Stayman/Texas sur mon propre "2SA" après l'ouverture forte — jamais de passe sur une enchère forcing (${points})` };
             }
@@ -3610,6 +3959,22 @@ function decideRobotCall(seat, deal, history) {
         if (call === 'PASS') explanation = `A déjà annoncé ${myBids.length} fois — passe (règle du tour unique)`;
     } else {
         explanation = `A déjà annoncé ${myBids.length} fois — passe (règle du tour unique)`;
+    }
+
+    // Voir échange avec Guillaume (session du 31 juillet — "je veux un mécanisme
+    // unifié") : FILET UNIVERSEL unique, appelé en tout dernier recours quel que soit le
+    // tour (1er, 2e, 3e ou plus) — voir FORCING_PATTERNS et decideForcingFallback,
+    // juste au-dessus de decideRobotCall, qui rassemblent en un seul registre TOUTES les
+    // situations de ce fichier où le partenaire vient de faire une enchère forcing sans
+    // que la logique spécifique à la séquence (plus haut) n'ait déjà produit de réponse.
+    // Ne s'active QUE si call est encore à 'PASS' à ce stade — jamais de priorité sur un
+    // calcul déjà plus précis fait ailleurs dans la fonction.
+    if (call === 'PASS') {
+        const forcingFallback = decideForcingFallback(hand, seat, history);
+        if (forcingFallback) {
+            call = forcingFallback.call;
+            explanation = `${forcingFallback.explanation} (${points})`;
+        }
     }
 
     if (call !== 'PASS' && !isCallLegal(history, call, seat)) {
