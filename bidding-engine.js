@@ -672,6 +672,22 @@ function decideRobotResponse(hand, hcp, hl, partnerCall, seat, history, partnerP
         }
     });
 
+    // Voir échange avec Guillaume (donne 8, session du 31 juillet — "je t'ai dit qu'il
+    // fallait faire un cue-bid") : je réponds DIRECTEMENT à l'ouverture du partenaire,
+    // mais un adversaire est intervenu entre les deux (voir decideDoublerFollowUp pour le
+    // même principe côté contreur, factorisé dans decideGameForcingFallbackAfterOvercall)
+    // — mon camp a-t-il de quoi jouer la manche, sans couleur annonçable (5+) ni arrêt
+    // dans SA couleur ? Alors cue-bid par défaut, MÊME avec un fit pour la sienne, avant
+    // toute logique de soutien plus bas (aucune enchère de soutien de ce moteur ne montre
+    // précisément cette fourchette 13-14H). Restreint à une seule couleur adverse claire
+    // (pas une enchère adverse ambiguë/multiple) et à une vraie ouverture (pas moi-même
+    // en train de répondre à une intervention du partenaire).
+    if (partnerBidWasOpening && bid.strain !== 'NT' && opponentSuits.size === 1) {
+        const [singleOpponentSuit] = opponentSuits;
+        const earlyFallback = decideGameForcingFallbackAfterOvercall(hand, hcp, seat, history, singleOpponentSuit, bid.strain);
+        if (earlyFallback) return earlyFallback;
+    }
+
     // Voir échange avec Guillaume (donne 2, session du 23 juillet) : les bots traitent
     // TOUS les contres comme des contres d'appel, jamais de contre punitif — trop subtil
     // à modéliser correctement. Donc pas de "passe de pénalité" en avance après un contre
@@ -1205,7 +1221,18 @@ function decideRobotIntervention(hand, hcp, hl, seat, history, dealVulnerable, i
     for (let level = 1; level <= 7; level++) {
         if (isCallLegal(history, level + suit, seat)) { naturalLevelForBarrage = level; break; }
     }
-    const isGenuineJumpToTwo = naturalLevelForBarrage === 1;
+    // Voir échange avec Guillaume (session du 31 juillet, 23h — régression trouvée sur la
+    // donne 2 : "pourquoi Est n'intervient plus à 2♠ ? avant il le faisait") : EXCEPTION
+    // pour une intervention sur SA — NT est classé au-dessus de TOUTE couleur dans
+    // STRAIN_RANK, donc le palier naturel d'une couleur quelconque après 1SA est TOUJOURS
+    // 2 (jamais 1, pour aucune couleur) : le garde-fou "isGenuineJumpToTwo" ci-dessus
+    // exclurait alors systématiquement TOUTE intervention à la couleur sur SA du barrage,
+    // ce qui n'était pas le sens de la règle de la donne 14 (pensée pour une couleur
+    // classée sous une AUTRE couleur d'ouverture, pas sous SA) — un 2♠ sur 1SA reste la
+    // forme normale et attendue d'une intervention faible à une longue majeure, pas un
+    // palier "subi" au sens péjoratif de la donne 14.
+    const wasInterveningOverNT = lastBid && parseBid(lastBid.call) && parseBid(lastBid.call).strain === 'NT';
+    const isGenuineJumpToTwo = naturalLevelForBarrage === 1 || wasInterveningOverNT;
     const hasOtherFourCardSuit = ['S', 'H', 'D', 'C'].some(s => s !== suit && lengths[s] >= 4);
     if ((suit === 'S' || suit === 'H') && hl <= 12 && lengths[suit] >= 6 && !hasOtherFourCardSuit && isGenuineJumpToTwo) {
         for (let level = 2; level <= 7; level++) {
@@ -1626,52 +1653,63 @@ function decideDoublerFollowUp(hand, hcp, hl, partnerResponseCall, seat, history
         }
     }
 
-    // Voir échange avec Guillaume (donne 2, 2e jeu, session du 31 juillet) : au-delà de
-    // tout ce qui précède — mon camp doit-il de toute façon jouer la manche (mon HCP
-    // propre + le plancher d'ouverture du partenaire atteint GAME_ZONE_NT) ? Si oui, je
-    // ne peux JAMAIS me contenter d'un simple passe ici : je dois produire une enchère
-    // forcing ou conclure directement à la manche. Ordre de priorité (ses mots) :
-    // 1) une vraie couleur à moi, annonçable naturellement — mais tout changement de
-    //    couleur au palier 2 promet formellement 5+ cartes, jamais moins ;
-    // 2) SA si j'ai l'arrêt dans la couleur adverse (celle-là même que mon contre visait) ;
-    // 3) à défaut, cue-bid dans cette couleur adverse ("j'ai de quoi jouer la manche,
-    //    mais ni couleur ni arrêt") — MÊME si j'ai un fit pour la couleur du partenaire,
-    //    puisqu'aucune enchère de soutien direct de ce moteur ne montre cette fourchette
-    //    précise (11-14H) : le bloc juste au-dessus ne couvre que 15+ points de soutien.
-    if (hcp + OPENING_MINIMUM >= GAME_ZONE_NT) {
-        const myDoubleEntry = history.find(e => e.seat === seat && isDouble(e.call));
-        const myDoubleIndex = myDoubleEntry ? history.indexOf(myDoubleEntry) : -1;
-        const doubledBid = myDoubleIndex > 0 ? parseBid(history[myDoubleIndex - 1].call) : null;
-        const opponentSuit = doubledBid ? doubledBid.strain : null;
+    // Voir échange avec Guillaume (donne 2, 2e jeu, puis généralisé donne 8, session du 31
+    // juillet — "je t'ai dit qu'il fallait faire un cue-bid") : au-delà de tout ce qui
+    // précède, filet partagé (voir decideGameForcingFallbackAfterOvercall juste en
+    // dessous) — mon camp doit-il de toute façon jouer la manche ? Si oui, je ne peux
+    // JAMAIS me contenter d'un simple passe (ni d'un soutien approximatif qui sous-décrit
+    // la main) : couleur naturelle 5+ > SA si arrêt > cue-bid par défaut.
+    const myDoubleEntry = history.find(e => e.seat === seat && isDouble(e.call));
+    const myDoubleIndex = myDoubleEntry ? history.indexOf(myDoubleEntry) : -1;
+    const doubledBid = myDoubleIndex > 0 ? parseBid(history[myDoubleIndex - 1].call) : null;
+    const opponentSuit = doubledBid ? doubledBid.strain : null;
+    const gameForcingFallback = decideGameForcingFallbackAfterOvercall(hand, hcp, seat, history, opponentSuit, responseBid.strain);
+    if (gameForcingFallback) return gameForcingFallback;
+    return 'PASS';
+}
 
-        if (opponentSuit) {
-            const alreadyShownSuits = new Set([opponentSuit, responseBid.strain]);
-            const naturalSuit = ['S', 'H', 'D', 'C'].find(s => !alreadyShownSuits.has(s) && lengths[s] >= 5);
-            if (naturalSuit) {
-                for (let level = 2; level <= 7; level++) {
-                    const call = level + naturalSuit;
-                    if (isCallLegal(history, call, seat)) return call;
-                }
-            }
+// Voir échange avec Guillaume (donne 2, 2e jeu, puis généralisé donne 8, session du 31
+// juillet — "je t'ai dit qu'il fallait faire un cue-bid ...") : factorisé en fonction
+// partagée — le même principe s'applique aussi bien à la suite du CONTREUR
+// (decideDoublerFollowUp, où le contexte donne directement la couleur adverse via le
+// contre lui-même) qu'à une réponse DIRECTE à l'ouverture du partenaire quand un
+// adversaire est intervenu entre les deux (decideRobotResponse) — un seul et même
+// principe : mon camp a-t-il de quoi jouer la manche (HCP propre + plancher d'ouverture
+// du partenaire ≥ GAME_ZONE_NT) sans couleur annonçable (5+ cartes) ni arrêt dans la
+// couleur adverse ? Alors, par défaut, cue-bid dans cette couleur adverse — jamais un
+// passe, jamais un soutien approximatif qui sous-décrit une main de cette force.
+// `alreadyShownSuit` exclut en plus la couleur que MOI j'ai déjà montrée/vais montrer
+// (celle du partenaire) de la recherche de couleur naturelle.
+function decideGameForcingFallbackAfterOvercall(hand, hcp, seat, history, opponentSuit, alreadyShownSuit) {
+    if (!opponentSuit) return null;
+    if (hcp + OPENING_MINIMUM < GAME_ZONE_NT) return null;
+    const lengths = suitLengths(hand);
 
-            const cardsInOpponentSuit = hand[opponentSuit] || '';
-            const hasStopperInOpponentSuit = cardsInOpponentSuit.includes('A')
-                || (cardsInOpponentSuit.includes('K') && cardsInOpponentSuit.length >= 2)
-                || (cardsInOpponentSuit.includes('Q') && cardsInOpponentSuit.length >= 3);
-            if (hasStopperInOpponentSuit) {
-                for (let level = 2; level <= 7; level++) {
-                    const call = level + 'NT';
-                    if (isCallLegal(history, call, seat)) return call;
-                }
-            }
-
-            for (let level = 2; level <= 7; level++) {
-                const call = level + opponentSuit;
-                if (isCallLegal(history, call, seat)) return call;
-            }
+    const alreadyShownSuits = new Set([opponentSuit, alreadyShownSuit].filter(Boolean));
+    const naturalSuit = ['S', 'H', 'D', 'C'].find(s => !alreadyShownSuits.has(s) && lengths[s] >= 5);
+    if (naturalSuit) {
+        for (let level = 2; level <= 7; level++) {
+            const call = level + naturalSuit;
+            if (isCallLegal(history, call, seat)) return call;
         }
     }
-    return 'PASS';
+
+    const cardsInOpponentSuit = hand[opponentSuit] || '';
+    const hasStopperInOpponentSuit = cardsInOpponentSuit.includes('A')
+        || (cardsInOpponentSuit.includes('K') && cardsInOpponentSuit.length >= 2)
+        || (cardsInOpponentSuit.includes('Q') && cardsInOpponentSuit.length >= 3);
+    if (hasStopperInOpponentSuit) {
+        for (let level = 2; level <= 7; level++) {
+            const call = level + 'NT';
+            if (isCallLegal(history, call, seat)) return call;
+        }
+    }
+
+    for (let level = 2; level <= 7; level++) {
+        const call = level + opponentSuit;
+        if (isCallLegal(history, call, seat)) return call;
+    }
+    return null;
 }
 
 function decideRobotResponseToDouble(hand, hcp, hl, doubleIndex, seat, history, wasReopeningDouble) {
@@ -3058,6 +3096,27 @@ function decideRobotCall(seat, deal, history) {
         } else if (wasOpening && !myPartnerBid && myPartnerDouble && !isDouble(myBids[0].call)) {
             call = decideOpenerResponseToPartnerDouble(hand, hcp, hl, history.indexOf(myPartnerDouble), seat, history);
             explanation = `Réponse au contre du partenaire après intervention adverse — obligation de donner le fit (${points})`;
+        } else if (wasOpening && myPartnerBid && myBids[0].call === '2NT') {
+            // Voir échange avec Guillaume (donne 4, session du 31 juillet, 23h) : mon
+            // "2SA" en réveil n'est JAMAIS une vraie ouverture à SA dans ce moteur — c'est
+            // TOUJOURS l'appel aux mineures (voir isReopenMinorTwoSuiter dans
+            // decideRobotIntervention, seule origine possible de ce "2SA" en réveil) : "je
+            // tiens les deux mineures, choisis". Sans cette branche dédiée, la branche
+            // générique juste en dessous (wasOpening && myPartnerBid) traitait à tort ce
+            // "2SA" comme un vrai 2SA d'ouverture et appelait decideRobotOpenerRebid, qui
+            // interprète la couleur choisie par le partenaire (ici 3♣) comme du Stayman/
+            // Texas — non-sens total, puisque le partenaire vient juste de PRENDRE
+            // POSITION entre mes deux mineures, il n'a rien demandé.
+            //
+            // Une fois le partenaire fixé sur l'une des deux, rien à ajouter — JAMAIS de
+            // correction vers l'autre mineure (voir sa donne 4 : "il n'y a aucune raison
+            // de reparler pour mettre 3♦, ça n'a pas de sens"). Sa propre explication :
+            // en réveil, les DEUX adversaires ont généralement déjà montré des valeurs
+            // réelles (contrairement à une ouverture-passe-passe-réveil classique, où seul
+            // l'ouvreur a parlé) — la manche n'est quasiment jamais jouable de notre côté,
+            // l'objectif du réveil est seulement de récupérer le meilleur contrat au
+            // palier le plus bas, jamais de chercher plus loin une fois le partenaire fixé.
+            explanation = `Réveil "appel aux mineures" : le partenaire a choisi, rien à ajouter — passe (${points})`;
         } else if (wasOpening && myPartnerBid && !isDouble(myBids[0].call)) {
             // Voir échange avec Guillaume (outil de simulation, session du 30 juillet —
             // régression trouvée juste après le correctif de wasOpening plus haut) : le
