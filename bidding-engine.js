@@ -342,15 +342,26 @@ function decideRobotMajorSupport(hand, hcp, hl, bid, seat, history) {
         }
     }
 
-    // 11-12 HLD avec fit 4+ cartes : soutien au palier 3, non-forcing.
-    if (supportPoints >= 11 && supportPoints <= 12 && fitLen >= 4) {
+    // 10-12 HLD avec fit 4+ cartes : soutien au palier 3, non-forcing (proposition de
+    // manche — voir échange avec Guillaume, donne 11, session du 31 juillet : "1M-P-3M...
+    // 4 atouts et 10-12HLD, propose de jouer 4M si l'ouvreur n'est pas minimal" — borne
+    // basse corrigée de 11 à 10).
+    if (supportPoints >= 10 && supportPoints <= 12 && fitLen >= 4) {
         const call = (bid.level + 2) + suit;
         if (isCallLegal(history, call, seat)) return call;
     }
 
-    // 11-12 HLD avec fit EXACTEMENT 3 cartes : 2SA conventionnel (ne promet pas une main
-    // régulière, juste ce fit précis et cette fourchette de points).
-    if (supportPoints >= 11 && supportPoints <= 12 && fitLen === 3) {
+    // 10-11 HLD avec fit EXACTEMENT 3 cartes : 2SA conventionnel (ne promet pas une main
+    // régulière, juste ce fit précis et cette fourchette de points — voir échange avec
+    // Guillaume, donne 12, session du 31 juillet : "2SA fitté = 10.5-11HLD" — borne haute
+    // abaissée de 12 à 11. À 12 (= OPENING_MINIMUM), le répondant a une main d'ouverture
+    // à lui seul ; "ouverture sur ouverture = manche" étant constant, s'engager dans une
+    // convention qui décrit une main LIMITÉE avec seulement 3 cartes de fit est illogique
+    // — mieux vaut alors une nouvelle couleur naturelle (2/1), qui garde l'enchère
+    // forcing de manche sans committer trop tôt sur ce fit marginal. Le splinter et le
+    // 3SA fitté (fit 4+ cartes) restent, eux, zonés 13-15 sans changement — ils décrivent
+    // déjà une main forte/distribuée, pas une main limitée comme celle-ci.
+    if (supportPoints >= 10 && supportPoints <= 11 && fitLen === 3) {
         const call = '2NT';
         if (isCallLegal(history, call, seat)) return call;
     }
@@ -799,17 +810,47 @@ function decideRobotResponse(hand, hcp, hl, partnerCall, seat, history, partnerP
     // puisque la longueur du partenaire est désormais connue (5+ via une intervention,
     // 3+ par défaut pour une ouverture à la mineure, qui peut ne pas en avoir plus).
     //
-    // Exception "1SA poubelle" (voir échange avec Guillaume, donne 3) : avec une main
-    // PLATE et un fit d'EXACTEMENT 3 cartes à une mineure qui n'a jamais promis 5+ (donc
-    // jamais via une intervention, seulement une ouverture), s'engager dans ce fit
-    // marginal vaut moins qu'un simple 1SA naturel — surtout au palier 1, où 1SA coûte la
-    // même chose. Ne s'applique pas avec 4+ cartes (fit plus solide, vaut la peine d'être
-    // montré) ni sur une main irrégulière (une distribution à exploiter ailleurs).
+    // Voir échange avec Guillaume (donne 11, session du 31 juillet) : règle précise pour
+    // le soutien à SAUT (1m-P-3m), qui remplace l'ancien seuil générique
+    // "supportPoints>=10" — montre une main LIMITE (9-11H BRUTS, pas les points de
+    // soutien), SANS majeure 4ème (déjà prioritaire plus haut dans cette fonction — si on
+    // arrive jusqu'ici en ayant dépassé les blocs "major4"/"longerSuit" ci-dessus, aucune
+    // majeure 4ème valable n'a été trouvée), avec 5+ cartes dans la mineure ET une courte
+    // (singleton ou chicane) ailleurs — une main IRRÉGULIÈRE. Propose la manche (3SA ou
+    // 5m), à l'ouvreur de juger selon sa propre main s'il n'est pas minimal.
+    const shortSuitForMinorJump = ['S', 'H', 'D', 'C'].filter(s => s !== suit).find(s => lengths[s] <= 1);
+    const has4CardMajorSomewhere = ['S', 'H'].some(s => lengths[s] >= 4);
+    const isMinorJumpRaiseShape = lengths[suit] >= 5 && shortSuitForMinorJump && !has4CardMajorSomewhere
+        && hcp >= 9 && hcp <= 11 && bid.level === 1;
+
+    // Exception "1SA poubelle", généralisée (voir échange avec Guillaume, donne 3 puis
+    // donne 11) : à l'origine limitée à un fit d'EXACTEMENT 3 cartes ; sa précision sur la
+    // donne 11 l'étend explicitement à N'IMPORTE QUELLE longueur de fit — "avec le fit
+    // mineur dans un jeu de 10HL maximum et une main RÉGULIÈRE, on passe plutôt par 1SA"
+    // — puisqu'une main régulière plafonnant à 10HL n'a de toute façon pas la forme
+    // irrégulière qu'exige le soutien à saut ci-dessus, ni assez pour un soutien simple
+    // vraiment convaincant : 1SA la décrit mieux, quelle que soit la longueur exacte du
+    // fit (3, 4 ou 5+ cartes).
+    const preferNTOverMinorFit = lengths[suit] >= 3 && isHandBalancedForNT(lengths) && hl <= 10 && bid.level === 1;
     const partnerGuaranteedLength = partnerPromises5Plus ? 5 : 3;
     const supportPoints = computeSupportPoints(hand, suit, partnerGuaranteedLength);
-    const flatWithMarginalMinorFit = !partnerPromises5Plus && lengths[suit] === 3
-        && isHandBalancedForNT(lengths) && bid.level === 1;
-    if (lengths[suit] >= 3 && supportPoints >= 6 && !flatWithMarginalMinorFit) {
+    if (preferNTOverMinorFit) {
+        const call = '1NT';
+        if (isCallLegal(history, call, seat)) return call;
+    }
+    // Voir échange avec Guillaume (donne 12, session du 31 juillet) : ce bloc, malgré son
+    // nom ("soutien à une MINEURE"), n'est en réalité PAS filtré aux mineures — il sert
+    // aussi de filet pour une MAJEURE quand decideRobotMajorSupport n'a rien trouvé. Bug
+    // trouvé en testant le fix donne 12 : une main d'ouverture (12+ points de soutien)
+    // avec seulement 3 cartes de fit à une majeure retombait ICI avec un seuil plus bas
+    // (6-10), produisant quand même un simple soutien — exactement ce que le fix de
+    // decideRobotMajorSupport voulait éviter. decideRobotMajorSupport a déjà eu sa pleine
+    // chance de juger cette main (majeure, palier 1) ; s'il a décliné alors que les
+    // points de soutien atteignent déjà OPENING_MINIMUM, c'est délibéré — laisser la
+    // suite de la fonction (nouvelle couleur naturelle, plus bas) prendre le relais,
+    // jamais ce filet générique.
+    const majorAlreadyDeclinedByDesign = (suit === 'S' || suit === 'H') && bid.level === 1 && supportPoints >= OPENING_MINIMUM;
+    if (lengths[suit] >= 3 && supportPoints >= 6 && !majorAlreadyDeclinedByDesign) {
         // Voir échange avec Guillaume (session du 24 juillet) : chelem par simple compte
         // de points, même principe que partout ailleurs dans le moteur — fit mineur
         // rarement assez fourni pour ça en pratique, mais autant rester cohérent plutôt
@@ -829,10 +870,12 @@ function decideRobotResponse(hand, hcp, hl, partnerCall, seat, history, partnerP
         // question de sauter en réponse, quels que soient MES propres points de soutien.
         // Distinct d'une vraie ouverture (qui n'a pas ce plafond) : seul un réveil (ou une
         // intervention, moins définie mais tout aussi non illimitée dans ce moteur) porte
-        // cette restriction.
+        // cette restriction. Voir aussi donne 11 : le saut sur une VRAIE ouverture
+        // n'est plus un seuil générique de points de soutien mais la forme précise
+        // isMinorJumpRaiseShape calculée plus haut.
         const raiseLevel = (partnerBidWasReopening || partnerWasIntervening)
             ? bid.level + 1
-            : bid.level + (supportPoints >= 10 ? 2 : 1);
+            : bid.level + (isMinorJumpRaiseShape ? 2 : 1);
         // Voir échange avec Guillaume, donne 8 (session du 22 juillet) : cherche le
         // palier légal le plus proche à PARTIR de raiseLevel, plutôt qu'un seul essai
         // précis — une intervention adverse (ex. un barrage) peut avoir rendu ce palier
