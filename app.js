@@ -5288,24 +5288,18 @@ function checkAuctionEnd() {
         }
     }
 
-    // Voir échange avec Guillaume ("maintenant je ne peux pas choisir de désactiver 'voir
-    // les 4 mains' en tant qu'hôte") : ce bloc affichait TOUJOURS les 4 mains une fois
-    // l'enchère terminée, sans jamais consulter hostForcedReveal/hostSeeAllHands — alors
-    // que le commentaire d'origine, plus haut dans cette même fonction, promet "à tout
-    // moment" (pas seulement pendant l'enchère). Pour un simple invité (pas le vrai hôte),
-    // rien ne change : il voit toujours les 4 mains une fois l'enchère finie, comme avant
-    // — seul le VRAI hôte peut désormais garder sa propre bascule y compris après la fin
-    // de l'enchère, plutôt que de se la voir imposée sans recours.
-    const showAllHandsPostAuction = isKibbitz() || (isTrueOriginalHost() ? hostSeeAllHands : true);
-    const myHandsElPostAuction = document.getElementById('myHandsContainer');
-    if (showAllHandsPostAuction) {
-        renderAllHandsDiagram();
-        diagramEl.style.display = 'grid';
-        if (myHandsElPostAuction) myHandsElPostAuction.style.display = 'none';
-    } else {
-        diagramEl.style.display = 'none';
-        if (myHandsElPostAuction) myHandsElPostAuction.style.display = '';
-        renderAllHandsDiagram();
+    // Voir échange avec Guillaume ("une fois la donne finie, les 4 mains doivent
+    // apparaître pour l'hôte, que l'option soit ON ou OFF") : inconditionnel pour tout le
+    // monde une fois l'enchère terminée, y compris l'hôte — la bascule
+    // hostSeeAllHands/isTrueOriginalHost ne joue un rôle QUE pendant l'enchère (voir plus
+    // haut, if (!auctionOver)), jamais après. Un essai précédent avait rendu ceci
+    // conditionnel pour l'hôte, ce qui n'était pas ce qui était demandé — revenu à
+    // l'affichage inconditionnel d'origine.
+    renderAllHandsDiagram();
+    diagramEl.style.display = 'grid';
+    {
+        const myHandsEl = document.getElementById('myHandsContainer');
+        if (myHandsEl) myHandsEl.style.display = 'none';
     }
 
     const isLastBoard = boardIndex >= deals.length - 1;
