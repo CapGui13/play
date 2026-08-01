@@ -200,6 +200,19 @@ function isKibbitz() {
     return !mySeats || mySeats.length === 0;
 }
 
+// Voir échange avec Guillaume ("je ne peux pas désactiver voir les 4 mains") : le VRAI
+// créateur de la salle (celui qui a lancé la séance), peu importe live ('host', jamais
+// réécrit) ou différé (roomCreatorToken, le jeton figé à la création) — PAS simplement
+// "myRole === 'host'", qui en mode différé peut aussi désigner n'importe quel joueur
+// ayant repris une salle abandonnée (voir uiResumeFromCloud, où myRole='host' sert
+// uniquement à accorder le contrôle local, pas une identité). Même critère déjà utilisé
+// pour l'arbitrage d'undo (voir hostHandleUndoRequest) — factorisé ici pour être
+// réutilisé partout où ce privilège du VRAI hôte (pas d'un simple contrôleur technique)
+// doit être vérifié, comme "voir les 4 mains".
+function isTrueOriginalHost() {
+    return myParticipantId === 'host' || myParticipantId === roomCreatorToken;
+}
+
 // ===== Préférences d'affichage des mains (locales, persistées, indépendantes du réseau) =====
 //
 // Purement cosmétique et propre à chaque appareil (comme le jeton de reconnexion) : pas
@@ -441,15 +454,15 @@ function uiToggleLedgerNames() {
 // vérifier une donne, aider un débutant en direct, etc.). Purement local — jamais envoyé
 // aux autres joueurs, qui ne voient toujours que ce qu'ils sont censés voir.
 //
-// Voir échange avec Guillaume (session asynchrone à deux — "le joueur B se retrouve avec
-// la possibilité d'utiliser les privilèges, ex: regarder les 4 mains") : myRole==='host'
-// ne suffit PLUS à lui seul depuis la reprise cloud (uiResumeFromCloud), puisque celui qui
-// reprend une salle abandonnée devient 'host' tout en occupant réellement un siège — lui
-// laisser ce privilège reviendrait à le laisser tricher sur sa propre main. isKibbitz()
-// (aucun siège occupé) est le bon critère : vrai pour un hôte "maître du jeu" classique qui
-// ne joue aucune main, faux pour quiconque a des cartes devant lui, hôte ou non.
+// Voir échange avec Guillaume : PRIVILÈGE DU VRAI HÔTE (voir isTrueOriginalHost), pas
+// seulement d'un hôte spectateur — un hôte qui joue lui-même une main (ex. donner un
+// cours) doit pouvoir l'activer pour tout voir. Mais "myRole==='host'" seul ne suffit
+// pas non plus (voir isTrueOriginalHost) : depuis la reprise cloud (uiResumeFromCloud),
+// celui qui reprend une salle différée abandonnée devient 'host' techniquement tout en
+// étant un joueur ordinaire assis à un vrai siège — lui laisser ce privilège reviendrait
+// à le laisser tricher sur sa propre main.
 function uiToggleHostSeeAllHands() {
-    if (myRole !== 'host' || !isKibbitz()) return;
+    if (!isTrueOriginalHost()) return;
     hostSeeAllHands = !hostSeeAllHands;
     saveBoolPref('bridgeBidHostSeeAllHands', hostSeeAllHands);
     renderHandDisplayOptionButtons();
@@ -468,13 +481,14 @@ function renderHandDisplayOptionButtons() {
 
     const hostSeeAllBtn = document.getElementById('hostSeeAllHandsBtn');
     if (hostSeeAllBtn) {
-        // Voir échange avec Guillaume : ce bouton est un PRIVILÈGE DE L'HÔTE, pas
-        // seulement d'un hôte spectateur — un kibbitz (n'importe lequel, hôte ou pas) voit
-        // déjà les 4 mains en permanence par défaut (voir isKibbitz), il n'a jamais besoin
-        // de ce bouton. Un hôte qui joue lui-même une main, en revanche, doit pouvoir
-        // l'activer pour tout voir (ex. donner un cours en jouant sa propre donne) — le
-        // restreindre à isKibbitz() l'en privait complètement dès qu'il prenait un siège.
-        hostSeeAllBtn.style.display = (myRole === 'host') ? '' : 'none';
+        // Voir échange avec Guillaume : ce bouton est un PRIVILÈGE DU VRAI HÔTE (voir
+        // isTrueOriginalHost), pas seulement d'un hôte spectateur — un kibbitz voit déjà
+        // les 4 mains en permanence par défaut, il n'a jamais besoin de ce bouton. Un
+        // hôte qui joue lui-même une main doit pouvoir l'activer (donner un cours) — mais
+        // "myRole==='host'" seul est TROP LARGE en mode différé (voir
+        // isTrueOriginalHost) : n'importe quel joueur reprenant une salle abandonnée
+        // devient 'host' techniquement, sans être le vrai créateur/organisateur.
+        hostSeeAllBtn.style.display = isTrueOriginalHost() ? '' : 'none';
         hostSeeAllBtn.classList.toggle('is-active', hostSeeAllHands);
     }
 }
@@ -5202,13 +5216,13 @@ function checkAuctionEnd() {
     // besoin d'attendre la fin de l'enchère ni une action de l'hôte, puisqu'il n'est
     // assis à aucun siège et ne peut donc rien "tricher" en les voyant.
     //
-    // Voir échange avec Guillaume : PRIVILÈGE DE L'HÔTE, pas seulement d'un hôte
-    // spectateur — un hôte qui joue lui-même une main (ex. donner un cours) doit pouvoir
-    // l'activer pour tout voir. isKibbitz() ici annulait ce privilège dès que l'hôte
-    // prenait un siège, alors que le commentaire au-dessus décrivait déjà l'intention
-    // correcte ("réservé à lui seul", sans condition de siège) — code et intention
-    // n'étaient plus alignés.
-    const hostForcedReveal = myRole === 'host' && hostSeeAllHands;
+    // Voir échange avec Guillaume : PRIVILÈGE DU VRAI HÔTE (voir isTrueOriginalHost) —
+    // un hôte qui joue lui-même une main (ex. donner un cours) doit pouvoir l'activer
+    // pour tout voir, mais "myRole==='host'" seul est trop large en mode différé
+    // (n'importe quel joueur reprenant une salle abandonnée devient 'host' techniquement
+    // sans être le vrai créateur — lui laisser ce privilège reviendrait à le laisser
+    // tricher sur sa propre main, voir isTrueOriginalHost pour le détail).
+    const hostForcedReveal = isTrueOriginalHost() && hostSeeAllHands;
     const showAllHandsEarly = hostForcedReveal || isKibbitz();
 
     if (!auctionOver) {
@@ -5274,11 +5288,24 @@ function checkAuctionEnd() {
         }
     }
 
-    renderAllHandsDiagram();
-    diagramEl.style.display = 'grid';
-    {
-        const myHandsEl = document.getElementById('myHandsContainer');
-        if (myHandsEl) myHandsEl.style.display = 'none';
+    // Voir échange avec Guillaume ("maintenant je ne peux pas choisir de désactiver 'voir
+    // les 4 mains' en tant qu'hôte") : ce bloc affichait TOUJOURS les 4 mains une fois
+    // l'enchère terminée, sans jamais consulter hostForcedReveal/hostSeeAllHands — alors
+    // que le commentaire d'origine, plus haut dans cette même fonction, promet "à tout
+    // moment" (pas seulement pendant l'enchère). Pour un simple invité (pas le vrai hôte),
+    // rien ne change : il voit toujours les 4 mains une fois l'enchère finie, comme avant
+    // — seul le VRAI hôte peut désormais garder sa propre bascule y compris après la fin
+    // de l'enchère, plutôt que de se la voir imposée sans recours.
+    const showAllHandsPostAuction = isKibbitz() || (isTrueOriginalHost() ? hostSeeAllHands : true);
+    const myHandsElPostAuction = document.getElementById('myHandsContainer');
+    if (showAllHandsPostAuction) {
+        renderAllHandsDiagram();
+        diagramEl.style.display = 'grid';
+        if (myHandsElPostAuction) myHandsElPostAuction.style.display = 'none';
+    } else {
+        diagramEl.style.display = 'none';
+        if (myHandsElPostAuction) myHandsElPostAuction.style.display = '';
+        renderAllHandsDiagram();
     }
 
     const isLastBoard = boardIndex >= deals.length - 1;
