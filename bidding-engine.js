@@ -1485,6 +1485,24 @@ function decideResponderContinuationAfterNewSuit(hand, hcp, hl, openingBid, myRe
 function decideOpenerResponseToPartnerDouble(hand, hcp, hl, doubleIndex, seat, history) {
     const lengths = suitLengths(hand);
 
+    // Voir échange avec Guillaume (session du 31 juillet, suite aux simulations à grande
+    // échelle — "sur une ouverture de barrage, après intervention, le X du partenaire de
+    // l'ouvreur est strictement punitif, on ne recherche pas un fit") : si MA propre
+    // annonce d'ouverture était un barrage (couleur, palier 2+, hors 2♣/2♦ fort
+    // artificiel), le contre de mon partenaire sur l'intervention adverse qui a suivi
+    // n'a RIEN à voir avec la recherche de fit ci-dessous — il est punitif, point final.
+    // Jamais de recherche de couleur ici : je passe, j'accepte le contre punitif de mon
+    // partenaire. Cas trouvé par simulation (voir run-bidding-simulations.js) : un 4♣
+    // barrage (9 cartes solides) suivi d'un contre du partenaire faisait sauter à 6♥ avec
+    // seulement 2 cartes à Cœur — la recherche de fit ci-dessous n'a de sens qu'après une
+    // vraie ouverture (1-niveau, ou 2♣/2♦ fort), jamais après un barrage.
+    const myFirstBidEntry = history.find(e => e.seat === seat && isBidCall(e.call));
+    const myFirstBidParsed = myFirstBidEntry ? parseBid(myFirstBidEntry.call) : null;
+    const wasBarrageOpening = myFirstBidParsed && myFirstBidParsed.strain !== 'NT'
+        && myFirstBidParsed.level >= 2
+        && !(myFirstBidParsed.level === 2 && (myFirstBidParsed.strain === 'C' || myFirstBidParsed.strain === 'D'));
+    if (wasBarrageOpening) return 'PASS';
+
     // Couleurs pas encore annoncées par QUICONQUE avant ce contre — celles que le contre
     // du partenaire promet (voir échange avec Guillaume). Filet de sécurité : si (cas
     // limite) ça n'en laisse aucune, retombe sur les 4 couleurs plutôt que de planter.
@@ -3165,7 +3183,15 @@ function decideRobotCall(seat, deal, history) {
             }
         } else if (wasOpening && !myPartnerBid && myPartnerDouble && !isDouble(myBids[0].call)) {
             call = decideOpenerResponseToPartnerDouble(hand, hcp, hl, history.indexOf(myPartnerDouble), seat, history);
-            explanation = `Réponse au contre du partenaire après intervention adverse — obligation de donner le fit (${points})`;
+            // Voir échange avec Guillaume (session du 31 juillet, suite aux simulations) :
+            // le texte générique "obligation de donner le fit" était trompeur après une
+            // ouverture de barrage (voir wasBarrageOpening dans
+            // decideOpenerResponseToPartnerDouble) — le contre y est punitif, pas une
+            // demande de fit, donc le passe qui en résulte n'est pas "un défaut par
+            // manque de couleur" mais bien la seule réponse correcte.
+            explanation = call === 'PASS'
+                ? `Contre punitif du partenaire sur mon ouverture de barrage — j'accepte, passe (${points})`
+                : `Réponse au contre du partenaire après intervention adverse — obligation de donner le fit (${points})`;
         } else if (wasOpening && myPartnerBid && myBids[0].call === '2NT'
             && (() => {
                 // Voir échange avec Guillaume (session du 31 juillet, 23h56 — régression
