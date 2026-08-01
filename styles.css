@@ -1026,11 +1026,22 @@ a.btn {
     padding: 26px 30px;
 }
 
+/* Voir échange avec Guillaume ("bouton retour accueil en haut à droite, même ligne que
+   le titre") : bascule le titre en flex plutôt que centré seul — le bouton vient occuper
+   le côté droit de la même ligne, indépendamment du reste du salon qui reste centré. */
+.lobby-header-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 8px;
+}
+
 #screen-lobby h2 {
     font-family: var(--font-display);
     font-weight: 600;
     font-size: 1.5rem;
-    margin-bottom: 8px;
+    margin-bottom: 0;
     color: var(--brass-bright);
 }
 

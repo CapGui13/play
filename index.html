@@ -23,12 +23,6 @@
 <body class="on-landing-screen">
 
 <div id="connectionBar" class="connection-bar">
-    <!-- Voir échange avec Guillaume ("bouton pour revenir à la page principale") : lien
-         brut plutôt qu'un bouton avec onclick — une simple navigation externe, pas besoin
-         de JS. Dans la barre persistante (visible sur tous les écrans : accueil, salon,
-         partie en cours) plutôt que seulement dans l'en-tête de partie, pour être
-         accessible à n'importe quel moment. -->
-    <a href="https://capgui13.github.io/play/" class="btn btn-secondary btn-small connection-bar-home-btn" title="Retour à l'accueil">🏠</a>
     <span id="connectionStatus" class="connection-status">⚪ Pas encore connecté</span>
     <button type="button" id="reconnectBtn" class="btn btn-primary btn-small" style="display:none;" onclick="uiReconnect()">🔌 Se reconnecter</button>
     <!-- Masqué par défaut : inutile (et non fonctionnel, personne à qui parler) tant qu'on
@@ -166,7 +160,14 @@
 
     <!-- Salon d'attente (commun à l'hôte et aux invités) -->
     <section id="screen-lobby" class="screen" style="display:none;">
-        <h2>Salon d'attente <span id="lobbyRoomCodeInline" class="lobby-room-code-inline"></span></h2>
+        <div class="lobby-header-row">
+            <h2>Salon d'attente <span id="lobbyRoomCodeInline" class="lobby-room-code-inline"></span></h2>
+            <!-- Voir échange avec Guillaume ("bouton retour accueil, positionnement") :
+                 pas dans la barre de connexion persistante (visible même sur l'écran
+                 d'accueil, où il n'a pas lieu d'être) — seulement une fois dans un salon
+                 ou une partie, en haut à droite sur la même ligne que le titre. -->
+            <a href="https://capgui13.github.io/play/" class="btn btn-secondary btn-small" title="Retour à l'accueil">🏠</a>
+        </div>
 
         <div id="lobbyRoomCodeBlock" style="display:none;">
             <input type="text" id="shareLinkInput" class="visually-hidden" readonly tabindex="-1" aria-hidden="true">
@@ -392,6 +393,10 @@
                          partenaire (voir SEAT_PENDING). Réutilise le même lien déjà généré
                          pour le salon (shareLinkInput/uiCopyShareLink), pas de duplication. -->
                     <button type="button" id="gameHeaderCopyLinkBtn" class="btn btn-secondary btn-small room-board-copy-link-btn" style="display:none;" onclick="uiCopyShareLink(this)" title="Copier le lien de connexion à cette salle">🔗</button>
+                    <!-- Voir échange avec Guillaume ("à droite du bouton pour copier le
+                         lien") : visible pour tout le monde, pas seulement l'hôte,
+                         contrairement au bouton de copie de lien juste à gauche. -->
+                    <a href="https://capgui13.github.io/play/" class="btn btn-secondary btn-small" title="Retour à l'accueil">🏠</a>
                 </div>
             </div>
             <div class="game-actions">

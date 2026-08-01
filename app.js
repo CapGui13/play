@@ -468,7 +468,13 @@ function renderHandDisplayOptionButtons() {
 
     const hostSeeAllBtn = document.getElementById('hostSeeAllHandsBtn');
     if (hostSeeAllBtn) {
-        hostSeeAllBtn.style.display = (myRole === 'host' && isKibbitz()) ? '' : 'none';
+        // Voir échange avec Guillaume : ce bouton est un PRIVILÈGE DE L'HÔTE, pas
+        // seulement d'un hôte spectateur — un kibbitz (n'importe lequel, hôte ou pas) voit
+        // déjà les 4 mains en permanence par défaut (voir isKibbitz), il n'a jamais besoin
+        // de ce bouton. Un hôte qui joue lui-même une main, en revanche, doit pouvoir
+        // l'activer pour tout voir (ex. donner un cours en jouant sa propre donne) — le
+        // restreindre à isKibbitz() l'en privait complètement dès qu'il prenait un siège.
+        hostSeeAllBtn.style.display = (myRole === 'host') ? '' : 'none';
         hostSeeAllBtn.classList.toggle('is-active', hostSeeAllHands);
     }
 }
@@ -3257,6 +3263,18 @@ function uiStartGameAsHost() {
     const proceedWithDeals = (orderedDeals) => {
         if (!orderedDeals) return; // l'erreur est déjà affichée par readAndValidateDealFile/readAndValidateDealFromLibrary
 
+        // Voir échange avec Guillaume ("nom de l'hôte doit être le nom quand l'hôte a
+        // lancé la séance, pas le nom par défaut à l'ouverture de la room") :
+        // roomCreatorName était figé à la CRÉATION de la room (uiCreateRoom, avec le
+        // savedNickname de la session PRÉCÉDENTE) et jamais remis à jour ensuite — même si
+        // l'hôte corrige son pseudo dans le salon d'attente juste avant de lancer (voir
+        // uiUpdateMyName, qui met bien à jour participants[...].name en temps réel, mais
+        // ignorait roomCreatorName). Remis à jour ici, au moment exact du lancement, avec
+        // le nom courant de l'hôte — la seule chose qui change ensuite, c'est qu'on ne le
+        // réécrit plus JAMAIS après ça (voir le commentaire original sur roomCreatorName).
+        const hostParticipantAtLaunch = participants.find(p => p.id === myParticipantId);
+        if (hostParticipantAtLaunch) roomCreatorName = hostParticipantAtLaunch.name;
+
         deals = orderedDeals;
         boardIndex = 0;
         if (!deals[0].auctionHistory) deals[0].auctionHistory = [];
@@ -5183,7 +5201,14 @@ function checkAuctionEnd() {
     // kibbitz, lui, voit toujours les 4 mains dès le début (voir renderMyHands) — pas
     // besoin d'attendre la fin de l'enchère ni une action de l'hôte, puisqu'il n'est
     // assis à aucun siège et ne peut donc rien "tricher" en les voyant.
-    const hostForcedReveal = myRole === 'host' && isKibbitz() && hostSeeAllHands;
+    //
+    // Voir échange avec Guillaume : PRIVILÈGE DE L'HÔTE, pas seulement d'un hôte
+    // spectateur — un hôte qui joue lui-même une main (ex. donner un cours) doit pouvoir
+    // l'activer pour tout voir. isKibbitz() ici annulait ce privilège dès que l'hôte
+    // prenait un siège, alors que le commentaire au-dessus décrivait déjà l'intention
+    // correcte ("réservé à lui seul", sans condition de siège) — code et intention
+    // n'étaient plus alignés.
+    const hostForcedReveal = myRole === 'host' && hostSeeAllHands;
     const showAllHandsEarly = hostForcedReveal || isKibbitz();
 
     if (!auctionOver) {
@@ -6479,6 +6504,12 @@ function uiResumeFromCloud() {
 
     hideConnectingOverlay();
     enterGameScreen();
+    // Voir échange avec Guillaume ("si on ouvre une room et que toutes les enchères sont
+    // finies, il faut afficher la vue d'ensemble par défaut") : arriver sur la donne 1
+    // n'a aucun intérêt si elle (et toutes les autres) sont déjà terminées — rien à y
+    // jouer. La vue d'ensemble montre directement où chaque donne en est, plus utile
+    // qu'un premier tableau qui ne servira à rien.
+    if (deals.every(d => isAuctionOver(d.auctionHistory || []))) uiOpenBoardOverview();
     const missingDD = deals.filter(d => !d.par && !d.ddTable);
     if (missingDD.length > 0) kickOffBackgroundDD(missingDD);
     if (!chatPanelOpen) uiToggleChat(false);
