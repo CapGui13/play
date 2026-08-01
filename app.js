@@ -4971,7 +4971,10 @@ function computeDDScores(ddTable, dealVulnerable) {
 // l'ordre par paires de partenaires (N, S, E, O) utilisé ailleurs (room board) — ce
 // tableau est affiché juste en dessous du relevé d'enchères, dont l'ordre de colonnes
 // doit rester cohérent pour que les deux s'alignent visuellement.
-const DD_TABLE_SEAT_ORDER = ['N', 'E', 'S', 'W'];
+// Voir échange avec Guillaume ("dans le tableau du PAR, NS devraient être collés et EO
+// ensuite au lieu d'alterner") : N,S,E,W plutôt que N,E,S,W — les deux camps groupés
+// plutôt qu'alternés, plus lisible pour comparer visuellement NS vs EO d'un coup d'œil.
+const DD_TABLE_SEAT_ORDER = ['N', 'S', 'E', 'W'];
 
 // Construit le tableau HTML du double mort (5 lignes SA/♠/♥/♦/♣ x 4 colonnes N/S/E/O),
 // tel qu'éventuellement fourni dans le fichier PBN chargé (tag [OptimumResultTable]).
@@ -5372,8 +5375,7 @@ function seatsOfParticipant(pid) {
 // spécial pour 'host' renvoyait ici à tort la toute dernière case du tableau quel qu'en
 // soit l'auteur — si un robot passait automatiquement juste après l'annonce de l'hôte
 // (avant qu'il ait le temps de cliquer "undo"), l'hôte annulait alors CE PASSE ROBOT au
-// lieu de sa propre annonce, ce qui faussait ensuite le calcul de qui doit valider
-// (voir humanOpponentsFor) — l'inverse de ce qui devait se produire.
+// lieu de sa propre annonce.
 function findUndoTargetIndex(requesterId, history) {
     const seats = seatsOfParticipant(requesterId);
     for (let i = history.length - 1; i >= 0; i--) {
@@ -5385,25 +5387,6 @@ function findUndoTargetIndex(requesterId, history) {
 function guestIndexForParticipant(pid) {
     if (!pid || pid === 'host') return null;
     return Object.prototype.hasOwnProperty.call(guestIndexByToken, pid) ? guestIndexByToken[pid] : null;
-}
-
-// Participants humains "en face" du camp qui a fait l'annonce ciblée par l'undo, hors le
-// demandeur — ce sont eux dont l'accord est requis pour annuler. `targetSeat` est le siège
-// dont l'annonce va effectivement être retirée (voir findUndoTargetIndex), pas forcément
-// le dernier siège de l'historique.
-function humanOpponentsFor(requesterId, targetSeat) {
-    const opposing = partnershipOf(targetSeat) === 'NS' ? partnershipSeats('EW') : partnershipSeats('NS');
-    const ids = new Set();
-    opposing.forEach(seat => {
-        const pid = seatAssignment[seat];
-        // Voir échange avec Guillaume : SEAT_PENDING est une chaîne non vide (donc "vraie"
-        // au sens JS) mais ne représente PERSONNE de réellement présent — sans cette
-        // exclusion, un camp adverse encore en attente d'un partenaire aurait fait
-        // patienter indéfiniment (jusqu'au délai de 20s) une demande d'undo qui aurait dû
-        // s'auto-approuver comme face à des robots.
-        if (pid && pid !== SEAT_PENDING && pid !== requesterId) ids.add(pid);
-    });
-    return Array.from(ids);
 }
 
 function undoRejectReasonText(reason) {
@@ -5483,39 +5466,35 @@ function hostHandleUndoRequest(msg) {
         deliverToParticipant(msg.requesterId, { type: 'undo-rejected', boardIndex: msg.boardIndex, requesterId: msg.requesterId, reason: 'nothing' });
         return;
     }
-    const targetSeat = auctionHistory[targetIndex].seat;
 
-    // L'hôte peut annuler unilatéralement, sans validation du camp d'en face (voir échange
-    // avec Guillaume) — l'hôte arbitre déjà toute la table (undo d'un simple joueur assis
-    // reste soumis à l'accord de l'adversaire humain, lui, via humanOpponentsFor plus bas).
+    // L'hôte peut annuler unilatéralement, sans validation de personne (voir échange avec
+    // Guillaume) — l'hôte arbitre déjà toute la table ; un simple joueur assis, lui,
+    // reste soumis à l'accord de l'hôte (voir plus bas, ex-humanOpponentsFor).
     //
     // Voir échange avec Guillaume ("2 modes : live / différé") : en mode différé,
     // myParticipantId (et donc requesterId ici) n'est JAMAIS la chaîne littérale 'host' —
     // c'est le vrai jeton du créateur (voir roomCreatorToken, figé à la création/au
     // lancement, jamais réécrit). Sans ce second cas, un créateur en mode différé perdait
-    // son droit d'arbitrage unilatéral — récupéré de façon incidente uniquement quand
-    // humanOpponentsFor renvoyait une liste vide (adversaires robots), mais pas dans une
-    // configuration où l'un des deux camps opposés serait un autre humain.
+    // son droit d'arbitrage unilatéral.
     if (msg.requesterId === 'host' || msg.requesterId === roomCreatorToken) {
         applyUndoAsHost({ boardIndex: msg.boardIndex, requesterId: msg.requesterId, historyLengthAtRequest: msg.historyLengthAtRequest, targetIndex });
         return;
     }
 
-    const opponents = humanOpponentsFor(msg.requesterId, targetSeat);
-    if (opponents.length === 0) {
-        applyUndoAsHost({ boardIndex: msg.boardIndex, requesterId: msg.requesterId, historyLengthAtRequest: msg.historyLengthAtRequest, targetIndex });
-        return;
-    }
-
+    // Voir échange avec Guillaume ("si demande d'undo, il faut validation de l'host, pas
+    // que ça marche automatiquement") : ce n'est plus l'ADVERSAIRE humain qui est
+    // sollicité pour approuver la demande d'un simple joueur assis — c'est l'HÔTE
+    // lui-même, seul arbitre de la table. humanOpponentsFor n'est donc plus utilisé ici
+    // (son ancien rôle, demander l'accord du camp d'en face, est abandonné).
+    //
+    // Puisque cette fonction tourne déjà côté hôte, pas besoin d'aller-retour réseau : on
+    // réutilise directement le mécanisme générique pendingUndoAsk/renderUndoAskBanner/
+    // uiAnswerUndo (déjà prévu pour fonctionner en local quand myRole==='host', voir
+    // hostReceiveUndoAnswer plus bas) — la même bannière "accepter/refuser" s'affiche
+    // simplement sur l'écran de l'hôte au lieu d'être envoyée à un adversaire distant.
+    pendingUndoAsk = { requesterId: msg.requesterId, boardIndex: msg.boardIndex, historyLengthAtRequest: msg.historyLengthAtRequest };
     hostPendingUndo = { requesterId: msg.requesterId, boardIndex: msg.boardIndex, historyLengthAtRequest: msg.historyLengthAtRequest, targetIndex };
-
-    const askMsg = {
-        type: 'undo-ask',
-        boardIndex: msg.boardIndex,
-        requesterId: msg.requesterId,
-        historyLengthAtRequest: msg.historyLengthAtRequest
-    };
-    opponents.forEach(pid => deliverToParticipant(pid, askMsg));
+    renderUndoAskBanner();
 
     setTimeout(() => {
         if (hostPendingUndo &&
@@ -5523,6 +5502,8 @@ function hostHandleUndoRequest(msg) {
             hostPendingUndo.boardIndex === msg.boardIndex &&
             hostPendingUndo.historyLengthAtRequest === msg.historyLengthAtRequest) {
             hostPendingUndo = null;
+            pendingUndoAsk = null;
+            renderUndoAskBanner();
             deliverToParticipant(msg.requesterId, { type: 'undo-rejected', boardIndex: msg.boardIndex, requesterId: msg.requesterId, reason: 'timeout' });
         }
     }, 20000);
@@ -5743,7 +5724,16 @@ function renderBoardSkipControls() {
     const isHost = myRole === 'host';
     prevBtn.style.display = isHost ? '' : 'none';
     nextBtn.style.display = isHost ? '' : 'none';
-    if (fastForwardBtn) fastForwardBtn.style.display = isHost ? '' : 'none';
+    // Voir échange avec Guillaume ("la flèche avance rapide ne doit pas apparaître en cas
+    // de jeu non différé") : "avance rapide" saute à la prochaine donne où c'est mon tour
+    // AILLEURS — utile seulement en mode différé, où les donnes avancent indépendamment
+    // les unes des autres au fil des connexions successives. En live, tout le monde est
+    // connecté en même temps sur la même donne : il n'y a jamais rien à "rattraper"
+    // ailleurs, le bouton n'a donc pas de sens et ne doit pas apparaître, même pour
+    // l'hôte. Même repère que pollCloudForUpdates pour détecter le mode différé
+    // (`peerConn instanceof NullPeerConnection`), fixé au lancement de la salle.
+    const isDeferredRoom = peerConn instanceof NullPeerConnection;
+    if (fastForwardBtn) fastForwardBtn.style.display = (isHost && isDeferredRoom) ? '' : 'none';
     if (!isHost || !deals) return;
     prevBtn.disabled = boardIndex <= 0;
     nextBtn.disabled = boardIndex >= deals.length - 1;

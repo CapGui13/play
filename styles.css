@@ -613,6 +613,18 @@ body.on-landing-screen .connection-bar {
     transition: transform 0.15s, box-shadow 0.15s, opacity 0.15s;
 }
 
+/* Voir échange avec Guillaume (bouton retour accueil, lien <a> plutôt que <button>) :
+   .btn n'avait jusqu'ici jamais été appliquée à un <a> — sans ceci, le soulignement et le
+   bleu par défaut du navigateur passeraient outre .btn-secondary (qui fixe bien `color`
+   pour un <button>, mais un lien a en plus besoin de `text-decoration` et d'un display
+   compatible avec le padding vertical). */
+a.btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    text-decoration: none;
+}
+
 .btn:hover { transform: translateY(-1px); }
 .btn:active { transform: translateY(0) scale(0.97); }
 
@@ -2213,9 +2225,18 @@ button.kibitz-chip {
 
 /* Colonne "au tour de" mise en évidence par inversion fond/texte (plutôt que par une
    couleur fixe) : lisible aussi bien sur ledger clair (fond sombre, texte clair) que
-   sombre (fond clair, texte sombre). */
+   sombre (fond clair, texte sombre).
+   Voir échange avec Guillaume (retour utilisateur Android — pas de fond derrière le nom
+   du joueur actif) : je n'ai pas pu tester sur un appareil Android réel, donc ceci est ma
+   meilleure hypothèse plutôt qu'une certitude vérifiée. `background-color` explicite
+   (plutôt que le raccourci `background`) + `background-clip: padding-box` forcent un
+   calque de peinture propre pour la cellule elle-même — un bug documenté sur certains
+   moteurs de rendu fait sinon "gagner" le fond de la <table> (voir .auction-ledger,
+   background: var(--card)) sur celui de la cellule quand border-collapse: collapse est
+   actif, précisément le genre de configuration utilisée ici. */
 .auction-ledger th.turn-col {
-    background: var(--text);
+    background-color: var(--text);
+    background-clip: padding-box;
     color: var(--card);
 }
 
@@ -2605,17 +2626,21 @@ table.dd-table td.dd-secondary-contract {
     border-radius: 6px;
 }
 
+/* Voir échange avec Guillaume ("À vous d'enchérir devrait avoir une couleur plus
+   marquée") : le vert précédent (color-mix avec #2f8f5b) se fondait trop dans le feutre
+   vert profond du fond (--felt-deep/--bg). Basculé sur l'accent doré déjà établi dans
+   l'identité visuelle de l'app (--brass-bright), qui tranche nettement mieux sur ce fond
+   — plus lisible en un coup d'œil, sans introduire une couleur étrangère à la palette. */
 .turn-indicator.my-turn {
-    background: #203c2d;
-    background: color-mix(in srgb, #2f8f5b 22%, var(--card));
-    color: #61a87d;
-    color: color-mix(in srgb, #2f8f5b 75%, var(--text));
+    background: color-mix(in srgb, var(--brass-bright) 26%, var(--card));
+    color: var(--brass-bright);
+    font-weight: 700;
     animation: turn-glow 2.4s ease-in-out infinite;
 }
 
 @keyframes turn-glow {
-    0%, 100% { box-shadow: 0 0 0 0 rgba(47, 143, 91, 0); }
-    50% { box-shadow: 0 0 12px 1px rgba(47, 143, 91, 0.35); }
+    0%, 100% { box-shadow: 0 0 0 0 rgba(224, 188, 74, 0); }
+    50% { box-shadow: 0 0 14px 2px rgba(224, 188, 74, 0.45); }
 }
 
 .turn-indicator.their-turn {

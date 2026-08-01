@@ -23,6 +23,12 @@
 <body class="on-landing-screen">
 
 <div id="connectionBar" class="connection-bar">
+    <!-- Voir échange avec Guillaume ("bouton pour revenir à la page principale") : lien
+         brut plutôt qu'un bouton avec onclick — une simple navigation externe, pas besoin
+         de JS. Dans la barre persistante (visible sur tous les écrans : accueil, salon,
+         partie en cours) plutôt que seulement dans l'en-tête de partie, pour être
+         accessible à n'importe quel moment. -->
+    <a href="https://capgui13.github.io/play/" class="btn btn-secondary btn-small connection-bar-home-btn" title="Retour à l'accueil">🏠</a>
     <span id="connectionStatus" class="connection-status">⚪ Pas encore connecté</span>
     <button type="button" id="reconnectBtn" class="btn btn-primary btn-small" style="display:none;" onclick="uiReconnect()">🔌 Se reconnecter</button>
     <!-- Masqué par défaut : inutile (et non fonctionnel, personne à qui parler) tant qu'on
