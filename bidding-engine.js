@@ -682,6 +682,24 @@ function decideRobotResponse(hand, hcp, hl, partnerCall, seat, history, partnerP
         }
     });
 
+    // Voir échange avec Guillaume (échantillon donne 8, session du 2 août, travail
+    // autonome — trouvé en creusant, même principe que les corrections "priorité au
+    // direct/naturel" ci-dessus) : je réponds à une ouverture MINEURE du partenaire, un
+    // adversaire est intervenu — ai-je une majeure 4+ cartes encore annonçable
+    // naturellement à un palier raisonnable, jamais annoncée par personne ? Alors je la
+    // montre DIRECTEMENT, avant même d'envisager un cue-bid ou un repli à SA (trouvé
+    // avec 16H, 4 cartes à ♠ encore libre au palier 1, qui sautait quand même à 2SA sans
+    // jamais montrer sa majeure). Priorité absolue, avant tout le reste ci-dessous.
+    if (partnerBidWasOpening && bid.strain !== 'NT' && bid.strain !== 'S' && bid.strain !== 'H' && opponentSuits.size === 1) {
+        const naturalMajor = ['S', 'H'].find(s => lengths[s] >= 4 && !opponentSuits.has(s));
+        if (naturalMajor) {
+            for (let level = 1; level <= 7; level++) {
+                const c = level + naturalMajor;
+                if (isCallLegal(history, c, seat)) return c;
+            }
+        }
+    }
+
     // Voir échange avec Guillaume (échantillon donne 3, session du 2 août — "le cue-bid
     // en face d'une ouverture en majeure promet un fit de 4 cartes dans une main FM") :
     // je réponds DIRECTEMENT à l'ouverture MAJEURE du partenaire, un adversaire est
@@ -752,8 +770,15 @@ function decideRobotResponse(hand, hcp, hl, partnerCall, seat, history, partnerP
         if (isCallLegal(history, call, seat)) return call;
     }
     if (longerSuit) {
+        // Voir échange avec Guillaume (session du 2 août — même famille que les fix
+        // "chelem fantôme" de cette session) : aucun garde-fou de palier ici — si
+        // bid.level était déjà très haut (intervention adverse développée), le palier
+        // légal le plus bas pouvait déjà être le chelem, uniquement parce que hl>=12 et
+        // une couleur plus longue existent, sans le moindre rapport avec une vraie
+        // main de chelem.
         for (let level = bid.level; level <= 7; level++) {
             const call = level + longerSuit;
+            if (level >= 6) break;
             if (isCallLegal(history, call, seat)) return call;
         }
     }
@@ -802,6 +827,13 @@ function decideRobotResponse(hand, hcp, hl, partnerCall, seat, history, partnerP
                 // directement plutôt que de forcer avec une couleur personnelle plus
                 // longue mais non fittée. Seul newSuitThreshold (déjà relevé à 13 pour
                 // une intervention) doit compter ici.
+                // Voir échange avec Guillaume (session du 2 août — même famille que les
+                // fix "chelem fantôme" de cette session) : si le palier légal le plus bas
+                // pour cette couleur atteint déjà le chelem (bid.level était déjà très
+                // haut, ex. après une intervention adverse à 5), ce n'est plus une simple
+                // "nouvelle couleur bon marché" — jamais de saut au chelem sur ce seul
+                // critère de longueur/HL, indépendamment des points réels.
+                if (level >= 6) break;
                 if ((level <= 1 && hl >= 6 && !partnerWasIntervening) || hl >= newSuitThreshold) return call;
                 break; // palier minimal légal déjà 2+ ET pas assez de points : pas la peine d'essayer plus haut, ce serait pire
             }
@@ -828,10 +860,24 @@ function decideRobotResponse(hand, hcp, hl, partnerCall, seat, history, partnerP
         // OPENING_MINIMUM/SIMPLE_RAISE_MINIMUM pour l'esprit similaire côté points). Le
         // fit se compte sur le VRAI total (ma longueur + celle promise), jamais sur un
         // seuil fixe qui ignorerait combien le partenaire a réellement annoncé.
-        const barragePromisedLength = bid.level + 4;
-        if (lengths[suit] + barragePromisedLength >= 8) {
-            const call = (bid.level + 1) + suit;
-            if (isCallLegal(history, call, seat)) return call;
+        //
+        // Voir échange avec Guillaume (session du 2 août — simulation à grande échelle,
+        // travail autonome) : bug sévère trouvé — cette formule s'appliquait à N'IMPORTE
+        // QUELLE enchère du partenaire au palier 2+, y compris sa 2e ou 3e intervention
+        // dans une enchère compétitive déjà développée (ex. il a contré, puis reparle au
+        // palier 5) — pas seulement une vraie ouverture de barrage. Un "5♥" qui n'est PAS
+        // un barrage se voyait alors supposer 9 cartes (5+4) chez le partenaire, un pur
+        // fantasme — trouvé avec Ouest (0H, 1 seule carte à Cœur) sautant au chelem sur
+        // cette base. Restreint maintenant aux VRAIS barrages : le bid auquel je réponds
+        // doit être la toute première et unique annonce du partenaire dans l'enchère.
+        const partnerBidCountForBarrage = history.filter(e => e.seat !== seat
+            && partnershipOf(e.seat) === partnershipOf(seat) && (isBidCall(e.call) || isDouble(e.call))).length;
+        if (partnerBidCountForBarrage === 1) {
+            const barragePromisedLength = bid.level + 4;
+            if (lengths[suit] + barragePromisedLength >= 8) {
+                const call = (bid.level + 1) + suit;
+                if (isCallLegal(history, call, seat)) return call;
+            }
         }
     }
 
@@ -943,9 +989,21 @@ function decideRobotResponse(hand, hcp, hl, partnerCall, seat, history, partnerP
         // précis — une intervention adverse (ex. un barrage) peut avoir rendu ce palier
         // exact illégal, et ce soutien pourtant justifié ne se faisait alors pas du tout
         // (tombait en silence dans les vérifications suivantes, new suit / repli SA).
-        for (let level = raiseLevel; level <= 7; level++) {
-            const call = level + suit;
-            if (isCallLegal(history, call, seat)) return call;
+        //
+        // Voir échange avec Guillaume (session du 2 août — simulation à grande échelle,
+        // travail autonome, même famille que les autres fix "chelem fantôme" de cette
+        // session) : si raiseLevel atteint DÉJÀ le chelem (6+), ce n'est plus un simple
+        // soutien "minimal" — la formule ne fait ici que suivre mécaniquement le palier
+        // de l'intervention adverse (potentiellement très haute, ex. un sacrifice à 5),
+        // sans le moindre rapport avec mes propres points. Les vérifications de chelem
+        // ci-dessus (SLAM_ZONE) ont déjà eu leur chance ; si elles n'ont rien donné,
+        // sauter quand même au chelem ici serait aveugle — mieux vaut laisser la suite
+        // de la fonction (nouvelle couleur / repli SA / passe) décider.
+        if (raiseLevel < 6) {
+            for (let level = raiseLevel; level <= 7; level++) {
+                const call = level + suit;
+                if (isCallLegal(history, call, seat)) return call;
+            }
         }
     }
 
@@ -970,8 +1028,14 @@ function decideRobotResponse(hand, hcp, hl, partnerCall, seat, history, partnerP
             ? newSuitCandidates.reduce((best, s) => (lengths[s] > lengths[best] ? s : best), newSuitCandidates[0])
             : longestSuitPreferHigh(lengths); // filet : plus aucune couleur "propre" 4+ (rarissime)
         if (newSuit !== suit && lengths[newSuit] >= 4) {
+            // Voir échange avec Guillaume (session du 2 août — même famille que les fix
+            // "chelem fantôme" de cette session) : jamais de saut au chelem ici juste
+            // parce que le palier légal le plus bas s'y trouve déjà (bid.level très haut
+            // suite à une enchère compétitive) — newSuitThreshold (11-13HL) n'a jamais
+            // été pensé comme un seuil de chelem.
             for (let level = bid.level; level <= 7; level++) {
                 const call = level + newSuit;
+                if (level >= 6) break;
                 if (isCallLegal(history, call, seat)) return call;
             }
         }
@@ -996,6 +1060,10 @@ function decideRobotResponse(hand, hcp, hl, partnerCall, seat, history, partnerP
     const saFallbackThreshold = bid.level >= 2 ? 13 : 6;
     if (!partnerWasIntervening) {
         for (let level = bid.level; level <= 7; level++) {
+            // Voir échange avec Guillaume (session du 2 août — même famille) : le seuil
+            // de points ci-dessous (pointsOk) n'a jamais été pensé pour justifier un
+            // chelem — jamais au-delà de 5NT via ce repli, quel que soit bid.level.
+            if (level >= 6) break;
             const call = level + 'NT';
             if (!isCallLegal(history, call, seat)) continue;
             const lastBidForStopper = getLastActualBid(history);
@@ -1390,12 +1458,24 @@ function decideResponderContinuationAfterNewSuit(hand, hcp, hl, openingBid, myRe
     } else if (rebid.strain !== 'NT') {
         const openingIsMajor = openingBid.strain === 'S' || openingBid.strain === 'H';
         const rebidIsMajor = rebid.strain === 'S' || rebid.strain === 'H';
-        if (openingIsMajor && lengths[openingBid.strain] + 5 >= 8) fitSuit = openingBid.strain;
+        // Voir échange avec Guillaume (session du 2 août — simulation à grande échelle,
+        // travail autonome) : bug trouvé — cette condition traitait la couleur
+        // D'OUVERTURE du partenaire comme un fit CONFIRMÉ dès que j'ai 4+ cartes là-
+        // dedans, sans jamais vérifier que sa REDEMANDE la confirme réellement. Une
+        // redemande qui introduit une toute NOUVELLE 3ème couleur (ex. 1♥-1♠-2♣) ne dit
+        // RIEN sur les cœurs — ni fit connu, ni longueur confirmée — pourtant ce fit
+        // "fantôme" gonflait zonePoints via computeSupportPoints (bonus de fit + de
+        // distribution), poussant au chelem avec des mains ordinaires (trouvé : 16H
+        // sautant à 6♥ sur une simple redemande naturelle, sans le moindre chelem en
+        // vue). Exigé maintenant que la redemande RÉPÈTE l'ouverture pour la traiter
+        // comme un fit confirmé — sinon c'est la redemande elle-même (ci-dessous) ou rien
+        // qui doit faire foi.
+        if (openingIsMajor && rebid.strain === openingBid.strain && lengths[openingBid.strain] + 5 >= 8) fitSuit = openingBid.strain;
         else if (rebidIsMajor && rebid.strain !== myResponseBid.strain && lengths[rebid.strain] + 4 >= 8) fitSuit = rebid.strain;
         else {
             const openingIsMinor = openingBid.strain === 'C' || openingBid.strain === 'D';
             const rebidIsMinor = rebid.strain === 'C' || rebid.strain === 'D';
-            if (openingIsMinor && lengths[openingBid.strain] + 5 >= 8) fitSuit = openingBid.strain;
+            if (openingIsMinor && rebid.strain === openingBid.strain && lengths[openingBid.strain] + 5 >= 8) fitSuit = openingBid.strain;
             else if (rebidIsMinor && rebid.strain !== myResponseBid.strain && lengths[rebid.strain] + 4 >= 8) fitSuit = rebid.strain;
         }
         if (fitSuit) {
@@ -1692,7 +1772,12 @@ function decideDoublerFollowUp(hand, hcp, hl, partnerResponseCall, seat, history
     const myLongSuit = longestSuitPreferHigh(lengths);
     if (hl >= 19 || (wasReopeningDouble && hcp >= 13 && lengths[myLongSuit] >= 5)) {
         const suit = myLongSuit;
-        for (let level = responseBid.level; level <= 7; level++) {
+        // Voir échange avec Guillaume (session du 2 août — même famille que les fix
+        // "chelem fantôme" de cette session) : "au palier minimal légal" peut déjà être
+        // le chelem si responseBid.level était déjà très haut (compétition développée) —
+        // même une main de 19HL+ ne justifie pas d'y sauter à l'aveugle sur ce seul geste
+        // ("montrer ma couleur"), qui n'a jamais été pensé comme une annonce de chelem.
+        for (let level = responseBid.level; level <= 5; level++) {
             const call = level + suit;
             if (isCallLegal(history, call, seat)) return call;
         }
@@ -1790,9 +1875,15 @@ function decideGameForcingFallbackAfterOvercall(hand, hcp, seat, history, oppone
     const lengths = suitLengths(hand);
 
     const alreadyShownSuits = new Set([opponentSuit, alreadyShownSuit].filter(Boolean));
-    const naturalSuit = ['S', 'H', 'D', 'C'].find(s => !alreadyShownSuits.has(s) && lengths[s] >= 5);
+    // Voir échange avec Guillaume (case 8 de l'échantillon, session du 2 août — même
+    // famille que Board 1/4 : priorité à ce qui est montrable naturellement) : une
+    // majeure 4ème encore annonçable (souvent même au palier 1) doit être montrée avant
+    // de recourir à SA ou au cue-bid — pas seulement une couleur 5+. Recherche aussi
+    // désormais à partir du palier 1 (pas seulement 2+), pour attraper ce cas précis.
+    const naturalSuit = ['S', 'H', 'D', 'C'].find(s => !alreadyShownSuits.has(s)
+        && (lengths[s] >= 5 || (lengths[s] === 4 && (s === 'S' || s === 'H'))));
     if (naturalSuit) {
-        for (let level = 2; level <= 7; level++) {
+        for (let level = 1; level <= 7; level++) {
             const call = level + naturalSuit;
             if (isCallLegal(history, call, seat)) return call;
         }
@@ -1922,14 +2013,21 @@ function decideRobotResponseToDouble(hand, hcp, hl, doubleIndex, seat, history, 
     }
 
     const startLevel = supportPoints >= 10 ? 2 : 1;
-    for (let level = startLevel; level <= 7; level++) {
+    // Voir échange avec Guillaume (session du 2 août — même famille que les fix "chelem
+    // fantôme" de cette session) : startLevel est toujours bas (1 ou 2), mais si tous les
+    // paliers legaux jusqu'à 5 sont déjà pris (contre à un palier très élevé dans une
+    // enchère compétitive développée), ce filet trouverait le chelem comme "premier
+    // palier légal" sans le moindre rapport avec supportPoints — jamais au-delà de 5 ici,
+    // les vérifications de chelem ci-dessus ont déjà eu leur chance.
+    for (let level = startLevel; level <= 5; level++) {
         const call = level + bestSuit;
         if (isCallLegal(history, call, seat)) return call;
     }
     // Filet : si la couleur préférée n'est jouable à aucun palier (ne devrait
-    // essentiellement jamais arriver), tente les deux autres avant d'abandonner.
+    // essentiellement jamais arriver), tente les deux autres avant d'abandonner. Même
+    // plafond à 5 que ci-dessus, même raison.
     for (const s of candidates) {
-        for (let level = 1; level <= 7; level++) {
+        for (let level = 1; level <= 5; level++) {
             const call = level + s;
             if (isCallLegal(history, call, seat)) return call;
         }
@@ -2181,7 +2279,7 @@ function decideOpenerRebidAfterWeakTwoForcing(hand, hcp, hl, myBid, partnerParse
         }
     }
 
-    for (let level = partnerParsed.level; level <= 7; level++) {
+    for (let level = partnerParsed.level; level <= 5; level++) {
         const call = level + myBid.strain;
         if (isCallLegal(history, call, seat)) return call;
     }
@@ -2273,8 +2371,13 @@ function decideRobotOpenerRebid(hand, hcp, hl, myOpeningCall, partnerCall, seat,
         // voir le palier invite 8-9HL ajouté à decideRobotResponse) — cette fonction
         // n'avait AUCUNE branche pour y réagir, retombant sur le passe par défaut même
         // avec un maximum (17H, en haut de la fourchette 15-17 de ce moteur). Accepte
-        // avec 16-17H (le haut de la fourchette), décline avec 15H (le bas).
-        if (partnerBid.strain === 'NT' && partnerBid.level === lv1) {
+        // avec 16-17H (le haut de la fourchette), décline avec 15H (le bas). Réservé à
+        // une VRAIE ouverture de 1SA (myBid.level===1) — bug trouvé en creusant plus loin
+        // : sans cette restriction, la même logique s'appliquait à tort après un 2SA
+        // (20-21H), où "3SA" du partenaire est un simple repli/acceptation, jamais une
+        // invite à évaluer (la fourchette resserrée du 2SA ne laisse pas cette place) —
+        // un ouvreur à 20H relançait alors à 4SA sur le repli normal du partenaire.
+        if (myBid.level === 1 && partnerBid.strain === 'NT' && partnerBid.level === lv1) {
             if (hcp >= 16) {
                 const c = (lv1 + 1) + 'NT';
                 if (isCallLegal(history, c, seat)) return c;
@@ -2652,7 +2755,11 @@ function decideRobotOpenerRebid(hand, hcp, hl, myOpeningCall, partnerCall, seat,
         }
     }
     if (isHandBalancedForNT(lengths)) {
-        for (let level = 1; level <= 7; level++) {
+        // Voir échange avec Guillaume (session du 2 août — même famille que les fix
+        // "chelem fantôme" de cette session) : recherche du palier légal le plus bas
+        // sans aucun plafond — jamais de chelem à l'aveugle juste parce que les paliers
+        // plus bas sont déjà pris.
+        for (let level = 1; level <= 5; level++) {
             const call = level + 'NT';
             if (isCallLegal(history, call, seat)) return call;
         }
@@ -2664,7 +2771,7 @@ function decideRobotOpenerRebid(hand, hcp, hl, myOpeningCall, partnerCall, seat,
             if (lengths[s] >= 4 && (!secondSuit || lengths[s] > lengths[secondSuit])) secondSuit = s;
         }
         if (secondSuit) {
-            for (let level = partnerParsed.level; level <= 7; level++) {
+            for (let level = partnerParsed.level; level <= 5; level++) {
                 const call = level + secondSuit;
                 if (isCallLegal(history, call, seat)) return call;
             }
@@ -2817,6 +2924,21 @@ function decideForcingResponseToInterventionAnswer(hand, seat, history) {
         && partnershipOf(history[myBidIndex - 1].seat) !== partnershipOf(seat);
     if (!precededByOpponentBidDirectly) return null; // ouverture ou réouverture, pas une intervention directe
 
+    // Voir échange avec Guillaume (session du 2 août — simulation à grande échelle,
+    // travail autonome) : bug sévère trouvé — "précédé directement par un adversaire"
+    // ne suffit PAS à identifier une vraie intervention. Une réponse à l'ouverture de
+    // MON PROPRE partenaire, avec une intervention adverse intercalée entre les deux
+    // (1♦(partenaire)-1♠(adversaire)-2♦(moi, simple relance)), remplit EXACTEMENT le
+    // même critère — mon "2♦" suit directement le "1♠" adverse — sans être la moindre
+    // intervention de ma part. Confondre les deux faisait traiter une simple relance
+    // comme "forcing, jamais de passe", avec des conséquences absurdes plus tard dans
+    // l'enchère (chelem aveugle trouvé par simulation). Une VRAIE intervention exige
+    // qu'AUCUNE annonce de mon propre camp n'existe avant la mienne — sinon c'est une
+    // réponse, pas une intervention, quel que soit ce qui la précède immédiatement.
+    const noPartnershipBidBeforeMine = history.slice(0, myBidIndex)
+        .every(e => partnershipOf(e.seat) !== partnershipOf(seat) || isPass(e.call));
+    if (!noPartnershipBidBeforeMine) return null;
+
     const myPartnerBid = history.slice().reverse()
         .find(e => partnershipOf(e.seat) === partnershipOf(seat) && isBidCall(e.call) && e !== myBids[0]);
     if (!myPartnerBid) return null;
@@ -2856,6 +2978,17 @@ function decideForcingResponseToInterventionAnswer(hand, seat, history) {
         for (let level = 1; level <= 7; level++) {
             const c = level + partnerSuit;
             if (isCallLegal(history, c, seat)) {
+                // Voir échange avec Guillaume (session du 2 août — simulation à grande
+                // échelle, travail autonome, même famille que le fix "barrage fantôme" ci-
+                // dessus) : ce repli "minimal" prenait aveuglément le palier légal le
+                // moins cher, sans jamais vérifier qu'il n'avait pas déjà atteint le
+                // chelem à cause d'une enchère compétitive très développée par ailleurs
+                // (le partenaire a pu enchérir haut pour des raisons n'ayant rien à voir
+                // avec cette main-ci) — trouvé avec 9H sautant à 6♥ simplement parce que
+                // "5♥" était déjà pris. Un soutien VRAIMENT minimal ne doit jamais
+                // atterrir au chelem : au-delà, mieux vaut ne rien dire ici (voir le
+                // return null en toute fin de fonction) que de s'engager à l'aveugle.
+                if (level >= 6) break;
                 return { call: c, explanation: `Réponse forcing du partenaire à mon intervention — soutien minimal, jamais de passe sur une enchère forcing` };
             }
         }
@@ -2874,6 +3007,10 @@ function decideForcingResponseToInterventionAnswer(hand, seat, history) {
         for (let level = 1; level <= 7; level++) {
             const c = level + partnerSuit;
             if (isCallLegal(history, c, seat)) {
+                // Même garde-fou que le repli "soutien minimal" ci-dessus : jamais de
+                // chelem à l'aveugle juste parce que l'enchère a déjà grimpé pour
+                // d'autres raisons.
+                if (level >= 6) break;
                 return { call: c, explanation: `Réponse forcing du partenaire à mon intervention, ni fit ni extra-longueur — préférence minimale` };
             }
         }
@@ -2933,11 +3070,44 @@ function decideForcingResponseAfterCRMStaymanDenial(hand, seat, history) {
     return null;
 }
 
+// Voir échange avec Guillaume (case 5 de l'échantillon, session du 2 août) : pendant de
+// la fonction précédente — après Stayman sur le "2SA" fort, si le partenaire CONFIRME
+// une majeure (au lieu de la dénier), rien ne concluait à la manche non plus — le
+// commentaire de decideForcingResponseAfterCRMStaymanDenial renvoyait vers "une autre
+// logique" pour ce cas, qui en réalité n'existait pas du tout. Même principe : le "2SA"
+// reste toujours forcing de manche, donc au minimum 4 de la majeure confirmée.
+function decideForcingResponseAfterCRMStaymanMajorFound(hand, seat, history) {
+    const myBids = history.filter(e => e.seat === seat && isBidCall(e.call));
+    if (myBids.length !== 2) return null;
+    const myStaymanAsk = parseBid(myBids[1].call);
+    if (!myStaymanAsk || myStaymanAsk.strain !== 'C') return null;
+
+    const partnerFirstBid = history.find(e => partnershipOf(e.seat) === partnershipOf(seat) && e.seat !== seat && isBidCall(e.call));
+    const partnerFirstBidWasRealOpening = partnerFirstBid
+        && history.slice(0, history.indexOf(partnerFirstBid)).every(e => isPass(e.call));
+    if (!partnerFirstBidWasRealOpening || !(partnerFirstBid.call === '2C' || partnerFirstBid.call === '2D')) return null;
+
+    const partnerLastBid = history.slice().reverse()
+        .find(e => partnershipOf(e.seat) === partnershipOf(seat) && e.seat !== seat && isBidCall(e.call));
+    if (!partnerLastBid || partnerLastBid === partnerFirstBid) return null;
+    const completion = parseBid(partnerLastBid.call);
+    if (!completion || (completion.strain !== 'S' && completion.strain !== 'H')) return null; // pas une confirmation de majeure
+
+    for (let level = 4; level <= 7; level++) {
+        const c = level + completion.strain;
+        if (isCallLegal(history, c, seat)) {
+            return { call: c, explanation: `Stayman sur le "2SA" de l'ouverture forte, majeure confirmée — toujours forcing de manche, conclusion dans cette majeure` };
+        }
+    }
+    return null;
+}
+
 const FORCING_PATTERNS = [
     { name: 'texas_mineur_complete', respond: decideForcingResponseTexasMineurContinuation },
     { name: 'cuebid_couleur_adverse', respond: decideResponseToOpponentSuitCuebid },
     { name: 'reponse_a_intervention', respond: decideForcingResponseToInterventionAnswer },
-    { name: 'crm_stayman_deni_majeure', respond: decideForcingResponseAfterCRMStaymanDenial }
+    { name: 'crm_stayman_deni_majeure', respond: decideForcingResponseAfterCRMStaymanDenial },
+    { name: 'crm_stayman_majeure_trouvee', respond: decideForcingResponseAfterCRMStaymanMajorFound }
 ];
 
 function decideForcingFallback(hand, seat, history) {
@@ -4066,7 +4236,12 @@ function decideRobotCall(seat, deal, history) {
                 const openingLen = responseLengths[partnerOpeningBid.strain];
                 const rebidLen = responseLengths[partnerRebidBid.strain];
                 if (openingLen >= 2 && rebidLen < openingLen + 2) {
-                    for (let level = partnerRebidBid.level; level <= 7; level++) {
+                    // Voir échange avec Guillaume (session du 2 août — même famille que
+                    // les fix "chelem fantôme" de cette session) : une main ≤9H ne doit
+                    // jamais atterrir au chelem via une simple préférence entre 2
+                    // couleurs déjà montrées, même si l'enchère a grimpé très haut pour
+                    // d'autres raisons (compétition).
+                    for (let level = partnerRebidBid.level; level <= 5; level++) {
                         const c = level + partnerOpeningBid.strain;
                         if (isCallLegal(history, c, seat)) { preferenceCall = c; break; }
                     }
@@ -4660,6 +4835,21 @@ function decideRobotCall(seat, deal, history) {
             const myPartnerEarlierBids = history.filter(e => partnershipOf(e.seat) === partnershipOf(seat) && e.seat !== seat && isBidCall(e.call) && e !== myPartnerLastBid2);
             if (myPartnerLastBid2 && myPartnerEarlierBids.length >= 2) {
                 const lastParsed = parseBid(myPartnerLastBid2.call);
+                // Voir échange avec Guillaume (case 9 de l'échantillon, session du 2 août)
+                // : bug trouvé — cette logique de "4ème couleur forcing" (générique, pensée
+                // pour une auction naturelle 1x-1y-1z-?) ne s'excluait jamais du contexte
+                // d'une ouverture forte CRM (2♣/2♦) — elle traitait alors la complétion
+                // MÉCANIQUE de Stayman ("3♥" par exemple, une vraie couleur déjà bien
+                // définie ailleurs, voir decideForcingResponseAfterCRMStaymanMajorFound)
+                // comme une 4ème couleur ARTIFICIELLE demandant un arrêt, et pire, prenait
+                // ma propre couleur d'appel Stayman (Trèfle, jamais une vraie couleur) pour
+                // "un fit connu" côté partenaire. Un vrai CRM a sa propre logique dédiée
+                // (registre FORCING_PATTERNS) : ce mécanisme générique ne doit jamais s'y
+                // appliquer.
+                const veryFirstBidOfAuction = history.find(e => isBidCall(e.call));
+                const auctionWasCRM = veryFirstBidOfAuction
+                    && partnershipOf(veryFirstBidOfAuction.seat) === partnershipOf(seat)
+                    && (veryFirstBidOfAuction.call === '2C' || veryFirstBidOfAuction.call === '2D');
                 // Voir échange avec Guillaume (outil de simulation, session du 30 juillet
                 // — plantage trouvé sur donne aléatoire) : myBids/myPartnerEarlierBids
                 // filtrent seulement les PASSES (voir leur propre définition), jamais les
@@ -4669,7 +4859,7 @@ function decideRobotCall(seat, deal, history) {
                 const myOwnSuits = new Set(myBids.filter(b => isBidCall(b.call)).map(b => parseBid(b.call).strain).filter(s => s !== 'NT'));
                 const partnerSuits = new Set(myPartnerEarlierBids.filter(b => isBidCall(b.call)).map(b => parseBid(b.call).strain).filter(s => s !== 'NT'));
                 const isFourthSuitForcing = lastParsed && lastParsed.strain !== 'NT'
-                    && !myOwnSuits.has(lastParsed.strain) && !partnerSuits.has(lastParsed.strain);
+                    && !myOwnSuits.has(lastParsed.strain) && !partnerSuits.has(lastParsed.strain) && !auctionWasCRM;
                 if (isFourthSuitForcing) {
                     const askedSuit = lastParsed.strain;
                     const lengths = suitLengths(hand);
