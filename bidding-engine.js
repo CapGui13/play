@@ -644,6 +644,16 @@ function decideRobotResponse(hand, hcp, hl, partnerCall, seat, history, partnerP
             const call = '3NT';
             if (isCallLegal(history, call, seat)) return call;
         }
+        // Voir échange avec Guillaume (session du 2 août — simulation à grande échelle,
+        // travail autonome) : trou complet trouvé — entre "assez pour forcer la manche"
+        // (neededHL, 10 pour une ouverture à 1SA) et le passe, il n'existait AUCUN palier
+        // invite (8-9, la fourchette classique) — un répondant à 9HL sans majeure 4ème
+        // passait purement sur 1SA au lieu d'inviter, alors même que l'ouvreur pouvait
+        // être en haut de sa propre fourchette (15-17H typiquement dans ce moteur).
+        if (bid.level === 1 && hl >= 8) {
+            const call = lv1 + 'NT';
+            if (isCallLegal(history, call, seat)) return call;
+        }
         return 'PASS';
     }
 
@@ -671,6 +681,30 @@ function decideRobotResponse(hand, hcp, hl, partnerCall, seat, history, partnerP
             if (p && p.strain !== 'NT') opponentSuits.add(p.strain);
         }
     });
+
+    // Voir échange avec Guillaume (échantillon donne 3, session du 2 août — "le cue-bid
+    // en face d'une ouverture en majeure promet un fit de 4 cartes dans une main FM") :
+    // je réponds DIRECTEMENT à l'ouverture MAJEURE du partenaire, un adversaire est
+    // intervenu — avec un fit de 4 cartes pour sa majeure ET assez de points de soutien
+    // pour imposer la manche (13+ — vérifié sur son exemple exact : 10H + 4 atouts + 1
+    // doubleton = 13 via computeSupportPoints), le cue-bid dans la couleur adverse est
+    // l'enchère à utiliser — pas un simple soutien (qui ne dit rien de borné sur la
+    // force), pas un contre. DISTINCT du cue-bid "demande d'arrêt"
+    // (decideResponseToOpponentSuitCuebid, plus bas dans le fichier) : celui-ci montre un
+    // FIT connu, pas une recherche de SA — vérifié avant lui, priorité absolue quand les
+    // deux conditions (fit 4+, 13+ points de soutien) sont réunies.
+    if (partnerBidWasOpening && (bid.strain === 'S' || bid.strain === 'H') && opponentSuits.size === 1 && lengths[bid.strain] >= 4) {
+        const [singleOpponentSuitForFitCuebid] = opponentSuits;
+        const supportPointsForFitCuebid = computeSupportPoints(hand, bid.strain, 5);
+        if (supportPointsForFitCuebid >= 13) {
+            for (let level = 2; level <= 7; level++) {
+                const c = level + singleOpponentSuitForFitCuebid;
+                if (isCallLegal(history, c, seat)) {
+                    return { call: c, explanation: `Cue-bid montrant le fit (${lengths[bid.strain]} cartes à ${STRAIN_SYMBOL[bid.strain]}) et assez de réserve pour la manche (${supportPointsForFitCuebid} points de soutien)` };
+                }
+            }
+        }
+    }
 
     // Voir échange avec Guillaume (donne 8, session du 31 juillet — "je t'ai dit qu'il
     // fallait faire un cue-bid") : je réponds DIRECTEMENT à l'ouverture du partenaire,
@@ -2234,6 +2268,20 @@ function decideRobotOpenerRebid(hand, hcp, hl, myOpeningCall, partnerCall, seat,
         if (!partnerBid) return 'PASS'; // partenaire a conclu directement (3SA, etc.) : rien à ajouter
         const lv1 = myBid.level + 1;
 
+        // Voir échange avec Guillaume (session du 2 août — simulation à grande échelle,
+        // travail autonome) : le partenaire vient d'INVITER (SA au palier ouverture+1,
+        // voir le palier invite 8-9HL ajouté à decideRobotResponse) — cette fonction
+        // n'avait AUCUNE branche pour y réagir, retombant sur le passe par défaut même
+        // avec un maximum (17H, en haut de la fourchette 15-17 de ce moteur). Accepte
+        // avec 16-17H (le haut de la fourchette), décline avec 15H (le bas).
+        if (partnerBid.strain === 'NT' && partnerBid.level === lv1) {
+            if (hcp >= 16) {
+                const c = (lv1 + 1) + 'NT';
+                if (isCallLegal(history, c, seat)) return c;
+            }
+            return 'PASS';
+        }
+
         // Stayman (palier ouverture+1, en trèfle) : nomme une majeure si 4+ cartes —
         // priorité aux cœurs si les deux majeures sont 4+ (convention standard, laisse
         // le répondant "corriger" à pique au même palier s'il n'a que 4 piques), sinon
@@ -3003,13 +3051,81 @@ function decideRobotCall(seat, deal, history) {
                 // intervention à 1♠ précisément : plus rien d'annonçable en dessous) mais
                 // l'exclut par exemple après 1♦-(1♣), où "1♠" reste disponible et doit être
                 // dit directement.
+                //
+                // Voir échange avec Guillaume (échantillon donnes 1/3, session du 2 août —
+                // bug trouvé pendant l'implémentation) : déclarées ICI, avant le bloc
+                // ci-dessous, plutôt qu'à l'intérieur — sinon (portée de bloc, `let`) elles
+                // redeviennent inaccessibles juste après, au moment précis où le garde-fou
+                // plus bas ("if (call !== 'X' && !directSuitWasBid...)") en a besoin pour
+                // empêcher decideRobotResponse d'écraser une couleur/un cue-bid déjà décidé.
+                let directSuitWasBid = false;
+                let fitCuebidWasBid = false;
                 if (call !== 'X' && myPartnerBid !== lastBid && isCallLegal(history, 'X', seat)) {
                     const lengthsForNegDouble = suitLengths(hand);
                     const opponentOvercallSuitForNegDouble = parseBid(lastBid.call).strain;
                     const shownSuitsForNegDouble = new Set([partnerBidInfo.strain, opponentOvercallSuitForNegDouble]);
                     const unshownSuitsForNegDouble = ['S', 'H', 'D', 'C'].filter(s => !shownSuitsForNegDouble.has(s));
+
+                    // Voir échange avec Guillaume (échantillon donne 1, session du 2 août) :
+                    // bug trouvé — "canShowAnySuitNaturally" ne vérifiait JAMAIS que le
+                    // PALIER 1 (isCallLegal(history, '1'+s, seat)), qui n'est quasiment
+                    // jamais légal une fois qu'un adversaire est déjà intervenu — ce garde-
+                    // fou était donc mort dans la quasi-totalité des cas réels. Sa vraie
+                    // règle, plus précise : avec 5+ cartes ET 11HL+, on nomme la couleur
+                    // DIRECTEMENT (au palier qui convient, 1 ou 2 selon la place) — le
+                    // Sputnik ne sert QUE si on ne PEUT PAS le faire (4 cartes seulement —
+                    // "impossible d'annoncer une couleur 4ème au palier de 2 en séquence à
+                    // 4" — ou 5+ cartes mais moins de 11HL). Priorité ABSOLUE sur le contre :
+                    // vérifié et retourné avant même d'envisager la logique de contre.
+                    const directSuitCandidate = unshownSuitsForNegDouble.find(s => lengthsForNegDouble[s] >= 5) && hl >= 11
+                        ? unshownSuitsForNegDouble.find(s => lengthsForNegDouble[s] >= 5)
+                        : null;
+                    directSuitWasBid = false;
+                    if (directSuitCandidate) {
+                        for (let level = 1; level <= 7; level++) {
+                            const c = level + directSuitCandidate;
+                            if (isCallLegal(history, c, seat)) {
+                                call = c;
+                                directSuitWasBid = true;
+                                explanation = `Nouvelle couleur directe (5+ cartes, 11HL+) — priorité sur le Sputnik, qui ne sert que si cette enchère est impossible (${points})`;
+                                break;
+                            }
+                        }
+                    }
+
                     const negDoubleSuits = unshownSuitsForNegDouble.filter(s => lengthsForNegDouble[s] >= 4);
-                    const canShowAnySuitNaturally = negDoubleSuits.some(s => isCallLegal(history, '1' + s, seat));
+
+                    // Voir échange avec Guillaume (échantillon donnes 3/4, session du 2
+                    // août) : cue-bid MONTRANT LE FIT (distinct du cue-bid "demande
+                    // d'arrêt" déjà en place ailleurs — "il y a plusieurs types de
+                    // cue-bid, certains demandent l'arrêt, d'autres montrent le fit") —
+                    // le partenaire a ouvert une MAJEURE, un SEUL adversaire est
+                    // intervenu, j'ai un fit de 4+ cartes ET assez de réserve pour
+                    // imposer la manche (13+ points de soutien — vérifié avec Guillaume :
+                    // "10H + 4 atouts + 1 doubleton = 13HLD, suffisant" — exactement le
+                    // seuil déjà utilisé ailleurs dans ce moteur pour "main à montrer",
+                    // voir decideRobotMajorSupport). Priorité absolue, avant même la
+                    // couleur directe ou le Sputnik ci-dessus/dessous : seule cette
+                    // enchère dit "fit connu + forcing de manche" dans ce contexte. Doit
+                    // être vérifié ici (pas dans decideRobotResponse, jamais atteint tant
+                    // que call==='X' — voir le garde plus bas, "if (call !== 'X')").
+                    fitCuebidWasBid = false;
+                    if (!directSuitWasBid && (partnerBidInfo.strain === 'S' || partnerBidInfo.strain === 'H')
+                        && lengthsForNegDouble[partnerBidInfo.strain] >= 4) {
+                        const supportPointsForFitCuebid = computeSupportPoints(hand, partnerBidInfo.strain, 5);
+                        if (supportPointsForFitCuebid >= 13) {
+                            for (let level = 2; level <= 7; level++) {
+                                const c = level + opponentOvercallSuitForNegDouble;
+                                if (isCallLegal(history, c, seat)) {
+                                    call = c;
+                                    fitCuebidWasBid = true;
+                                    explanation = `Cue-bid montrant le fit (4+ cartes, ${supportPointsForFitCuebid} points de soutien) — forcing de manche (${points})`;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
                     // Voir échange avec Guillaume (donne 2, 1er jeu, session du 31 juillet
                     // — "Ouest n'a aucune raison de contrer, puisqu'il a les Coeurs [la
                     // couleur même de l'adversaire] / il doit passer en attendant un
@@ -3040,14 +3156,25 @@ function decideRobotCall(seat, deal, history) {
                     // qui a pourtant clairement quelque chose à montrer (sa longue), juste
                     // pas assez pour l'annoncer directement en changement de couleur
                     // (newSuitThreshold, généralement 11+).
-                    if (negDoubleSuits.length > 0 && (hcp >= 8 || hl >= 9) && !canShowAnySuitNaturally && !tooLongInOpponentSuit && majorsPromiseSatisfied) {
+                    // Voir échange avec Guillaume (échantillon donne 4, session du 2 août
+                    // — "Est doit juste fitter, pourquoi contre-t-il ??? Priorité au
+                    // fit !!!") : le contre négatif se calculait AVANT même de vérifier si
+                    // j'ai simplement un FIT (3+ cartes) pour la couleur que mon
+                    // partenaire vient lui-même d'annoncer — la logique de soutien normale
+                    // (plus bas, via decideRobotResponse) n'était alors JAMAIS atteinte
+                    // puisque tout ce bloc est gated par `call !== 'X'`. Un fit connu et
+                    // déjà annoncé par le partenaire prime toujours sur une exploration
+                    // via contre vers des couleurs inconnues chez lui.
+                    const hasFitForPartnerOwnSuit = partnerBidInfo && partnerBidInfo.strain !== 'NT'
+                        && lengthsForNegDouble[partnerBidInfo.strain] >= 3;
+                    if (!directSuitWasBid && !fitCuebidWasBid && !hasFitForPartnerOwnSuit && negDoubleSuits.length > 0 && (hcp >= 8 || hl >= 9) && !tooLongInOpponentSuit && majorsPromiseSatisfied) {
                         call = 'X';
                         explanation = `Contre négatif : aucune couleur annonçable au palier 1 (${negDoubleSuits.map(s => STRAIN_SYMBOL[s]).join('/')} bloquée(s)) (${points})`;
                     }
                 }
 
 
-                if (call !== 'X') {
+                if (call !== 'X' && !directSuitWasBid && !fitCuebidWasBid) {
                 // Voir échange avec Guillaume (règle du fit) : le partenaire a-t-il
                 // PROMIS 5+ cartes dans sa couleur ? Toujours vrai pour une ouverture à
                 // la majeure (système "majeure 5ème") ; toujours vrai aussi pour une
@@ -3356,6 +3483,31 @@ function decideRobotCall(seat, deal, history) {
             // palier le plus bas, jamais de chercher plus loin une fois le partenaire fixé.
             explanation = `Réveil "appel aux mineures" : le partenaire a choisi, rien à ajouter — passe (${points})`;
         } else if (wasOpening && myPartnerBid && !isDouble(myBids[0].call)) {
+            // Voir échange avec Guillaume (échantillon donnes 3/4, session du 2 août) :
+            // mon ouverture était une MAJEURE, et la réponse du partenaire nomme la
+            // couleur d'un ADVERSAIRE qui est intervenu entre les deux — c'est le
+            // cue-bid "montrant le fit" (voir sa génération plus haut dans
+            // decideRobotResponse/le contre négatif) : fit 4+ cartes ET forcing de
+            // manche déjà établis par cette seule enchère. Rien à vérifier de plus —
+            // conclusion directe à la manche dans ma majeure (son propre exemple :
+            // "1♥ 1♠ 2♠(cue-bid) ... 4♥", sans étape intermédiaire).
+            const myOpeningForFitCuebidRecognition = parseBid(myBids[0].call);
+            const partnerResponseForFitCuebidRecognition = parseBid(myPartnerBid.call);
+            const opponentSuitsForFitCuebidRecognition = new Set(history.filter(e =>
+                partnershipOf(e.seat) !== partnershipOf(seat) && isBidCall(e.call))
+                .map(e => parseBid(e.call).strain).filter(s => s && s !== 'NT'));
+            if (myOpeningForFitCuebidRecognition && (myOpeningForFitCuebidRecognition.strain === 'S' || myOpeningForFitCuebidRecognition.strain === 'H')
+                && partnerResponseForFitCuebidRecognition && opponentSuitsForFitCuebidRecognition.has(partnerResponseForFitCuebidRecognition.strain)) {
+                for (let level = 4; level <= 7; level++) {
+                    const c = level + myOpeningForFitCuebidRecognition.strain;
+                    if (isCallLegal(history, c, seat)) {
+                        call = c;
+                        explanation = `Cue-bid du partenaire (fit 4+ cartes, forcing de manche déjà établi) — conclusion directe à la manche (${points})`;
+                        break;
+                    }
+                }
+                return { call, explanation };
+            }
             // Voir échange avec Guillaume (outil de simulation, session du 30 juillet —
             // régression trouvée juste après le correctif de wasOpening plus haut) : le
             // nouveau calcul de wasOpening (qui reconnaît maintenant une réouverture
