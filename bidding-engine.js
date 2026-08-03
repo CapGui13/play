@@ -1349,7 +1349,14 @@ function decideRobotIntervention(hand, hcp, hl, seat, history, dealVulnerable, i
     const isGenuineJumpToTwo = naturalLevelForBarrage === 1 || wasInterveningOverNT;
     const hasOtherFourCardSuit = ['S', 'H', 'D', 'C'].some(s => s !== suit && lengths[s] >= 4);
     if ((suit === 'S' || suit === 'H') && hl <= 12 && lengths[suit] >= 6 && !hasOtherFourCardSuit && isGenuineJumpToTwo) {
-        for (let level = 2; level <= 7; level++) {
+        // Voir échange avec Guillaume (session du 2 août — simulation à grande échelle,
+        // travail autonome, même famille que les autres fix "chelem fantôme" de cette
+        // session) : cette boucle prend le premier palier légal, sans jamais vérifier
+        // qu'il n'a pas déjà atteint le chelem parce que l'adversaire a annoncé très
+        // haut (ex. 6SA) — une intervention barrage (8-12HL) qui saute alors au GRAND
+        // CHELEM (7) pour "intervenir quand même" n'a plus aucun sens : mieux vaut
+        // rester silencieux qu'un sacrifice à l'aveugle au pire palier possible.
+        for (let level = 2; level <= 6; level++) {
             const call = level + suit;
             if (isCallLegal(history, call, seat)) return call;
         }
@@ -1444,7 +1451,17 @@ function decideResponderContinuationAfterNewSuit(hand, hcp, hl, openingBid, myRe
     // voir plus bas.
     let zonePoints = hl;
     let fitSuit = null;
-    if (rebid.strain !== 'NT' && rebid.strain === myResponseBid.strain) {
+    // Voir échange avec Guillaume (session du 2 août — simulation à grande échelle,
+    // travail autonome) : bug trouvé — cette branche traite MA propre couleur de
+    // réponse comme un "fit garanti" dès que le partenaire la relance, sans jamais
+    // vérifier que j'y ai réellement une vraie longueur. Si "myResponseBid" était en
+    // fait un CUE-BID conventionnel (ex. dans la couleur de l'adversaire pour montrer
+    // un fit ailleurs — voir les mécanismes de cue-bid plus haut), je peux n'avoir
+    // qu'une carte, voire zéro, dans cette couleur — un chelem calculé dessus (via
+    // computeSupportPoints) est alors un pur fantasme. Exigé 3+ cartes réelles pour
+    // traiter ceci comme un vrai fit.
+    const myResponseBidWasGenuineSuit = lengths[myResponseBid.strain] >= 3;
+    if (rebid.strain !== 'NT' && rebid.strain === myResponseBid.strain && myResponseBidWasGenuineSuit) {
         // Voir échange avec Guillaume (session du 25 juillet, donne 4 — nouveau bug) : le
         // cas le plus évident de tous — le partenaire RELANCE DIRECTEMENT ma propre
         // couleur (même famille que myResponseBid.strain), un vrai fit garanti — mais
@@ -3705,6 +3722,18 @@ function decideRobotCall(seat, deal, history) {
             call = decideRobotOpenerRebid(hand, hcp, hl, myBids[0].call, myPartnerBid.call, seat, history, opponentInterveningAfterPartner);
             explanation = `Rebid de l'ouvreur après ${formatCallForDisplay(myPartnerBid.call)} du partenaire (${points})`;
         } else if (!isDouble(myBids[0].call) && !myPartnerBid && (() => {
+            // Voir échange avec Guillaume (session du 2 août — suite au cas "Ouest
+            // saute à 6♣ sur le contre punitif manifeste d'Est sur 4♥ adverse déjà
+            // établi") : tenté un garde-fou "contre sur un contrat de manche = punitif",
+            // MAIS retiré aussitôt — ça cassait le cas confirmé (donne 5) où un contre
+            // sur une manche adverse était bien un contre d'appel. Tranché : "j'abandonne
+            // les contres punitifs pour les bots, le X reste d'appel [même là] — juger
+            // correctement entre punitif et d'appel nécessiterait une logique de marque
+            // consciente de la vulnérabilité, hors de portée ici". Cohérent avec le
+            // principe déjà en place ailleurs dans ce fichier (voir plus haut : "tous les
+            // contres comme des contres d'appel, jamais de contre punitif — trop subtil à
+            // modéliser correctement") — seule exception restant : le contre sur un
+            // barrage, strictement punitif par accord explicite (voir plus bas).
             const partnerLastAction = history.slice().reverse().find(e => e.seat !== seat && partnershipOf(e.seat) === partnershipOf(seat));
             return partnerLastAction && isDouble(partnerLastAction.call);
         })()) {
@@ -4385,6 +4414,34 @@ function decideRobotCall(seat, deal, history) {
                     } else {
                         explanation = `A déjà annoncé — passe (règle du tour unique)`;
                     }
+                }
+            } else if (partnerRebidBid && partnerRebidBid.strain !== 'NT') {
+                // Voir échange avec Guillaume (session du 2 août — "c'est n'importe quoi
+                // de passer pour le répondant avec 11H sur une redemande qui n'est pas
+                // zonée. 1T 1C > 1P : l'ouvreur peut très souvent avoir 14H+, c'est donc
+                // forcing, et c'est toujours exactement la même logique : tant que la
+                // zone de manche peut potentiellement être atteinte, la séquence est
+                // forcing") : filet général — aucune branche plus précise ci-dessus ne
+                // s'applique, mais la redemande de l'ouvreur est une VRAIE couleur
+                // naturelle (pas SA à fourchette connue, exclu ci-dessus) : elle NE
+                // BORNE PAS sa force, il peut très bien avoir 14H+. Passer ici
+                // reviendrait à parier qu'il est minimum — ce qu'on ne sait PAS tant
+                // qu'il n'a montré aucune limite précise. Préférence entre ses 2
+                // couleurs (la mieux fournie chez moi), au palier le plus bas légal,
+                // plutôt qu'un passe qui suppose à tort la main minimale.
+                const prefLengths = suitLengths(hand);
+                const preferOpening = prefLengths[partnerOpeningBid.strain] >= prefLengths[partnerRebidBid.strain];
+                const preferredSuit = preferOpening ? partnerOpeningBid.strain : partnerRebidBid.strain;
+                let generalPreferenceCall = null;
+                for (let level = 1; level <= 7; level++) {
+                    const c = level + preferredSuit;
+                    if (isCallLegal(history, c, seat)) { generalPreferenceCall = c; break; }
+                }
+                if (generalPreferenceCall) {
+                    call = generalPreferenceCall;
+                    explanation = `Redemande naturelle du partenaire non bornée (il peut avoir 14H+) — préférence entre ses 2 couleurs plutôt qu'un passe qui le supposerait à tort minimal (${points})`;
+                } else {
+                    explanation = `A déjà annoncé — passe (règle du tour unique)`;
                 }
             } else {
                 explanation = `A déjà annoncé — passe (règle du tour unique)`;
