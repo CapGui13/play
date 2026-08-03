@@ -927,7 +927,14 @@ function decideRobotResponse(hand, hcp, hl, partnerCall, seat, history, partnerP
     // irrégulière qu'exige le soutien à saut ci-dessus, ni assez pour un soutien simple
     // vraiment convaincant : 1SA la décrit mieux, quelle que soit la longueur exacte du
     // fit (3, 4 ou 5+ cartes).
-    const preferNTOverMinorFit = lengths[suit] >= 3 && isHandBalancedForNT(lengths) && hl <= 10 && bid.level === 1;
+    // Voir échange avec Guillaume (session PBN réelle du 3 août — donne 1, "ça n'a aucun
+    // sens que Sud réponde 1SA avec 2H, d'où est-ce que sort cette connerie ????") : bug
+    // trouvé — aucun plancher minimal sur ce repli, il s'appliquait même à une main
+    // proche du Yarborough (2H trouvé en pratique). Ajouté le plancher standard (6+,
+    // déjà utilisé ailleurs dans ce moteur pour "assez pour parler du tout") — sous ce
+    // seuil, aucune réponse n'est montrable, le silence (passe) est la seule enchère
+    // honnête.
+    const preferNTOverMinorFit = lengths[suit] >= 3 && isHandBalancedForNT(lengths) && hl <= 10 && hcp >= 6 && bid.level === 1;
     const partnerGuaranteedLength = partnerPromises5Plus ? 5 : 3;
     const supportPoints = computeSupportPoints(hand, suit, partnerGuaranteedLength);
     if (preferNTOverMinorFit) {
@@ -1122,6 +1129,38 @@ function estimateAuctionSideMinPoints(history, side) {
 function decideRobotIntervention(hand, hcp, hl, seat, history, dealVulnerable, isReopening) {
     const lengths = suitLengths(hand);
     const lastBid = getLastActualBid(history); // l'enchère adverse à laquelle on réagit
+
+    // Voir échange avec Guillaume (session PBN réelle du 3 août — donne 3, "Lorsque dans
+    // une séquence 1x P 1y, le #4 joueur a un 55 des restantes, il cue-bid la couleur
+    // d'ouverture (x) pour le montrer... il faut évidemment avoir un peu de jeu, disons
+    // que c'est 5 perdantes en étant vulnérable") : NOUVELLE CONVENTION — 4ème joueur
+    // (moi), séquence exacte "1x Pass 1y" (vraie ouverture au palier 1, mon partenaire
+    // passe, une vraie réponse au palier 1, toutes deux des couleurs réelles, pas SA),
+    // avec 5+5+ dans les 2 couleurs que PERSONNE n'a montrées et assez de jeu (5 pertes
+    // ou mieux) : cue-bid la couleur D'OUVERTURE (x, pas celle du répondant) pour
+    // annoncer ce bicolore, plutôt qu'une intervention ordinaire ou un passe.
+    if (!isReopening && history.length === 3) {
+        const [e0, e1, e2] = history;
+        if (isBidCall(e0.call) && isPass(e1.call) && isBidCall(e2.call)
+            && partnershipOf(e0.seat) === partnershipOf(e2.seat)
+            && partnershipOf(e0.seat) !== partnershipOf(seat)) {
+            const openingBid = parseBid(e0.call);
+            const responseBid = parseBid(e2.call);
+            if (openingBid && responseBid && openingBid.level === 1 && responseBid.level === 1
+                && openingBid.strain !== 'NT' && responseBid.strain !== 'NT' && openingBid.strain !== responseBid.strain) {
+                const remainingSuitsForCuebid = ['S', 'H', 'D', 'C']
+                    .filter(s => s !== openingBid.strain && s !== responseBid.strain);
+                if (remainingSuitsForCuebid.length === 2
+                    && remainingSuitsForCuebid.every(s => lengths[s] >= 5)
+                    && computeLoserCount(hand) <= 5) {
+                    for (let level = 1; level <= 7; level++) {
+                        const c = level + openingBid.strain;
+                        if (isCallLegal(history, c, seat)) return c;
+                    }
+                }
+            }
+        }
+    }
 
     // Voir échange avec Guillaume (session du 24 juillet) : RÉVEIL — moins exigeant
     // qu'une intervention directe, puisque le silence du partenaire (qui n'a pas pu
@@ -1378,7 +1417,15 @@ function decideRobotIntervention(hand, hcp, hl, seat, history, dealVulnerable, i
     // ailleurs) compense une partie du déficit en points secs, exactement comme partout
     // ailleurs dans ce moteur où HL est la mesure de référence pour juger si une main a
     // "assez" pour un palier donné.
-    if (chosenLevel >= 2 && (hl < 12 || lengths[suit] < 6)) return 'PASS';
+    //
+    // Voir échange avec Guillaume (session PBN réelle du 3 août — donne 1, "si on a 14H+,
+    // c'est acceptable d'intervenir au palier de 2 dans une mineure seulement 5ème.
+    // L'idée c'est que le surplus de force contrebalance la carte manquante") : exception
+    // symétrique à celle ci-dessus (mais côté FORCE brute cette fois, pas longueur) — un
+    // vrai 14H+ (HCP, pas HL) compense la carte manquante pour une intervention à 5
+    // cartes seulement.
+    const strengthCompensatesForShortSuit = hcp >= 14 && lengths[suit] >= 5;
+    if (chosenLevel >= 2 && (hl < 12 || (lengths[suit] < 6 && !strengthCompensatesForShortSuit))) return 'PASS';
 
     return chosenLevel + suit;
 }
@@ -2105,8 +2152,20 @@ function decideOpenerRebidAfterNewSuit(hand, hcp, hl, myBid, partnerParsed, seat
         const isMajorFit = fitSuit === 'S' || fitSuit === 'H';
         const supportPointsForFit = computeSupportPoints(hand, fitSuit, 4);
         let targetLevel = partnerParsed.level;
-        if (supportPointsForFit >= 18) targetLevel = isMajorFit ? 4 : 5;
-        else if (supportPointsForFit >= 15) targetLevel = 3;
+        // Voir échange avec Guillaume (session PBN réelle du 3 août — donnes 3 et 5, "le
+        // soutien à saut de l'ouvreur montre une main 15-17H avec une courte") : vérifié
+        // AVANT le seuil générique de manche ci-dessous — bug trouvé, le bonus de
+        // chicane/singleton (+3 dans computeSupportPoints) fait mécaniquement dépasser
+        // 18 points de soutien pour QUASIMENT toute main 15-17H+courte, empêchant ce
+        // saut diagnostique de jamais s'appliquer si vérifié en second (le seuil manche
+        // l'interceptait toujours avant). La règle de Guillaume porte sur le HCP BRUT
+        // (15-17, PAS le total après bonus) ET une vraie courte (0-1 carte) — elle
+        // prime explicitement sur le calcul générique en dessous.
+        if (hcp >= 15 && hcp <= 17 && ['S', 'H', 'D', 'C'].some(s => lengths[s] <= 1)) {
+            targetLevel = 3;
+        } else if (supportPointsForFit >= 18) {
+            targetLevel = isMajorFit ? 4 : 5;
+        }
 
         for (let level = Math.max(targetLevel, partnerParsed.level); level <= 7; level++) {
             const call = level + fitSuit;
@@ -2402,6 +2461,31 @@ function decideRobotOpenerRebid(hand, hcp, hl, myOpeningCall, partnerCall, seat,
             return 'PASS';
         }
 
+        // Voir échange avec Guillaume (session PBN réelle du 3 août — donne 2, "Fit 11ème
+        // connu... on est en zone de chelem, conclure à la manche est stupide") : le
+        // partenaire vient de répondre "3SA fitté" (saut DIRECT à 3SA sur mon ouverture
+        // au palier 1 — voir le commentaire "13-15 HLD sans aucun singleton" plus haut
+        // dans ce fichier, côté génération) — ce n'est PAS un 3SA ordinaire, c'est une
+        // annonce conventionnelle montrant un fit connu (4+ cartes dans MA couleur) ET
+        // une fourchette précise (13-15 points de soutien). Cette fonction n'avait
+        // AUCUNE branche pour ce cas, tombant sur un repli générique qui se contentait
+        // de corriger à la manche (4x) sans jamais explorer le chelem — alors même que
+        // la fourchette du partenaire est connue avec précision. Utilise directement le
+        // PLANCHER (13, le bas de sa fourchette) pour décider avec certitude, comme
+        // partout ailleurs dans ce moteur pour un fit chiffré.
+        if (myBid.level === 1 && partnerBid.strain === 'NT' && partnerBid.level === 3) {
+            const lengths = suitLengths(hand);
+            const supportPointsForFittedNT = computeSupportPoints(hand, myBid.strain, 4);
+            const gameLevelForFittedNT = (myBid.strain === 'S' || myBid.strain === 'H') ? 4 : 5;
+            let targetLevelForFittedNT = gameLevelForFittedNT;
+            if (supportPointsForFittedNT + 13 >= SLAM_ZONE_GRAND) targetLevelForFittedNT = 7;
+            else if (supportPointsForFittedNT + 13 >= SLAM_ZONE_SMALL) targetLevelForFittedNT = 6;
+            for (let level = targetLevelForFittedNT; level <= 7; level++) {
+                const c = level + myBid.strain;
+                if (isCallLegal(history, c, seat)) return c;
+            }
+        }
+
         // Stayman (palier ouverture+1, en trèfle) : nomme une majeure si 4+ cartes —
         // priorité aux cœurs si les deux majeures sont 4+ (convention standard, laisse
         // le répondant "corriger" à pique au même palier s'il n'a que 4 piques), sinon
@@ -2532,11 +2616,41 @@ function decideRobotOpenerRebid(hand, hcp, hl, myOpeningCall, partnerCall, seat,
             const c = (myBid.level + 1) + 'NT';
             if (isCallLegal(history, c, seat)) return c;
         }
-        if (lengths[myBid.strain] >= 5) {
+        // Voir échange avec Guillaume (session PBN réelle du 3 août — donne 1, "Nord ne
+        // doit évidemment pas reparler à 2♠, ça montrerait 6 cartes... avec un jeu 5332
+        // on passe") : bug trouvé dans mon propre fix — je répétais la couleur dès 5
+        // cartes, mais répéter une couleur ici affirme 6 cartes, pas 5. Avec exactement
+        // 5 et pas d'espoir de manche, il faut passer plutôt que répéter (ce qui
+        // laisserait croire à 6). Corrigé : 6+ requis pour ce repli non-forcing.
+        if (lengths[myBid.strain] >= 6) {
             const c = (myBid.level + 1) + myBid.strain;
             if (isCallLegal(history, c, seat)) return c;
         }
         return 'PASS';
+    }
+
+    // Voir échange avec Guillaume (session PBN réelle du 3 août — donne 2, "Fit 11ème
+    // connu... on est en zone de chelem, conclure à la manche est stupide") : le
+    // partenaire vient de répondre "3SA fitté" (saut DIRECT à 3SA sur mon ouverture au
+    // palier 1 — voir le commentaire "13-15 HLD sans aucun singleton" plus haut dans ce
+    // fichier, côté génération) — ce n'est PAS un 3SA ordinaire, c'est une annonce
+    // conventionnelle montrant un fit connu (4+ cartes dans MA couleur) ET une
+    // fourchette précise (13-15 points de soutien). Cette fonction n'avait AUCUNE
+    // branche pour ce cas (mon premier essai avait été placé par erreur dans l'autre
+    // branche du fichier, celle où c'est MOI qui ouvre à SA — jamais atteinte ici où
+    // j'ouvre une couleur), tombant sur un repli générique qui se contentait de
+    // corriger à la manche (4x) sans jamais explorer le chelem. Utilise le PLANCHER
+    // (13, le bas de sa fourchette) pour décider avec certitude.
+    if (myBid.level === 1 && partnerParsed && partnerParsed.strain === 'NT' && partnerParsed.level === 3) {
+        const supportPointsForFittedNT = computeSupportPoints(hand, myBid.strain, 4);
+        const gameLevelForFittedNT = (myBid.strain === 'S' || myBid.strain === 'H') ? 4 : 5;
+        let targetLevelForFittedNT = gameLevelForFittedNT;
+        if (supportPointsForFittedNT + 13 >= SLAM_ZONE_GRAND) targetLevelForFittedNT = 7;
+        else if (supportPointsForFittedNT + 13 >= SLAM_ZONE_SMALL) targetLevelForFittedNT = 6;
+        for (let level = targetLevelForFittedNT; level <= 7; level++) {
+            const c = level + myBid.strain;
+            if (isCallLegal(history, c, seat)) return c;
+        }
     }
 
     // Voir échange avec Guillaume (session du 24 juillet, donne 7) : le partenaire a
@@ -3146,6 +3260,56 @@ function decideRobotCall(seat, deal, history) {
     let explanation = '';
 
     if (myBids.length === 0) {
+        // Voir échange avec Guillaume (session PBN réelle du 3 août — donne 3) : mon
+        // partenaire vient-il de faire le cue-bid bicolore du 4ème joueur (voir
+        // decideRobotIntervention) — séquence exacte "1x Pass 1y" suivie de son cue-bid
+        // de x ? Il montre alors 5+5+ dans les 2 couleurs que personne n'a montrées : je
+        // choisis la meilleure entre les deux, jamais une réponse ordinaire à un "vrai"
+        // cue-bid de fit (aucun fit n'est even promis ici, juste un bicolore).
+        //
+        // Voir échange avec Guillaume (session PBN réelle du 3 août — "toujours le même
+        // problème que précédemment") : bug trouvé dans mon PREMIER essai — je vérifiais
+        // `history.length === 4`, supposant que je réagis JUSTE APRÈS le cue-bid de mon
+        // partenaire. Faux : en rotation normale, c'est l'OUVREUR qui parle ensuite
+        // (il rebidde généralement), et je ne parle qu'APRÈS lui — l'historique compte
+        // alors 5 entrées, jamais 4, donc ce filet ne se déclenchait JAMAIS dans une
+        // vraie séquence de jeu (repéré en rejouant l'enchère réelle pas à pas plutôt
+        // qu'en la reconstruisant à la main). Corrigé : cherche le cue-bid de mon
+        // partenaire par sa POSITION RÉELLE dans l'historique (son propre index, pas une
+        // longueur totale fixe), peu importe ce qui s'est dit depuis.
+        const myPartnerCuebidEntry = history.slice().reverse()
+            .find(e => partnershipOf(e.seat) === partnershipOf(seat) && e.seat !== seat && isBidCall(e.call));
+        const cuebidIdxForCuebidResp = myPartnerCuebidEntry ? history.indexOf(myPartnerCuebidEntry) : -1;
+        if (cuebidIdxForCuebidResp === 3) {
+            const [e0, e1, e2] = history;
+            const e3 = myPartnerCuebidEntry;
+            if (isBidCall(e0.call) && isPass(e1.call) && isBidCall(e2.call) && isBidCall(e3.call)
+                && partnershipOf(e0.seat) === partnershipOf(e2.seat) && partnershipOf(e0.seat) !== partnershipOf(seat)) {
+                const openingBidForCuebidResp = parseBid(e0.call);
+                const responseBidForCuebidResp = parseBid(e2.call);
+                const partnerCuebid = parseBid(e3.call);
+                if (openingBidForCuebidResp && responseBidForCuebidResp && partnerCuebid
+                    && openingBidForCuebidResp.level === 1 && responseBidForCuebidResp.level === 1
+                    && openingBidForCuebidResp.strain !== 'NT' && responseBidForCuebidResp.strain !== 'NT'
+                    && openingBidForCuebidResp.strain !== responseBidForCuebidResp.strain
+                    && partnerCuebid.strain === openingBidForCuebidResp.strain) {
+                    const remainingSuitsForCuebidResp = ['S', 'H', 'D', 'C']
+                        .filter(s => s !== openingBidForCuebidResp.strain && s !== responseBidForCuebidResp.strain);
+                    if (remainingSuitsForCuebidResp.length === 2) {
+                        const lengthsForCuebidResp = suitLengths(hand);
+                        const bestSuitForCuebidResp = remainingSuitsForCuebidResp
+                            .slice().sort((a, b) => lengthsForCuebidResp[b] - lengthsForCuebidResp[a])[0];
+                        for (let level = 1; level <= 7; level++) {
+                            const c = level + bestSuitForCuebidResp;
+                            if (isCallLegal(history, c, seat)) {
+                                return { call: c, explanation: `Cue-bid bicolore du partenaire — je choisis entre ses 2 couleurs annoncées (${points})` };
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // Cherche la dernière action RÉELLE (annonce ou contre) de MON PROPRE camp, en
         // remontant l'historique — pas seulement la toute dernière de l'enchère (voir
         // échange avec Guillaume, donne 4) : un adversaire qui reparle après le contre du
@@ -3888,7 +4052,43 @@ function decideRobotCall(seat, deal, history) {
                 }
             }
 
-            // Voir échange avec Guillaume (donne 6, session du 31 juillet — "on va
+            // Voir échange avec Guillaume (session PBN réelle du 3 août — donne 6, "Sud
+            // a promis 19HL. Donc Nord avec 6H et le fit devrait logiquement dire 4♥ à
+            // sa 2ème enchère") : variante du cas ci-dessus — mon partenaire a contré
+            // PUIS montré une NOUVELLE couleur (pas la mienne — ce cas précis n'était
+            // couvert par AUCUNE branche, retombant sur le passe par défaut même avec
+            // un fit réel). Contre + nouvelle couleur (plutôt qu'un simple retour dans
+            // MA couleur) montre une réserve significative, jamais anodine — même
+            // plancher prudent (13) qu'au-dessus.
+            const partnerBidParsedForDoublerNewSuit = parseBid(myPartnerBid.call);
+            if (partnerFirstActionForDoublerPartnerCheck && isDouble(partnerFirstActionForDoublerPartnerCheck.call)
+                && myFirstBidParsedForDoublerPartnerCheck && partnerBidParsedForDoublerNewSuit
+                && partnerBidParsedForDoublerNewSuit.strain !== 'NT'
+                && partnerBidParsedForDoublerNewSuit.strain !== myFirstBidParsedForDoublerPartnerCheck.strain
+                && call === 'PASS') {
+                const lengthsForDoublerNewSuit = suitLengths(hand);
+                // Voir échange avec Guillaume (session PBN réelle du 3 août — donne 6,
+                // "Sud a promis 19HL. Donc Nord avec 6H et le fit devrait logiquement
+                // dire 4♥") : premier essai (plancher générique 13 + mes propres points
+                // de soutien face à GAME_ZONE) ne suffisait pas — 13+6=19, encore loin
+                // de la zone de manche (27) même avec un fit connu. Contre PUIS une
+                // TOUTE NOUVELLE couleur (pas un simple retour dans ma propre couleur)
+                // est un signal fort en soi, pas juste "13+" : avec un vrai fit (3+) et
+                // même des valeurs modestes, la manche est déjà pratiquement acquise —
+                // conclut directement plutôt que de recalculer un seuil de certitude
+                // indépendant.
+                if (lengthsForDoublerNewSuit[partnerBidParsedForDoublerNewSuit.strain] >= 3 && hcp >= 6) {
+                    const isMajorForDoublerNewSuit = partnerBidParsedForDoublerNewSuit.strain === 'S' || partnerBidParsedForDoublerNewSuit.strain === 'H';
+                    const gameLevelForDoublerNewSuit = isMajorForDoublerNewSuit ? 4 : 5;
+                    for (let level = gameLevelForDoublerNewSuit; level <= 7; level++) {
+                        const c = level + partnerBidParsedForDoublerNewSuit.strain;
+                        if (isCallLegal(history, c, seat)) { call = c; break; }
+                    }
+                    explanation = call !== 'PASS'
+                        ? `Contre puis nouvelle couleur du partenaire — signal fort en soi, fit connu suffit pour la manche (${points})`
+                        : `Pas de vraie ouverture de mon propre camp dans cette séquence (ex. réponse au contre du partenaire plutôt qu'à une ouverture, voir échange avec Guillaume) — passe (${points})`;
+                }
+            }
             // considérer que le soutien à saut est toujours plus fort que le soutien
             // simple, donc s'applique pareil en face d'une ouverture et d'une
             // intervention") : le partenaire vient-il de RELANCER MA PROPRE couleur
@@ -4286,7 +4486,17 @@ function decideRobotCall(seat, deal, history) {
             // AVANT ce bloc — voir decideResponderContinuationAfterNewSuit pour la suite
             // (conclusion à la manche, ou saut d'invite si la manche n'est pas certaine).
             let ownSuitRepeatCall = null;
-            if ((myResponseBid.strain === 'S' || myResponseBid.strain === 'H') && responseLengths && responseLengths[myResponseBid.strain] >= 6) {
+            // Voir échange avec Guillaume (session PBN réelle du 3 août — donne 8,
+            // "c'est n'importe quoi ensuite de dire 6♠ en Est alors qu'il est impossible
+            // d'être dans la zone") : bug trouvé — cette boucle cherchait le palier légal
+            // le plus proche à PARTIR du palier du partenaire, sans jamais vérifier qu'il
+            // n'avait pas DÉJÀ relancé MA PROPRE couleur directement (une main de 10H,
+            // "zone basse", ne doit jamais se retrouver poussée au chelem juste parce que
+            // le palier "minimal" en apparence était déjà pris par la relance du
+            // partenaire). Si le partenaire relance MA couleur exactement, "répéter" n'a
+            // plus de sens — j'accepte (passe) plutôt que d'aller chercher plus haut.
+            if ((myResponseBid.strain === 'S' || myResponseBid.strain === 'H') && responseLengths
+                && responseLengths[myResponseBid.strain] >= 6 && partnerRebidBid.strain !== myResponseBid.strain) {
                 for (let level = partnerRebidBid.level; level <= 7; level++) {
                     const c = level + myResponseBid.strain;
                     if (isCallLegal(history, c, seat)) { ownSuitRepeatCall = c; break; }
@@ -4329,10 +4539,14 @@ function decideRobotCall(seat, deal, history) {
                 // juillet) : le partenaire vient de SOUTENIR directement ma couleur — un
                 // fit est confirmé, donc points de SOUTIEN (HLD), pas HCP brut comme dans
                 // ma première version de cette branche (bug trouvé au même audit que celui
-                // qui a corrigé decideOpenerRebidAfterNewSuit). Mêmes seuils qu'ailleurs
-                // pour un soutien direct sans saut (12-14H de sa part) : sous 15 points de
-                // soutien, ma main est déjà décrite, rien de plus à ajouter ; 15-17,
-                // enchère d'essai (2SA générique) ; 18+, manche directe.
+                // qui a corrigé decideOpenerRebidAfterNewSuit).
+                //
+                // Voir échange avec Guillaume (session PBN réelle du 3 août — donne 5,
+                // "avec sa main de 11HLD, Nord va ensuite faire une proposition de
+                // manche") : seuil d'invite corrigé de 15 à 11 — mon premier chiffre
+                // était trop haut, une main à seulement 11-12 points de soutien face à
+                // ce soutien simple (12-14H) doit déjà inviter, pas rester silencieuse.
+                // 18+, manche directe (inchangé, déjà confirmé ailleurs).
                 const supportPointsForRaise = computeSupportPoints(hand, myResponseBid.strain, 4);
                 if (supportPointsForRaise >= 18) {
                     const isMajor = myResponseBid.strain === 'S' || myResponseBid.strain === 'H';
@@ -4344,7 +4558,7 @@ function decideRobotCall(seat, deal, history) {
                     explanation = call !== 'PASS'
                         ? `Soutien direct du partenaire (12-14H) — assez de points de soutien pour viser la manche (${points})`
                         : `A déjà annoncé — passe (règle du tour unique)`;
-                } else if (supportPointsForRaise >= 15 && partnerRebidBid.level === 2 && isCallLegal(history, '2NT', seat)) {
+                } else if (supportPointsForRaise >= 11 && partnerRebidBid.level === 2 && isCallLegal(history, '2NT', seat)) {
                     call = '2NT';
                     explanation = `Soutien direct du partenaire (12-14H) — enchère d'essai, juste sous la manche connue (${points})`;
                 } else {
@@ -4415,7 +4629,17 @@ function decideRobotCall(seat, deal, history) {
                         explanation = `A déjà annoncé — passe (règle du tour unique)`;
                     }
                 }
-            } else if (partnerRebidBid && partnerRebidBid.strain !== 'NT') {
+            } else if (partnerRebidBid && partnerRebidBid.strain !== 'NT' && myResponseBid.strain !== 'NT') {
+                // Voir échange avec Guillaume (session PBN réelle du 3 août — donne 2,
+                // "je ne comprends absolument pas l'enchère de 5♥ d'Est sur 4♥, alors
+                // qu'il a déjà tout dit à son tour précédent") : bug trouvé sur cette
+                // règle même — elle ne vérifiait que la redemande DU PARTENAIRE, jamais
+                // MA PROPRE première annonce. Si MA première annonce était déjà une
+                // convention ZONÉE (ex. "3SA fitté", 13-15 points de soutien précis —
+                // voir plus haut), j'ai déjà tout montré : rien à ajouter, quel que soit
+                // ce que le partenaire fait ensuite. Exclu ici (myResponseBid.strain
+                // !== 'NT') : cette règle ne s'applique qu'après une VRAIE couleur de ma
+                // part, jamais après mon propre SA conventionnel déjà borné.
                 // Voir échange avec Guillaume (session du 2 août — "c'est n'importe quoi
                 // de passer pour le répondant avec 11H sur une redemande qui n'est pas
                 // zonée. 1T 1C > 1P : l'ouvreur peut très souvent avoir 14H+, c'est donc
@@ -4432,10 +4656,21 @@ function decideRobotCall(seat, deal, history) {
                 const prefLengths = suitLengths(hand);
                 const preferOpening = prefLengths[partnerOpeningBid.strain] >= prefLengths[partnerRebidBid.strain];
                 const preferredSuit = preferOpening ? partnerOpeningBid.strain : partnerRebidBid.strain;
+                // Voir échange avec Guillaume (session PBN réelle du 3 août — donne 8,
+                // "c'est n'importe quoi de dire 6♠ en Est alors qu'il est impossible
+                // d'être dans la zone") : même bug que le repli "répète ma couleur" ci-
+                // dessus, retrouvé ici après l'avoir corrigé là-bas — si ma préférence
+                // tombe exactement sur la couleur que le partenaire vient LUI-MÊME de
+                // montrer (une relance directe, pas juste "une des 2 couleurs
+                // possibles"), il n'y a plus de vraie préférence à exprimer : j'accepte
+                // (passe) plutôt que de chercher plus haut parce que son palier est déjà
+                // pris.
                 let generalPreferenceCall = null;
-                for (let level = 1; level <= 7; level++) {
-                    const c = level + preferredSuit;
-                    if (isCallLegal(history, c, seat)) { generalPreferenceCall = c; break; }
+                if (partnerRebidBid.strain !== myResponseBid.strain) {
+                    for (let level = 1; level <= 7; level++) {
+                        const c = level + preferredSuit;
+                        if (isCallLegal(history, c, seat)) { generalPreferenceCall = c; break; }
+                    }
                 }
                 if (generalPreferenceCall) {
                     call = generalPreferenceCall;
@@ -4537,7 +4772,19 @@ function decideRobotCall(seat, deal, history) {
                 if (supportPointsForDoublerThirdTurn >= SLAM_ZONE_GRAND) targetLevelForDoublerThirdTurn = 7;
                 else if (supportPointsForDoublerThirdTurn >= SLAM_ZONE_SMALL) targetLevelForDoublerThirdTurn = 6;
                 else if (supportPointsForDoublerThirdTurn >= 15) targetLevelForDoublerThirdTurn = gameLevelForDoublerThirdTurn;
-                if (targetLevelForDoublerThirdTurn !== null) {
+                // Voir échange avec Guillaume (session PBN réelle du 3 août — donne 6,
+                // "pourquoi Sud dit 5♥ ? c'est complètement con") : bug trouvé — la
+                // boucle cherchait aveuglément le palier légal le plus proche de ma
+                // cible, sans jamais vérifier que le partenaire n'avait pas DÉJÀ atteint
+                // (ou dépassé) cette cible dans CETTE MÊME couleur — ici Nord avait déjà
+                // conclu "4♥" (exactement ma cible), donc "4♥" n'était plus disponible
+                // (déjà pris) et la boucle sautait mécaniquement à "5♥", une pure
+                // escalade sans justification. Accepte maintenant (passe) si le
+                // partenaire est déjà AU MOINS à ma cible dans cette couleur.
+                const partnerAlreadyThereForDoublerThirdTurn = targetLevelForDoublerThirdTurn !== null
+                    && partnerSuitForDoublerThirdTurn.strain === suitForDoublerThirdTurn
+                    && partnerSuitForDoublerThirdTurn.level >= targetLevelForDoublerThirdTurn;
+                if (targetLevelForDoublerThirdTurn !== null && !partnerAlreadyThereForDoublerThirdTurn) {
                     for (let level = targetLevelForDoublerThirdTurn; level <= 7; level++) {
                         const c = level + suitForDoublerThirdTurn;
                         if (isCallLegal(history, c, seat)) { call = c; break; }
