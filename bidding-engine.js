@@ -404,7 +404,15 @@ function decideResponseToWeakTwo(hand, hcp, hl, bid, seat, history) {
     const lengths = suitLengths(hand);
     const barragePromisedLength = bid.level + 4;
     const totalTrumps = lengths[bid.strain] + barragePromisedLength;
-    const hasFit = totalTrumps >= 8;
+    // Voir échange avec Guillaume ("tu te bases toujours sur les fiches", fiches
+    // S-3T/K/C/P-Q, trouvé via le signal "toujours la même réponse") : cette formule
+    // générique (palier+4 assumé chez le partenaire) fait passer presque N'IMPORTE
+    // QUELLE longueur pour un "fit" dès le palier 3 (7+2=9≥8) — alors que ces 4 fiches
+    // jumelles disent explicitement et identiquement "Passe : 0 à 16HL, SANS fit (2
+    // cartes maximum)". Le vrai seuil de fit, pour un barrage (palier 3+), c'est 3+
+    // cartes RÉELLES chez moi, pas un total théorique qui dépend surtout de ce qu'on
+    // suppose déjà chez le partenaire.
+    const hasFit = bid.level >= 3 ? lengths[bid.strain] >= 3 : totalTrumps >= 8;
     const isMajor = bid.strain === 'S' || bid.strain === 'H';
     const gameLevel = isMajor ? 4 : 5;
 
@@ -452,6 +460,85 @@ function decideResponseToWeakTwo(hand, hcp, hl, bid, seat, history) {
 //   mélangés (ni même rang ni même couleur). 3+ As : cas non couvert explicitement par
 //   l'échelle (qui s'arrête à 2) — choix pragmatique, "4SA" direct plutôt que de forcer
 //   une catégorie à 2 As qui ne correspondrait pas.
+// Voir échange avec Guillaume ("tu te bases toujours sur les fiches", fiches
+// C-1K-2SA-Q-corr-3 et C-1T-2SA-Q-corr-4, construit après clarification directe du
+// principe) : réponse au Michaël 2SA de l'adversaire, précisément sur l'ouverture
+// MINEURE du partenaire — confirmé sur les 2 mineures (1♣ et 1♦) : ce 2SA montre
+// toujours l'AUTRE mineure ET les cœurs, jamais les piques (4ème couleur exclue dans
+// les deux cas). Principe général (donné par Guillaume) : l'intervenant a montré 2
+// couleurs précises ; des 2 cue-bids disponibles dans CES couleurs, le moins cher
+// montre le FIT avec la couleur du partenaire (forcing de manche), le plus cher montre
+// la 4ème couleur (celle qu'aucun des 3 autres n'a nommée) avec 5+ cartes, forcing de
+// manche également.
+function decideResponseToMichaelOverMinor(hand, hcp, hl, openingSuit, seat, history) {
+    const lengths = suitLengths(hand);
+    const otherMinor = openingSuit === 'C' ? 'D' : 'C';
+    const shownSuits = [otherMinor, 'H'];
+    const unshownSuit = 'S';
+    const cheap = STRAIN_RANK[shownSuits[0]] < STRAIN_RANK[shownSuits[1]] ? shownSuits[0] : shownSuits[1];
+    const expensive = cheap === shownSuits[0] ? shownSuits[1] : shownSuits[0];
+
+    const ownFit = lengths[openingSuit] >= 5;
+    const supportPoints = computeSupportPoints(hand, openingSuit, 3);
+
+    // Fit poli, compétitif (8-10HLD, 5+ cartes dans la couleur du partenaire) — vérifié
+    // AVANT le repli "hl<=7" ci-dessous : avec un vrai fit (6+ cartes), c'est la mesure
+    // en points de soutien (HLD) qui compte, pas le HL brut, qui sous-estime largement
+    // une main courte partout sauf dans la couleur d'atout.
+    if (ownFit && supportPoints >= 8 && supportPoints <= 10) {
+        const c = '3' + openingSuit;
+        if (isCallLegal(history, c, seat)) return c;
+    }
+
+    if (hl <= 7) return 'PASS';
+
+    // Cue-bid économique (fit, forcing de manche, 12HLD+) — priorité sur X, plus précis
+    if (supportPoints >= 12 && lengths[openingSuit] >= 5) {
+        const c = '3' + cheap;
+        if (isCallLegal(history, c, seat)) return c;
+    }
+    // Cue-bid le moins économique (4ème couleur, 5+ cartes, forcing) — priorité sur X
+    if (hl >= 12 && lengths[unshownSuit] >= 5) {
+        const c = '3' + expensive;
+        if (isCallLegal(history, c, seat)) return c;
+    }
+    // Voir échange avec Guillaume ("tu te bases toujours sur les fiches", fiche
+    // C-1K-2SA-Q-corr-3 : "3♠ NF Maximum 11HL, 6 ♠, ressemble à un 2 faible") : la MÊME
+    // enchère (3 de la 4ème couleur) a un second sens, non forcing cette fois — un
+    // barrage naturel faible avec une vraie longueur (6+), distinct du cue-bid fort
+    // ci-dessus. Volontairement après le cue-bid (qui prime si la main est assez forte
+    // pour ça) : ne se déclenche que sous le seuil du cue-bid.
+    if (hl <= 11 && lengths[unshownSuit] >= 6) {
+        const c = '3' + unshownSuit;
+        if (isCallLegal(history, c, seat)) return c;
+    }
+
+    if (hcp >= 10 && isCallLegal(history, 'X', seat)) {
+        return 'X';
+    }
+    // Fit poli, compétitif (8-10HLD, 5+ cartes dans la couleur du partenaire)
+    if (ownFit && supportPoints >= 8 && supportPoints <= 10) {
+        const c = '3' + openingSuit;
+        if (isCallLegal(history, c, seat)) return c;
+    }
+    // À jouer, régulier, arrêts dans les 2 couleurs adverses
+    const lengthsForStop = lengths;
+    const hasStoppers = ['A', 'K', 'Q'].some(r => (hand[otherMinor] || '').includes(r)) || lengthsForStop[otherMinor] >= 3;
+    if (hcp >= 13 && hcp <= 16 && hasStoppers) {
+        const c = '3NT';
+        if (isCallLegal(history, c, seat)) return c;
+    }
+    if (hcp >= 8 && hcp <= 10 && !ownFit) {
+        return 'PASS';
+    }
+    // Repli : soutien poli si un peu de fit, sinon passe.
+    if (ownFit) {
+        const c = '3' + openingSuit;
+        if (isCallLegal(history, c, seat)) return c;
+    }
+    return 'PASS';
+}
+
 function decideResponseToStrongDiamond(hand, seat, history) {
     const hcp = computeHandHcp(hand);
     const aceSuits = ['S', 'H', 'D', 'C'].filter(s => (hand[s] || '').includes('A'));
@@ -3840,7 +3927,17 @@ function decideRobotCall(seat, deal, history) {
                 let directSuitWasBid = false;
                 let fitCuebidWasBid = false;
                 let naturalNTWasBid = false;
-                if (call !== 'X' && myPartnerBid !== lastBid && isCallLegal(history, 'X', seat)) {
+                // Voir échange avec Guillaume ("tu te bases toujours sur les fiches",
+                // construit lors de l'ajout de decideResponseToMichaelOverMinor) : ce
+                // bloc Sputnik générique interceptait AVANT la fonction dédiée au
+                // Michaël 2SA sur mineure — même famille de bug d'ordre que plusieurs
+                // fois cette session. Exclu explicitement ici (recalcul local, la
+                // variable complète n'existe que plus bas).
+                const isMichaelOverMinorForGuard = history.slice(0, partnerBidIndexForProtect).every(e => isPass(e.call))
+                    && partnerBidInfo && partnerBidInfo.level === 1
+                    && (partnerBidInfo.strain === 'C' || partnerBidInfo.strain === 'D')
+                    && lastBid.call === '2NT' && lastBid === history[partnerBidIndexForProtect + 1];
+                if (!isMichaelOverMinorForGuard && call !== 'X' && myPartnerBid !== lastBid && isCallLegal(history, 'X', seat)) {
                     const lengthsForNegDouble = suitLengths(hand);
                     const opponentOvercallSuitForNegDouble = parseBid(lastBid.call).strain;
                     const shownSuitsForNegDouble = new Set([partnerBidInfo.strain, opponentOvercallSuitForNegDouble]);
@@ -4042,11 +4139,28 @@ function decideRobotCall(seat, deal, history) {
                 // les deux utilisent la même chaîne mais n'ont RIEN à voir.
                 const partnerLast2 = history.slice(Math.max(0, partnerBidIndex - 2), partnerBidIndex);
                 const partnerBidWasReopening = partnerLast2.length === 2 && partnerLast2.every(e => isPass(e.call));
+
+                // Voir échange avec Guillaume ("tu te bases toujours sur les fiches",
+                // fiches C-1K-2SA-Q-corr-3 et C-1T-2SA-Q-corr-4, construit après
+                // clarification directe du principe des cue-bids) : Michaël 2SA de
+                // l'adversaire, précisément sur une ouverture MINEURE du partenaire —
+                // detecté ici pour router vers la fonction dédiée plutôt que la réponse
+                // générique (qui ne sait pas que "2SA" est conventionnel, pas naturel).
+                const isMichaelOverMinorOpening = partnerBidWasOpening
+                    && partnerBidInfo && partnerBidInfo.level === 1
+                    && (partnerBidInfo.strain === 'C' || partnerBidInfo.strain === 'D')
+                    && lastBid.call === '2NT' && lastBid === history[partnerBidIndex + 1];
+
+                if (isMichaelOverMinorOpening) {
+                    call = decideResponseToMichaelOverMinor(hand, hcp, hl, partnerBidInfo.strain, seat, history);
+                    explanation = `Réponse au Michaël 2SA de l'adversaire sur l'ouverture ${formatCallForDisplay(myPartnerBid.call)} du partenaire (${points})`;
+                } else {
                 call = decideRobotResponse(hand, hcp, hl, myPartnerBid.call, seat, history, partnerPromises5Plus, wasIntervention, partnerBidWasOpening, partnerBidWasReopening);
                 const isCompetitive = myPartnerBid !== lastBid;
                 explanation = isCompetitive
                     ? `Soutien compétitif de ${formatCallForDisplay(myPartnerBid.call)} du partenaire malgré ${formatCallForDisplay(lastBid.call)} adverse (${points})`
                     : `Réponse à ${formatCallForDisplay(lastBid.call)} du partenaire (${points}, fit ${suitLengths(hand)[partnerBidInfo.strain] || 0}${partnerBidInfo.strain !== 'NT' ? ' carte(s) à ' + STRAIN_SYMBOL[partnerBidInfo.strain] : ''})`;
+                }
                 } // fin du if (call !== 'X') — voir le contre protecteur plus haut
             } else {
                 // Voir échange avec Guillaume (session du 24 juillet) : RÉVEIL — si je
