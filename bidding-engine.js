@@ -235,7 +235,20 @@ function decideRobotOpening(hand, hcp, hl, dealVulnerable, seat) {
     // (même garde-fou que ci-dessus) — un "super 2SA" annoncé en deux temps (2♣ puis 2SA
     // au rebid si régulière, ou sa couleur si un unicolore, voir decideRobotOpenerRebid)
     // plutôt qu'un 2SA direct qui plafonnerait à tort la main à 20-21.
-    if ((hl >= 22 && hl <= 23 && balanced) || (hasGenuineSuit && losers === 5 && hcp >= 15)) return '2C';
+    // Voir échange avec Guillaume ("2♣ = Fort indéterminé", fiche S-2T-Q-corr-1, SEF
+    // 2024 — plus récente et plus précise que la première fiche trouvée) : le 2♣
+    // recouvre en réalité plusieurs familles de mains fortes, dont seule la "super SA
+    // régulière" (22-23HL) était codée jusqu'ici. Ajout du cas le plus net et
+    // vérifiable : l'ANCIEN 2 FORT EN MAJEURE — 16H minimum (levées de défense), 6
+    // cartes avec au moins 2 honneurs, ou 5 cartes avec au moins 3 honneurs (qualité de
+    // couleur exigée, pas de plafond HCP strict puisque décrit par "levées de jeu" côté
+    // fiche — approximé ici par le seuil HL du 2♦ juste au-dessus, qui prend
+    // naturellement le relais pour les mains encore plus fortes).
+    const majorLen = Math.max(lengths['S'], lengths['H']);
+    const majorSuit = lengths['S'] >= lengths['H'] ? 'S' : 'H';
+    const majorHonors = ['A', 'K', 'Q', 'J'].filter(r => (hand[majorSuit] || '').includes(r)).length;
+    const hasStrongMajor = (majorLen >= 6 && majorHonors >= 2) || (majorLen === 5 && majorHonors >= 3);
+    if ((hl >= 22 && hl <= 23 && balanced) || (hasGenuineSuit && losers === 5 && hcp >= 15) || (hasStrongMajor && hcp >= 16)) return '2C';
 
     // Barrages faibles (système "majeure 5ème") : 6 cartes à une majeure au palier 2
     // ("2 faible"), 7 cartes au palier 3, 8 cartes au palier 4 — toujours la couleur la
@@ -271,6 +284,34 @@ function decideRobotOpening(hand, hcp, hl, dealVulnerable, seat) {
 // tour d'enchères) : ceux-là supposent un rebid de l'ouvreur puis un second tour du
 // répondant, hors de portée de ce filet — voir decideRobotOpenerRebid pour le rebid de
 // l'ouvreur, qui lui existe, mais seulement pour les mains très fortes (18HL+).
+// Voir échange avec Guillaume ("traiter intégralement les fiches d'ouverture", fiches
+// S-1T-Q-corr-3 et S-1K-Q-corr-5, trouvé en vérification systématique) : TROU
+// STRUCTUREL majeur — decideRobotMajorSupport n'existe que pour les majeures ;
+// répondre par un soutien direct à l'ouverture MINEURE du partenaire (2♣ après 1♣, 2♦
+// après 1♦) n'avait AUCUNE logique dédiée, tombant systématiquement dans le repli SA
+// générique plus bas. Seuils confirmés IDENTIQUES sur les 2 fiches mineures : 6-10HLD
+// simple (5+ cartes exigées, pas 3+ comme en majeure — la mineure du partenaire peut
+// n'être que 3ème), 11-12HLD à saut (5+ cartes), 4-niveau barrage faible (6-7 cartes,
+// singleton souhaité, HLD max ~11).
+function decideRobotMinorSupport(hand, hcp, hl, bid, seat, history) {
+    const lengths = suitLengths(hand);
+    const suit = bid.strain;
+    const fitLen = lengths[suit];
+    if (fitLen < 5) return null; // pas de vraie longueur : rien à faire ici, laisser la suite de la fonction décider
+
+    const supportPoints = computeSupportPoints(hand, suit, 3);
+
+    if (supportPoints >= 11 && supportPoints <= 12) {
+        const call = (bid.level + 2) + suit;
+        if (isCallLegal(history, call, seat)) return call;
+    }
+    if (supportPoints >= 6 && supportPoints <= 10) {
+        const call = (bid.level + 1) + suit;
+        if (isCallLegal(history, call, seat)) return call;
+    }
+    return null;
+}
+
 function decideRobotMajorSupport(hand, hcp, hl, bid, seat, history) {
     const lengths = suitLengths(hand);
     const suit = bid.strain;
@@ -292,7 +333,7 @@ function decideRobotMajorSupport(hand, hcp, hl, bid, seat, history) {
     // Barrage (5+ atouts, une courte ailleurs, main faible en H — la distribution prime
     // sur les points, "loi des levées totales") : indépendant du seuil habituel de 6H/6HL
     // pour répondre, un vrai barrage peut se faire avec très peu de points d'honneurs.
-    if (fitLen >= 5 && shortSuit && hcp < 10) {
+    if (fitLen >= 5 && (shortSuit || hcp <= 9) && hcp < 10) {
         const call = (bid.level + 3) + suit; // saut direct à la manche (ex. 1H -> 4H)
         if (isCallLegal(history, call, seat)) return call;
     }
@@ -708,6 +749,21 @@ function decideRobotResponse(hand, hcp, hl, partnerCall, seat, history, partnerP
         // pour faire le Texas (le plancher de l'ouvreur, 20HL au minimum même pour un
         // simple 2SA direct, garantit la manche dès qu'on y ajoute un minimum chez soi).
         const fiveCardMajor = ['S', 'H'].find(s => lengths[s] >= 5);
+        // Voir échange avec Guillaume ("traiter intégralement les fiches d'ouverture",
+        // fiche S-1SA-Q-corr-1, "3♥/3♠ FM Main forte (15+HLD), 6 cartes dont 2 gros
+        // honneurs, recherche de chelem", trouvé en vérification systématique) : cette
+        // main ne doit PAS passer par le Texas (transfert mécanique) — c'est une
+        // convention distincte et forte, prioritaire, nommée pour la première fois SEF
+        // 2018. Vérifiée avant le transfert majeur ci-dessous.
+        const strongMajorSuit = ['S', 'H'].find(s => {
+            if (lengths[s] < 6) return false;
+            const topHonors = ['A', 'K', 'Q'].filter(r => (hand[s] || '').includes(r)).length;
+            return topHonors >= 2;
+        });
+        if (strongMajorSuit && hl >= 15 && bid.level === 1) {
+            const call = 3 + strongMajorSuit;
+            if (isCallLegal(history, call, seat)) return call;
+        }
         // Voir échange avec Guillaume (session du 30 juillet) : hl>=5 suffit déjà pour
         // TOUT 2SA (direct comme "super 2SA") — même le plancher le plus bas possible
         // (20, pour un vrai 2SA direct) combiné à 5HL atteint la zone de manche (25).
@@ -726,11 +782,19 @@ function decideRobotResponse(hand, hcp, hl, partnerCall, seat, history, partnerP
         // manche. SANS courte (main régulière, donc forcément 6322), seulement en zone de
         // chelem — sinon on va direct à 3SA/manche naturelle (voir plus bas), inutile de
         // complexifier l'enchère pour une main qui n'a que la manche à proposer.
+        //
+        // Voir échange avec Guillaume ("traiter intégralement les fiches d'ouverture",
+        // fiche S-1SA-Q-corr-1, "2♠ Texas ♣... main faible (maximum 8HLD), 6 cartes à
+        // ♣", trouvé en vérification systématique) : troisième cas ajouté — une main
+        // FAIBLE (max 8HLD) avec 6+ cartes utilise aussi ce transfert, même sans courte
+        // ni zone de chelem (l'exclusion précédente ne couvrait que 2 des 3 cas décrits
+        // par la fiche, oubliant le plus simple).
         const sixCardMinor = ['C', 'D'].find(s => lengths[s] >= 6);
         if (sixCardMinor) {
             const hasShortness = ['S', 'H', 'D', 'C'].some(s => s !== sixCardMinor && lengths[s] <= 1);
             const slamZone = hl + (bid.level === 1 ? 15 : 20) >= 33; // même heuristique bornée que decideResponderContinuationAfterNewSuit
-            if (hasShortness || slamZone) {
+            const weakHand = hl <= 8 && bid.level === 1;
+            if (hasShortness || slamZone || weakHand) {
                 const transferAsk = sixCardMinor === 'C' ? 'S' : 'C';
                 const transferLevel = sixCardMinor === 'C' ? lv1 : lv1 + 1;
                 const call = transferLevel + transferAsk;
@@ -742,12 +806,27 @@ function decideRobotResponse(hand, hcp, hl, partnerCall, seat, history, partnerP
         // s'appliquerait déjà) : demande si l'ouvreur a 4+ cartes dans une majeure, avant
         // de se rabattre sur SA — seulement avec assez de points pour vouloir explorer
         // (même seuil que pour parler du tout, voir neededHL).
+        // Voir échange avec Guillaume ("traiter intégralement les fiches d'ouverture",
+        // fiche S-1SA-Q-corr-1, "2♣ Stayman... 8HL et plus", trouvé en vérification
+        // systématique) : seuil propre au Stayman (8HL), distinct du seuil générique
+        // "neededHL" (10) partagé jusqu'ici à tort avec le repli 3SA direct plus bas —
+        // ce dernier garde son propre seuil, plus élevé, inchangé.
+        const staymanNeededHcp = (bid.level === 1) ? 9 : null;
         const fourCardMajor = ['S', 'H'].some(s => lengths[s] === 4);
-        if (fourCardMajor && hl >= neededHL) {
+        if (fourCardMajor && (staymanNeededHcp !== null ? hcp >= staymanNeededHcp : hl >= neededHL)) {
             const call = lv1 + 'C';
             if (isCallLegal(history, call, seat)) return call;
         }
 
+        // Voir échange avec Guillaume ("traiter intégralement les fiches d'ouverture",
+        // fiche S-1SA-Q-corr-1, "4SA Quantitatif, 16-17H(L), proposition de chelem",
+        // trouvé en vérification systématique) : absent jusqu'ici — une main de 16-17
+        // (au-dessus de la zone de manche normale mais sous la zone de chelem certain)
+        // doit inviter au chelem plutôt que conclure directement à 3SA.
+        if (bid.level === 1 && hl >= 16 && hl <= 17 && isHandBalancedForNT(lengths)) {
+            const call = '4NT';
+            if (isCallLegal(history, call, seat)) return call;
+        }
         if (hl >= neededHL) {
             const call = '3NT';
             if (isCallLegal(history, call, seat)) return call;
@@ -870,6 +949,31 @@ function decideRobotResponse(hand, hcp, hl, partnerCall, seat, history, partnerP
     // ET une couleur de 5+ cartes plus longue que la majeure trouvée, on montre la longue
     // d'abord — plus informatif qu'une majeure 4ème qui ne dit rien sur la vraie forme.
     const major4 = partnerOpenedMinor ? ['H', 'S'].find(s => lengths[s] >= 4 && !opponentSuits.has(s)) : null;
+    // Voir échange avec Guillaume (fiche S-1T-Q-corr-3, "1♦-? Réponse naturelle, avec
+    // une vraie couleur ♦. 6+HL illimité", trouvé en vérification systématique des
+    // fiches d'ouverture) : bug significatif — sans majeure 4ème, une réponse naturelle
+    // et bon marché au palier 1 (1♦ après 1♣) n'était JAMAIS montrée quand j'ai aussi
+    // du fit pour les ♣ du partenaire, la comparaison de longueur "ownLongSuit"
+    // plus bas (2+ cartes d'écart exigées) étant bien trop stricte pour ce cas précis —
+    // une réponse au palier 1 doit primer sur un soutien, peu importe l'écart de
+    // longueur, tant qu'elle existe (contrairement à une couleur plus chère, où
+    // l'écart de longueur redevient pertinent).
+    if (hl >= 6 && partnerOpenedMinor && suit === 'C' && !major4 && !opponentSuits.has('D') && lengths['D'] >= 4
+        && !isDouble(history[history.length - 1].call)) {
+        const call = '1D';
+        if (isCallLegal(history, call, seat)) return call;
+    }
+    // Voir échange avec Guillaume (fiche S-1T-Q-corr-3, "2SA NF 11-12HL, pas de majeure
+    // 4ème... dénie 5 belles cartes à ♦... Enchère non forcing", confirmé explicitement
+    // NF par Guillaume — contrairement au 2SA fitté majeure qui est forcing) : réponse
+    // spécifique pour la zone 11-12HL sans majeure ni vraie couleur ♦ à montrer
+    // naturellement (déjà couvert juste au-dessus si 4+ ♦). Priorité nécessaire sur le
+    // soutien générique plus bas, qui prendrait sinon la main avec un simple fit à ♣.
+    if (hl >= 11 && hl <= 12 && partnerOpenedMinor && suit === 'C' && !major4 && lengths['D'] < 4
+        && isHandBalancedForNT(lengths) && !isDouble(history[history.length - 1].call)) {
+        const call = '2NT';
+        if (isCallLegal(history, call, seat)) return call;
+    }
     const longerSuit = hl >= 12 && major4
         ? ['S', 'H', 'D', 'C'].find(s => s !== suit && lengths[s] >= 5 && lengths[s] > lengths[major4])
         : null;
@@ -910,11 +1014,42 @@ function decideRobotResponse(hand, hcp, hl, partnerCall, seat, history, partnerP
     // imposé par la concurrence) sans la moindre valeur, ce qui n'a plus rien d'anodin.
     // Au-delà du palier minimal légal disponible, même seuil que pour une vraie nouvelle
     // couleur (newSuitThreshold), par cohérence.
-    const ownLongSuit = ['S', 'H', 'D', 'C'].find(s => s !== suit && !opponentSuits.has(s) && lengths[s] >= 5 && lengths[s] >= lengths[suit] + 2);
+    // Voir échange avec Guillaume ("traiter intégralement les fiches d'ouverture",
+    // fiche S-1C-Q-corr-1, trouvé en vérification systématique) : bug d'ordre trouvé —
+    // cette priorité "montrer ma longue couleur" interceptait AVANT que la convention
+    // "2SA fitté" (fit EXACT de 3 cartes en majeure, 10-11HLD, voir
+    // decideRobotMajorSupport) n'ait sa chance, alors que 2SA est strictement plus
+    // spécifique et informatif dans cette zone étroite de points.
+    const isFittedTwoNTZone = (suit === 'S' || suit === 'H') && bid.level === 1
+        && lengths[suit] === 3 && computeSupportPoints(hand, suit, 5) >= 10 && computeSupportPoints(hand, suit, 5) <= 11;
+    const ownLongSuit = isFittedTwoNTZone ? null
+        : ['S', 'H', 'D', 'C'].find(s => s !== suit && !opponentSuits.has(s) && lengths[s] >= 5 && lengths[s] >= lengths[suit] + 2);
     if (ownLongSuit) {
+        // Voir échange avec Guillaume ("traiter intégralement les fiches d'ouverture",
+        // fiche S-1C-Q-corr-1, "4♠ misfitté, 8 cartes à ♠, pour les jouer", trouvé en
+        // vérification systématique) : avec une longueur EXTRÊME (8+ cartes) dans ma
+        // propre couleur, la main se joue essentiellement toute seule — sauter
+        // directement à la manche (pour une majeure) plutôt que de s'arrêter au palier
+        // minimal comme pour une longue couleur ordinaire.
+        if ((ownLongSuit === 'S' || ownLongSuit === 'H') && lengths[ownLongSuit] >= 8) {
+            const gameCall = '4' + ownLongSuit;
+            if (isCallLegal(history, gameCall, seat)) return gameCall;
+        }
+        // Voir échange avec Guillaume ("traiter intégralement les fiches d'ouverture",
+        // fiche S-1C-Q-corr-1, "changement de couleur à saut simple sont forts : 16H et
+        // plus, avec une très belle couleur", trouvé en vérification systématique) :
+        // absent jusqu'ici — un unicolore de qualité (6+ cartes, 2+ gros honneurs) avec
+        // 16H+ doit sauter un palier au-delà du minimum légal, pas s'arrêter au palier
+        // le plus bas comme une couleur ordinaire.
+        const ownLongSuitHonors = ['A', 'K', 'Q'].filter(r => (hand[ownLongSuit] || '').includes(r)).length;
+        const jumpShiftStrong = hl >= 16 && lengths[ownLongSuit] >= 6 && ownLongSuitHonors >= 2;
         for (let level = bid.level; level <= 7; level++) {
             const call = level + ownLongSuit;
             if (isCallLegal(history, call, seat)) {
+                if (jumpShiftStrong) {
+                    const jumpCall = (level + 1) + ownLongSuit;
+                    if (isCallLegal(history, jumpCall, seat)) return jumpCall;
+                }
                 // Voir échange avec Guillaume (donne 4, session du 30 juillet) : bug trouvé
                 // en testant — "priorité de longueur, pas de points" pour une réponse bon
                 // marché (palier 1) ignorait TOUT plancher, y compris une main à 0H/0HL.
@@ -961,6 +1096,9 @@ function decideRobotResponse(hand, hcp, hl, partnerCall, seat, history, partnerP
     if ((suit === 'S' || suit === 'H') && bid.level === 1) {
         const majorSupport = decideRobotMajorSupport(hand, hcp, hl, bid, seat, history);
         if (majorSupport) return majorSupport;
+    } else if ((suit === 'D' || suit === 'C') && bid.level === 1) {
+        const minorSupport = decideRobotMinorSupport(hand, hcp, hl, bid, seat, history);
+        if (minorSupport) return minorSupport;
     } else if ((suit === 'S' || suit === 'H') && bid.level >= 2) {
         // Voir échange avec Guillaume ("fitté = 8 cartes dans la ligne, pas 3 cartes
         // fixe", session du 30 juillet) : un barrage promet une longueur qui croît avec
@@ -1172,9 +1310,23 @@ function decideRobotResponse(hand, hcp, hl, partnerCall, seat, history, partnerP
     // valet en main dans la couleur adverse, ce qui ne protège rien à l'entame. La
     // fourchette de points précise (10-11H, sans HL) pour 2SA vient directement de
     // Guillaume ; gardé au seuil HL existant pour les autres paliers, non précisés.
+    // Voir échange avec Guillaume ("traiter intégralement les fiches d'ouverture",
+    // fiche S-1T-Q-corr-3, trouvé en vérification systématique) : bug sévère et à fort
+    // impact trouvé — ce repli n'avait AUCUN plafond de points au palier 1 ("hl>=6",
+    // sans limite haute) : une main de 6HL et une main de 17HL recevaient exactement
+    // la même réponse "1NT" minimale, alors que les fiches d'ouverture (1♣ notamment)
+    // détaillent une vraie échelle : 1SA (6-10HL), 2SA (11-12HL), 3SA (13-15HL et
+    // au-delà). Calcule maintenant le palier SA adapté à la force réelle, plutôt que
+    // de toujours viser le palier légal le plus bas.
     const saFallbackThreshold = bid.level >= 2 ? 13 : 6;
     if (!partnerWasIntervening) {
-        for (let level = bid.level; level <= 7; level++) {
+        let saTargetLevel = bid.level;
+        if (bid.level === 1) {
+            if (hl >= 13) saTargetLevel = 3;
+            else if (hl >= 11) saTargetLevel = 2;
+            else saTargetLevel = 1;
+        }
+        for (let level = Math.max(bid.level, saTargetLevel); level <= 7; level++) {
             // Voir échange avec Guillaume (session du 2 août — même famille) : le seuil
             // de points ci-dessous (pointsOk) n'a jamais été pensé pour justifier un
             // chelem — jamais au-delà de 5NT via ce repli, quel que soit bid.level.
@@ -2306,6 +2458,23 @@ function decideRobotResponseToDouble(hand, hcp, hl, doubleIndex, seat, history, 
     const bestSuit = candidates.reduce((best, s) => (lengths[s] > lengths[best] ? s : best), candidates[0]);
 
     // Voir échange avec Guillaume ("tu te bases toujours sur les fiches", fiche
+    // C-1C-X-2C-Q-corr-1, trouvé en vérification fiche par fiche) : quand l'adversaire
+    // relance dans la MÊME couleur que celle doublée (pas une nouvelle couleur), et que
+    // je n'ai pas de vraie couleur 5ème à montrer, un contre RESPONSIVE (demande au
+    // partenaire de choisir) prend le pas sur une couleur naturelle médiocre. Seuil
+    // précis de cette fiche : 7HL+, au maximum 3 cartes dans la majeure la plus
+    // probable chez le contreur (ici ♠, régulièrement 4ème chez lui) — approximé par
+    // "pas de 5+ cartes ailleurs", pour rester prudent après un premier essai trop
+    // large plus tôt cette session.
+    const opponentRaisedSameSuit = opponentSuitsAfterDouble.has(doubledSuit) && opponentSuitsAfterDouble.size === 1;
+    const bestSuitIsGoodMajor = (bestSuit === 'S' || bestSuit === 'H') && lengths[bestSuit] >= 4;
+    const lastHistoryEntry = history[history.length - 1];
+    const opponentRaiseLevel = lastHistoryEntry && parseBid(lastHistoryEntry.call) ? parseBid(lastHistoryEntry.call).level : null;
+    if (opponentRaisedSameSuit && opponentRaiseLevel === 2 && hl >= 7 && bestSuit && lengths[bestSuit] < 5 && !bestSuitIsGoodMajor && lengths[doubledSuit] < 5 && isCallLegal(history, 'X', seat)) {
+        return 'X';
+    }
+
+    // Voir échange avec Guillaume ("tu te bases toujours sur les fiches", fiche
     // C-1K-X-1P-Q, trouvé en re-vérifiant la même fiche) : deux réponses plus
     // descriptives que la simple couleur naturelle, à tester avant le repli mécanique
     // "la plus longue chez moi" — priorité au 2SA quand il s'applique (plus précis
@@ -2330,7 +2499,7 @@ function decideRobotResponseToDouble(hand, hcp, hl, doubleIndex, seat, history, 
     // Cue-bid de la couleur d'ouverture (doublée) : "sans meilleure enchère" —
     // approximé ici par l'absence de couleur naturelle à 5+ cartes (sinon, la couleur
     // naturelle reste préférable et sera trouvée par le repli plus bas).
-    if (hl >= cueBidMinHl && bestSuit && lengths[bestSuit] < 5) {
+    if (hl >= cueBidMinHl && bestSuit && lengths[bestSuit] < 5 && lengths[doubledSuit] < 5) {
         for (let level = 1; level <= 7; level++) {
             const call = level + doubledSuit;
             if (isCallLegal(history, call, seat)) return call;
@@ -2359,6 +2528,25 @@ function decideRobotResponseToDouble(hand, hcp, hl, doubleIndex, seat, history, 
         if (isCallLegal(history, level + bestSuit, seat)) { minLevelForBestSuit = level; break; }
     }
     const pushedToLevel2Plus = bestLen < 4 && minLevelForBestSuit !== null && minLevelForBestSuit >= 2;
+    // Voir échange avec Guillaume ("tu te bases toujours sur les fiches", fiche
+    // C-1K-X-1SA-Q, trouvé en re-vérifiant la même fiche) : avec une VRAIE longueur (5+
+    // cartes) et 8-12HL, la fiche dit explicitement de traiter la main "comme si le n°3
+    // n'avait pas répondu" à l'ouverture — c'est-à-dire sauter au palier que la longueur
+    // justifierait normalement (5 cartes → palier 3, 6+ cartes → palier 4), pas se
+    // contenter du palier minimal légal une fois repoussé par le 1SA intercalé.
+    // Voir échange avec Guillaume ("tu te bases toujours sur les fiches", fiche
+    // C-1C-X-2C-Q-corr-1, trouvé en re-vérifiant une fiche voisine) : cette escalade ne
+    // vaut QUE dans le contexte "adversaire n'a montré qu'un 1SA faible" (d'où la
+    // formulation "comme si le n°3 n'avait pas répondu" — un SA ne compte pour rien de
+    // concret). Quand l'adversaire a au contraire relancé une VRAIE couleur (ici sa
+    // propre ouverture), le palier minimal légal reflète déjà la vraie pression de
+    // l'enchère adverse — sauter davantage n'a plus de justification, et cette même
+    // fiche le confirme (6 cartes à ♣ → palier 3 seulement, pas 4).
+    if (bestLen >= 5 && hl >= 8 && hl <= 12 && minLevelForBestSuit !== null) {
+        const targetLevel = Math.max(minLevelForBestSuit, bestLen === 5 ? 3 : 4);
+        const call = targetLevel + bestSuit;
+        if (isCallLegal(history, call, seat)) return call;
+    }
     if (pushedToLevel2Plus) {
         // Voir échange avec Guillaume ("tu te bases toujours sur les fiches", fiche
         // C-1K-X-1P-Q, trouvé en re-vérifiant après un premier fix incomplet) : même
@@ -3730,15 +3918,20 @@ function decideGenericNewSuitContinuation(hand, seat, history) {
     if (!lastParsed) return null;
 
     const myBidStrains = new Set(myBids.map(e => parseBid(e.call)).filter(Boolean).map(b => b.strain));
-    const partnerBidStrains = new Set(partnerBids.slice(0, -1).map(e => parseBid(e.call)).filter(Boolean).map(b => b.strain));
-    const alreadyKnownStrain = lastParsed.strain === 'NT'
-        || myBidStrains.has(lastParsed.strain) || partnerBidStrains.has(lastParsed.strain);
-    if (alreadyKnownStrain) return null;
+
+    // Voir échange avec Guillaume ("ON A DIT QU'ON ARRETAIT AVEC CETTE HISTOIRE DE UNE
+    // SEULE REDEMANDE. C'EST FINI. TU L'ENLEVES DE PARTOUT") : plus aucune exclusion
+    // par couleur déjà vue — seul un SA de la part du partenaire reste traité comme un
+    // point d'arrêt probable. Toute annonce du partenaire dans une couleur, même déjà
+    // citée, tant que JE n'ai pas moi-même confirmé mon accord dessus, mérite une vraie
+    // réponse plutôt qu'un passe par défaut.
+    if (lastParsed.strain === 'NT') return null;
+    if (myBidStrains.has(lastParsed.strain)) return null;
 
     const lengths = suitLengths(hand);
     const level = lastParsed.level;
 
-    if (lengths[lastParsed.strain] >= 3) {
+    if (lengths[lastParsed.strain] >= 4) {
         for (let l = level; l <= 7; l++) {
             const c = l + lastParsed.strain;
             if (isCallLegal(history, c, seat)) {
