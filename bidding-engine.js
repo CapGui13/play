@@ -2227,6 +2227,19 @@ function decideRobotResponseToDouble(hand, hcp, hl, doubleIndex, seat, history, 
         }
         return 'PASS';
     }
+    // Voir échange avec Guillaume ("tu te bases toujours sur les fiches", fiche
+    // C-1C-X-4C-Q : "la prise de parole du n°3 délivre le n°4 de l'obligation de
+    // répondre au X de son partenaire", trouvé via le signal "toujours la même
+    // réponse") : la règle "4+ cartes → on répond toujours" n'a plus de sens quand une
+    // préemption adverse a repoussé la réponse très haut (palier 5+) — répondre y
+    // deviendrait un pari sur des valeurs qu'on n'a pas forcément, l'obligation du
+    // contre initial ayant été "libérée" par cette préemption. Seuil : 10H minimum
+    // avant d'insister à ce palier, sinon passe (cohérent avec l'entrée "X" de cette
+    // fiche, qui exige déjà 10H+ pour insister à ce stade).
+    const pushedVeryHigh = minLevelForBestSuit !== null && minLevelForBestSuit >= 5;
+    if (pushedVeryHigh && hl < 10) {
+        return 'PASS';
+    }
 
     // Points de soutien (voir échange avec Guillaume, donne 4 : main de 8H comptée à 10
     // avec la courte) plutôt que HL brut — le contre du partenaire ne garantit pas de
@@ -2820,6 +2833,26 @@ function decideRobotOpenerRebid(hand, hcp, hl, myOpeningCall, partnerCall, seat,
     const partnerParsed = parseBid(partnerCall);
     const isRaiseOfMySuit = partnerParsed && partnerParsed.strain === myBid.strain;
 
+    // Voir échange avec Guillaume ("tu te bases toujours sur les fiches", fiche
+    // C-1T-1K-2T-X-corr-1, trouvé via le signal "toujours la même réponse") : même
+    // famille de bug que côté répondant — l'adversaire qui contre le soutien du
+    // partenaire APRÈS coup était totalement ignoré, la logique de soutien
+    // (isRaiseOfMySuit, zone de chelem par points) tournait comme si de rien n'était et
+    // produisait toujours la même conclusion mécanique. Approximation sûre plutôt que
+    // l'arbre complet de la fiche (13-15HL passe, 18+HL surcontre, 17+HL avec forme
+    // précise = enchère de contrôle) : seuil simple passe/surcontre, qui couvre déjà la
+    // majorité des cas sans risquer de mal modéliser les branches à forme spécifique.
+    const lastEntryForPartnerRaiseDoubled = history[history.length - 1];
+    const opponentDoubledPartnerRaise = isRaiseOfMySuit && lastEntryForPartnerRaiseDoubled
+        && isDouble(lastEntryForPartnerRaiseDoubled.call)
+        && partnershipOf(lastEntryForPartnerRaiseDoubled.seat) !== partnershipOf(seat);
+    if (opponentDoubledPartnerRaise) {
+        if (hl >= 18 && isCallLegal(history, 'XX', seat)) {
+            return 'XX';
+        }
+        return 'PASS';
+    }
+
     // Voir échange avec Guillaume (session du 2 août — simulation à grande échelle) : trou
     // complet trouvé — le partenaire a répondu SA au palier minimal (une vraie réponse
     // limitée, pas une ouverture à SA de ma part, déjà traitée plus haut) — cette
@@ -3086,6 +3119,17 @@ function decideRobotOpenerRebid(hand, hcp, hl, myOpeningCall, partnerCall, seat,
     // NATUREL (pas conventionnel — les cas 2SA/3SA sont désormais traités plus haut,
     // avant ce seuil) ?
     if (isRaiseOfMySuit) {
+        // Voir échange avec Guillaume ("tu te bases toujours sur les fiches", fiche
+        // S-1C-3C-Q-corr-1, trouvé via le signal "toujours la même réponse malgré des
+        // mains différentes") : bug trouvé — ces vérifications de zone de chelem
+        // utilisaient SIMPLE_RAISE_MINIMUM (6, le plancher d'un soutien SIMPLE au
+        // palier 2) même quand le partenaire a fait un soutien À SAUT (palier 3+,
+        // promettant nettement plus, typiquement 10-12 points de soutien selon le
+        // SEF) — sous-estimant sa main et empêchant toute exploration de chelem
+        // pourtant justifiée. Détecté ici via le saut de palier (partnerParsed.level
+        // strictement supérieur au palier naturel attendu).
+        const partnerRaiseWasJumpForSlam = partnerParsed.level > myBid.level + 1;
+        const partnerMinimumForSlam = partnerRaiseWasJumpForSlam ? 10 : SIMPLE_RAISE_MINIMUM;
         // Voir échange avec Guillaume (session du 24 juillet) : chelem par simple compte
         // de points (même principe que decideResponderContinuationAfterNewSuit, mis de
         // côté ici à tort jusqu'ici) — mes points de soutien (HLD, fit déjà connu)
@@ -3093,11 +3137,11 @@ function decideRobotOpenerRebid(hand, hcp, hl, myOpeningCall, partnerCall, seat,
         // computeSupportPoints ci-dessus) donnent une estimation basse mais sûre du
         // camp ; testé AVANT le filet "sous 18 → passe", pour ne pas manquer une main
         // suffisamment forte alors que supportPoints est déjà dans la zone de manche.
-        if (supportPoints + SIMPLE_RAISE_MINIMUM >= SLAM_ZONE_GRAND) {
+        if (supportPoints + partnerMinimumForSlam >= SLAM_ZONE_GRAND) {
             const call = '7' + myBid.strain;
             if (isCallLegal(history, call, seat)) return call;
         }
-        if (supportPoints + SIMPLE_RAISE_MINIMUM >= SLAM_ZONE_SMALL) {
+        if (supportPoints + partnerMinimumForSlam >= SLAM_ZONE_SMALL) {
             const call = '6' + myBid.strain;
             if (isCallLegal(history, call, seat)) return call;
         }
@@ -3825,7 +3869,14 @@ function decideRobotCall(seat, deal, history) {
                     // fiche exige explicitement 6+ cartes ("3♣/3♦ NF... avec 6+ cartes...
                     // Dénie un fit") — jamais 5, contrairement au cas Sputnik standard.
                     const directSuitMinLength = wasInterventionForProtect ? 6 : 5;
-                    const directSuitCandidate = unshownSuitsForNegDouble.find(s => lengthsForNegDouble[s] >= directSuitMinLength) && hl >= 11
+                    // Voir échange avec Guillaume (fiche C-1T-1C-1SA-Q : "2♠ NF... 8 à
+                    // 12HL, non forcing", trouvé via le même signal "toujours la même
+                    // réponse") : même famille que le fix de longueur ci-dessus — le
+                    // seuil de points (11HL+) ne vaut que pour le Sputnik classique ; ce
+                    // contexte-ci (réponse à l'intervention du partenaire relancée par
+                    // l'adversaire) n'exige que 8HL+.
+                    const directSuitMinHl = wasInterventionForProtect ? 8 : 11;
+                    const directSuitCandidate = unshownSuitsForNegDouble.find(s => lengthsForNegDouble[s] >= directSuitMinLength) && hl >= directSuitMinHl
                         ? unshownSuitsForNegDouble.find(s => lengthsForNegDouble[s] >= directSuitMinLength)
                         : null;
                     directSuitWasBid = false;
