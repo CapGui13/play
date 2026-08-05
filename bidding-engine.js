@@ -2256,10 +2256,30 @@ function decideRobotResponseToDouble(hand, hcp, hl, doubleIndex, seat, history, 
     // cartes) choisie seulement parce que c'est "la plus longue chez soi" parmi des choix
     // tous médiocres. Ne s'applique QUE sur un contre de réveil — un contre d'appel
     // DIRECT classique n'a pas cette convention précise.
+    // Voir échange avec Guillaume ("tu te bases toujours sur les fiches", fiche
+    // C-1K-X-1P-Q, trouvé en vérification fiche par fiche) : correction d'une
+    // affirmation antérieure trouvée fausse — "un contre d'appel DIRECT classique n'a
+    // pas cette convention" ne tient pas, cette fiche montre explicitement "1SA NF
+    // 8-10HL, arrêt ♦" en réponse à un contre DIRECT (pas un réveil). Seuil propre à ce
+    // cas (8-10HL, plus bas que le réveil 10-12H) : la main a moins de raisons d'être
+    // aussi étoffée puisque le contre direct suit immédiatement l'ouverture adverse,
+    // sans les 2 passes intermédiaires du réveil qui filtrent déjà un peu le jeu.
+    const hasStopperForNT = ['A', 'K', 'Q', 'J', 'T'].filter(r => (hand[doubledSuit] || '').includes(r)).length >= 2;
+    const hasFourCardMajorForNT = ['S', 'H'].some(s => lengths[s] >= 4);
+    // Voir échange avec Guillaume ("tu te bases toujours sur les fiches", même fiche,
+    // trouvé en re-vérifiant après le premier fix) : exclusion supplémentaire — avec 5+
+    // cartes dans la couleur DOUBLÉE elle-même, ce n'est plus un simple "arrêt" mais une
+    // vraie position d'attente ("coin du bois", texte de l'entrée Passe) : le contre de
+    // appel du partenaire vaut peut-être mieux laissé en place. Sans cette exclusion, un
+    // arrêt à article + une longue couleur adverse déclenchait 1SA à tort.
+    const hasLongDoubledSuit = lengths[doubledSuit] >= 5;
     if (wasReopeningDouble) {
-        const hasStopper = ['A', 'K', 'Q', 'J', 'T'].filter(r => (hand[doubledSuit] || '').includes(r)).length >= 2;
-        const hasFourCardMajor = ['S', 'H'].some(s => lengths[s] >= 4);
-        if (hcp >= 10 && hcp <= 12 && hasStopper && !hasFourCardMajor) {
+        if (hcp >= 10 && hcp <= 12 && hasStopperForNT && !hasFourCardMajorForNT && !hasLongDoubledSuit) {
+            const call = '1NT';
+            if (isCallLegal(history, call, seat)) return call;
+        }
+    } else {
+        if (hcp >= 8 && hcp <= 10 && hasStopperForNT && !hasFourCardMajorForNT && !hasLongDoubledSuit) {
             const call = '1NT';
             if (isCallLegal(history, call, seat)) return call;
         }
@@ -2285,6 +2305,38 @@ function decideRobotResponseToDouble(hand, hcp, hl, doubleIndex, seat, history, 
     if (candidates.length === 0) candidates = ['S', 'H', 'D', 'C'].filter(s => s !== doubledSuit);
     const bestSuit = candidates.reduce((best, s) => (lengths[s] > lengths[best] ? s : best), candidates[0]);
 
+    // Voir échange avec Guillaume ("tu te bases toujours sur les fiches", fiche
+    // C-1K-X-1P-Q, trouvé en re-vérifiant la même fiche) : deux réponses plus
+    // descriptives que la simple couleur naturelle, à tester avant le repli mécanique
+    // "la plus longue chez moi" — priorité au 2SA quand il s'applique (plus précis
+    // qu'une simple mineure 5ème), sinon au cue-bid quand rien de naturel ne convainc.
+    const hasStopperForCue = ['A', 'K', 'Q', 'J', 'T'].filter(r => (hand[doubledSuit] || '').includes(r)).length >= 2;
+    const hasFourCardMajorForCue = ['S', 'H'].some(s => lengths[s] >= 4);
+    // 2SA : 11-12HL, arrêt dans la couleur doublée, pas de majeure 4ème à préférer.
+    if (hl >= 11 && hl <= 12 && hasStopperForCue && !hasFourCardMajorForCue) {
+        const call = '2NT';
+        if (isCallLegal(history, call, seat)) return call;
+    }
+    // Voir échange avec Guillaume ("tu te bases toujours sur les fiches", fiche
+    // C-1K-X-1SA-Q, trouvé en vérifiant une fiche jumelle) : le seuil de 11HL était
+    // calibré pour une relance adverse par une vraie couleur — mais quand l'adversaire
+    // n'a montré qu'un simple 1SA faible (aucune couleur, 8-10H, dénie une majeure
+    // 4ème), la fiche dit explicitement "à partir de 6HL(D) au minimum (il faut se
+    // battre !)" : le camp du contreur est alors quasi certain d'être majoritaire en
+    // points (12H+ chez lui, 8-10H max chez l'adversaire).
+    const opponentOnlyBidNTAfterDouble = opponentSuitsAfterDouble.size === 0
+        && history.slice(doubleIndex + 1).some(e => isBidCall(e.call) && partnershipOf(e.seat) !== partnershipOf(seat));
+    const cueBidMinHl = opponentOnlyBidNTAfterDouble ? 6 : 11;
+    // Cue-bid de la couleur d'ouverture (doublée) : "sans meilleure enchère" —
+    // approximé ici par l'absence de couleur naturelle à 5+ cartes (sinon, la couleur
+    // naturelle reste préférable et sera trouvée par le repli plus bas).
+    if (hl >= cueBidMinHl && bestSuit && lengths[bestSuit] < 5) {
+        for (let level = 1; level <= 7; level++) {
+            const call = level + doubledSuit;
+            if (isCallLegal(history, call, seat)) return call;
+        }
+    }
+
     // Voir échange avec Guillaume (donne 2, session du 23 juillet) : plus de "passe de
     // pénalité" ici pour un contre encore BON MARCHÉ (palier 1 toujours disponible) — les
     // bots traitent tous les contres comme des contres d'appel, jamais punitifs, donc on
@@ -2308,7 +2360,12 @@ function decideRobotResponseToDouble(hand, hcp, hl, doubleIndex, seat, history, 
     }
     const pushedToLevel2Plus = bestLen < 4 && minLevelForBestSuit !== null && minLevelForBestSuit >= 2;
     if (pushedToLevel2Plus) {
-        if (hcp >= 8) {
+        // Voir échange avec Guillaume ("tu te bases toujours sur les fiches", fiche
+        // C-1K-X-1P-Q, trouvé en re-vérifiant après un premier fix incomplet) : même
+        // exclusion que plus haut — avec 5+ cartes dans la couleur DOUBLÉE elle-même,
+        // ce repli à SA n'a pas de sens non plus (vraie position d'attente, pas un
+        // simple "rien à dire ailleurs").
+        if (hcp >= 8 && lengths[doubledSuit] < 5) {
             const ntCall = '1NT';
             if (isCallLegal(history, ntCall, seat)) return ntCall;
         }
@@ -3811,7 +3868,18 @@ function decideRobotCall(seat, deal, history) {
             // VRAI plutôt que de fabriquer une couleur avec 0 point.
             const opponentInterveningAfterDouble = history.slice(doubleIndex + 1)
                 .some(e => (isBidCall(e.call) || isDouble(e.call)) && partnershipOf(e.seat) !== partnershipOf(seat));
-            if (opponentInterveningAfterDouble && hcp < 6) {
+            // Voir échange avec Guillaume ("tu te bases toujours sur les fiches", fiche
+            // C-1K-X-1SA-Q, trouvé en vérification fiche par fiche) : le seuil de 6H
+            // était calibré pour une relance adverse compétitive (vraie couleur, ou
+            // palier élevé) — mais quand la relance est un simple 1SA (8-10H, dénie une
+            // majeure 4ème, ne montre aucune vraie couleur), la fiche dit explicitement
+            // "il faut se battre !" avec seulement 4H suffisants, le camp du contreur
+            // étant alors quasi certain d'être majoritaire en points (partenaire 12H+,
+            // adversaire du 1SA 8-10H max).
+            const opponentReliefBidWasWeakNT = history.slice(doubleIndex + 1)
+                .some(e => partnershipOf(e.seat) !== partnershipOf(seat) && isBidCall(e.call) && parseBid(e.call) && parseBid(e.call).strain === 'NT' && parseBid(e.call).level === 1);
+            const minHcpToStillRespond = opponentReliefBidWasWeakNT ? 4 : 6;
+            if (opponentInterveningAfterDouble && hcp < minHcpToStillRespond) {
                 explanation = `Libéré de l'obligation de répondre (un adversaire a repris la parole depuis le contre) — pas assez de jeu pour répondre librement (${points})`;
             } else {
                 // Voir échange avec Guillaume (donne 4, session du 30 juillet) : le contre
