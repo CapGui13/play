@@ -965,7 +965,7 @@ function decideRobotResponse(hand, hcp, hl, partnerCall, seat, history, partnerP
     // montre DIRECTEMENT, avant même d'envisager un cue-bid ou un repli à SA (trouvé
     // avec 16H, 4 cartes à ♠ encore libre au palier 1, qui sautait quand même à 2SA sans
     // jamais montrer sa majeure). Priorité absolue, avant tout le reste ci-dessous.
-    if (partnerBidWasOpening && bid.strain !== 'NT' && bid.strain !== 'S' && bid.strain !== 'H' && opponentSuits.size === 1) {
+    if (hl >= 6 && partnerBidWasOpening && bid.strain !== 'NT' && bid.strain !== 'S' && bid.strain !== 'H' && opponentSuits.size === 1) {
         const naturalMajor = ['S', 'H'].find(s => lengths[s] >= 4 && !opponentSuits.has(s));
         if (naturalMajor) {
             for (let level = 1; level <= 7; level++) {
@@ -1297,8 +1297,28 @@ function decideRobotResponse(hand, hcp, hl, partnerCall, seat, history, partnerP
     // chercher une manche pourtant acquise. Réservé à une VRAIE ouverture (pas une
     // intervention ni un réveil, dont le plancher est plus bas et plus flou — voir plus
     // bas, "un réveil naturel... dénie en général 14H+").
+    // Voir échange avec Guillaume (résidu identifié en corrigeant le bug d'inversion
+    // "wasIntervention", vraie donne testée : ♠J6 ♥75 ♦92 ♣AQJT763 après 1♥-3♣) : sans
+    // fit pour la couleur du partenaire (moins de 3 cartes) et avec ma PROPRE couleur
+    // très longue (6+), rien ne la montrait — la main retombait sur "soutien
+    // compétitif" qui ne trouvait rien et passait, alors qu'une main pareille a
+    // clairement quelque chose à dire. Vérifié seulement quand un adversaire est
+    // intervenu (sinon la réponse naturelle normale, plus haut dans la fonction,
+    // couvre déjà ce cas).
+    if (partnerWasIntervening && lengths[suit] < 3) {
+        const myLongSuit = ['S', 'H', 'D', 'C'].find(s => s !== suit && lengths[s] >= 6);
+        if (myLongSuit && hcp >= 5) {
+            const lastBidForOwnSuit = getLastActualBid(history);
+            const minLevelForOwnSuit = lastBidForOwnSuit ? parseBid(lastBidForOwnSuit.call).level : 1;
+            for (let level = minLevelForOwnSuit; level <= 7; level++) {
+                const call = level + myLongSuit;
+                if (isCallLegal(history, call, seat)) return call;
+            }
+        }
+    }
+
     const minorAlreadyDeclinedByDesign = (suit === 'C' || suit === 'D') && bid.level === 1
-        && partnerBidWasOpening && supportPoints >= OPENING_MINIMUM && !isMinorJumpRaiseShape;
+        && partnerBidWasOpening && supportPoints >= OPENING_MINIMUM && !isMinorJumpRaiseShape && !partnerWasIntervening;
     if (lengths[suit] >= 3 && supportPoints >= 6 && !majorAlreadyDeclinedByDesign && !minorAlreadyDeclinedByDesign) {
         // Voir échange avec Guillaume (session du 24 juillet) : chelem par simple compte
         // de points, même principe que partout ailleurs dans le moteur — fit mineur
@@ -2890,6 +2910,15 @@ function decideOpenerRebidAfterNewSuit(hand, hcp, hl, myBid, partnerParsed, seat
         if (naturalLevel === null) continue;
         const isReverse = STRAIN_RANK[s] > STRAIN_RANK[myBid.strain] && naturalLevel >= 2;
         if (isReverse && (hl < 17 || lengths[myBid.strain] < 5)) continue; // pas les moyens de le montrer, ou pas une vraie 5ème dans la 1ère couleur
+        // Voir échange avec Guillaume (vraie donne testée, "bicolore cher atténué...
+        // pour faire son bicolore cher atténué à 3♣, il faut 15H+") : cas distinct du
+        // reverse classique ci-dessus — une couleur de rang INFÉRIEUR à l'ouverture
+        // (donc jamais un reverse par définition) peut quand même être poussée au
+        // palier 3+ par la réponse du partenaire elle-même (ex. 1♠-2♦-3♣, le 2♦ ayant
+        // déjà consommé le palier 2). Sans vraie 5ème dans l'ouverture, il faut 15H+
+        // pour se le permettre, sinon retour à la couleur d'ouverture (palier 2).
+        const isAttenuatedReverse = !isReverse && naturalLevel >= 3;
+        if (isAttenuatedReverse && (hl < 15 || lengths[myBid.strain] < 5)) continue;
         if (!secondSuit || lengths[s] > lengths[secondSuit]) {
             secondSuit = s;
             secondSuitLevel = naturalLevel;
@@ -4596,7 +4625,7 @@ function decideRobotCall(seat, deal, history) {
                 // l'enchère, si un adversaire a reparlé depuis).
                 const isMajorSuit = partnerBidInfo && (partnerBidInfo.strain === 'S' || partnerBidInfo.strain === 'H');
                 const partnerBidIndex = history.indexOf(myPartnerBid);
-                const wasIntervention = history.slice(0, partnerBidIndex)
+                const wasIntervention = history.slice(partnerBidIndex + 1)
                     .some(e => isBidCall(e.call) && partnershipOf(e.seat) !== partnershipOf(seat));
                 const partnerPromises5Plus = isMajorSuit || wasIntervention;
                 // Voir échange avec Guillaume (session du 25 juillet, donne 3 — nouveau
@@ -5521,6 +5550,18 @@ function decideRobotCall(seat, deal, history) {
                 && hcp >= 6 && hcp <= 10
                 && responseLengths[myResponseBid.strain] < 6
                 && isHandBalancedForNT(responseLengths);
+            // Voir échange avec Guillaume (fiche S-1T-1P-2T-corr-4, "2SA NF 11-12HL...
+            // SEULEMENT 4 ♠" / "Passe NF 5-10HL... surtout pas 2SA !", vraie donne
+            // testée, cartographie complète de cette fonction cette fois) : 5+ cartes
+            // dans la couleur de réponse a déjà été pleinement montré, rien à ajouter
+            // via SA — passer, jamais 2SA.
+            const lowZoneLongMajorPass = partnerOpeningBid && myResponseBid && !knowsGameZone
+                && (myResponseBid.strain === 'S' || myResponseBid.strain === 'H')
+                && (partnerOpeningBid.strain === 'C' || partnerOpeningBid.strain === 'D')
+                && partnerRebidBid && partnerRebidBid.strain === partnerOpeningBid.strain
+                && partnerRebidBid.level === partnerOpeningBid.level + 1
+                && hcp >= 5 && hcp <= 11
+                && responseLengths[myResponseBid.strain] >= 5;
 
             // Voir échange avec Guillaume (session du 23 juillet — "ne pas passer sur une
             // situation forcing") : un RENVERSE de l'ouvreur (2e couleur annoncée de rang
@@ -5617,7 +5658,8 @@ function decideRobotCall(seat, deal, history) {
             // essai de manche (help-suit game try), pas une question de préférence.
             // Sans cette garde, "1♠-2♠-3♣-?" tombait toujours sur "3♠" par défaut, quelle
             // que soit la main — écrasant systématiquement l'essai du partenaire.
-            if (partnerRebidIsSuit && hcp <= 9 && responseLengths && myResponseBid.strain !== partnerOpeningBid.strain) {
+            if (partnerRebidIsSuit && hcp <= 9 && responseLengths && myResponseBid.strain !== partnerOpeningBid.strain
+                    && partnerRebidBid.strain !== partnerOpeningBid.strain) {
                 const openingLen = responseLengths[partnerOpeningBid.strain];
                 const rebidLen = responseLengths[partnerRebidBid.strain];
                 const openingIsMajor = partnerOpeningBid.strain === 'S' || partnerOpeningBid.strain === 'H';
@@ -5680,7 +5722,18 @@ function decideRobotCall(seat, deal, history) {
             // sans jamais atteindre l'échelle dédiée au soutien direct (essai à 2SA/12-
             // 14H, saut à 15-17H) — exactement le même type de conflit d'ordre déjà
             // trouvé et corrigé côté decideRobotOpenerRebid dans cette même session.
-            if ((knowsGameZone || mustAnswerQuantitative || knowsGameZoneViaFit || was2over1GameForcing || partnerRebidIsJumpToStrongNT) && partnerBidsCount === 2 && !isPartnerRaiseOfMyResponse) {
+            // Voir échange avec Guillaume (vraie donne testée, "Ouest a 18HL, il doit
+            // donc redemander à 4SA... Est qui a 15HL mettra 6SA", fiche S-1K-1C-1SA,
+            // "4SA NF 18 à 20HL, main régulière, enchère quantitative") : absent
+            // jusqu'ici — après une redemande 1SA de l'ouvreur (15-17H typique), une
+            // main de 18-20HL régulière doit inviter au chelem plutôt que conclure
+            // directement à 3SA. Vérifié avant le grand dispatch de zone de manche,
+            // qui filerait sinon droit sur 3SA sans jamais envisager le chelem.
+            if (partnerRebidWasLowNT && hl >= 18 && hl <= 20 && isHandBalancedForNT(responseLengths)
+                    && partnerBidsCount === 2 && isCallLegal(history, '4NT', seat)) {
+                call = '4NT';
+                explanation = `Quantitatif (18-20HL) après la redemande 1SA du partenaire — invite au chelem plutôt que conclure directement (${points})`;
+            } else if ((knowsGameZone || mustAnswerQuantitative || knowsGameZoneViaFit || was2over1GameForcing || partnerRebidIsJumpToStrongNT) && partnerBidsCount === 2 && !isPartnerRaiseOfMyResponse) {
                 call = decideResponderContinuationAfterNewSuit(hand, hcp, hl, partnerOpeningBid, myResponseBid, myPartnerBid.call, seat, history);
                 explanation = `Suite en zone de manche après ${formatCallForDisplay(myPartnerBid.call)} du partenaire (${points})`;
             } else if (partnerRebidIsReverse && partnerBidsCount === 2) {
@@ -5787,6 +5840,9 @@ function decideRobotCall(seat, deal, history) {
                     call = '3NT';
                     explanation = `Main énorme (${hcp}H) mais pas de longue franche à imposer — repli sur la manche à SA plutôt qu'un passe (${points})`;
                 }
+            } else if (lowZoneLongMajorPass && partnerBidsCount === 2) {
+                explanation = `Majeure déjà pleinement montrée (${responseLengths[myResponseBid.strain]} cartes), zone basse, manche trop lointaine — passe, surtout pas SA (${points})`;
+                deliberatePassAfterTransfer = true;
             } else if (lowZoneFlatNoInsist && partnerBidsCount === 2) {
                 const ntCall = parseBid(myPartnerBid.call).level + 'NT';
                 if (isCallLegal(history, ntCall, seat)) {
@@ -5941,6 +5997,66 @@ function decideRobotCall(seat, deal, history) {
             explanation = `A déjà annoncé — passe (règle du tour unique)`;
         }
     } else if (myBids.length === 2) {
+        // Voir échange avec Guillaume (vraie donne testée, "Est ne doit pas dire 4♠,
+        // par contre avec 7♥ maîtres, il est stupide de ne pas imposer sa couleur...
+        // normal de dire 4♥ sur 3SA") : cas totalement absent jusqu'ici — JE suis
+        // l'ouvreur du CRM (2♣/2♦), j'ai montré ma propre couleur via ma redemande, et
+        // le partenaire signe en SA à un palier qui ne garantit PAS structurellement
+        // 2+ cartes partout (contrairement à un 1SA classique) : "je sais qu'on est
+        // forcing de manche, je n'ai pas de vrai fit, j'annonce la manche qui me
+        // semble la plus logique" (ses mots) — ça ne promet ni ne dénie mon fit. Sans
+        // garantie de fit assurée par les points seuls, c'est la LONGUEUR/QUALITÉ de
+        // ma propre couleur qui doit trancher : réutilise exactement le même seuil
+        // (7+, ou 6 avec chicane extérieure + 2 gros honneurs) déjà validé côté
+        // répondant pour la même famille CRM.
+        const myOwnOpeningWasCRM = myBids[0] && (myBids[0].call === '2C' || myBids[0].call === '2D');
+        const lastRealBidForCRMOpenerNT = getLastActualBid(history);
+        if (myOwnOpeningWasCRM && lastRealBidForCRMOpenerNT && lastRealBidForCRMOpenerNT.call.endsWith('NT')
+                && partnershipOf(lastRealBidForCRMOpenerNT.seat) === partnershipOf(seat) && lastRealBidForCRMOpenerNT.seat !== seat) {
+            const myRebidSuit = myBids[1] ? parseBid(myBids[1].call) : null;
+            if (myRebidSuit && myRebidSuit.strain !== 'NT') {
+                const lengthsForCRMOpenerSuit = suitLengths(hand);
+                const s = myRebidSuit.strain;
+                const len = lengthsForCRMOpenerSuit[s];
+                const qualifiesForReconvert = len >= 7 || (len === 6
+                    && ['S', 'H', 'D', 'C'].some(s2 => s2 !== s && lengthsForCRMOpenerSuit[s2] === 1)
+                    && ['A', 'K', 'Q'].filter(r => (hand[s] || '').includes(r)).length >= 2);
+                if (qualifiesForReconvert) {
+                    const ntLevel = parseInt(lastRealBidForCRMOpenerNT.call[0]);
+                    for (let level = ntLevel + 1; level <= 7; level++) {
+                        const c = level + s;
+                        if (isCallLegal(history, c, seat)) {
+                            call = c;
+                            explanation = `Ma couleur (${len} cartes, maîtresse) l'emporte sur le SA du partenaire, qui ne garantit pas mon fit ici (${points})`;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Voir échange avec Guillaume (même vraie donne, "Est qui a 15HL mettra 6SA") :
+        // symétrique de la logique déjà existante côté répondant
+        // (decideResponderContinuationAfterNewSuit) pour accepter/décliner un 4SA
+        // quantitatif — absente ici côté OUVREUR, qui doit pourtant répondre à la même
+        // question quand c'est LUI qui a redemandé 1SA et que le partenaire invite.
+        const lastRealBidForQuantAccept = getLastActualBid(history);
+        if (myBids.length === 2 && myBids[1] && myBids[1].call.endsWith('NT')
+                && lastRealBidForQuantAccept && lastRealBidForQuantAccept.call === '4NT'
+                && partnershipOf(lastRealBidForQuantAccept.seat) === partnershipOf(seat) && lastRealBidForQuantAccept.seat !== seat) {
+            // Voir échange avec Guillaume : la fourchette combinée (15-17H côté ouvreur
+            // + 18-20HL côté répondant) atteint déjà la zone de chelem même au minimum
+            // des deux mains (15+18=33) — accepter systématiquement, sans seuil
+            // supplémentaire, plutôt que d'exiger encore plus alors que la structure
+            // même de la séquence garantit déjà assez.
+            if (isCallLegal(history, '6NT', seat)) {
+                call = '6NT';
+                explanation = `Accepte le quantitatif du partenaire — la fourchette combinée atteint déjà la zone de chelem (${points})`;
+            } else {
+                explanation = `Décline le quantitatif du partenaire (${points})`;
+            }
+        }
+
         // Voir échange avec Guillaume (chasse aux bugs systémiques, fiche
         // C-1T-1K-2T-X-corr-1, "Passe 13-15HL... XX Au moins 18HL, régulier") :
         // scénario totalement absent jusqu'ici — l'adversaire contre directement MA
