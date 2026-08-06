@@ -76,6 +76,31 @@ function suitLengths(hand) {
     return { S: hand.S.length, H: hand.H.length, D: hand.D.length, C: hand.C.length };
 }
 
+// Voir échange avec Guillaume (test réel via BridgeComposer, Board 2 : ♠AQJ64 ♥AQ53
+// ♦QJ4 ♣5, 16H, ouvrait 2♣ à tort) : estimation des LEVÉES DE JEU ("8 à 8½ levées"
+// exigées par la fiche S-2T-Q-corr-1 pour l'Ancien 2 fort, jusqu'ici non vérifiée —
+// seuls HCP/honneurs/longueur l'étaient, insuffisant comme le confirme cet exemple
+// réel). Méthode standard : dans chaque couleur, un honneur ne compte comme levée que
+// si la couleur est assez longue pour le "loger" (As toujours, Roi dès 2 cartes, Dame
+// dès 3, Valet dès 4) ; au-delà de la 3ème carte, chaque carte supplémentaire est une
+// levée de longueur (partage favorable supposé).
+function estimatePlayingTricks(hand) {
+    const lengths = suitLengths(hand);
+    let total = 0;
+    for (const s of ['S', 'H', 'D', 'C']) {
+        const cards = hand[s] || '';
+        const len = lengths[s];
+        let honorTricks = 0;
+        if (cards.includes('A')) honorTricks++;
+        if (cards.includes('K') && len >= 2) honorTricks++;
+        if (cards.includes('Q') && len >= 3) honorTricks++;
+        if (cards.includes('J') && len >= 4) honorTricks++;
+        const lengthTricks = Math.max(0, len - 4);
+        total += Math.min(len, honorTricks) + lengthTricks;
+    }
+    return total;
+}
+
 // Vrai si `seat` est vulnérable sur cette donne — utilisé pour ajuster l'agressivité des
 // barrages et interventions (voir échange avec Guillaume) : le SEF réel les resserre
 // vulnérable (le risque d'un gros nombre de plis de chute contré coûte plus cher) et les
@@ -247,7 +272,8 @@ function decideRobotOpening(hand, hcp, hl, dealVulnerable, seat) {
     const majorLen = Math.max(lengths['S'], lengths['H']);
     const majorSuit = lengths['S'] >= lengths['H'] ? 'S' : 'H';
     const majorHonors = ['A', 'K', 'Q', 'J'].filter(r => (hand[majorSuit] || '').includes(r)).length;
-    const hasStrongMajor = (majorLen >= 6 && majorHonors >= 2) || (majorLen === 5 && majorHonors >= 3);
+    const hasStrongMajor = ((majorLen >= 6 && majorHonors >= 2) || (majorLen === 5 && majorHonors >= 3))
+        && estimatePlayingTricks(hand) >= 8;
     if ((hl >= 22 && hl <= 23 && balanced) || (hasGenuineSuit && losers === 5 && hcp >= 15) || (hasStrongMajor && hcp >= 16)) return '2C';
 
     // Barrages faibles (système "majeure 5ème") : 6 cartes à une majeure au palier 2
@@ -3074,6 +3100,51 @@ function decideRobotOpenerRebid(hand, hcp, hl, myOpeningCall, partnerCall, seat,
     const myBid = parseBid(myOpeningCall);
     if (!myBid) return 'PASS';
 
+    // Voir échange avec Guillaume (chasse aux bugs systémiques, fiche S-1C-2K-Q et
+    // S-2C-2P-Q, demande de l'autre majeure après barrage 2♥/2♠, min/max avec ou sans
+    // fit — proche d'une convention connue sous le nom "Ogust", terme absent du texte
+    // de la fiche elle-même) : construction du cœur de
+    // cette convention, absente jusqu'ici (tombait sur une simple répétition
+    // mécanique) — demande conventionnelle de l'AUTRE majeure après une ouverture de
+    // barrage à 2 dans une majeure, cherchant min/max et fit éventuel dans l'autre
+    // majeure. Scopé au cas de base (2SA maximum / 3-couleur minimum / 3-couleur fit
+    // minimum) ; les branches plus fines (Ogust par couleur précise, splinters,
+    // "6ème AKD") laissées de côté pour l'instant.
+    const partnerBidForOgust = parseBid(partnerCall);
+    const wasWeakTwoOpening = myBid.level === 2 && (myBid.strain === 'H' || myBid.strain === 'S')
+        && history.slice(0, history.indexOf(history.find(e => e.seat === seat && e.call === myOpeningCall))).every(e => isPass(e.call));
+    const otherMajor = myBid.strain === 'H' ? 'S' : 'H';
+    if (wasWeakTwoOpening && partnerBidForOgust && partnerBidForOgust.strain === otherMajor && partnerBidForOgust.level === myBid.level && hl >= 8) {
+        const lengthsForOgust = suitLengths(hand);
+        const hasOtherMajorFit = lengthsForOgust[otherMajor] >= 3 && ['A', 'K', 'Q', 'J'].some(r => (hand[otherMajor] || '').includes(r));
+        const isMax = hl >= 11;
+        if (hasOtherMajorFit) {
+            const c = isMax ? '4' + otherMajor : (myBid.level + 1) + otherMajor;
+            if (isCallLegal(history, c, seat)) return c;
+        } else {
+            const c = isMax ? '2NT' : (myBid.level + 1) + myBid.strain;
+            if (isCallLegal(history, c, seat)) return c;
+        }
+    }
+
+    // Voir échange avec Guillaume (chasse aux bugs systémiques, fiche S-2P-3C-Q,
+    // "2♠-3♥-?") : cas symétrique où l'ask porte sur ♥ directement après un barrage
+    // 2♠ — fit 2+ cartes → 4♥, singleton exact (main plus que minimale) → 3SA
+    // descriptif, sinon répétition minimale.
+    if (wasWeakTwoOpening && myBid.strain === 'S' && partnerBidForOgust && partnerBidForOgust.strain === 'H' && partnerBidForOgust.level === 3) {
+        const lengthsForHeartAsk = suitLengths(hand);
+        if (lengthsForHeartAsk['H'] >= 2) {
+            const c = '4H';
+            if (isCallLegal(history, c, seat)) return c;
+        } else if (lengthsForHeartAsk['H'] === 1 && hl >= 9) {
+            const c = '3NT';
+            if (isCallLegal(history, c, seat)) return c;
+        } else {
+            const c = '3S';
+            if (isCallLegal(history, c, seat)) return c;
+        }
+    }
+
     // Réponse à Stayman/transfert (voir échange avec Guillaume, donne 4 et donne 8) :
     // purement mécanique pour un transfert (majeur OU mineur, pas de sur-acceptation,
     // hors périmètre) — seul Stayman regarde ma main, pour savoir laquelle des majeures
@@ -4013,6 +4084,16 @@ function decideGenericNewSuitContinuation(hand, seat, history) {
     const partnerBids = history.filter(e => partnershipOf(e.seat) === partnershipOf(seat) && e.seat !== seat && isBidCall(e.call));
     if (partnerBids.length === 0) return null;
 
+    // Voir échange avec Guillaume (simulation à grande échelle, 10% des donnes
+    // montaient au palier 7 !) : bug CRITIQUE trouvé — cette fonction n'avait aucun
+    // plafond lié aux points ou au nombre de tours déjà joués, se contentant de
+    // trouver "le palier légal le plus bas" à chaque appel. Résultat : deux mains
+    // faibles qui répètent chacune leur propre couleur (le partenaire ne "sait" jamais
+    // que l'autre est faible aussi) montent en boucle indéfiniment jusqu'à 7SA. Plafond
+    // de sécurité : au-delà de mon 3ème tour de parole sur cette séquence, il me faut
+    // de vraies valeurs supplémentaires (15H+) pour continuer à insister — sinon,
+    // laisser la main se reposer (return null, PASS prendra le relais).
+
     const lastPartnerBid = partnerBids[partnerBids.length - 1];
     const idxLastPartnerBid = history.indexOf(lastPartnerBid);
     const opponentSpokeAfter = history.slice(idxLastPartnerBid + 1)
@@ -4035,12 +4116,30 @@ function decideGenericNewSuitContinuation(hand, seat, history) {
 
     const lengths = suitLengths(hand);
     const level = lastParsed.level;
+    const myHcpForCeiling = computeHandHcp(hand);
+    // Voir échange avec Guillaume (simulation à grande échelle, cas restants après le
+    // 1er plafond) : le 1er plafond (<15H) protège les mains faibles, mais une main
+    // FORTE (18-19H) peut aussi escalader mécaniquement à l'infini sans jamais vérifier
+    // si le partenaire a du nouveau à dire — trouvé sur une vraie donne simulée (2♣ 18H
+    // qui montait jusqu'à 7♥ en écho avec son partenaire, chacun via ce même filet).
+    // Plafond absolu au palier 6, sauf main exceptionnelle (20H+ chez MOI seul).
+    const absoluteCeilingLevel = myHcpForCeiling >= 20 ? 7 : 6;
 
     if (lengths[lastParsed.strain] >= 4) {
-        for (let l = level; l <= 7; l++) {
-            const c = l + lastParsed.strain;
-            if (isCallLegal(history, c, seat)) {
-                return { call: c, explanation: `Filet générique (couleur inédite du partenaire, presque toujours exploratoire ici) — je la soutiens (${lengths[lastParsed.strain]} cartes)` };
+        const partnerSuitMentionCount = myBids.filter(e => {
+            const p = parseBid(e.call);
+            return p && p.strain === lastParsed.strain;
+        }).length;
+        // Voir échange avec Guillaume (simulation à grande échelle, 10% des donnes
+        // montaient au palier 7 !) : plafond de sécurité — après avoir déjà soutenu
+        // cette couleur 2 fois sans valeurs supplémentaires (15H+), rien de neuf à
+        // ajouter en insistant une 3ème fois.
+        if (!(partnerSuitMentionCount >= 3 && myHcpForCeiling < 15)) {
+            for (let l = level; l <= absoluteCeilingLevel; l++) {
+                const c = l + lastParsed.strain;
+                if (isCallLegal(history, c, seat)) {
+                    return { call: c, explanation: `Filet générique (couleur inédite du partenaire, presque toujours exploratoire ici) — je la soutiens (${lengths[lastParsed.strain]} cartes)` };
+                }
             }
         }
     }
@@ -4050,7 +4149,17 @@ function decideGenericNewSuitContinuation(hand, seat, history) {
         if (!bestOwn || lengths[s] > lengths[bestOwn]) bestOwn = s;
     }
     if (bestOwn && lengths[bestOwn] >= 5) {
-        for (let l = level; l <= 7; l++) {
+        // Voir échange avec Guillaume (même fix) : c'est PRÉCISÉMENT ici que la boucle
+        // observée en simulation se produisait — je répète MA PROPRE couleur, encore et
+        // encore, sans jamais vérifier combien de fois je l'ai déjà fait. Après 2
+        // répétitions déjà faites sans valeurs supplémentaires (15H+), stop : rien de
+        // neuf à dire, laisser passer plutôt que d'escalader mécaniquement.
+        const myOwnSuitMentionCount = myBids.filter(e => {
+            const p = parseBid(e.call);
+            return p && p.strain === bestOwn;
+        }).length;
+        if (myOwnSuitMentionCount >= 3 && myHcpForCeiling < 15) return null;
+        for (let l = level; l <= absoluteCeilingLevel; l++) {
             const c = l + bestOwn;
             if (isCallLegal(history, c, seat)) {
                 return { call: c, explanation: `Filet générique (couleur inédite du partenaire, presque toujours exploratoire ici) — je répète ma couleur (${lengths[bestOwn]} cartes)` };
@@ -5103,8 +5212,8 @@ function decideRobotCall(seat, deal, history) {
             // inerte plutôt que de mal interpréter la séquence.
             const partnerOpeningEntry = history.slice(0, myBidIndex).find(e => isBidCall(e.call) && partnershipOf(e.seat) === partnershipOf(seat));
             const partnerOpeningBid = partnerOpeningEntry ? parseBid(partnerOpeningEntry.call) : null;
-            const myResponseBid = parseBid(myBids[0].call);
-            if (partnerOpeningBid) {
+            const myResponseBid = myBids.length > 0 ? parseBid(myBids[0].call) : null;
+            if (partnerOpeningBid && myResponseBid) {
 
 
 
@@ -5124,9 +5233,9 @@ function decideRobotCall(seat, deal, history) {
             // ici : la manche est déjà atteinte à la complétion, le filet par défaut plus
             // bas (passe) est déjà la bonne réponse.
             const wasNTOpening = partnerOpeningEntry && (partnerOpeningEntry.call === '1NT' || partnerOpeningEntry.call === '2NT');
-            const myAskBid = wasNTOpening ? parseBid(myBids[0].call) : null;
-            const wasStaymanAsk = wasNTOpening && myAskBid.strain === 'C' && myAskBid.level === partnerOpeningBid.level + 1;
-            const wasJacobyTransferAsk = wasNTOpening && (myAskBid.strain === 'D' || myAskBid.strain === 'H')
+            const myAskBid = (wasNTOpening && myBids.length > 0) ? parseBid(myBids[0].call) : null;
+            const wasStaymanAsk = wasNTOpening && myAskBid && myAskBid.strain === 'C' && myAskBid.level === partnerOpeningBid.level + 1;
+            const wasJacobyTransferAsk = wasNTOpening && myAskBid && (myAskBid.strain === 'D' || myAskBid.strain === 'H')
                 && myAskBid.level === partnerOpeningBid.level + 1;
             // Suite après transfert MINEUR (voir échange avec Guillaume, donne 8) :
             // ma 1ère annonce transférait vers ♣ (via ♠ au palier +1) ou vers ♦ (via ♣ au
@@ -5134,7 +5243,7 @@ function decideRobotCall(seat, deal, history) {
             // courte : directement si elle est de rang SUPÉRIEUR à la mineure montrée,
             // sinon (seulement possible pour ♣ quand ♦ est la mineure montrée, qui rang
             // en dessous et n'est donc plus nommable) via SA.
-            const wasMinorTransferAsk = wasNTOpening && (
+            const wasMinorTransferAsk = wasNTOpening && myAskBid && (
                 (myAskBid.strain === 'S' && myAskBid.level === partnerOpeningBid.level + 1) ||
                 (myAskBid.strain === 'C' && myAskBid.level === partnerOpeningBid.level + 2)
             );
@@ -5857,8 +5966,8 @@ function decideRobotCall(seat, deal, history) {
         // une main nettement plus forte (18-19H) que le simple 1SA minimal, viser 3SA
         // directement plutôt que le palier le plus bas.
         const lastRealBidFor4thSuit = history.slice().reverse().find(e => !isPass(e.call));
-        const myFirstBidIdxFor4th = history.indexOf(myBids[0]);
-        const iAmOpenerFor4th = history.slice(0, myFirstBidIdxFor4th).every(e => isPass(e.call));
+        const myFirstBidIdxFor4th = myBids.length > 0 ? history.indexOf(myBids[0]) : -1;
+        const iAmOpenerFor4th = myBids.length > 0 && history.slice(0, myFirstBidIdxFor4th).every(e => isPass(e.call));
         if (iAmOpenerFor4th && lastRealBidFor4thSuit && partnershipOf(lastRealBidFor4thSuit.seat) === partnershipOf(seat) && lastRealBidFor4thSuit.seat !== seat) {
             const parsed4th = parseBid(lastRealBidFor4thSuit.call);
             if (parsed4th && (parsed4th.strain === 'S' || parsed4th.strain === 'H')) {
