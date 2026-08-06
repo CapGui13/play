@@ -453,9 +453,27 @@ function decideResponseToWeakTwo(hand, hcp, hl, bid, seat, history) {
     // cartes maximum)". Le vrai seuil de fit, pour un barrage (palier 3+), c'est 3+
     // cartes RÉELLES chez moi, pas un total théorique qui dépend surtout de ce qu'on
     // suppose déjà chez le partenaire.
-    const hasFit = bid.level >= 3 ? lengths[bid.strain] >= 3 : totalTrumps >= 8;
+    const hasFit = lengths[bid.strain] >= 3;
     const isMajor = bid.strain === 'S' || bid.strain === 'H';
     const gameLevel = isMajor ? 4 : 5;
+
+    // Voir échange avec Guillaume ("traiter intégralement les fiches d'ouverture",
+    // fiche S-3T-Q, "3♦ F Main de manche, avec 5 ou 6 cartes à ♦... L'ouvreur décrit sa
+    // répartition", trouvé en vérification systématique) : même principe que 1♣→1♦ vu
+    // plus tôt — avec un fit seulement MARGINAL (exactement 3 cartes, pas franc), une
+    // vraie couleur personnelle 5+ cartes doit primer sur le soutien, plus descriptive
+    // et forcing plutôt qu'une relance mécanique.
+    const genuineAltSuit = lengths[bid.strain] === 3
+        ? ['S', 'H', 'D', 'C'].find(s => s !== bid.strain && lengths[s] >= 5)
+        : null;
+    if (genuineAltSuit && hcp >= 12) {
+        const isMajorAlt = genuineAltSuit === 'S' || genuineAltSuit === 'H';
+        const minLevelAlt = Math.max(bid.level, isMajorAlt ? 3 : 3);
+        for (let level = minLevelAlt; level <= 7; level++) {
+            const call = level + genuineAltSuit;
+            if (isCallLegal(history, call, seat)) return call;
+        }
+    }
 
     if (hasFit) {
         const supportPoints = computeSupportPoints(hand, bid.strain, barragePromisedLength);
@@ -472,6 +490,18 @@ function decideResponseToWeakTwo(hand, hcp, hl, bid, seat, history) {
         // En dessous de 15 points de soutien : pas d'espoir de manche. Loi des atouts —
         // fit 9ème+ (3+ cartes réelles au-delà du plancher promis) ET 8H+ : relance d'un
         // palier (sécurité distributionnelle). Sinon, déjà au bon palier, rien à ajouter.
+        // Voir échange avec Guillaume ("traiter intégralement les fiches d'ouverture",
+        // fiche S-2C-Q-corr-3, "avec 3 atouts, niveau de 3, avec 4 atouts, on bondit à
+        // 4♥", trouvé en vérification systématique) : le code ne faisait qu'une seule
+        // escalade générique (+1 palier) — différencié maintenant selon la vraie
+        // longueur de soutien : 3 cartes → +1 palier, 4+ cartes → saut direct à la
+        // manche (loi des atouts, un fit encore plus long justifie d'aller plus loin).
+        if (hcp >= 8 && lengths[bid.strain] >= 4) {
+            for (let level = gameLevel; level <= 7; level++) {
+                const call = level + bid.strain;
+                if (isCallLegal(history, call, seat)) return call;
+            }
+        }
         if (hcp >= 8 && totalTrumps >= 9) {
             const call = (bid.level + 1) + bid.strain;
             if (isCallLegal(history, call, seat)) return call;
@@ -481,6 +511,29 @@ function decideResponseToWeakTwo(hand, hcp, hl, bid, seat, history) {
 
     // Pas de fit : HCP brut, le barreur plafonne (10H à 2, 11H à 3, 12H à 4 — voir
     // decideRobotOpening pour ces mêmes plafonds côté ouverture).
+    // Voir échange avec Guillaume ("traiter intégralement les fiches d'ouverture",
+    // fiches S-2C-Q-corr-3 et S-2P-Q-corr-1, "couleur très solide, 5ème au moins,
+    // recherche de fit 5-3", trouvé en vérification systématique) : absente jusqu'ici —
+    // une nouvelle couleur personnelle solide (5+ cartes) cherche un fit chez
+    // l'ouvreur (forcing) ; avec une longueur extrême (7+, quasi autonome), on va
+    // directement à la manche pour jouer (misfit assumé). Vérifié avant le repli SA
+    // générique, plus vague.
+    const otherSuitsForNewSuit = ['S', 'H', 'D', 'C'].filter(s => s !== bid.strain);
+    const ownNewSuit = otherSuitsForNewSuit.find(s => lengths[s] >= 5);
+    if (ownNewSuit && hcp >= 12) {
+        if (lengths[ownNewSuit] >= 7) {
+            const isMajorNew = ownNewSuit === 'S' || ownNewSuit === 'H';
+            const gameLevelNew = isMajorNew ? 4 : 5;
+            for (let level = gameLevelNew; level <= 7; level++) {
+                const call = level + ownNewSuit;
+                if (isCallLegal(history, call, seat)) return call;
+            }
+        }
+        for (let level = bid.level; level <= 7; level++) {
+            const call = level + ownNewSuit;
+            if (isCallLegal(history, call, seat)) return call;
+        }
+    }
     if (hcp >= 19) {
         const call = '3NT';
         if (isCallLegal(history, call, seat)) return call;
@@ -823,7 +876,16 @@ function decideRobotResponse(hand, hcp, hl, partnerCall, seat, history, partnerP
         // trouvé en vérification systématique) : absent jusqu'ici — une main de 16-17
         // (au-dessus de la zone de manche normale mais sous la zone de chelem certain)
         // doit inviter au chelem plutôt que conclure directement à 3SA.
-        if (bid.level === 1 && hl >= 16 && hl <= 17 && isHandBalancedForNT(lengths)) {
+        // Voir échange avec Guillaume ("traiter intégralement les fiches d'ouverture",
+        // fiche S-1SA-Q-corr-1, "4SA Quantitatif, 16-17H(L), proposition de chelem",
+        // trouvé en vérification systématique) : absent jusqu'ici — une main de 16-17
+        // (au-dessus de la zone de manche normale mais sous la zone de chelem certain)
+        // doit inviter au chelem plutôt que conclure directement à 3SA. Généralisé au
+        // palier 2 (ouverture 2SA, fiche S-2SA-Q-corr-2) avec son propre seuil (11-12HL
+        // — l'ouverture elle-même étant déjà à 20-21HL, moins de points suffisent chez
+        // le répondant pour atteindre la même zone totale).
+        const quantitativeRange = bid.level === 1 ? [16, 17] : bid.level === 2 ? [11, 12] : null;
+        if (quantitativeRange && hl >= quantitativeRange[0] && hl <= quantitativeRange[1] && isHandBalancedForNT(lengths)) {
             const call = '4NT';
             if (isCallLegal(history, call, seat)) return call;
         }
@@ -1933,7 +1995,7 @@ function decideResponderContinuationAfterNewSuit(hand, hcp, hl, openingBid, myRe
             const openingIsMinor = openingBid.strain === 'C' || openingBid.strain === 'D';
             const rebidIsMinor = rebid.strain === 'C' || rebid.strain === 'D';
             if (openingIsMinor && rebid.strain === openingBid.strain && lengths[openingBid.strain] + 5 >= 8) fitSuit = openingBid.strain;
-            else if (rebidIsMinor && rebid.strain !== myResponseBid.strain && lengths[rebid.strain] + 4 >= 8) fitSuit = rebid.strain;
+            else if (rebidIsMinor && rebid.strain !== myResponseBid.strain && lengths[rebid.strain] >= 5) fitSuit = rebid.strain;
         }
         if (fitSuit) {
             const partnerGuaranteedLength = fitSuit === openingBid.strain ? 5 : 4;
@@ -2010,6 +2072,31 @@ function decideResponderContinuationAfterNewSuit(hand, hcp, hl, openingBid, myRe
         }
     }
 
+    // Voir échange avec Guillaume ("4ème forcing", fiche S-1C-1P-2T-corr-3, "2♥ Main
+    // minimum (13-16HL)... poubelle, sans meilleure enchère", trouvé en cartographiant
+    // enfin cette fonction) : pièce manquante précise — sans fit trouvé nulle part et
+    // sans longue couleur personnelle (5+ ailleurs), une vraie longueur (5+) dans la
+    // couleur d'OUVERTURE elle-même mérite d'être reprise au palier minimal (simple
+    // préférence/poubelle), plutôt que de finir noyée dans un SA générique qui perd
+    // cette information de longueur.
+    if (!fitSuit) {
+        const lengthsForOpeningPref = suitLengths(hand);
+        const knownSuitsForPref = new Set([myResponseBid.strain, rebid.strain]);
+        const hasNewSecondSuit = ['S', 'H', 'D', 'C'].some(s => !knownSuitsForPref.has(s) && s !== openingBid.strain && lengthsForOpeningPref[s] >= 5);
+        if (!hasNewSecondSuit && !knownSuitsForPref.has(openingBid.strain) && lengthsForOpeningPref[openingBid.strain] >= 5 && hl <= 16) {
+            for (let level = rebid.level; level <= 7; level++) {
+                const call = level + openingBid.strain;
+                if (isCallLegal(history, call, seat)) return call;
+            }
+        } else if (hasNewSecondSuit) {
+            const secondSuit = ['S', 'H', 'D', 'C'].find(s => !knownSuitsForPref.has(s) && s !== openingBid.strain && lengthsForOpeningPref[s] >= 5);
+            for (let level = rebid.level; level <= 7; level++) {
+                const call = level + secondSuit;
+                if (isCallLegal(history, call, seat)) return call;
+            }
+        }
+    }
+
     // Chelem par simple compte de points (voir échange avec Guillaume, donne 6) : pas de
     // véritable enchère de contrôle (cue-bids, Blackwood — hors périmètre, voir le
     // README), mais un déclenchement borné et sûr — si MES points (HL, ou HLD si un fit
@@ -2028,17 +2115,23 @@ function decideResponderContinuationAfterNewSuit(hand, hcp, hl, openingBid, myRe
     }
 
     if (fitSuit) {
-        // Vise directement la MANCHE une fois le fit identifié — palier 4 pour une
-        // majeure, 5 pour une mineure (voir échange avec Guillaume, donne 4 — bug trouvé
-        // en étendant cette fonction aux mineures : restait au palier 4 par erreur, qui
-        // n'est pas la manche dans une mineure). Pas juste le palier minimal légal
-        // au-dessus du rebid du partenaire (bug trouvé à l'audit, donne 7 : atterrissait
-        // sur un simple "3H" alors que la zone de manche est déjà connue par
-        // construction, voir le déclencheur dans decideRobotCall). Repli sur le palier
-        // minimal légal seulement si le palier de manche lui-même n'est plus disponible
-        // (enchère déjà montée plus haut, cas rare).
         const fitIsMajor = fitSuit === 'S' || fitSuit === 'H';
         const gameLevel = fitIsMajor ? 4 : 5;
+        // Voir échange avec Guillaume ("4ème forcing", fiche S-1K-1C-1P, "4♣/4♦
+        // Splinter, court à ♣/♦, agrée l'atout ♠", trouvé en poursuivant cette
+        // famille) : avec une vraie courte (0-1 carte) ailleurs et une main de force
+        // manche/chelem (13-17HLD environ), le splinter (annoncer la courte
+        // directement au palier 4) est plus précis qu'un saut aveugle à la manche —
+        // scopé strictement au fit trouvé via la redemande de l'ouvreur, à une
+        // majeure, avec exactement 4 cartes de fit (le cas décrit par la fiche).
+        if (fitSuit === rebid.strain && fitSuit !== openingBid.strain && fitIsMajor
+                && lengths[fitSuit] === 4 && zonePoints >= 13 && zonePoints <= 17 && gameLevel === 4) {
+            const shortSuit = ['S', 'H', 'D', 'C'].find(s => s !== fitSuit && lengths[s] <= 1);
+            if (shortSuit) {
+                const splinterCall = '4' + shortSuit;
+                if (isCallLegal(history, splinterCall, seat)) return splinterCall;
+            }
+        }
         for (let level = Math.max(gameLevel, rebid.level); level <= 7; level++) {
             const call = level + fitSuit;
             if (isCallLegal(history, call, seat)) return call;
@@ -2206,7 +2299,7 @@ function decideOpenerResponseToPartnerDouble(hand, hcp, hl, doubleIndex, seat, h
     // bruts). Réservé aux majeures — pas de repli équivalent mentionné pour les mineures.
     const altHcpGameZoneForMajor = 25;
     if (supportPoints + partnerFloor >= gameZone || (isMajor && hcp + partnerFloor >= altHcpGameZoneForMajor)) targetLevel = gameLevel; // manche acquise avec le plancher du contre
-    else if (supportPoints >= 15) targetLevel = 3; // invite : nettement au-dessus d'une ouverture minimale
+    else if (supportPoints >= 16) targetLevel = 3; // invite : nettement au-dessus d'une ouverture minimale
     else targetLevel = 1; // minimum
 
     for (let level = Math.max(targetLevel, minLegalLevel); level <= 7; level++) {
@@ -2848,6 +2941,18 @@ function decideOpenerRebidAfterNewSuit(hand, hcp, hl, myBid, partnerParsed, seat
     // n'est plus vraiment forcing — passer redevient une sortie légitime si rien de mieux
     // n'a été trouvé plus haut dans cette fonction.
     if (!opponentIntervened) {
+        for (let level = partnerParsed.level; level <= 7; level++) {
+            const call = level + myBid.strain;
+            if (isCallLegal(history, call, seat)) return call;
+        }
+    }
+    // Voir échange avec Guillaume ("traiter intégralement les fiches d'ouverture",
+    // fiche C-1C-X-1P-1SA, "2♥ Enchère classique, avec 6 beaux ♥", trouvé en
+    // vérification systématique) : sous intervention adverse, répéter sa couleur reste
+    // une réponse valide (NF, pas juste un dernier recours) à partir d'une vraie
+    // longueur et de points suffisants — pas seulement "jamais passer coûte que coûte"
+    // (retiré ci-dessus à raison), mais pas non plus un passe systématique par défaut.
+    if (opponentIntervened && lengths[myBid.strain] >= 6 && hl >= 12) {
         for (let level = partnerParsed.level; level <= 7; level++) {
             const call = level + myBid.strain;
             if (isCallLegal(history, call, seat)) return call;
@@ -3987,6 +4092,7 @@ function decideRobotCall(seat, deal, history) {
 
     let call = 'PASS';
     let explanation = '';
+    let deliberatePassAfterTransfer = false; // voir wasJacobyTransferAsk plus bas : passe réfléchi, pas un défaut
 
     if (myBids.length === 0) {
         // Voir échange avec Guillaume (session PBN réelle du 3 août — donne 3) : mon
@@ -5159,7 +5265,27 @@ function decideRobotCall(seat, deal, history) {
                 const openerMinHl = partnerOpeningBid.level === 1 ? 15 : 20;
                 const openerMaxHl = partnerOpeningBid.level === 1 ? 17 : 21;
 
-                if (supportPointsForTransfer + openerMinHl >= GAME_ZONE_MAJOR) {
+                // Voir échange avec Guillaume ("traiter intégralement les fiches
+                // d'ouverture", fiche S-1SA-2C-2P-corr-1, trouvé en re-vérifiant après
+                // le premier fix) : 2 paliers "exactement 5 cartes" (pas de longueur
+                // supplémentaire, contrairement au limit-bid à 6+ déjà ajouté) — 2SA
+                // très précis (8-9HL, sans singleton) et 3SA (10-15HL, main de manche,
+                // le partenaire choisit entre passe et 4 de la majeure).
+                const lengthsForExactFive = suitLengths(hand);
+                const hasNoSingletonElsewhere = ['S', 'H', 'D', 'C'].every(s => s === major || lengthsForExactFive[s] >= 2);
+                if (lengthsForExactFive[major] === 5 && hl >= 8 && hl <= 9 && hasNoSingletonElsewhere) {
+                    const c = '2NT';
+                    if (isCallLegal(history, c, seat)) {
+                        call = c;
+                        explanation = `Exactement 5 cartes et 8-9HL sans courte après le transfert — enchère très précise (${points})`;
+                    }
+                } else if (lengthsForExactFive[major] === 5 && hl >= 10 && hl <= 15) {
+                    const c = '3NT';
+                    if (isCallLegal(history, c, seat)) {
+                        call = c;
+                        explanation = `Exactement 5 cartes, main de manche après le transfert — le partenaire choisit (${points})`;
+                    }
+                } else if (supportPointsForTransfer + openerMinHl >= GAME_ZONE_MAJOR) {
                     call = '4' + major;
                     explanation = `Assez de points de soutien après le transfert (${supportPointsForTransfer}) — manche certaine (${points})`;
                 } else if (supportPointsForTransfer + openerMaxHl >= GAME_ZONE_MAJOR) {
@@ -5175,7 +5301,29 @@ function decideRobotCall(seat, deal, history) {
                         ? `Zone de manche possible (pas certaine) après le transfert — continue pour savoir (${points})`
                         : `A déjà annoncé — passe (règle du tour unique)`;
                 } else {
-                    explanation = `Transfert complété, pas assez pour la manche même dans le meilleur des cas — passe (${points})`;
+                    // Voir échange avec Guillaume ("traiter intégralement les fiches
+                    // d'ouverture", fiche S-1SA-2C-2P-corr-1, "3♠ NF Limit-bid, avec 6
+                    // cartes à ♠, et 10-11HLD (fit certain), proposition de manche",
+                    // trouvé en re-vérifiant après une première régression) : palier
+                    // manquant entre le passe et l'invite au palier 3 — une VRAIE
+                    // longueur supplémentaire (6+ cartes, pas seulement 5 comme promis
+                    // par le transfert) justifie une proposition de manche même quand
+                    // les points de soutien seuls ne l'auraient pas fait, la longueur
+                    // compensant les points manquants (loi des atouts).
+                    const lengthsForLimitBid = suitLengths(hand);
+                    if (lengthsForLimitBid[major] >= 6 && supportPointsForTransfer >= 8) {
+                        const c = '3' + major;
+                        if (isCallLegal(history, c, seat)) {
+                            call = c;
+                            explanation = `Limit-bid après le transfert (6+ cartes, ${supportPointsForTransfer} points de soutien) — proposition de manche (${points})`;
+                        } else {
+                            explanation = `Transfert complété, pas assez pour la manche même dans le meilleur des cas — passe (${points})`;
+                            deliberatePassAfterTransfer = true;
+                        }
+                    } else {
+                        explanation = `Transfert complété, pas assez pour la manche même dans le meilleur des cas — passe (${points})`;
+                        deliberatePassAfterTransfer = true;
+                    }
                 }
             } else {
             const responseLengths = myResponseBid ? suitLengths(hand) : null;
@@ -5363,14 +5511,26 @@ function decideRobotCall(seat, deal, history) {
             if (partnerRebidIsSuit && hcp <= 9 && responseLengths && myResponseBid.strain !== partnerOpeningBid.strain) {
                 const openingLen = responseLengths[partnerOpeningBid.strain];
                 const rebidLen = responseLengths[partnerRebidBid.strain];
-                if (openingLen >= 2 && rebidLen < openingLen + 2) {
-                    // Voir échange avec Guillaume (session du 2 août — même famille que
-                    // les fix "chelem fantôme" de cette session) : une main ≤9H ne doit
-                    // jamais atterrir au chelem via une simple préférence entre 2
-                    // couleurs déjà montrées, même si l'enchère a grimpé très haut pour
-                    // d'autres raisons (compétition).
+                const openingIsMajor = partnerOpeningBid.strain === 'S' || partnerOpeningBid.strain === 'H';
+                const rebidIsMajor = partnerRebidBid.strain === 'S' || partnerRebidBid.strain === 'H';
+                // Voir échange avec Guillaume ("4ème forcing", fiches
+                // S-1T-1C-1P-corr-4 et S-1C-1P-2K-corr-1) : le vrai facteur n'est pas la
+                // longueur brute mais majeure vs mineure — une majeure même plus courte
+                // prime sur une mineure plus longue, sauf marge nette (+2) en sa faveur.
+                // Boucle de recherche de palier INCHANGÉE (déjà correcte : démarre à
+                // partnerRebidBid.level, laisse isCallLegal trouver le palier légal
+                // selon le rang réel de la couleur choisie — mon premier essai de
+                // correction avait à tort figé "+1", cassant le rang des couleurs qui
+                // dépassent la redemande).
+                let preferOpeningSuit;
+                if (openingIsMajor && !rebidIsMajor) preferOpeningSuit = rebidLen < openingLen + 2;
+                else if (rebidIsMajor && !openingIsMajor) preferOpeningSuit = rebidLen < openingLen;
+                else preferOpeningSuit = rebidLen < openingLen + 2;
+                const suitForPreference = preferOpeningSuit ? partnerOpeningBid.strain : partnerRebidBid.strain;
+                const lengthForPreference = preferOpeningSuit ? openingLen : rebidLen;
+                if (lengthForPreference >= 2) {
                     for (let level = partnerRebidBid.level; level <= 5; level++) {
-                        const c = level + partnerOpeningBid.strain;
+                        const c = level + suitForPreference;
                         if (isCallLegal(history, c, seat)) { preferenceCall = c; break; }
                     }
                 }
@@ -5394,8 +5554,7 @@ function decideRobotCall(seat, deal, history) {
             // le palier "minimal" en apparence était déjà pris par la relance du
             // partenaire). Si le partenaire relance MA couleur exactement, "répéter" n'a
             // plus de sens — j'accepte (passe) plutôt que d'aller chercher plus haut.
-            if ((myResponseBid.strain === 'S' || myResponseBid.strain === 'H') && responseLengths
-                && responseLengths[myResponseBid.strain] >= 6 && partnerRebidBid.strain !== myResponseBid.strain) {
+            if (responseLengths && responseLengths[myResponseBid.strain] >= 6 && partnerRebidBid.strain !== myResponseBid.strain) {
                 for (let level = partnerRebidBid.level; level <= 7; level++) {
                     const c = level + myResponseBid.strain;
                     if (isCallLegal(history, c, seat)) { ownSuitRepeatCall = c; break; }
@@ -5468,9 +5627,28 @@ function decideRobotCall(seat, deal, history) {
                     explanation = call !== 'PASS'
                         ? `Soutien direct du partenaire (${partnerRaiseWasJump ? '15-17H, saut' : '12-14H'}) — assez de points de soutien pour viser la manche (${points})`
                         : `A déjà annoncé — passe (règle du tour unique)`;
-                } else if (!partnerRaiseWasJump && supportPointsForRaise >= 11 && partnerRebidBid.level === 2 && isCallLegal(history, '2NT', seat)) {
-                    call = '2NT';
-                    explanation = `Soutien direct du partenaire (12-14H) — enchère d'essai, juste sous la manche connue (${points})`;
+                } else if (!partnerRaiseWasJump && supportPointsForRaise >= 11 && partnerRebidBid.level === 2) {
+                    // Voir échange avec Guillaume ("4ème forcing", fiche S-1C-1P-2P,
+                    // "3♣ essai de manche du répondant : cherche un complément à ♣,
+                    // 11-12HLD", trouvé en reconstruisant cette famille) : essai de
+                    // manche PAR COULEUR — plus précis que le 2SA générique quand j'ai
+                    // une vraie couleur annexe (4+ cartes, tête décente) où un
+                    // complément de l'ouvreur ferait la différence. Repli sur le 2SA
+                    // générique si aucune couleur ne qualifie.
+                    const lengthsForTrial = suitLengths(hand);
+                    const trialSuit = ['C', 'D'].filter(s => s !== myResponseBid.strain)
+                        .find(s => lengthsForTrial[s] >= 4 && ['A', 'K', 'Q'].some(r => (hand[s] || '').includes(r)));
+                    if (trialSuit) {
+                        const c = '3' + trialSuit;
+                        if (isCallLegal(history, c, seat)) {
+                            call = c;
+                            explanation = `Essai de manche (11-12HLD) cherchant un complément à ${trialSuit === 'C' ? '♣' : '♦'} (${points})`;
+                        }
+                    }
+                    if (call === 'PASS' && isCallLegal(history, '2NT', seat)) {
+                        call = '2NT';
+                        explanation = `Soutien direct du partenaire (12-14H) — enchère d'essai, juste sous la manche connue (${points})`;
+                    }
                 } else {
                     explanation = `Soutien direct du partenaire (${partnerRaiseWasJump ? '15-17H, saut' : '12-14H'}) — pas assez pour insister, on reste là (${points})`;
                 }
@@ -5539,6 +5717,25 @@ function decideRobotCall(seat, deal, history) {
                         explanation = `A déjà annoncé — passe (règle du tour unique)`;
                     }
                 }
+            } else if (partnerRebidBid && partnerRebidBid.strain !== 'NT' && myResponseBid.strain !== 'NT'
+                    && responseLengths && responseLengths[myResponseBid.strain] === 4 && hl >= 11 && hl <= 12
+                    && (() => {
+                        const shownSuits = new Set([partnerOpeningBid.strain, myResponseBid.strain, partnerRebidBid.strain]);
+                        const unshown = ['S', 'H', 'D', 'C'].find(s => !shownSuits.has(s));
+                        return unshown && ['A', 'K', 'Q', 'J', 'T'].filter(r => (hand[unshown] || '').includes(r)).length >= 2;
+                    })()) {
+                // Voir échange avec Guillaume ("4ème forcing", fiche S-1K-1C-1P,
+                // "2SA NF 11-12HL, 4 cartes à ♥ (avec 5 cartes, 4ème couleur à 2♣
+                // préférable), bon arrêt ♣", trouvé en poursuivant cette famille) :
+                // cas précis et étroit — EXACTEMENT 4 cartes dans ma propre couleur
+                // (pas 5+, qui préférerait la 4ème couleur forcing à la place) et un
+                // arrêt dans la 4ème couleur jamais montrée par la ligne. Testé
+                // isolément avant d'élargir, vu la fragilité de cette zone de code.
+                const c2SA = '2NT';
+                if (isCallLegal(history, c2SA, seat)) {
+                    call = c2SA;
+                    explanation = `Exactement 4 cartes dans ma couleur avec arrêt dans la 4ème couleur, 11-12HL (${points})`;
+                }
             } else if (partnerRebidBid && partnerRebidBid.strain !== 'NT' && myResponseBid.strain !== 'NT') {
                 // Voir échange avec Guillaume (session PBN réelle du 3 août — donne 2,
                 // "je ne comprends absolument pas l'enchère de 5♥ d'Est sur 4♥, alors
@@ -5576,7 +5773,16 @@ function decideRobotCall(seat, deal, history) {
                 // (passe) plutôt que de chercher plus haut parce que son palier est déjà
                 // pris.
                 let generalPreferenceCall = null;
-                if (partnerRebidBid.strain !== myResponseBid.strain) {
+                // Voir échange avec Guillaume ("4ème forcing", fiche S-1C-1P-2T-corr-3,
+                // "Passe 5-8HL, préférence pour les ♣, avec 2 cartes de plus à ♣ qu'à
+                // ♥", trouvé en reconstruisant la 4ème couleur forcing) : cas manquant
+                // — quand ma préférence tombe précisément sur la couleur que l'ouvreur
+                // vient de nommer lui-même (déjà au palier actuel), avec une main
+                // faible (jusqu'à 8HL), passer accepte cette couleur telle quelle,
+                // plutôt que de monter mécaniquement au palier suivant.
+                if (preferredSuit === partnerRebidBid.strain && hl <= 8) {
+                    deliberatePassAfterTransfer = true;
+                } else if (partnerRebidBid.strain !== myResponseBid.strain) {
                     for (let level = 1; level <= 7; level++) {
                         const c = level + preferredSuit;
                         if (isCallLegal(history, c, seat)) { generalPreferenceCall = c; break; }
@@ -5626,18 +5832,107 @@ function decideRobotCall(seat, deal, history) {
             explanation = `A déjà annoncé — passe (règle du tour unique)`;
         }
     } else if (myBids.length === 2) {
-        // Voir échange avec Guillaume (session du 2 août — simulation à grande échelle,
-        // travail autonome) : mes 2 premières annonces étaient une vraie ouverture puis
-        // une 2e couleur naturelle (1x-1y-1z, ni renverse ni saut), et le partenaire a
-        // répondu par un SA limité au palier minimal (montre 6-10H, "pas de 6ème pour
-        // imposer sa couleur" — voir decideResponderContinuationAfterNewSuit) — je
-        // n'avais AUCUNE branche pour réagir à cette main limitée, retombant sur le
-        // passe par défaut quelle que soit ma réserve (trouvé avec un ouvreur à 17H
-        // passant sur ce 1SA). Seuils volontairement prudents (plancher du partenaire
-        // 6-10, pas de fourchette plus précise dans ce moteur) : 19H+ conclut
-        // directement (même avec un partenaire minimum, la manche est acquise) ; 15-18H
-        // invite seulement (la manche dépend d'où le partenaire se situe dans sa
-        // fourchette).
+        // Voir échange avec Guillaume (chasse aux bugs systémiques, fiche
+        // C-1T-1K-2T-X-corr-1, "Passe 13-15HL... XX Au moins 18HL, régulier") :
+        // scénario totalement absent jusqu'ici — l'adversaire contre directement MA
+        // PROPRE 3ème enchère (typiquement une répétition de couleur), et rien ne
+        // le détectait, retombant systématiquement sur passe quelle que soit la
+        // force réelle.
+        const lastEntryFor3rdDouble = history[history.length - 1];
+        if (lastEntryFor3rdDouble && isDouble(lastEntryFor3rdDouble.call) && partnershipOf(lastEntryFor3rdDouble.seat) !== partnershipOf(seat)) {
+            if (hcp >= 18 && isHandBalancedForNT(suitLengths(hand)) && isCallLegal(history, 'XX', seat)) {
+                call = 'XX';
+                explanation = `Surcontre — l'adversaire a contré ma propre redemande, main régulière 18H+ (${points})`;
+            } else {
+                explanation = `Passe — l'adversaire a contré ma propre redemande, rien à ajouter (${points})`;
+            }
+        }
+
+        // Voir échange avec Guillaume ("4ème forcing", fiche S-1T-1K-1C-corr-5, 2ème
+        // fiche, "3SA NF 18-19H, régulier, arrêt ♠, sans 4 cartes") : scopé strictement
+        // à CE contexte (pas le filet générique partagé partout, qui a causé une
+        // régression nette de -23 lors d'une première tentative trop large) — quand le
+        // partenaire vient de nommer la 4ème couleur jamais montrée par notre camp
+        // (typiquement une majeure ici), sans 4 cartes de soutien mais avec un arrêt et
+        // une main nettement plus forte (18-19H) que le simple 1SA minimal, viser 3SA
+        // directement plutôt que le palier le plus bas.
+        const lastRealBidFor4thSuit = history.slice().reverse().find(e => !isPass(e.call));
+        const myFirstBidIdxFor4th = history.indexOf(myBids[0]);
+        const iAmOpenerFor4th = history.slice(0, myFirstBidIdxFor4th).every(e => isPass(e.call));
+        if (iAmOpenerFor4th && lastRealBidFor4thSuit && partnershipOf(lastRealBidFor4thSuit.seat) === partnershipOf(seat) && lastRealBidFor4thSuit.seat !== seat) {
+            const parsed4th = parseBid(lastRealBidFor4thSuit.call);
+            if (parsed4th && (parsed4th.strain === 'S' || parsed4th.strain === 'H')) {
+                const lastIdx4th = history.indexOf(lastRealBidFor4thSuit);
+                const priorSuits4th = new Set(history.slice(0, lastIdx4th)
+                    .filter(e => partnershipOf(e.seat) === partnershipOf(seat) && isBidCall(e.call))
+                    .map(e => parseBid(e.call).strain).filter(s => s && s !== 'NT'));
+                const lengthsFor4th = suitLengths(hand);
+                const hasStopperFor4th = ['A', 'K', 'Q', 'J', 'T'].filter(r => (hand[parsed4th.strain] || '').includes(r)).length >= 2;
+                if (priorSuits4th.size === 3 && !priorSuits4th.has(parsed4th.strain)
+                    && lengthsFor4th[parsed4th.strain] < 4 && hasStopperFor4th && hl >= 18 && hl <= 19) {
+                    const c = '3NT';
+                    if (isCallLegal(history, c, seat)) {
+                        call = c;
+                        explanation = `Réponse à la 4ème couleur forcing (${parsed4th.strain === 'S' ? '♠' : '♥'}), main forte avec arrêt sans 4 cartes de soutien (${points})`;
+                    }
+                }
+            }
+            // Voir échange avec Guillaume ("4ème forcing", fiche S-1K-1C-1P, 2ème
+            // fiche, "1♦-1♥-1♠-2♣-?") : cas symétrique quand la 4ème couleur est une
+            // MINEURE — purement artificielle (contrairement à une majeure, qui cache
+            // souvent une vraie longueur chez le répondant), donc priorité au soutien
+            // de la VRAIE couleur du répondant (la toute première qu'il a montrée),
+            // sinon arrêt dans la 4ème couleur → SA, sinon repli vers ma couleur
+            // d'ouverture. Scopé strictement à ce contexte précis.
+            if (parsed4th && (parsed4th.strain === 'C' || parsed4th.strain === 'D')) {
+                const lastIdx4thMin = history.indexOf(lastRealBidFor4thSuit);
+                const priorSuits4thMin = new Set(history.slice(0, lastIdx4thMin)
+                    .filter(e => partnershipOf(e.seat) === partnershipOf(seat) && isBidCall(e.call))
+                    .map(e => parseBid(e.call).strain).filter(s => s && s !== 'NT'));
+                if (priorSuits4thMin.size === 3 && !priorSuits4thMin.has(parsed4th.strain)) {
+                    const lengthsForMin4th = suitLengths(hand);
+                    const responderSuitEntry = history.filter(e => partnershipOf(e.seat) === partnershipOf(seat) && e.seat !== seat && isBidCall(e.call))[0];
+                    const responderSuit = responderSuitEntry ? parseBid(responderSuitEntry.call).strain : null;
+                    const askLevel4th = parsed4th.level;
+                    if (responderSuit && lengthsForMin4th[responderSuit] >= 3) {
+                        const supportPoints4th = computeSupportPoints(hand, responderSuit, 4);
+                        const isMajorResp = responderSuit === 'S' || responderSuit === 'H';
+                        const gameLevel4th = isMajorResp ? 4 : 5;
+                        if (supportPoints4th >= 17) {
+                            for (let level = gameLevel4th; level <= 7; level++) {
+                                const c = level + responderSuit;
+                                if (isCallLegal(history, c, seat)) { call = c; explanation = `Réponse à la 4ème couleur forcing — soutien fort de la couleur du répondant (${points})`; break; }
+                            }
+                        }
+                        if (call === 'PASS') {
+                            for (let level = askLevel4th; level <= 7; level++) {
+                                const c = level + responderSuit;
+                                if (isCallLegal(history, c, seat)) { call = c; explanation = `Réponse à la 4ème couleur forcing — soutien de la couleur du répondant (${points})`; break; }
+                            }
+                        }
+                    } else {
+                        const hasStopperMin4th = ['A', 'K', 'Q', 'J', 'T'].filter(r => (hand[parsed4th.strain] || '').includes(r)).length >= 2;
+                        if (hasStopperMin4th) {
+                            const ntLevel4th = hl >= 14 ? askLevel4th + 1 : askLevel4th;
+                            for (let level = ntLevel4th; level <= 7; level++) {
+                                const c = level + 'NT';
+                                if (isCallLegal(history, c, seat)) { call = c; explanation = `Réponse à la 4ème couleur forcing — arrêt dans la 4ème couleur (${points})`; break; }
+                            }
+                        } else {
+                            const myOwnSuits4th = myBids.map(e => parseBid(e.call)).filter(b => b && b.strain !== 'NT');
+                            if (myOwnSuits4th.length > 0) {
+                                const fallbackSuit4th = myOwnSuits4th[0].strain;
+                                for (let level = askLevel4th; level <= 7; level++) {
+                                    const c = level + fallbackSuit4th;
+                                    if (isCallLegal(history, c, seat)) { call = c; explanation = `Réponse à la 4ème couleur forcing — repli collante (${points})`; break; }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         const myFirstBidForOpenerVsLimitedNT = myBids[0];
         const myBid0IdxForOpenerVsLimitedNT = history.indexOf(myFirstBidForOpenerVsLimitedNT);
         const wasRealOpeningForOpenerVsLimitedNT = history.slice(0, myBid0IdxForOpenerVsLimitedNT).every(e => isPass(e.call));
@@ -6128,7 +6423,7 @@ function decideRobotCall(seat, deal, history) {
     // que la logique spécifique à la séquence (plus haut) n'ait déjà produit de réponse.
     // Ne s'active QUE si call est encore à 'PASS' à ce stade — jamais de priorité sur un
     // calcul déjà plus précis fait ailleurs dans la fonction.
-    if (call === 'PASS') {
+    if (call === 'PASS' && !deliberatePassAfterTransfer) {
         const forcingFallback = decideForcingFallback(hand, seat, history);
         if (forcingFallback) {
             call = forcingFallback.call;
