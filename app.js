@@ -4728,6 +4728,7 @@ function renderBiddingBox() {
 
     if (isAuctionOver(auctionHistory)) {
         box.innerHTML = '';
+        box.classList.remove('my-turn');
         turnPanel.textContent = '';
         return;
     }
@@ -4762,6 +4763,12 @@ function renderBiddingBox() {
         turnPanel.textContent = `En attente de ${seatFullName(turnSeat)}...`;
     }
     turnPanel.className = 'turn-indicator ' + (ownerDisconnected ? 'disconnected-turn' : (myTurn ? 'my-turn' : 'their-turn'));
+    // Voir échange avec Guillaume (session du 8 août — "j'aimerais cet effet tout autour
+    // de ses touches d'enchères") : même halo pulsant que turnPanel (voir .my-turn dans
+    // styles.css), appliqué cette fois directement sur la boîte des boutons — plus
+    // visible pour le joueur concerné que le seul texte au-dessus, qui peut passer
+    // inaperçu.
+    box.classList.toggle('my-turn', myTurn);
 
     const specialLabels = { PASS: 'Passe', X: 'X', XX: 'XX' };
     // Voir échange avec Guillaume : ligne spéciale calée sur la même grille à 5 colonnes

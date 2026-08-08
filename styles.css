@@ -2099,6 +2099,7 @@ button.kibitz-chip {
    redondant. */
 @media (prefers-reduced-motion: reduce) {
     .turn-indicator.my-turn { animation: none; }
+    .bidding-box.my-turn { animation: none; }
     .auction-ledger td.is-latest-call { animation: none; }
     .contract-result.contract-reveal { animation: none; }
 }
@@ -2544,6 +2545,17 @@ table.dd-table td.dd-secondary-contract {
 
 /* Boîte d'enchères */
 .bidding-box { margin-bottom: 12px; }
+
+/* Voir échange avec Guillaume (session du 8 août — "j'aimerais cet effet tout autour de
+   ses touches d'enchères") : même halo pulsant que .turn-indicator.my-turn (même
+   @keyframes turn-glow, déjà défini plus bas), appliqué directement autour de la boîte
+   des boutons — padding/arrondi ajoutés pour que le halo ait de la place tout autour,
+   la boîte n'en ayant aucun par défaut (.bidding-box ci-dessus, juste une margin). */
+.bidding-box.my-turn {
+    padding: 8px;
+    border-radius: 10px;
+    animation: turn-glow 2.4s ease-in-out infinite;
+}
 
 .special-calls-row {
     display: grid;
