@@ -147,6 +147,91 @@ const SLAM_ZONE_GRAND = 37;   // grand chelem
 // précisément (avant qu'il n'ait eu l'occasion de préciser sa main davantage).
 const OPENING_MINIMUM = 12;
 
+// Voir échange avec Guillaume ("je pense qu'on doit s'abstenir des contrôles et juste
+// poser le Blackwood... Blackwood 5 clés [RKCB]... 0314") : infrastructure RKCB
+// complète, en remplacement des cue-bids de contrôle (hors périmètre de ce moteur —
+// voir les nombreux commentaires "Blackwood, hors périmètre" disséminés ailleurs).
+// Barème 0314 : 5♣=0 ou 3 clés, 5♦=1 ou 4 clés, 5♥=2 clés sans Dame d'atout,
+// 5♠=2 clés avec Dame d'atout. Une "clé" = un des 4 As, ou le Roi d'atout (5 clés
+// au total).
+
+// Détecte la couleur d'atout convenue entre les 2 mains de MA PROPRE paire : le
+// répondant a-t-il montré/soutenu une couleur que MON PARTENAIRE a aussi montrée
+// (ou l'inverse) ? Recherche la couleur la plus RÉCEMMENT confirmée par les DEUX
+// membres de la paire (peu importe qui l'a nommée en premier). Renvoie null si
+// aucune couleur n'est ainsi doublement montrée (aucun atout convenu — un 4SA
+// dans ce cas resterait quantitatif, pas RKCB).
+function getAgreedTrumpSuit(history, seat) {
+    const myPartnership = partnershipOf(seat);
+    const mySuitsShown = new Set();
+    const partnerSuitsShown = new Set();
+    history.forEach(e => {
+        if (partnershipOf(e.seat) === myPartnership && isBidCall(e.call)) {
+            const p = parseBid(e.call);
+            if (p && p.strain !== 'NT') {
+                if (e.seat === seat) mySuitsShown.add(p.strain);
+                else partnerSuitsShown.add(p.strain);
+            }
+        }
+    });
+    const agreedSuits = ['S', 'H', 'D', 'C'].filter(s => mySuitsShown.has(s) && partnerSuitsShown.has(s));
+    if (agreedSuits.length === 0) return null;
+    // La plus récente des couleurs doublement montrées : parcourt l'historique à
+    // l'envers, renvoie la première qui matche.
+    for (let i = history.length - 1; i >= 0; i--) {
+        const e = history[i];
+        if (partnershipOf(e.seat) === myPartnership && isBidCall(e.call)) {
+            const p = parseBid(e.call);
+            if (p && agreedSuits.includes(p.strain)) return p.strain;
+        }
+    }
+    return agreedSuits[0];
+}
+
+// Nombre de "clés" (0-5) dans ma main pour la couleur d'atout convenue : les 4 As,
+// plus le Roi d'atout.
+function countKeyCards(hand, trumpSuit) {
+    let count = 0;
+    ['S', 'H', 'D', 'C'].forEach(s => { if ((hand[s] || '').includes('A')) count++; });
+    if (trumpSuit && (hand[trumpSuit] || '').includes('K')) count++;
+    return count;
+}
+
+// Ai-je la Dame d'atout ?
+function hasTrumpQueen(hand, trumpSuit) {
+    return trumpSuit && (hand[trumpSuit] || '').includes('Q');
+}
+
+// Réponse RKCB 0314 à un 4SA du partenaire, connaissant la couleur d'atout convenue.
+function decideRKCBResponse(hand, trumpSuit, history, seat) {
+    const keyCards = countKeyCards(hand, trumpSuit);
+    const withQueen = hasTrumpQueen(hand, trumpSuit);
+    let call;
+    if (keyCards === 0 || keyCards === 3) call = '5C';
+    else if (keyCards === 1 || keyCards === 4) call = '5D';
+    else if (keyCards === 2 && !withQueen) call = '5H';
+    else call = '5S'; // 2 clés avec Dame
+    if (isCallLegal(history, call, seat)) return call;
+    // Repli improbable (palier déjà dépassé) : annonce le plus bas palier légal en
+    // dessous du chelem, plutôt que rien.
+    for (const c of ['5C', '5D', '5H', '5S']) {
+        if (isCallLegal(history, c, seat)) return c;
+    }
+    return 'PASS';
+}
+
+// Décode la réponse RKCB du partenaire en nombre de clés (0-4, la Dame étant
+// gérée séparément par le releveur si besoin).
+function decodeRKCBResponseKeyCards(responseCall) {
+    const parsed = parseBid(responseCall);
+    if (!parsed || parsed.level !== 5) return null;
+    if (parsed.strain === 'C') return 'zeroOrThree';
+    if (parsed.strain === 'D') return 'oneOrFour';
+    if (parsed.strain === 'H') return 'twoNoQueen';
+    if (parsed.strain === 'S') return 'twoWithQueen';
+    return null;
+}
+
 // Voir échange avec Guillaume (session du 24 juillet — régression trouvée à l'audit) :
 // minimum promis par un simple SOUTIEN (pas une ouverture) — bien plus bas. Utilisé
 // spécifiquement quand le "partenaire" dont on estime le plancher est un RÉPONDANT qui a
@@ -1736,29 +1821,28 @@ function decideRobotIntervention(hand, hcp, hl, seat, history, dealVulnerable, i
         });
         const opponentsShowedFit = Object.values(oppSuitCounts).some(count => count >= 2);
 
-        // Voir échange avec Guillaume (même échange, "c'est absurde de faire un X, la
-        // seule couleur non nommée par les adversaires est ♣") : tenté AVANT le
-        // blocage général ci-dessous — avec une seule couleur restante et une longueur
-        // raisonnable (4+), l'annoncer directement reste valable même sans fit adverse
-        // confirmé (ce n'est pas un vrai "réveil" générique, juste une description
-        // naturelle de ma main).
+        // Voir échange avec Guillaume (vraie donne testée, "quand les adversaires ne
+        // sont pas fittés, on ne réveille pas... la règle doit être plus haute dans la
+        // hiérarchie") : cette garde passe maintenant EN PREMIER, avant toute autre
+        // considération — sans fit confirmé entre les 2 adversaires, aucune raison de
+        // penser qu'ils sont groupés en zone de manche, le réveil perd sa justification
+        // de base, quelle que soit ma propre main.
+        if (!opponentsShowedFit && Object.keys(oppSuitCounts).length >= 2) return 'PASS';
+
+        // Voir échange avec Guillaume (même échange, précision suite à une 1ère
+        // tentative trop généreuse : "il est inenvisageable de réveiller avec 4
+        // cartes, un réveil est comme une intervention en moins fort") : seuil corrigé
+        // à 5+ cartes (pas 4+) — un réveil suit les mêmes exigences de longueur qu'une
+        // intervention normale. Avec une main régulière et pas 5 cartes dans sa plus
+        // longue couleur, aucune raison de réveiller du tout.
         const unshownSuitsForReopenDouble = ['S', 'H', 'D', 'C'].filter(s => !oppSuitCounts[s]);
         const onlyOneSuitLeftForReopen = unshownSuitsForReopenDouble.length === 1;
-        if (onlyOneSuitLeftForReopen && lengths[unshownSuitsForReopenDouble[0]] >= 4 && hcp <= 16) {
+        if (onlyOneSuitLeftForReopen && lengths[unshownSuitsForReopenDouble[0]] >= 5 && hcp <= 16) {
             for (let lvl = 1; lvl <= 5; lvl++) {
                 const c = lvl + unshownSuitsForReopenDouble[0];
                 if (isCallLegal(history, c, seat)) { return c; }
             }
         }
-
-        // Voir échange avec Guillaume (vraie donne testée, "quand les adversaires ne
-        // sont pas fittés, on ne réveille pas") : nouvelle garde — le réveil (contre ou
-        // 1SA génériques) suppose que les points sont probablement équilibrés (silence
-        // général), mais si les 2 adversaires ont chacun décrit une couleur DIFFÉRENTE
-        // sans jamais se soutenir mutuellement (aucun fit confirmé entre eux), rien
-        // n'indique qu'ils soient groupés en zone de manche par un fit — le réveil
-        // générique perd sa justification.
-        if (!opponentsShowedFit && Object.keys(oppSuitCounts).length >= 2) return 'PASS';
 
         // Voir échange avec Guillaume (donnes 3/8) : jamais la couleur de l'ADVERSAIRE
         // lui-même comme couleur de réveil, même si c'est ma plus longue chez moi —
@@ -4419,6 +4503,61 @@ function decideRobotCall(seat, deal, history) {
     let explanation = '';
     let deliberatePassAfterTransfer = false; // voir wasJacobyTransferAsk plus bas : passe réfléchi, pas un défaut
 
+    // Voir échange avec Guillaume ("il faut que 4SA soit bien reconnu comme un
+    // Blackwood, pour que le partenaire y réponde et ne passe pas dessus") :
+    // reconnaissance RKCB en priorité ABSOLUE, avant tout le reste du dispatch — dès
+    // que la dernière annonce de MON PARTENAIRE est "4SA" et qu'un atout est convenu
+    // entre nous (voir getAgreedTrumpSuit), c'est du Blackwood 5 clés (0314), jamais
+    // un repli quantitatif ni un passe générique. Sans cette priorité, "4SA" tombait
+    // dans le filet générique "déjà annoncé, passe" comme n'importe quelle autre
+    // annonce.
+    const veryLastEntryForRKCB = getLastActualBid(history);
+    if (veryLastEntryForRKCB && veryLastEntryForRKCB.call === '4NT'
+            && partnershipOf(veryLastEntryForRKCB.seat) === partnershipOf(seat) && veryLastEntryForRKCB.seat !== seat) {
+        const agreedTrumpForRKCBResponse = getAgreedTrumpSuit(history, seat);
+        if (agreedTrumpForRKCBResponse) {
+            const rkcbCall = decideRKCBResponse(hand, agreedTrumpForRKCBResponse, history, seat);
+            const keyCards = countKeyCards(hand, agreedTrumpForRKCBResponse);
+            return { call: rkcbCall, explanation: `Réponse au Blackwood 5 clés (RKCB, atout ${STRAIN_SYMBOL[agreedTrumpForRKCBResponse]}) — ${keyCards} clé(s) (${hcp}H / ${hl}HL)` };
+        }
+    }
+
+    // Voir échange avec Guillaume (même demande RKCB) : décision finale — je suis
+    // l'AUTEUR du 4SA (RKCB), le partenaire vient de répondre son décompte de clés.
+    // Je combine avec MES PROPRES clés pour décider du palier final. En priorité
+    // absolue elle aussi, avant tout le reste du dispatch générique.
+    const myOwnLastRealBidForRKCB = history.slice().reverse().find(e => e.seat === seat && isBidCall(e.call));
+    if (myOwnLastRealBidForRKCB && myOwnLastRealBidForRKCB.call === '4NT'
+            && veryLastEntryForRKCB && veryLastEntryForRKCB.seat !== seat
+            && partnershipOf(veryLastEntryForRKCB.seat) === partnershipOf(seat)) {
+        const agreedTrumpForRKCBDecision = getAgreedTrumpSuit(history, seat);
+        const decodedResponse = decodeRKCBResponseKeyCards(veryLastEntryForRKCB.call);
+        if (agreedTrumpForRKCBDecision && decodedResponse) {
+            const myKeyCards = countKeyCards(hand, agreedTrumpForRKCBDecision);
+            // Ambiguïté 0/3 et 1/4 : on tranche selon MES propres clés (si j'ai déjà
+            // 3+ clés moi-même, le partenaire ne peut raisonnablement en avoir 3 ou 4
+            // de plus — 5 max au total — donc c'est la lecture basse qui s'applique).
+            let partnerKeyCards;
+            if (decodedResponse === 'zeroOrThree') partnerKeyCards = myKeyCards <= 2 ? 3 : 0;
+            else if (decodedResponse === 'oneOrFour') partnerKeyCards = myKeyCards <= 1 ? 4 : 1;
+            else partnerKeyCards = 2;
+            const totalKeyCards = myKeyCards + partnerKeyCards;
+            const partnerHasQueen = decodedResponse === 'twoWithQueen';
+            const myHasQueen = hasTrumpQueen(hand, agreedTrumpForRKCBDecision);
+            const isMajorForRKCB = agreedTrumpForRKCBDecision === 'S' || agreedTrumpForRKCBDecision === 'H';
+            let targetLevel;
+            if (totalKeyCards >= 5 && (partnerHasQueen || myHasQueen)) targetLevel = 7;
+            else if (totalKeyCards >= 4) targetLevel = 6;
+            else targetLevel = isMajorForRKCB ? 4 : 5; // repli sûr, pas assez de clés
+            for (let level = targetLevel; level <= 7; level++) {
+                const c = level + agreedTrumpForRKCBDecision;
+                if (isCallLegal(history, c, seat)) {
+                    return { call: c, explanation: `Décision finale RKCB — ${totalKeyCards} clés au total (${myKeyCards} chez moi) (${hcp}H / ${hl}HL)` };
+                }
+            }
+        }
+    }
+
     if (myBids.length === 0) {
         // Voir échange avec Guillaume (session PBN réelle du 3 août — donne 3) : mon
         // partenaire vient-il de faire le cue-bid bicolore du 4ème joueur (voir
@@ -6999,6 +7138,35 @@ function decideRobotCall(seat, deal, history) {
                     explanation = `Le partenaire a déjà répondu par un contrat de manche ou mieux — passe (${points})`;
                 }
             } else if (isExtraStrong) {
+                // Voir échange avec Guillaume (vraie donne testée, "pourquoi Nord dit 5♦
+                // sur 4♥ ???") : bug trouvé — cette branche n'avait PAS la même
+                // vérification "le partenaire a-t-il déjà conclu à la manche" que la
+                // branche juste au-dessus, alors qu'elle devrait s'appliquer pareillement
+                // : une fois que le partenaire a clairement commis à une manche (4♥ ici),
+                // il n'y a plus de "4ème couleur" à chercher — la 4ème couleur forcing
+                // n'a de sens qu'AVANT que le partenaire se soit engagé sur un contrat.
+                const partnerBidAlreadyExtraStrong = parseBid(myPartnerLastBid.call);
+                const partnerAlreadyAtGameExtraStrong = partnerBidAlreadyExtraStrong && (
+                    (partnerBidAlreadyExtraStrong.strain === 'NT' && partnerBidAlreadyExtraStrong.level >= 3)
+                    || ((partnerBidAlreadyExtraStrong.strain === 'S' || partnerBidAlreadyExtraStrong.strain === 'H') && partnerBidAlreadyExtraStrong.level >= 4)
+                    || (partnerBidAlreadyExtraStrong.strain !== 'NT' && partnerBidAlreadyExtraStrong.strain !== 'S' && partnerBidAlreadyExtraStrong.strain !== 'H' && partnerBidAlreadyExtraStrong.level >= 5)
+                );
+                if (partnerAlreadyAtGameExtraStrong) {
+                    // Voir échange avec Guillaume (vraie donne testée, "pourquoi Nord dit
+                    // 5♦ sur 4♥ ???", puis "je pense qu'on doit s'abstenir des contrôles
+                    // et juste poser le Blackwood [RKCB] si on pense être en zone de
+                    // chelem") : avec une main extra-forte (20HL+, on est déjà dans cette
+                    // branche) et un atout convenu avec le partenaire, poser 4SA (RKCB)
+                    // plutôt que simplement passer — le partenaire vient de committer à
+                    // une couleur, il y a peut-être un chelem à explorer.
+                    const agreedTrumpForRKCB = getAgreedTrumpSuit(history, seat);
+                    if (agreedTrumpForRKCB && isCallLegal(history, '4NT', seat)) {
+                        call = '4NT';
+                        explanation = `Main extra-forte (20HL+), atout ${STRAIN_SYMBOL[agreedTrumpForRKCB]} convenu — Blackwood 5 clés (RKCB) pour explorer le chelem (${points})`;
+                    } else {
+                        explanation = `Le partenaire a déjà répondu par un contrat de manche ou mieux — passe (${points})`;
+                    }
+                } else {
                 // 4ème couleur forcing : la seule couleur pas encore annoncée par
                 // personne — signale des points de manche sans fit ni arrêt évident,
                 // sans s'engager sur une vraie couleur à soi. Un cran AU-DESSUS du
@@ -7015,6 +7183,7 @@ function decideRobotCall(seat, deal, history) {
                         if (isCallLegal(history, c, seat)) { call = c; break; }
                     }
                     if (call !== 'PASS') explanation = `Main forcing de manche après son propre renverse, sans fit ni arrêt — 4ème couleur forcing (${points})`;
+                }
                 }
             }
         }
