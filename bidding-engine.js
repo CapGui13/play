@@ -1720,6 +1720,46 @@ function decideRobotIntervention(hand, hcp, hl, seat, history, dealVulnerable, i
         const opposingMin = estimateAuctionSideMinPoints(history, opposingSide);
         if (opposingMin !== null && opposingMin >= 22) return 'PASS';
 
+        // Voir échange avec Guillaume (vraie donne testée, "quand les adversaires ne
+        // sont pas fittés, on ne réveille pas") : nouvelle garde — le réveil suppose
+        // que les points sont probablement équilibrés (silence général), mais si les 2
+        // adversaires ont chacun décrit une couleur DIFFÉRENTE sans jamais se soutenir
+        // mutuellement (aucun fit confirmé entre eux), rien n'indique qu'ils soient
+        // groupées en zone de manche par un fit — le réveil perd sa justification.
+        const opponentBidsForFitCheck = history.filter(e => partnershipOf(e.seat) === opposingSide.replace('NS', 'N').replace('EW', 'E') || partnershipOf(e.seat) === opposingSide);
+        const oppSuitCounts = {};
+        history.forEach(e => {
+            if (partnershipOf(e.seat) === opposingSide && isBidCall(e.call)) {
+                const p = parseBid(e.call);
+                if (p && p.strain !== 'NT') oppSuitCounts[p.strain] = (oppSuitCounts[p.strain] || 0) + 1;
+            }
+        });
+        const opponentsShowedFit = Object.values(oppSuitCounts).some(count => count >= 2);
+
+        // Voir échange avec Guillaume (même échange, "c'est absurde de faire un X, la
+        // seule couleur non nommée par les adversaires est ♣") : tenté AVANT le
+        // blocage général ci-dessous — avec une seule couleur restante et une longueur
+        // raisonnable (4+), l'annoncer directement reste valable même sans fit adverse
+        // confirmé (ce n'est pas un vrai "réveil" générique, juste une description
+        // naturelle de ma main).
+        const unshownSuitsForReopenDouble = ['S', 'H', 'D', 'C'].filter(s => !oppSuitCounts[s]);
+        const onlyOneSuitLeftForReopen = unshownSuitsForReopenDouble.length === 1;
+        if (onlyOneSuitLeftForReopen && lengths[unshownSuitsForReopenDouble[0]] >= 4 && hcp <= 16) {
+            for (let lvl = 1; lvl <= 5; lvl++) {
+                const c = lvl + unshownSuitsForReopenDouble[0];
+                if (isCallLegal(history, c, seat)) { return c; }
+            }
+        }
+
+        // Voir échange avec Guillaume (vraie donne testée, "quand les adversaires ne
+        // sont pas fittés, on ne réveille pas") : nouvelle garde — le réveil (contre ou
+        // 1SA génériques) suppose que les points sont probablement équilibrés (silence
+        // général), mais si les 2 adversaires ont chacun décrit une couleur DIFFÉRENTE
+        // sans jamais se soutenir mutuellement (aucun fit confirmé entre eux), rien
+        // n'indique qu'ils soient groupés en zone de manche par un fit — le réveil
+        // générique perd sa justification.
+        if (!opponentsShowedFit && Object.keys(oppSuitCounts).length >= 2) return 'PASS';
+
         // Voir échange avec Guillaume (donnes 3/8) : jamais la couleur de l'ADVERSAIRE
         // lui-même comme couleur de réveil, même si c'est ma plus longue chez moi —
         // m'y réveiller (directement, ou via un contre suivi de cette couleur) n'a
@@ -1751,10 +1791,10 @@ function decideRobotIntervention(hand, hcp, hl, seat, history, dealVulnerable, i
         // réveil est plus tolérant), puis préciser à SA au tour suivant une fois le
         // palier ouvert par la réponse du partenaire (voir decideDoublerFollowUp, à
         // étendre pour ce cas précis).
-        if (!hasReopenSuit && hcp >= 13 && hcp <= 16 && isHandBalancedForNT(lengths) && isCallLegal(history, 'X', seat)) {
+        if (!hasReopenSuit && !onlyOneSuitLeftForReopen && hcp >= 13 && hcp <= 16 && isHandBalancedForNT(lengths) && isCallLegal(history, 'X', seat)) {
             return 'X';
         }
-        if (hasReopenSuit && hcp >= 13 && isCallLegal(history, 'X', seat)) {
+        if (hasReopenSuit && !onlyOneSuitLeftForReopen && hcp >= 13 && isCallLegal(history, 'X', seat)) {
             return 'X';
         }
         // Voir échange avec Guillaume (fiches C-3C-P-P-Q-corr-1, C-3K-P-P-Q,
@@ -2947,6 +2987,19 @@ function decideOpenerRebidAfterNewSuit(hand, hcp, hl, myBid, partnerParsed, seat
     // 1SA/2SA directs), seules deux fourchettes de points sont possibles : sous 15H
     // (n'aurait pas ouvert 1SA/2SA directement) ou 18H+ (trop fort pour 1SA 15-17, pas
     // encore 20-21 pour 2SA direct) — 15-17H régulière aurait déjà ouvert 1SA.
+    // Voir échange avec Guillaume (vraie donne testée, "pourquoi Sud n'annonce pas ses
+    // 4 cartes à ♠ ?", fiche S-1K-1C-Q, "1SA NF... PAS 4 cartes à ♥, NI À ♠") : 1SA nie
+    // explicitement les 2 majeures, pas seulement celle que le partenaire a montrée —
+    // avec une majeure 4ème NON montrée (l'autre que celle du partenaire), je dois la
+    // nommer en priorité, avant même d'envisager le repli SA "main régulière" ci-dessous.
+    if (partnerParsed.strain === 'H' || partnerParsed.strain === 'S') {
+        const otherMajorForRebid = partnerParsed.strain === 'H' ? 'S' : 'H';
+        if (myBid.strain !== otherMajorForRebid && lengths[otherMajorForRebid] >= 4) {
+            const c = myBid.level + otherMajorForRebid;
+            if (isCallLegal(history, c, seat)) return c;
+        }
+    }
+
     if (isBalanced(lengths)) {
         if (hcp >= 18) {
             const call = '2NT';
@@ -4044,6 +4097,28 @@ function decideForcingResponseToInterventionAnswer(hand, seat, history) {
     const isNewSuitResponse = partnerRespParsed
         && partnerRespParsed.strain !== myFirstBidParsed.strain && partnerRespParsed.strain !== 'NT';
     if (!isNewSuitResponse) return null;
+
+    // Voir échange avec Guillaume (vraie donne testée, "3♣ en Ouest est un cue-bid ?
+    // Il n'a pas l'air d'être interprété comme ça par Est") : bug trouvé — cette
+    // fonction traitait TOUJOURS la réponse du partenaire comme une couleur naturelle
+    // chez lui, calculant à tort "ai-je un fit pour SA couleur" même quand cette
+    // couleur était en réalité celle d'un ADVERSAIRE (donc un cue-bid, montrant du
+    // soutien pour MA PROPRE couleur d'intervention, pas une vraie couleur chez lui).
+    const partnerRespWasCuebid = history.some(e => partnershipOf(e.seat) !== partnershipOf(seat)
+        && isBidCall(e.call) && parseBid(e.call) && parseBid(e.call).strain === partnerRespParsed.strain);
+    if (partnerRespWasCuebid) {
+        const lengthsForCuebidReact = suitLengths(hand);
+        const myOwnSuitForCuebid = myFirstBidParsed.strain;
+        const isMajorForCuebidReact = myOwnSuitForCuebid === 'S' || myOwnSuitForCuebid === 'H';
+        const gameLevelForCuebidReact = isMajorForCuebidReact ? 4 : 5;
+        for (let level = gameLevelForCuebidReact; level <= 7; level++) {
+            const c = level + myOwnSuitForCuebid;
+            if (isCallLegal(history, c, seat)) {
+                return { call: c, explanation: `Cue-bid du partenaire (montre le soutien pour MA couleur d'intervention) — conclusion directe (${lengthsForCuebidReact[myOwnSuitForCuebid]} cartes)` };
+            }
+        }
+        return null;
+    }
 
     const lengths = suitLengths(hand);
     const partnerSuit = partnerRespParsed.strain;
@@ -6042,6 +6117,24 @@ function decideRobotCall(seat, deal, history) {
                 } else {
                     explanation = `Soutien direct du partenaire (${partnerRaiseWasJump ? '15-17H, saut' : '12-14H'}) — pas assez pour insister, on reste là (${points})`;
                 }
+            } else if (partnerOpeningBid && partnerRebidBid && (partnerOpeningBid.strain === 'C' || partnerOpeningBid.strain === 'D')
+                    && (partnerRebidBid.strain === 'S' || partnerRebidBid.strain === 'H')
+                    && myResponseBid && myResponseBid.strain === 'H' && partnerRebidBid.strain === 'S'
+                    && hl >= 6 && hl <= 10 && partnerBidsCount === 2
+                    && responseLengths[partnerOpeningBid.strain] < 4
+                    && responseLengths['H'] < 6 && responseLengths['S'] < 4
+                    && isCallLegal(history, '1NT', seat)) {
+                // Voir échange avec Guillaume (vraie donne testée, "pourquoi Ouest fitte
+                // à ♠ avec 3 cartes ?", fiche S-1K-1C-1P intégralement) : la logique de
+                // "préférence entre 2 couleurs" ne s'applique QUE sur un vrai bicolore
+                // économique — pas ici (mineure d'ouverture, MAJEURE en redemande, un
+                // contexte avec sa PROPRE fiche détaillée). "1SA NF 6-10HL, main
+                // variable (SA fourre-tout)" est la vraie réponse à ce niveau de force,
+                // MAIS seulement si aucune entrée plus spécifique ne s'applique déjà
+                // (fit carreau 5+, 6 cœurs, ou 4-4 dans les 2 majeures — exclus ici,
+                // sinon régresse sur les AUTRES entrées de cette même fiche).
+                call = '1NT';
+                explanation = `1SA fourre-tout (6-10HL), sans lien avec un bicolore économique — l'ouvreur a montré une mineure puis une majeure, fiche dédiée (${points})`;
             } else if (ownSuitRepeatCall && partnerBidsCount === 2) {
                 call = ownSuitRepeatCall;
                 explanation = `Zone basse (6-9H) avec ma couleur déjà montrée (${responseLengths[myResponseBid.strain]} cartes) — je la répète au palier minimal (${points})`;
