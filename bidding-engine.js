@@ -6,6 +6,28 @@
 // Chargé par index.html AVANT app.js (comme bidding-rules.js), donc utilisable tel quel
 // par app.js sans le moindre changement à ses points d'appel — les fonctions restent de
 // simples fonctions globales, exactement comme avant leur déplacement ici.
+//
+// ⚠️  CHANTIER EN ATTENTE — voir échange avec Guillaume (session du 8 août) : "à chaque
+// fois qu'on traite ces cas particuliers, ça se retranscrit mal de manière générique pour
+// les autres cas analogues qui seront rencontrés ultérieurement". CONSTAT : ce moteur n'a
+// aucune fonction centralisée pour des concepts récurrents — chaque fonction réimplémente
+// sa propre version locale, avec ses propres angles morts. Trouvé et corrigé séparément,
+// PLUSIEURS FOIS, dans des endroits différents cette seule session :
+//   - "Est-ce un cue-bid (couleur de l'adversaire, pas une couleur à soi) ?" — au moins
+//     3 endroits distincts, dont l'un encore non résolu (voir README, "contres
+//     compétitifs en 4ème main").
+//   - "Le partenaire a-t-il déjà tout dit / conclu, plus rien à ajouter ?" — au moins 5
+//     versions quasi-identiques reconstruites à la main (2SA fitté, cue-bid accepté,
+//     transfert Texas accepté, redemande 1SA + retour simple, reconvert accepté).
+//   - "Est-ce une VRAIE ouverture (précédée de passes) ou une intervention ?" — corrigé à
+//     un seul endroit (donne 5, session du 8 août), jamais vérifié ailleurs.
+// À FAIRE dans une session DÉDIÉE (jamais à la volée en cours de traitement d'une donne) :
+// cartographier tous les points d'usage actuels de ces concepts, construire des fonctions
+// de reconnaissance centralisées (ex. isCueBid(bid, history, seat), isPartnerAlready
+// Committed(history, seat), wasRealOpening(entry, history)), puis les substituer partout
+// où une logique équivalente a été réinventée localement — plutôt que de continuer à
+// patcher au cas par cas. Rappeler ce chantier à Guillaume à chaque nouvelle sollicitation
+// tant qu'il n'est pas fait.
 
 const HCP_VALUE = { A: 4, K: 3, Q: 2, J: 1 };
 
@@ -2015,7 +2037,26 @@ function decideRobotIntervention(hand, hcp, hl, seat, history, dealVulnerable, i
     // même logique que pour les barrages (voir decideRobotOpening).
     const threshold = isSeatVulnerable(seat, dealVulnerable) ? 10 : 8;
     if (hl < threshold) return 'PASS';
+    // Voir échange avec Guillaume (vraie donne testée, "pourquoi Est dit 2♣ ?", fiche
+    // C-1T-P-1P-2T, "cue-bid de l'ouvreur 'en sandwich', indique conventionnellement un
+    // bicolore [rouge]") : en position "en sandwich" (adversaire a ouvert une mineure,
+    // SON PARTENAIRE a déjà répondu naturellement), cette mineure d'ouverture devient
+    // conventionnellement réservée au cue-bid — jamais annonçable naturellement, même
+    // avec une vraie longueur personnelle là. Sans cette main précise (bicolore rouge
+    // 5+5+), ni assez pour le contre d'appel (17HL+ ici) : passe.
+    const openingEntryForSandwich = history.find(e => isBidCall(e.call));
+    const openingParsedForSandwich = openingEntryForSandwich ? parseBid(openingEntryForSandwich.call) : null;
+    const isSandwichPosition = openingEntryForSandwich && openingParsedForSandwich
+        && (openingParsedForSandwich.strain === 'C' || openingParsedForSandwich.strain === 'D')
+        && openingParsedForSandwich.level === 1
+        && partnershipOf(openingEntryForSandwich.seat) !== partnershipOf(seat)
+        && history.slice(0, history.indexOf(openingEntryForSandwich)).every(e => isPass(e.call))
+        && history.some(e => e !== openingEntryForSandwich && isBidCall(e.call)
+            && partnershipOf(e.seat) === partnershipOf(openingEntryForSandwich.seat)
+            && parseBid(e.call) && parseBid(e.call).strain !== openingParsedForSandwich.strain
+            && parseBid(e.call).strain !== 'NT');
     const suit = longestSuitPreferHigh(lengths);
+    if (isSandwichPosition && suit === openingParsedForSandwich.strain) return 'PASS';
     if (lengths[suit] < 5) return 'PASS';
 
     // Barrage en INTERVENTION (voir échange avec Guillaume, donne 2 — précision
@@ -3788,9 +3829,18 @@ function decideRobotOpenerRebid(hand, hcp, hl, myOpeningCall, partnerCall, seat,
     // un soutien naturel n'a pas la même valeur de fit garantie).
     if (myBid.strain === 'S' || myBid.strain === 'H') {
         if (partnerCall === '2NT') {
-            // 12-13H (mini) : accepte le fit au palier minimal (3) sans viser plus haut ;
-            // 14H+ : la manche est acquise (12+ garanti côté partenaire, 14+12=26+).
-            const call = (hcp >= 14 ? '4' : '3') + myBid.strain;
+            // Voir échange avec Guillaume (vraie donne testée, "Nord devrait conclure à
+            // la manche avec tous ces HLD. Pourquoi ne le fait-il pas ?") : bug trouvé —
+            // ce seuil comparait le HCP BRUT (13) à 14, ignorant TOTALEMENT la
+            // distribution (ici une chicane trèfle, qui devient précieuse dès que le
+            // fit à 3 cartes est confirmé par le 2SA du partenaire — ruffs potentiels).
+            // Remplacé par un vrai calcul de points de soutien (HCP + longueur +
+            // distribution, fit connu à 3 cartes), cohérent avec ce qui est fait
+            // partout ailleurs dans ce moteur pour un fit chiffré.
+            const supportPointsForFittedTwoNT = computeSupportPoints(hand, myBid.strain, 3);
+            // 12-13 points de soutien (mini) : accepte le fit au palier minimal (3) ;
+            // 14+ : la manche est acquise (12+ garanti côté partenaire, 14+12=26+).
+            const call = (supportPointsForFittedTwoNT >= 14 ? '4' : '3') + myBid.strain;
             if (isCallLegal(history, call, seat)) return call;
         }
         if (partnerCall === '3NT') {
@@ -5645,7 +5695,17 @@ function decideRobotCall(seat, deal, history) {
             // ce bloc (pensé pour "le partenaire a ouvert, j'ai répondu") doit rester
             // inerte plutôt que de mal interpréter la séquence.
             const partnerOpeningEntry = history.slice(0, myBidIndex).find(e => isBidCall(e.call) && partnershipOf(e.seat) === partnershipOf(seat));
-            const partnerOpeningBid = partnerOpeningEntry ? parseBid(partnerOpeningEntry.call) : null;
+            // Voir échange avec Guillaume (vraie donne testée, "pourquoi Est saute
+            // brutalement à 5♦ ?") : bug trouvé — cette recherche ne vérifiait jamais si
+            // l'annonce trouvée était une VRAIE ouverture (précédée uniquement de
+            // passes) ou une simple INTERVENTION sur l'ouverture adverse. Une
+            // intervention (comme "1♦" ici, sur le "1♣" adverse) n'a pas la même valeur
+            // structurelle qu'une vraie ouverture pour tout ce qui suit (2/1 forcing,
+            // zone de manche connue) — sans cette distinction, une réponse normale à une
+            // simple intervention était traitée comme un 2/1 forcing de manche établi.
+            const partnerOpeningWasRealOpening = partnerOpeningEntry
+                && history.slice(0, history.indexOf(partnerOpeningEntry)).every(e => isPass(e.call));
+            const partnerOpeningBid = (partnerOpeningEntry && partnerOpeningWasRealOpening) ? parseBid(partnerOpeningEntry.call) : null;
             const myResponseBid = myBids.length > 0 ? parseBid(myBids[0].call) : null;
             if (partnerOpeningBid && myResponseBid) {
 
@@ -6462,6 +6522,82 @@ function decideRobotCall(seat, deal, history) {
             explanation = `A déjà annoncé — passe (règle du tour unique)`;
         }
     } else if (myBids.length === 2) {
+        // Voir échange avec Guillaume (vraie donne testée, "3♦ me semble une enchère
+        // d'essai, à la couleur plutôt qu'à 2SA... demandant au partenaire de revenir à
+        // 3♠ s'il est mini, mettre 4♠ s'il est maxi, juger sa main s'il est entre les
+        // deux") : construction complète — j'ai soutenu la majeure du partenaire (2ème
+        // annonce), il redemande maintenant une NOUVELLE couleur (pas la majeure
+        // convenue) SOUS le palier de manche : c'est une enchère d'essai naturelle.
+        const myOpeningForTrial = myBids[0] && parseBid(myBids[0].call);
+        const mySupportForTrial = myBids[1] && parseBid(myBids[1].call);
+        const partnerFirstBidForTrial = history.find(e => partnershipOf(e.seat) === partnershipOf(seat)
+            && e.seat !== seat && isBidCall(e.call));
+        const partnerFirstParsedForTrial = partnerFirstBidForTrial ? parseBid(partnerFirstBidForTrial.call) : null;
+        const partnerTrialBid = getLastActualBid(history);
+        const partnerTrialParsed = partnerTrialBid ? parseBid(partnerTrialBid.call) : null;
+        const isMajorSupportSequence = mySupportForTrial && partnerFirstParsedForTrial
+            && (partnerFirstParsedForTrial.strain === 'S' || partnerFirstParsedForTrial.strain === 'H')
+            && mySupportForTrial.strain === partnerFirstParsedForTrial.strain
+            && mySupportForTrial.level === partnerFirstParsedForTrial.level + 1;
+        const isTrialBid = isMajorSupportSequence && partnerTrialParsed
+            && partnerTrialParsed.strain !== partnerFirstParsedForTrial.strain && partnerTrialParsed.strain !== 'NT'
+            && partnerTrialParsed.level < 4
+            && partnershipOf(partnerTrialBid.seat) === partnershipOf(seat) && partnerTrialBid.seat !== seat;
+        if (isTrialBid) {
+            const agreedMajor = partnerFirstParsedForTrial.strain;
+            const trialSuit = partnerTrialParsed.strain;
+            const gameCall = '4' + agreedMajor;
+            const declineCall = '3' + agreedMajor;
+            if (hcp >= 14) {
+                if (isCallLegal(history, gameCall, seat)) {
+                    call = gameCall;
+                    explanation = `Maxi (14H+) après l'enchère d'essai à ${STRAIN_SYMBOL[trialSuit]} — manche dans le fit, jamais à SA (${points})`;
+                }
+            } else if (hcp <= 11) {
+                if (isCallLegal(history, declineCall, seat)) {
+                    call = declineCall;
+                    explanation = `Mini (≤11H) après l'enchère d'essai à ${STRAIN_SYMBOL[trialSuit]} — décline, retour au palier minimal (${points})`;
+                }
+            } else {
+                // Voir échange avec Guillaume ("s'il avait 13H dont la DK seconde... le
+                // fait de savoir que ♦ est la couleur de son partenaire lui permettrait
+                // de revaloriser sa main") : zone intermédiaire (12-13H) — jugement basé
+                // sur une AIDE spécifique dans la couleur d'essai (honneur A/R/D, ou
+                // chicane/singleton qui limite les pertes là-bas).
+                const trialSuitCards = hand[trialSuit] || '';
+                const hasHelpInTrialSuit = trialSuitCards.includes('A') || trialSuitCards.includes('K')
+                    || trialSuitCards.includes('Q') || trialSuitCards.length <= 1;
+                if (hasHelpInTrialSuit && isCallLegal(history, gameCall, seat)) {
+                    call = gameCall;
+                    explanation = `Zone intermédiaire (12-13H) mais aide réelle à ${STRAIN_SYMBOL[trialSuit]} (honneur ou chicane) — revalorise la main, manche dans le fit (${points})`;
+                } else if (isCallLegal(history, declineCall, seat)) {
+                    call = declineCall;
+                    explanation = `Zone intermédiaire (12-13H) sans aide réelle à ${STRAIN_SYMBOL[trialSuit]} — décline, retour au palier minimal (${points})`;
+                }
+            }
+        }
+
+        // Voir échange avec Guillaume (vraie donne testée, "pourquoi Est ajoute 5♥ ?") :
+        // cas manquant — ma 1ère annonce était un transfert Texas (2♦→♥ ou 2♥→♠) et ma
+        // 2ème une invite "2SA" — le partenaire vient d'ACCEPTER clairement en manche
+        // dans la majeure transférée (voir le fix symétrique côté ouvreur, "accepte
+        // l'invite... vise la manche"). J'ai déjà tout dit (transfert + invite bornée),
+        // rien de plus à ajouter — passe, jamais un repli générique qui pousse au-delà
+        // de la manche sans justification.
+        const myTransferAskForEast = myBids[0] && parseBid(myBids[0].call);
+        const myInviteForEast = myBids[1] && myBids[1].call === '2NT';
+        const transferredMajorForEast = myTransferAskForEast && myTransferAskForEast.level === 2
+            ? (myTransferAskForEast.strain === 'D' ? 'H' : myTransferAskForEast.strain === 'H' ? 'S' : null)
+            : null;
+        const partnerAcceptForEast = getLastActualBid(history);
+        const partnerAcceptParsedForEast = partnerAcceptForEast ? parseBid(partnerAcceptForEast.call) : null;
+        if (myInviteForEast && transferredMajorForEast && partnerAcceptParsedForEast
+                && partnerAcceptParsedForEast.strain === transferredMajorForEast && partnerAcceptParsedForEast.level === 4
+                && partnershipOf(partnerAcceptForEast.seat) === partnershipOf(seat) && partnerAcceptForEast.seat !== seat) {
+            explanation = `Transfert + invite déjà tout dit, le partenaire accepte en manche — passe (${points})`;
+            deliberatePassAfterTransfer = true;
+        }
+
         // Voir échange avec Guillaume (vraie donne testée, "pourquoi Sud reparle sur le
         // 2♥ [Coeur] de son partenaire ?") : cas manquant — ma REDEMANDE (pas mon
         // ouverture) était 1SA (12-14H typique, dénie 4 cartes dans la couleur du

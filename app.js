@@ -1281,10 +1281,10 @@ function uiCreateRoom() {
     document.getElementById('landingError').style.display = 'none';
     showConnectingOverlay('Création de la partie…');
     if (peerConn) peerConn.destroy();
-    // Voir échange avec Guillaume (session du 23 juillet — reprise via localStorage) :
-    // création délibérée d'une TOUTE NOUVELLE partie — une éventuelle ancienne
-    // sauvegarde n'a plus lieu d'être proposée à la reprise après ça.
-    clearHostGameStateStorage();
+    // Voir échange avec Guillaume (session du 8 août — "multi room") : on ne touche plus
+    // aux sauvegardes existantes ici — créer une nouvelle partie n'a plus de raison
+    // d'effacer les AUTRES salles encore reprenables (ancien comportement mono-salle).
+    // On masque juste la bannière pour la durée de la création, purement visuel.
     const resumeBanner = document.getElementById('resumeSessionBanner');
     if (resumeBanner) resumeBanner.style.display = 'none';
 
@@ -3478,8 +3478,10 @@ function handlePeerData(msg, guestIndex) {
             // Voir échange avec Guillaume (session du 23 juillet — reprise via
             // localStorage) : on vient de transférer l'hôte volontairement à quelqu'un
             // d'autre — la sauvegarde locale de CETTE partie n'a plus lieu d'être
-            // proposée à la reprise, on n'en est plus le responsable légitime.
-            clearHostGameStateStorage();
+            // proposée à la reprise, on n'en est plus le responsable légitime. Les
+            // AUTRES salles reprenables (session du 8 août — "multi room") ne sont pas
+            // affectées.
+            clearHostGameStateStorage(currentRoomCode);
 
             connectAsGuest(newRoomCode, myOldToken, myName);
             break;
@@ -4288,10 +4290,41 @@ function uiSelfWizz() {
     triggerWizzEffect();
 }
 
+// Vérifie que la connexion réseau nécessaire pour atteindre CE destinataire précis est
+// vraiment ouverte — pas seulement que peerConn existe (voir échange avec Guillaume,
+// session du 8 août, "le wizz ne marchait plus"). Côté hôte : la connexion spécifique
+// vers ce jeton doit être ouverte. Côté invité : sa seule connexion (vers l'hôte) doit
+// l'être — peerConn.isConnected() convient déjà pour ce cas (une seule connexion
+// possible), inutile de dupliquer sa logique.
+function isWizzTargetReachable(targetId) {
+    if (!peerConn) return false;
+    if (myRole === 'host') {
+        const guestIndex = guestIndexByToken[targetId];
+        if (guestIndex === undefined) return false;
+        const conn = peerConn.conns && peerConn.conns[guestIndex];
+        return !!(conn && conn.open);
+    }
+    return peerConn.isConnected();
+}
+
 function uiSendWizz(targetId) {
     if (!peerConn || targetId === myParticipantId) return;
     const now = Date.now();
     if (wizzCooldownUntil[targetId] && now < wizzCooldownUntil[targetId]) return; // encore en sablier, on ignore silencieusement
+
+    // Voir échange avec Guillaume (session du 8 août — "le wizz ne marchait plus, je
+    // pouvais juste pas le faire") : bug trouvé — le cooldown était posé AVANT même de
+    // savoir si l'envoi allait réussir. peerConn.send() abandonne silencieusement un
+    // message si la connexion cible n'est pas encore pleinement ouverte (voir conn.open
+    // dans peer-connection.js) — un cas plausible juste après une reconnexion, où le
+    // statut semble déjà "connecté" mais la DataConnection elle-même termine encore son
+    // établissement. Sans ce contrôle, un envoi raté posait quand même le cooldown,
+    // empêchant toute nouvelle tentative pendant 4s de plus, alors que rien n'était
+    // jamais parti.
+    if (!isWizzTargetReachable(targetId)) {
+        pushDebugLog(`Wizz vers ${targetId.slice(0, 10)}… abandonné : connexion pas encore prête.`);
+        return;
+    }
     wizzCooldownUntil[targetId] = now + WIZZ_COOLDOWN_MS;
 
     const me = participants.find(p => p.id === myParticipantId);
@@ -5997,12 +6030,51 @@ function clearHostingPregameMark() {
 // navigateur (localStorage est propre à cette combinaison), pas depuis un autre — pour
 // couvrir ce cas-là, voir plutôt la reprise automatique par le sous-hôte
 // (computeSubHostId), pensée précisément pour "un autre appareil prend le relais".
-const HOST_GAME_STATE_KEY = 'bridgeBidHostGameState';
+const HOST_GAME_STATE_KEY = 'bridgeBidHostGameStates'; // carte {roomCode: payload}, voir échange avec Guillaume (session du 8 août — "multi room")
 // Passé ce délai, une session sauvegardée n'est plus proposée à la reprise — un chiffre
 // volontairement généreux (une session de club peut s'étaler sur plusieurs heures avec
 // pauses), sans non plus laisser une bannière "reprendre" resurgir des jours après une
 // partie oubliée.
 const HOST_GAME_STATE_EXPIRY_MS = 6 * 60 * 60 * 1000; // 6h
+// Voir échange avec Guillaume (session du 8 août — "multi room") : plafond du nombre de
+// salles mémorisées simultanément, pour ne pas laisser localStorage grossir sans limite
+// au fil des semaines — au-delà, la plus ancienne (par savedAt) est évincée en priorité,
+// avant même de regarder l'expiration.
+const MAX_SAVED_HOST_SESSIONS = 8;
+
+// Lit la carte complète {roomCode: payload} depuis localStorage, purgée des entrées
+// expirées au passage (jamais écrites telles quelles ailleurs — voir writeAllHostGame
+// States, seul point d'écriture). Repli sur un objet vide si absent/corrompu.
+function readAllHostGameStates() {
+    let map;
+    try {
+        const raw = localStorage.getItem(HOST_GAME_STATE_KEY);
+        map = raw ? JSON.parse(raw) : {};
+    } catch (e) {
+        map = {};
+    }
+    if (!map || typeof map !== 'object') map = {};
+    let changed = false;
+    for (const code of Object.keys(map)) {
+        const entry = map[code];
+        if (!entry || !entry.roomCode || !entry.deals || !entry.savedAt
+                || Date.now() - entry.savedAt > HOST_GAME_STATE_EXPIRY_MS) {
+            delete map[code];
+            changed = true;
+        }
+    }
+    if (changed) writeAllHostGameStates(map);
+    return map;
+}
+
+function writeAllHostGameStates(map) {
+    try {
+        localStorage.setItem(HOST_GAME_STATE_KEY, JSON.stringify(map));
+    } catch (e) {
+        // Quota localStorage dépassé, ou navigation privée stricte qui bloque l'écriture :
+        // tant pis, la reprise ne sera simplement pas possible — rien d'autre n'est cassé.
+    }
+}
 
 // Sauvegarde l'état complet — appelée à chaque changement significatif (voir applyCall,
 // gotoBoard, broadcastLobbyState) tant qu'on est hôte et que la partie est lancée. Pas de
@@ -6016,74 +6088,99 @@ const HOST_GAME_STATE_EXPIRY_MS = 6 * 60 * 60 * 1000; // 6h
 // via le cloud), plutôt que de dupliquer l'appel à chacun des call sites existants.
 function saveHostGameStateToStorage() {
     if (myRole !== 'host' || !deals || !currentRoomCode) return;
-    try {
-        const payload = {
-            roomCode: currentRoomCode,
-            deals, boardIndex, seatAssignment, participants, autoPassSeats,
-            roomCreatorName, roomCreatorToken,
-            // Voir échange avec Guillaume (session du 23 juillet — "sauve aussi le chat") :
-            // sans ça, la conversation repartait de zéro à chaque reprise, même s'il y
-            // avait des messages échangés juste avant la fermeture de l'onglet.
-            chatMessages,
-            savedAt: Date.now()
-        };
-        localStorage.setItem(HOST_GAME_STATE_KEY, JSON.stringify(payload));
-    } catch (e) {
-        // Quota localStorage dépassé, ou navigation privée stricte qui bloque l'écriture :
-        // tant pis, la reprise ne sera simplement pas possible — rien d'autre n'est cassé.
+    const payload = {
+        roomCode: currentRoomCode,
+        deals, boardIndex, seatAssignment, participants, autoPassSeats,
+        roomCreatorName, roomCreatorToken,
+        // Voir échange avec Guillaume (session du 23 juillet — "sauve aussi le chat") :
+        // sans ça, la conversation repartait de zéro à chaque reprise, même s'il y
+        // avait des messages échangés juste avant la fermeture de l'onglet.
+        chatMessages,
+        savedAt: Date.now()
+    };
+    const map = readAllHostGameStates();
+    map[currentRoomCode] = payload;
+    // Voir échange avec Guillaume (session du 8 août — "multi room") : plafond appliqué
+    // ICI, pas seulement à la lecture — sans ça, une salle active depuis longtemps (donc
+    // re-sauvegardée sans cesse, jamais expirée) pourrait à elle seule empêcher toute
+    // purge naturelle des autres.
+    const codes = Object.keys(map);
+    if (codes.length > MAX_SAVED_HOST_SESSIONS) {
+        codes.sort((a, b) => (map[a].savedAt || 0) - (map[b].savedAt || 0));
+        for (let i = 0; i < codes.length - MAX_SAVED_HOST_SESSIONS; i++) delete map[codes[i]];
     }
+    writeAllHostGameStates(map);
     pushCloudGameState();
 }
 
-function clearHostGameStateStorage() {
-    try { localStorage.removeItem(HOST_GAME_STATE_KEY); } catch (e) { /* tant pis */ }
+// Efface UNE salle précise de la carte des sessions reprenables (celle en cours par
+// défaut) — jamais les autres, contrairement à l'ancien comportement mono-salle qui
+// effaçait tout indistinctement.
+function clearHostGameStateStorage(roomCode) {
+    const code = roomCode || currentRoomCode;
+    if (!code) return;
+    const map = readAllHostGameStates();
+    if (map[code]) {
+        delete map[code];
+        writeAllHostGameStates(map);
+    }
 }
 
-// Lit une éventuelle session sauvegardée, sans effet de bord — utilisée à la fois pour
-// l'afficher (checkForResumableHostSession) et pour la reprendre (uiResumeHostSession),
-// afin de ne jamais dupliquer la logique de validité/expiration entre les deux.
-function readResumableHostState() {
-    let saved;
-    try {
-        const raw = localStorage.getItem(HOST_GAME_STATE_KEY);
-        if (!raw) return null;
-        saved = JSON.parse(raw);
-    } catch (e) {
-        return null;
-    }
-    if (!saved || !saved.roomCode || !saved.deals || !saved.savedAt) return null;
-    if (Date.now() - saved.savedAt > HOST_GAME_STATE_EXPIRY_MS) {
-        clearHostGameStateStorage(); // périmée : autant la nettoyer tout de suite
-        return null;
-    }
-    return saved;
+// Lit UNE session sauvegardée par son code de salle, sans effet de bord au-delà de la
+// purge déjà faite par readAllHostGameStates — utilisée à la fois pour l'afficher
+// (checkForResumableHostSession) et pour la reprendre (uiResumeHostSession), afin de ne
+// jamais dupliquer la logique de validité/expiration entre les deux.
+function readResumableHostState(roomCode) {
+    const map = readAllHostGameStates();
+    return map[roomCode] || null;
 }
 
-// Affiche (ou masque) la bannière de reprise à l'accueil — appelée une fois au
-// chargement de la page (voir DOMContentLoaded plus bas).
+// Renvoie toutes les sessions reprenables, triées de la plus récente à la plus ancienne.
+function readAllResumableHostStates() {
+    const map = readAllHostGameStates();
+    return Object.values(map).sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0));
+}
+
+// Affiche (ou masque) la bannière de reprise à l'accueil — une entrée par salle
+// reprenable (voir échange avec Guillaume, session du 8 août — "multi room" : auparavant
+// une seule salle possible, la plus récemment sauvegardée écrasait systématiquement les
+// précédentes). Appelée une fois au chargement de la page (voir DOMContentLoaded plus
+// bas), et à chaque fermeture/reprise pour rester à jour.
 function checkForResumableHostSession() {
     const banner = document.getElementById('resumeSessionBanner');
-    if (!banner) return null;
-    const saved = readResumableHostState();
-    if (!saved) {
+    if (!banner) return [];
+    const sessions = readAllResumableHostStates();
+    if (sessions.length === 0) {
         banner.style.display = 'none';
-        return null;
+        return [];
     }
-    const minutesAgo = Math.max(0, Math.round((Date.now() - saved.savedAt) / 60000));
-    const timeLabel = minutesAgo === 0 ? "à l'instant" : `il y a ${minutesAgo} min`;
-    document.getElementById('resumeSessionDetails').textContent =
-        `(salle ${saved.roomCode}, ${saved.deals.length} donnes, ${timeLabel})`;
+    const list = document.getElementById('resumeSessionList');
+    if (list) {
+        list.innerHTML = sessions.map(saved => {
+            const minutesAgo = Math.max(0, Math.round((Date.now() - saved.savedAt) / 60000));
+            const timeLabel = minutesAgo === 0 ? "à l'instant" : `il y a ${minutesAgo} min`;
+            const code = escapeHtml(saved.roomCode);
+            return `<div class="resume-session-row">
+                <div class="resume-session-text">🔄 Salle ${code} <span class="resume-session-details">(${saved.deals.length} donnes, ${timeLabel})</span></div>
+                <div class="resume-session-actions">
+                    <button type="button" class="btn btn-primary btn-small" onclick="uiResumeHostSession('${code}')">Reprendre</button>
+                    <button type="button" class="btn btn-secondary btn-small" onclick="uiDismissResumeSession('${code}')">Non merci</button>
+                </div>
+            </div>`;
+        }).join('');
+    }
     banner.style.display = 'block';
-    return saved;
+    return sessions;
 }
 
-function uiDismissResumeSession() {
+function uiDismissResumeSession(roomCode) {
     // Voir échange avec Guillaume (session du 24 juillet) : clôture définitivement la
     // partie — supprime la sauvegarde elle-même, pas seulement la bannière pour cette
-    // visite. Un rechargement ultérieur ne la reproposera plus.
-    clearHostGameStateStorage();
-    const banner = document.getElementById('resumeSessionBanner');
-    if (banner) banner.style.display = 'none';
+    // visite. Un rechargement ultérieur ne la reproposera plus. Paramétré par salle
+    // (session du 8 août — "multi room") : n'affecte que celle-ci, les autres salles
+    // reprenables restent proposées normalement.
+    clearHostGameStateStorage(roomCode);
+    checkForResumableHostSession(); // ré-affiche la liste sans cette entrée (ou masque si c'était la dernière)
 }
 
 // Reprend une partie sauvegardée : restaure tout l'état en mémoire à l'identique, puis
@@ -6113,10 +6210,10 @@ function uiDismissResumeSession() {
 // pushCloudGameState) — il l'emporte systématiquement dès qu'il est joignable. La
 // sauvegarde locale ne sert plus que de filet si le cloud est injoignable (hors-ligne,
 // panne passagère) ou n'a jamais rien reçu pour ce code.
-async function uiResumeHostSession() {
-    const saved = readResumableHostState();
+async function uiResumeHostSession(roomCode) {
+    const saved = readResumableHostState(roomCode);
     if (!saved) {
-        checkForResumableHostSession(); // périmée entre-temps : remet la bannière à jour (la masque)
+        checkForResumableHostSession(); // périmée entre-temps : remet la bannière à jour
         return;
     }
 
@@ -6465,11 +6562,17 @@ function uiResumeFromCloud() {
         }
     }
 
-    if (!claimedSeat) {
-        cloudResumeCandidate = null;
-        hideConnectingOverlay();
-        showLandingError("Aucun siège n'est disponible à reprendre dans cette salle (tous déjà occupés, aucun en attente d'un partenaire).");
-        return;
+    // Voir échange avec Guillaume (session du 8 août — "j'essaye de m'incruster plus
+    // tard [...] il me dit un truc du genre 'tous les sièges sont occupés' mais on doit
+    // toujours pouvoir join en tant que kibbitz") : bug trouvé — sans siège à revendiquer
+    // (ni le mien déjà assigné, ni un SEAT_PENDING libre), cette fonction REJETAIT
+    // entièrement la connexion, alors qu'un kibbitz (personne sans siège) doit TOUJOURS
+    // pouvoir rejoindre, quel que soit l'état des 4 sièges (tous en bots, ou tous déjà
+    // occupés par d'autres humains). Corrigé : sans siège à revendiquer, on rejoint quand
+    // même, simplement sans siège (comme n'importe quel kibbitz) — seul un participant
+    // pas encore connu de cette salle a besoin d'être ajouté à `participants`.
+    if (!claimedSeat && !st.participants.some(p => p.id === myToken)) {
+        st.participants.push({ id: myToken, name: savedNickname || 'Joueur' });
     }
 
     // Voir échange avec Guillaume ("on n'est plus obligé de passer par le P2P") : aucune
@@ -6566,8 +6669,8 @@ window.addEventListener('DOMContentLoaded', () => {
     // est en réalité toujours son hôte légitime. Si le code diffère (lien d'un tiers), le
     // traitement normal du paramètre reste inchangé — la bannière de reprise s'affiche
     // simplement EN PLUS, comme une option indépendante.
-    const resumable = checkForResumableHostSession();
-    const roomMatchesResumable = resumable && room && resumable.roomCode === room.toUpperCase();
+    const resumableSessions = checkForResumableHostSession();
+    const matchingResumable = room && resumableSessions.find(s => s.roomCode === room.toUpperCase());
 
     // Voir échange avec Guillaume (session du 23 juillet) — voir HOSTING_PREGAME_KEY plus
     // haut : si ce code correspond à une salle qu'on hébergeait nous-même, encore dans le
@@ -6582,17 +6685,17 @@ window.addEventListener('DOMContentLoaded', () => {
         const url = new URL(window.location.href);
         url.searchParams.delete('room');
         window.history.replaceState(null, '', url.toString());
-    } else if (roomMatchesResumable) {
+    } else if (matchingResumable) {
         // Voir échange avec Guillaume ("je devrais être versé directement dedans") : le
         // lien pointe explicitement vers CETTE salle, sur l'appareil qui en est bien
         // l'hôte légitime — aucune ambiguïté à lever, contrairement à un code tapé à la
         // main sans certitude d'être le bon. On masque la bannière (elle ferait
-        // doublon) et on reprend directement, via uiResumeHostSession() — désormais
-        // consciente du cloud (voir plus bas), donc jamais périmée même si un partenaire
-        // a enchéri depuis un autre appareil entre-temps.
+        // doublon) et on reprend directement, via uiResumeHostSession(roomCode) —
+        // désormais consciente du cloud (voir plus bas), donc jamais périmée même si un
+        // partenaire a enchéri depuis un autre appareil entre-temps.
         const banner = document.getElementById('resumeSessionBanner');
         if (banner) banner.style.display = 'none';
-        uiResumeHostSession();
+        uiResumeHostSession(matchingResumable.roomCode);
     } else if (room && navigator.onLine) {
         document.getElementById('joinCodeInput').value = room.toUpperCase();
         uiJoinRoom();

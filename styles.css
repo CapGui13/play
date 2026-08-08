@@ -543,7 +543,7 @@ body.on-landing-screen .connection-bar {
 .resume-session-banner {
     max-width: 520px;
     margin: 0 auto 24px;
-    padding: 16px 20px;
+    padding: 4px 20px;
     border-radius: 10px;
     background: #223d2c;
     background: color-mix(in srgb, #3ca05a 20%, var(--card));
@@ -553,9 +553,27 @@ body.on-landing-screen .connection-bar {
     text-align: center;
 }
 
+/* Voir échange avec Guillaume (session du 8 août — "multi room") : une ligne par salle
+   reprenable, empilées dans #resumeSessionList — séparateur discret entre elles (aucun
+   avant la 1ère, voir :first-child), chacune avec son propre padding vertical. */
+.resume-session-row {
+    padding: 12px 0;
+    border-top: 1px solid color-mix(in srgb, #3ca05a 30%, transparent);
+}
+
+.resume-session-row:first-child {
+    border-top: none;
+}
+
 .resume-session-text {
     margin-bottom: 12px;
     font-weight: 600;
+}
+
+.resume-session-details {
+    font-weight: 400;
+    opacity: 0.8;
+    font-size: 0.92em;
 }
 
 .resume-session-actions {

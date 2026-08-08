@@ -113,18 +113,14 @@
             <p class="tagline">Entraînez-vous aux enchères à deux, à distance, sur les donnes que vous avez générées.</p>
         </div>
 
-        <!-- Voir échange avec Guillaume (session du 23 juillet — persistance localStorage) :
-             affichée uniquement si une partie hébergée par CET appareil est récupérable
-             (voir checkForResumableHostSession dans app.js) — masquée par défaut, avant les
-             cartes Créer/Rejoindre puisque c'est le choix le plus probable dans ce cas. -->
+        <!-- Voir échange avec Guillaume (session du 23 juillet — persistance localStorage,
+             étendu session du 8 août en "multi room") : une entrée par partie hébergée par
+             CET appareil et encore récupérable (voir checkForResumableHostSession dans
+             app.js) — masquée par défaut, avant les cartes Créer/Rejoindre puisque c'est le
+             choix le plus probable dans ce cas. Le contenu de #resumeSessionList est généré
+             entièrement en JS (une ligne par salle), rien de statique ici. -->
         <div id="resumeSessionBanner" class="resume-session-banner" style="display:none;">
-            <div class="resume-session-text">
-                🔄 Une partie est encore en cours <span id="resumeSessionDetails"></span>
-            </div>
-            <div class="resume-session-actions">
-                <button type="button" class="btn btn-primary btn-small" onclick="uiResumeHostSession()">Reprendre la partie</button>
-                <button type="button" class="btn btn-secondary btn-small" onclick="uiDismissResumeSession()">Non merci</button>
-            </div>
+            <div id="resumeSessionList"></div>
         </div>
 
         <div class="landing-choices">
