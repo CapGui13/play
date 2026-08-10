@@ -1039,6 +1039,11 @@ a.btn {
 .board-overview-status.is-pending { color: var(--text-muted); }
 .board-overview-status.is-waiting { color: var(--warn-amber); }
 .board-overview-status.is-done { color: #7fbf7f; }
+/* Voir échange avec Guillaume (session du 8 août — "le point d'interrogation... doit
+   être en rouge si le joueur concerné est celui dont on attend l'enchère") : même
+   teinte que .disconnected-turn (--suit-red), déjà établie ailleurs pour ce type
+   d'alerte — distinct du simple "en attente de quelqu'un d'autre" (is-waiting, ambre). */
+.board-overview-status.needs-me { color: var(--suit-red); font-weight: 700; }
 
 .deal-preview-board {
     padding: 14px 0;

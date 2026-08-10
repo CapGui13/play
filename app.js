@@ -5745,12 +5745,22 @@ function getParContractCell(ddTable, dealVulnerable) {
     if (nsScore === null && ewScore === null) return null; // aucun camp ne fait le moindre pli au-dessus de 6, rarissime
     const winningSide = (nsScore ?? -Infinity) >= (ewScore ?? -Infinity) ? 'NS' : 'EW';
     const summary = sideSummary[winningSide];
+    const sidePositions = winningSide === 'NS' ? ['N', 'S'] : ['E', 'W'];
     for (const strain of STRAIN_ORDER) {
-        for (const pos of DD_TABLE_SEAT_ORDER) {
+        // Voir échange avec Guillaume ("si le contrat optimal est 3♣ en NS, il faut
+        // mettre 3♣ NS et non 3♣ N ; mais si le contrat optimal ne s'atteint que d'un
+        // seul côté, alors on ne donne que ce côté là") : les 2 partenaires peuvent
+        // avoir un nombre de plis différent dans la MÊME couleur (l'entame diffère selon
+        // qui déclare) — ne regrouper que s'ils atteignent VRAIMENT le même palier
+        // optimal ensemble, jamais par défaut.
+        const matchingPositions = sidePositions.filter(pos => {
             const cell = info[strain][pos];
-            if (cell.side === winningSide && cell.tier === summary.activeTier && cell.score === summary.bestScore) {
-                return { strain, level: ddTable[strain][pos] - 6, declarer: pos };
-            }
+            return cell.tier === summary.activeTier && cell.score === summary.bestScore;
+        });
+        if (matchingPositions.length > 0) {
+            const level = ddTable[strain][matchingPositions[0]] - 6;
+            const declarer = matchingPositions.length === sidePositions.length ? winningSide : matchingPositions[0];
+            return { strain, level, declarer };
         }
     }
     return null;
@@ -5783,35 +5793,49 @@ function renderBoardOverview() {
         const hist = deal.auctionHistory || [];
         const mySeat = myEffectiveSeatForDeal(deal);
         const handHtml = compactHandHtml(mySeat ? deal.hands[mySeat] : null);
+        const auctionOver = isAuctionOver(hist);
 
         let reachedHtml;
         let titleAttr = '';
-        if (hist.length === 0) {
-            reachedHtml = '<span class="board-overview-status is-pending">?</span>';
-            titleAttr = 'Pas encore commencée';
-        } else if (isPassedOut(hist)) {
-            reachedHtml = '<span class="board-overview-status is-done">Passé</span>';
-        } else if (isAuctionOver(hist)) {
-            const contract = determineContract(hist);
-            reachedHtml = contractBadgeHtml(contract.strain, contract.level, contract.declarer, contract.doubled);
+        if (auctionOver) {
+            if (isPassedOut(hist)) {
+                reachedHtml = '<span class="board-overview-status is-done">Passé</span>';
+            } else {
+                const contract = determineContract(hist);
+                reachedHtml = contractBadgeHtml(contract.strain, contract.level, contract.declarer, contract.doubled);
+            }
         } else {
+            // Voir échange avec Guillaume ("le point d'interrogation... doit être en
+            // rouge si le joueur concerné est celui dont on attend l'enchère pour
+            // continuer") : même logique que la donne n'ait pas encore commencé (le
+            // donneur doit ouvrir) ou soit déjà en cours — dans les 2 cas, quelqu'un
+            // doit agir, et le "?" devient rouge précisément si c'est MOI (un de mes
+            // sièges) qu'on attend.
             const turnSeat = currentTurnSeat(deal.dealer, hist);
+            const isMyTurnHere = mySeats && mySeats.includes(turnSeat);
             const occupantId = seatAssignment[turnSeat];
             const occupantLabel = !occupantId
                 ? 'un robot'
                 : (occupantId === SEAT_PENDING ? 'un partenaire pas encore arrivé' : participantName(occupantId));
-            reachedHtml = '<span class="board-overview-status is-waiting">?</span>';
-            titleAttr = `En attente de ${seatFullName(turnSeat)} (${occupantLabel})`;
+            reachedHtml = `<span class="board-overview-status ${isMyTurnHere ? 'needs-me' : 'is-waiting'}">?</span>`;
+            titleAttr = hist.length === 0
+                ? (isMyTurnHere ? 'À vous d\'ouvrir' : `En attente de ${seatFullName(turnSeat)} (${occupantLabel})`)
+                : (isMyTurnHere ? 'À vous d\'enchérir' : `En attente de ${seatFullName(turnSeat)} (${occupantLabel})`);
         }
 
+        // Voir échange avec Guillaume ("le PAR ne doit apparaître que si la séquence
+        // d'enchère est finie") : masqué tant que l'enchère n'est pas terminée, plutôt
+        // que de révéler par avance ce qui serait un bon résultat.
         let parHtml = '<span class="board-overview-status is-pending">—</span>';
-        const parCell = getParContractCell(deal.ddTable, deal.vulnerable);
-        if (parCell) {
-            parHtml = contractBadgeHtml(parCell.strain, parCell.level, parCell.declarer);
-        } else if (deal.par && deal.par.contract) {
-            // Repli sur le résumé PBN préformaté (voir dealPreviewParText) si la table
-            // complète n'est pas dispo mais qu'un PAR direct l'était à l'import.
-            parHtml = `<span class="board-overview-status">${escapeHtml(deal.par.contract)}${deal.par.declarer ? ' ' + escapeHtml(deal.par.declarer) : ''}</span>`;
+        if (auctionOver) {
+            const parCell = getParContractCell(deal.ddTable, deal.vulnerable);
+            if (parCell) {
+                parHtml = contractBadgeHtml(parCell.strain, parCell.level, parCell.declarer);
+            } else if (deal.par && deal.par.contract) {
+                // Repli sur le résumé PBN préformaté (voir dealPreviewParText) si la
+                // table complète n'est pas dispo mais qu'un PAR direct l'était à l'import.
+                parHtml = `<span class="board-overview-status">${escapeHtml(deal.par.contract)}${deal.par.declarer ? ' ' + escapeHtml(deal.par.declarer) : ''}</span>`;
+            }
         }
 
         const activeClass = idx === boardIndex ? ' is-current' : '';
