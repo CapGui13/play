@@ -5116,26 +5116,43 @@ function computeSacrificeAwareVisibility(ddTable, dealVulnerable, info, sideSumm
     return visible;
 }
 
+// Voir échange avec Guillaume (session du 8 août — "dans les PAR, ça serait bien de
+// fondre les colonnes d'une ligne si c'est le même PAR... conserver la taille des 2
+// colonnes additionnées mais faire en sorte que ça n'en fasse plus qu'une seule") :
+// fusionne 2 cellules partenaires (N/S ou E/O) sur UNE ligne en une seule <td colspan=2>
+// quand elles ont exactement la même valeur affichée ET la même mise en évidence —
+// sinon garde 2 cellules séparées. Appliqué ligne par ligne (pas table entière) : une
+// donne peut avoir SA différent entre les 2 partenaires mais toutes les autres couleurs
+// identiques (voir l'exemple de Guillaume), auquel cas seule la ligne SA reste à 2
+// cellules.
+function renderDDCellPairHtml(strain, posA, posB, ddTable, info, sideSummary, sideVisibility) {
+    const buildCell = (pos) => {
+        const cellInfo = info[strain][pos];
+        const summary = sideSummary[cellInfo.side];
+        let cls = '';
+        if (sideVisibility[cellInfo.side] && summary.activeTier && cellInfo.tier === summary.activeTier) {
+            if (cellInfo.score === summary.bestScore) cls = 'dd-best-contract';
+            else if (summary.activeTier !== 'partial') cls = 'dd-secondary-contract';
+        }
+        return { cls, text: tricksToContractLevel(ddTable[strain][pos]) };
+    };
+    const a = buildCell(posA);
+    const b = buildCell(posB);
+    if (a.text === b.text && a.cls === b.cls) {
+        return `<td colspan="2"${a.cls ? ` class="${a.cls}"` : ''}>${a.text}</td>`;
+    }
+    return `<td${a.cls ? ` class="${a.cls}"` : ''}>${a.text}</td><td${b.cls ? ` class="${b.cls}"` : ''}>${b.text}</td>`;
+}
+
 function renderDDTable(ddTable, dealVulnerable) {
     if (!ddTable) return '';
     const { info, sideSummary } = computeDDScores(ddTable, dealVulnerable);
     const sideVisibility = computeSacrificeAwareVisibility(ddTable, dealVulnerable, info, sideSummary);
     const rows = STRAIN_ORDER.map(strain => {
         const labelHtml = formatStrainLabel(strain);
-        const cells = DD_TABLE_SEAT_ORDER.map(pos => {
-            const cellInfo = info[strain][pos];
-            const summary = sideSummary[cellInfo.side];
-            let cls = '';
-            if (sideVisibility[cellInfo.side] && summary.activeTier && cellInfo.tier === summary.activeTier) {
-                if (cellInfo.score === summary.bestScore) {
-                    cls = ' class="dd-best-contract"';
-                } else if (summary.activeTier !== 'partial') {
-                    cls = ' class="dd-secondary-contract"';
-                }
-            }
-            return `<td${cls}>${tricksToContractLevel(ddTable[strain][pos])}</td>`;
-        }).join('');
-        return `<tr><th class="${STRAIN_CLASS[strain]}">${labelHtml}</th>${cells}</tr>`;
+        const nsCells = renderDDCellPairHtml(strain, 'N', 'S', ddTable, info, sideSummary, sideVisibility);
+        const ewCells = renderDDCellPairHtml(strain, 'E', 'W', ddTable, info, sideSummary, sideVisibility);
+        return `<tr><th class="${STRAIN_CLASS[strain]}">${labelHtml}</th>${nsCells}${ewCells}</tr>`;
     }).join('');
     return `
         <div class="dd-table-title">Table du double mort</div>

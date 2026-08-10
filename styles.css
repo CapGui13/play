@@ -949,11 +949,19 @@ a.btn {
 /* Voir échange avec Guillaume (session asynchrone à deux) : liste scrollable, une ligne
    cliquable par donne — le modal-panel parent gère déjà le défilement au-delà de sa
    max-height (voir .modal-panel), pas besoin de le redéclarer ici. */
+/* Voir échange avec Guillaume (session du 8 août — "quand il y a trop de donnes, elles
+   sortent de l'écran") : la liste grandissait sans limite, débordant du cadre de la
+   modale (pourtant plafonnée en hauteur par .modal-panel, voir max-height ci-dessus).
+   flex:1 lui fait occuper l'espace restant sous l'en-tête (fixe, flex-shrink:0), et
+   overflow-y:auto la fait défiler proprement au-delà plutôt que déborder. */
 .board-overview-list {
     padding: 12px 20px 20px;
     display: flex;
     flex-direction: column;
     gap: 6px;
+    flex: 1;
+    overflow-y: auto;
+    min-height: 0;
 }
 
 /* Voir échange avec Guillaume (session du 8 août — nouvelle vue d'ensemble) : plus large
