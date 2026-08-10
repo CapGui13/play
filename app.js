@@ -5715,32 +5715,112 @@ function uiHostSkipPrevBoard() {
 // par une. Accessible à tout le monde (lecture), mais seul l'hôte peut s'en servir pour
 // sauter directement à une donne (voir uiJumpToBoardFromOverview) — même règle que les
 // flèches ◀▶ existantes, réservées à l'hôte.
+// Voir échange avec Guillaume (session du 8 août — nouvelle vue d'ensemble) : quel siège
+// afficher pour un joueur qui n'occupe qu'UNE place normalement — mais qui peut en
+// occuper deux (ex. un robot remplacé temporairement). Dans ce cas, celui qui doit
+// effectivement enchérir sur CETTE donne précise prime ; hors de son tour (ou enchère
+// terminée), repli sur le premier de ses sièges.
+function myEffectiveSeatForDeal(deal) {
+    if (!mySeats || mySeats.length === 0) return null;
+    if (mySeats.length === 1) return mySeats[0];
+    const hist = deal.auctionHistory || [];
+    if (!isAuctionOver(hist)) {
+        const turnSeat = currentTurnSeat(deal.dealer, hist);
+        if (mySeats.includes(turnSeat)) return turnSeat;
+    }
+    return mySeats[0];
+}
+
+// Voir échange avec Guillaume ("l'app calcule le PAR même si le PBN ne le contient
+// pas") : dérive le contrat PAR (approximatif — le meilleur contrat réalisable du camp
+// qui peut scorer le plus, pas un vrai calcul de PAR tournoi avec sacrifices) à partir
+// de la table du double mort déjà calculée pour cette donne (voir kickOffBackgroundDD),
+// en réutilisant computeDDScores tel quel plutôt que dupliquer sa logique. Renvoie null
+// tant que la table n'est pas encore prête (calcul en tâche de fond, voir missingDD).
+function getParContractCell(ddTable, dealVulnerable) {
+    if (!ddTable) return null;
+    const { info, sideSummary } = computeDDScores(ddTable, dealVulnerable);
+    const nsScore = sideSummary.NS.bestScore;
+    const ewScore = sideSummary.EW.bestScore;
+    if (nsScore === null && ewScore === null) return null; // aucun camp ne fait le moindre pli au-dessus de 6, rarissime
+    const winningSide = (nsScore ?? -Infinity) >= (ewScore ?? -Infinity) ? 'NS' : 'EW';
+    const summary = sideSummary[winningSide];
+    for (const strain of STRAIN_ORDER) {
+        for (const pos of DD_TABLE_SEAT_ORDER) {
+            const cell = info[strain][pos];
+            if (cell.side === winningSide && cell.tier === summary.activeTier && cell.score === summary.bestScore) {
+                return { strain, level: ddTable[strain][pos] - 6, declarer: pos };
+            }
+        }
+    }
+    return null;
+}
+
+// Petit badge de contrat réutilisable (même classe .call-suit que partout ailleurs dans
+// l'appli — relevé d'enchères, contrat final, table du double mort — pour rester
+// visuellement cohérent) : palier + couleur colorée, plus le déclarant en toutes
+// lettres à côté si fourni.
+function contractBadgeHtml(strain, level, declarerSeat, doubled) {
+    const strainCls = SUIT_CLASSES[strain] || 'notrump';
+    const strainLabel = formatStrainLabel(strain);
+    const declarerHtml = declarerSeat ? ` <span class="board-overview-declarer">${declarerSeat}</span>` : '';
+    return `<span class="call-suit ${strainCls}">${level}${strainLabel}${doubled || ''}</span>${declarerHtml}`;
+}
+
+// Main compacte sur une seule ligne (♠JT6 ♥T6 ♦KT932 ♣K32), pour tenir dans une ligne de
+// liste — contrairement à dealPreviewHandCardHtml (carte empilée, trop haute ici).
+function compactHandHtml(hand) {
+    if (!hand) return '<span class="board-overview-hand-empty">—</span>';
+    return ['S', 'H', 'D', 'C'].map(suit =>
+        `<span class="board-overview-hand-suit">${suitIconHtml(suit)}${formatRanksForDisplay(hand[suit]) || '—'}</span>`
+    ).join('');
+}
+
 function renderBoardOverview() {
     const listEl = document.getElementById('boardOverviewList');
     if (!listEl || !deals) return;
     listEl.innerHTML = deals.map((deal, idx) => {
         const hist = deal.auctionHistory || [];
-        let statusHtml;
+        const mySeat = myEffectiveSeatForDeal(deal);
+        const handHtml = compactHandHtml(mySeat ? deal.hands[mySeat] : null);
+
+        let reachedHtml;
+        let titleAttr = '';
         if (hist.length === 0) {
-            statusHtml = `<span class="board-overview-status is-pending">Pas encore commencée</span>`;
+            reachedHtml = '<span class="board-overview-status is-pending">?</span>';
+            titleAttr = 'Pas encore commencée';
         } else if (isPassedOut(hist)) {
-            statusHtml = `<span class="board-overview-status is-done">Donne passée</span>`;
+            reachedHtml = '<span class="board-overview-status is-done">Passé</span>';
         } else if (isAuctionOver(hist)) {
             const contract = determineContract(hist);
-            statusHtml = `<span class="board-overview-status is-done">Terminée : ${contract.contractString} par ${seatFullName(contract.declarer)}</span>`;
+            reachedHtml = contractBadgeHtml(contract.strain, contract.level, contract.declarer, contract.doubled);
         } else {
             const turnSeat = currentTurnSeat(deal.dealer, hist);
             const occupantId = seatAssignment[turnSeat];
             const occupantLabel = !occupantId
                 ? 'un robot'
                 : (occupantId === SEAT_PENDING ? 'un partenaire pas encore arrivé' : participantName(occupantId));
-            statusHtml = `<span class="board-overview-status is-waiting">En attente de ${seatFullName(turnSeat)} (${occupantLabel})</span>`;
+            reachedHtml = '<span class="board-overview-status is-waiting">?</span>';
+            titleAttr = `En attente de ${seatFullName(turnSeat)} (${occupantLabel})`;
         }
+
+        let parHtml = '<span class="board-overview-status is-pending">—</span>';
+        const parCell = getParContractCell(deal.ddTable, deal.vulnerable);
+        if (parCell) {
+            parHtml = contractBadgeHtml(parCell.strain, parCell.level, parCell.declarer);
+        } else if (deal.par && deal.par.contract) {
+            // Repli sur le résumé PBN préformaté (voir dealPreviewParText) si la table
+            // complète n'est pas dispo mais qu'un PAR direct l'était à l'import.
+            parHtml = `<span class="board-overview-status">${escapeHtml(deal.par.contract)}${deal.par.declarer ? ' ' + escapeHtml(deal.par.declarer) : ''}</span>`;
+        }
+
         const activeClass = idx === boardIndex ? ' is-current' : '';
         return `
-            <button type="button" class="board-overview-row${activeClass}" onclick="uiJumpToBoardFromOverview(${idx})">
-                <span class="board-overview-number">Donne ${deal.board != null ? deal.board : idx + 1}</span>
-                ${statusHtml}
+            <button type="button" class="board-overview-row${activeClass}" onclick="uiJumpToBoardFromOverview(${idx})"${titleAttr ? ` title="${escapeHtml(titleAttr)}"` : ''}>
+                <span class="board-overview-number">${deal.board != null ? deal.board : idx + 1}</span>
+                <span class="board-overview-hand">${handHtml}</span>
+                <span class="board-overview-contract">${reachedHtml}</span>
+                <span class="board-overview-par">${parHtml}</span>
             </button>
         `;
     }).join('');
