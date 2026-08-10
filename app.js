@@ -4729,6 +4729,12 @@ function renderBiddingBox() {
     if (isAuctionOver(auctionHistory)) {
         box.innerHTML = '';
         box.classList.remove('my-turn');
+        // Voir échange avec Guillaume (session du 8 août — "il y a parfois une
+        // persistence de la barre... il n'y a plus les lettres mais on voit l'effet
+        // visuel mouvant") : le texte était bien vidé, mais la CLASSE (turn-indicator
+        // my-turn/their-turn/disconnected-turn) restait — le halo pulsant continuait de
+        // tourner sur un élément désormais vide.
+        turnPanel.className = 'turn-indicator';
         turnPanel.textContent = '';
         return;
     }
@@ -4985,6 +4991,20 @@ function contractScoreFromTrickPoints(trickPts, level, vulnerable) {
     return total;
 }
 
+// Voir échange avec Guillaume (session du 8 août — "si un camp a une manche, ne pas
+// afficher en vert le meilleur contrat de l'autre camp, sauf si ils ont sacrifice") :
+// score d'une chute CONTRÉE (barème standard SEF/FFB), nécessaire pour évaluer si
+// sacrifier au-dessus de la manche/chelem adverse est rentable. Non-vulnérable :
+// -100/-200/-200/-300/-300... ; vulnérable : -200/-300/-300... (chaque levée
+// supplémentaire au-delà de la 1ère coûte 300, sauf les 2ème et 3ème non-vulnérables
+// à 200 chacune).
+function doubledUndertrickScore(undertricks, vulnerable) {
+    if (undertricks <= 0) return 0;
+    if (vulnerable) return -(200 + (undertricks - 1) * 300);
+    if (undertricks <= 3) return -(100 + (undertricks - 1) * 200);
+    return -(100 + 2 * 200 + (undertricks - 3) * 300);
+}
+
 // `dealVulnerable` : la valeur normalisée habituelle ('None'/'NS'/'EW'/'Both', voir
 // deal-parser.js) — contrairement au générateur, pas besoin de la recalculer depuis le
 // numéro de donne, currentDeal().vulnerable la donne déjà directement.
@@ -5052,16 +5072,61 @@ const DD_TABLE_SEAT_ORDER = ['N', 'S', 'E', 'W'];
 // tel qu'éventuellement fourni dans le fichier PBN chargé (tag [OptimumResultTable]).
 // Affiche le palier de contrat réalisable (et non le nombre brut de levées), avec le
 // meilleur contrat de chaque camp mis en évidence (voir computeDDScores ci-dessus).
+// Voir échange avec Guillaume ("si un camp a une manche, ne pas afficher en vert le
+// meilleur contrat de l'autre camp, sauf si ils ont sacrifice. Ex : NS gagne 4♥ en étant
+// rouge contre vert... EO a un bon sacrifice si ils ont 5x-3 à jouer") : pour chaque
+// camp qui a une VRAIE manche ou chelem, vérifie si l'AUTRE camp (dont le meilleur
+// contrat n'est qu'une partielle) aurait un sacrifice rentable en enchérissant un cran
+// au-dessus (contré) — sinon, son contrat n'est plus mis en évidence du tout (il n'y a
+// rien à viser). Si l'autre camp a AUSSI sa propre manche/chelem, ou si aucun camp n'a
+// de manche, rien ne change (mise en évidence normale des 2 côtés).
+function computeSacrificeAwareVisibility(ddTable, dealVulnerable, info, sideSummary) {
+    const nsVuln = (dealVulnerable === 'NS' || dealVulnerable === 'Both');
+    const ewVuln = (dealVulnerable === 'EW' || dealVulnerable === 'Both');
+    const visible = { NS: true, EW: true };
+
+    const bestLevelForSide = (side, tier, score) => {
+        for (const strain of STRAIN_ORDER) {
+            for (const pos of (side === 'NS' ? ['N', 'S'] : ['E', 'W'])) {
+                const cell = info[strain][pos];
+                if (cell.tier === tier && cell.score === score) return ddTable[strain][pos] - 6;
+            }
+        }
+        return null;
+    };
+
+    for (const gameSide of ['NS', 'EW']) {
+        const otherSide = gameSide === 'NS' ? 'EW' : 'NS';
+        const gameSummary = sideSummary[gameSide];
+        const otherSummary = sideSummary[otherSide];
+        if (gameSummary.activeTier !== 'game' && gameSummary.activeTier !== 'slam') continue; // rien à protéger ici
+        if (otherSummary.activeTier === 'game' || otherSummary.activeTier === 'slam') continue; // l'autre a AUSSI son propre gros contrat
+        if (!otherSummary.activeTier) { visible[otherSide] = false; continue; } // l'autre camp ne fait rien du tout : pas de sacrifice possible
+
+        const gameLevel = bestLevelForSide(gameSide, gameSummary.activeTier, gameSummary.bestScore);
+        const otherLevel = bestLevelForSide(otherSide, otherSummary.activeTier, otherSummary.bestScore);
+        if (gameLevel === null || otherLevel === null) continue;
+
+        const sacrificeLevel = gameLevel + 1;
+        const undertricks = sacrificeLevel - otherLevel;
+        const otherVuln = otherSide === 'NS' ? nsVuln : ewVuln;
+        const penalty = doubledUndertrickScore(undertricks, otherVuln);
+        if (Math.abs(penalty) >= gameSummary.bestScore) visible[otherSide] = false; // sacrifice pas rentable
+    }
+    return visible;
+}
+
 function renderDDTable(ddTable, dealVulnerable) {
     if (!ddTable) return '';
     const { info, sideSummary } = computeDDScores(ddTable, dealVulnerable);
+    const sideVisibility = computeSacrificeAwareVisibility(ddTable, dealVulnerable, info, sideSummary);
     const rows = STRAIN_ORDER.map(strain => {
         const labelHtml = formatStrainLabel(strain);
         const cells = DD_TABLE_SEAT_ORDER.map(pos => {
             const cellInfo = info[strain][pos];
             const summary = sideSummary[cellInfo.side];
             let cls = '';
-            if (summary.activeTier && cellInfo.tier === summary.activeTier) {
+            if (sideVisibility[cellInfo.side] && summary.activeTier && cellInfo.tier === summary.activeTier) {
                 if (cellInfo.score === summary.bestScore) {
                     cls = ' class="dd-best-contract"';
                 } else if (summary.activeTier !== 'partial') {
@@ -5737,7 +5802,7 @@ function myEffectiveSeatForDeal(deal) {
 // de la table du double mort déjà calculée pour cette donne (voir kickOffBackgroundDD),
 // en réutilisant computeDDScores tel quel plutôt que dupliquer sa logique. Renvoie null
 // tant que la table n'est pas encore prête (calcul en tâche de fond, voir missingDD).
-function getParContractCell(ddTable, dealVulnerable) {
+function getParContractCell(ddTable, dealVulnerable, preferredStrain) {
     if (!ddTable) return null;
     const { info, sideSummary } = computeDDScores(ddTable, dealVulnerable);
     const nsScore = sideSummary.NS.bestScore;
@@ -5746,24 +5811,25 @@ function getParContractCell(ddTable, dealVulnerable) {
     const winningSide = (nsScore ?? -Infinity) >= (ewScore ?? -Infinity) ? 'NS' : 'EW';
     const summary = sideSummary[winningSide];
     const sidePositions = winningSide === 'NS' ? ['N', 'S'] : ['E', 'W'];
+    // Voir échange avec Guillaume ("il y a 5♠ et 5♥, comme on est arrivé au contrat de
+    // 4♥, le PAR affiché devrait être 5♥ plutôt que 5♠") : quand plusieurs couleurs sont
+    // À ÉGALITÉ pour le meilleur palier, celle réellement jouée en séquence prime sur
+    // l'ordre arbitraire de STRAIN_ORDER — plus parlant pour le joueur qui compare son
+    // résultat au PAR. On collecte donc TOUTES les couleurs à égalité avant de choisir,
+    // au lieu de s'arrêter à la première trouvée.
+    const tiedStrains = [];
     for (const strain of STRAIN_ORDER) {
-        // Voir échange avec Guillaume ("si le contrat optimal est 3♣ en NS, il faut
-        // mettre 3♣ NS et non 3♣ N ; mais si le contrat optimal ne s'atteint que d'un
-        // seul côté, alors on ne donne que ce côté là") : les 2 partenaires peuvent
-        // avoir un nombre de plis différent dans la MÊME couleur (l'entame diffère selon
-        // qui déclare) — ne regrouper que s'ils atteignent VRAIMENT le même palier
-        // optimal ensemble, jamais par défaut.
         const matchingPositions = sidePositions.filter(pos => {
             const cell = info[strain][pos];
             return cell.tier === summary.activeTier && cell.score === summary.bestScore;
         });
-        if (matchingPositions.length > 0) {
-            const level = ddTable[strain][matchingPositions[0]] - 6;
-            const declarer = matchingPositions.length === sidePositions.length ? winningSide : matchingPositions[0];
-            return { strain, level, declarer };
-        }
+        if (matchingPositions.length > 0) tiedStrains.push({ strain, matchingPositions });
     }
-    return null;
+    if (tiedStrains.length === 0) return null;
+    const chosen = (preferredStrain && tiedStrains.find(t => t.strain === preferredStrain)) || tiedStrains[0];
+    const level = ddTable[chosen.strain][chosen.matchingPositions[0]] - 6;
+    const declarer = chosen.matchingPositions.length === sidePositions.length ? winningSide : chosen.matchingPositions[0];
+    return { strain: chosen.strain, level, declarer };
 }
 
 // Petit badge de contrat réutilisable (même classe .call-suit que partout ailleurs dans
@@ -5797,12 +5863,13 @@ function renderBoardOverview() {
 
         let reachedHtml;
         let titleAttr = '';
+        let reachedContract = null;
         if (auctionOver) {
             if (isPassedOut(hist)) {
                 reachedHtml = '<span class="board-overview-status is-done">Passé</span>';
             } else {
-                const contract = determineContract(hist);
-                reachedHtml = contractBadgeHtml(contract.strain, contract.level, contract.declarer, contract.doubled);
+                reachedContract = determineContract(hist);
+                reachedHtml = contractBadgeHtml(reachedContract.strain, reachedContract.level, reachedContract.declarer, reachedContract.doubled);
             }
         } else {
             // Voir échange avec Guillaume ("le point d'interrogation... doit être en
@@ -5828,7 +5895,8 @@ function renderBoardOverview() {
         // que de révéler par avance ce qui serait un bon résultat.
         let parHtml = '<span class="board-overview-status is-pending">—</span>';
         if (auctionOver) {
-            const parCell = getParContractCell(deal.ddTable, deal.vulnerable);
+            const reachedStrainForPar = reachedContract ? (reachedContract.strain === 'NT' ? 'N' : reachedContract.strain) : null;
+            const parCell = getParContractCell(deal.ddTable, deal.vulnerable, reachedStrainForPar);
             if (parCell) {
                 parHtml = contractBadgeHtml(parCell.strain, parCell.level, parCell.declarer);
             } else if (deal.par && deal.par.contract) {
