@@ -2415,6 +2415,11 @@ button.kibitz-chip {
     margin-bottom: 16px;
     font-size: 0.95rem;
     text-align: center;
+    /* Voir échange avec Guillaume (session du 8 août — "je voudrais que le bouton 'Donne
+       suivante' s'affiche dans la case du PAR") : position:relative nécessaire ici pour
+       que .next-board-panel (position:absolute, voir plus bas) se positionne PAR
+       RAPPORT à cette case précise, pas à un ancêtre plus lointain. */
+    position: relative;
 }
 
 /* Petite mise en valeur au moment précis où le contrat final apparaît (pas à chaque
@@ -3055,9 +3060,20 @@ table.dd-table td.dd-secondary-contract {
     font-size: 0.72rem;
 }
 
+/* Voir échange avec Guillaume (session du 8 août — "je voudrais que le bouton 'Donne
+   suivante' s'affiche dans la case du PAR, en dessous de Export PBN... vers le bas de
+   la case, en face de la dernière ligne du tableau à peu près") : positionné en absolu
+   PAR RAPPORT à .contract-result (voir position:relative ajouté ci-dessus), aligné à
+   droite comme Export PBN, mais vers le bas plutôt qu'en haut — reste ainsi à une
+   position stable même si le contenu au-dessus (table du double mort, texte d'attente)
+   varie en hauteur d'une donne à l'autre. La logique JS de visibilité (voir
+   checkAuctionEnd dans app.js) reste entièrement inchangée : ce n'est qu'un
+   repositionnement visuel, pas un déplacement dans le DOM. */
 .next-board-panel {
-    text-align: center;
-    margin-top: 20px;
+    position: absolute;
+    right: 14px;
+    bottom: 14px;
+    margin-top: 0;
 }
 
 .info-text {

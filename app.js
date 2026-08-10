@@ -5487,12 +5487,12 @@ function checkAuctionEnd() {
         </span>
     ` : '';
     if (!contract) {
-        resultEl.innerHTML = `<div class="contract-final-header">↩️ Donne passée — personne n'a annoncé.${exportBtnHtml}</div>`;
+        resultEl.innerHTML = `<div class="contract-final-header"><span class="contract-final-text">↩️ Donne passée — personne n'a annoncé.</span>${exportBtnHtml}</div>`;
     } else {
         const strainCls = SUIT_CLASSES[contract.strain] || 'notrump';
         const strainLabel = formatStrainLabel(contract.strain);
         const contractHtml = `<span class="call-suit ${strainCls}">${contract.level}${strainLabel}${escapeHtml(contract.doubled)}</span>`;
-        resultEl.innerHTML = `<div class="contract-final-header">Contrat final : <strong>${contractHtml}</strong> par <strong>${seatFullName(contract.declarer)}</strong>${exportBtnHtml}</div>`;
+        resultEl.innerHTML = `<div class="contract-final-header"><span class="contract-final-text">Contrat final : <strong>${contractHtml}</strong> par <strong>${seatFullName(contract.declarer)}</strong></span>${exportBtnHtml}</div>`;
     }
     if (wasHidden) {
         // Retire puis relit offsetWidth avant de rajouter la classe : sans ce "force
