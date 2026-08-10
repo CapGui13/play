@@ -255,6 +255,13 @@ function saveStringPref(key, value) {
 // null si jamais personnalisé : on retombe alors sur defaultParticipantName comme avant.
 let savedNickname = loadStringPref('bridgeBidNickname', null);
 
+// Voir échange avec Guillaume (session du 8 août — "je voudrais que sa couleur d'avatar
+// [soit persistante]... qu'il récupère automatiquement la dernière couleur utilisée à
+// chaque nouvelle connexion") : même principe exact que savedNickname ci-dessus — propre
+// à l'appareil, survit d'une partie à l'autre. null si jamais choisie : on retombe alors
+// sur la couleur dérivée par hachage (avatarColorForId) comme avant.
+let savedAvatarColor = loadStringPref('bridgeBidAvatarColor', null);
+
 let useFrenchRanks = loadBoolPref('bridgeBidFrenchRanks', false); // R/D/V/X au lieu de K/Q/J/T
 let showHcp = loadBoolPref('bridgeBidShowHcp', false);            // affiche le compte de points d'honneur par main
 let showKr = loadBoolPref('bridgeBidShowKr', false);              // affiche l'évaluation Kaplan-Rubens par main
@@ -1081,14 +1088,17 @@ const AVATAR_COLOR_PALETTE = [
 
 function avatarColorForId(id) {
     // Surcharge manuelle (voir échange avec Guillaume, uiRandomizeAvatarColor) : si ce
-    // participant a choisi une couleur au clic sur son avatar, elle prime sur le calcul
+    // participant a choisi une couleur (au clic, ou reprise automatiquement depuis
+    // savedAvatarColor à la connexion — voir échange du 8 août, "qu'il récupère
+    // automatiquement la dernière couleur utilisée"), elle prime sur le calcul
     // déterministe ci-dessous.
     const p = participants.find(x => x.id === id);
     if (p && p.avatarColor) return p.avatarColor;
 
-    // Mélange le code de salon dans le hash (pas l'id seul) : une couleur différente à
-    // chaque nouvelle partie plutôt qu'une "couleur de signature" fixe pour toujours sur
-    // cet appareil — mais stable pendant toute la durée d'UNE partie, y compris après une
+    // Repli pour un participant SANS préférence sauvegardée (jamais choisi de couleur
+    // sur cet appareil) : mélange le code de salon dans le hash (pas l'id seul) — une
+    // couleur différente à chaque nouvelle partie plutôt qu'une "couleur de signature"
+    // fixe, mais stable pendant toute la durée d'UNE partie, y compris après une
     // reconnexion (le code de salon ne change pas entre-temps, seul le jeton pourrait
     // changer de contexte). Sans code de salon connu (avant qu'une partie ait démarré),
     // repli sur l'id seul.
@@ -1290,7 +1300,7 @@ function uiCreateRoom() {
 
     myRole = 'host';
     myParticipantId = 'host';
-    participants = [{ id: 'host', name: savedNickname || 'Hôte' }];
+    participants = [{ id: 'host', name: savedNickname || 'Hôte', ...(savedAvatarColor ? { avatarColor: savedAvatarColor } : {}) }];
     // Voir échange avec Guillaume (session asynchrone à deux — "je ne veux pas de bascule
     // d'hôte") : figé une seule fois, ici, à la création — jamais réécrit ensuite, y
     // compris par une reprise cloud ou un transfert d'hôte (voir promoteSelfToHostAfterTakeover,
@@ -1398,9 +1408,13 @@ function buildHostHandlers(onOpenExtra) {
             if (!p) {
                 // Un pseudo sauvegardé côté invité (voir savedNickname) prime sur le nom
                 // générique "Guest #N" — transmis via les métadonnées de connexion, comme
-                // le jeton de reconnexion.
+                // le jeton de reconnexion. Même principe pour la couleur d'avatar (voir
+                // échange avec Guillaume, session du 8 août — "qu'il récupère
+                // automatiquement la dernière couleur utilisée").
                 const nickname = metadata && metadata.nickname;
+                const avatarColorFromMeta = metadata && metadata.avatarColor;
                 p = { id: token, name: nickname || defaultParticipantName(token), disconnected: false, disconnectedAt: null };
+                if (avatarColorFromMeta) p.avatarColor = avatarColorFromMeta;
                 participants.push(p);
                 // Voir échange avec Guillaume (session asynchrone à deux — "il faut lui
                 // attribuer un siège") : un nouvel arrivant qui trouve un siège encore
@@ -1793,7 +1807,7 @@ function connectAsGuest(code, token, nickname) {
     const attemptToken = ++guestJoinAttemptToken;
     peerConn = new BridgePeerConnection(buildGuestHandlers());
     pushDebugLog(`Connexion au salon ${code} avec le jeton ${token.slice(0, 10)}…`);
-    peerConn.joinRoom(code, { reconnectToken: token, nickname: nickname });
+    peerConn.joinRoom(code, { reconnectToken: token, nickname: nickname, avatarColor: savedAvatarColor });
 
     // Voir échange avec Guillaume ("connexion en cours en boucle" quand A vient tout juste
     // de lancer en mode différé) : dans ce mode, il n'y a jamais personne à trouver en
@@ -1828,7 +1842,7 @@ function uiReconnect() {
     peerConn = new BridgePeerConnection(buildGuestHandlers());
     const token = getReconnectToken();
     pushDebugLog(`Reconnexion au salon ${currentRoomCode} avec le jeton ${token.slice(0, 10)}…`);
-    peerConn.joinRoom(currentRoomCode, { reconnectToken: token, nickname: savedNickname });
+    peerConn.joinRoom(currentRoomCode, { reconnectToken: token, nickname: savedNickname, avatarColor: savedAvatarColor });
 }
 
 // Voir échange avec Guillaume (session du 23 juillet) : la reconnexion AUTOMATIQUE de
@@ -2034,6 +2048,12 @@ function uiRandomizeAvatarColor(event, participantId) {
     const current = avatarColorForId(participantId);
     const choices = AVATAR_COLOR_PALETTE.filter(c => c !== current);
     p.avatarColor = choices[Math.floor(Math.random() * choices.length)];
+    // Voir échange avec Guillaume (session du 8 août — "qu'il récupère automatiquement
+    // la dernière couleur utilisée à chaque nouvelle connexion") : persisté uniquement
+    // quand c'est MA PROPRE couleur qui change — l'hôte peut aussi changer celle d'un
+    // AUTRE participant (voir canChange ci-dessus), ça ne doit alors rien sauvegarder
+    // dans son propre localStorage.
+    if (participantId === myParticipantId) saveStringPref('bridgeBidAvatarColor', p.avatarColor);
     broadcastLobbyState();
     renderLobby();
     // Voir échange avec Guillaume (session du 23 juillet) : le changement de couleur est
@@ -6753,7 +6773,7 @@ function uiResumeFromCloud() {
         if (claimedSeat) {
             st.seatAssignment[claimedSeat] = myToken;
             if (!st.participants.some(p => p.id === myToken)) {
-                st.participants.push({ id: myToken, name: savedNickname || 'Joueur' });
+                st.participants.push({ id: myToken, name: savedNickname || 'Joueur', ...(savedAvatarColor ? { avatarColor: savedAvatarColor } : {}) });
             }
         }
     }
@@ -6768,7 +6788,7 @@ function uiResumeFromCloud() {
     // même, simplement sans siège (comme n'importe quel kibbitz) — seul un participant
     // pas encore connu de cette salle a besoin d'être ajouté à `participants`.
     if (!claimedSeat && !st.participants.some(p => p.id === myToken)) {
-        st.participants.push({ id: myToken, name: savedNickname || 'Joueur' });
+        st.participants.push({ id: myToken, name: savedNickname || 'Joueur', ...(savedAvatarColor ? { avatarColor: savedAvatarColor } : {}) });
     }
 
     // Voir échange avec Guillaume ("on n'est plus obligé de passer par le P2P") : aucune
