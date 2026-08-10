@@ -1889,6 +1889,26 @@ button.kibitz-chip {
     flex-wrap: wrap;
 }
 
+/* Voir échange avec Guillaume (session du 8 août — "réorganiser les boutons... 1ère
+   ligne... 2ème ligne... tu fais ça pour l'affichage desktop, pour le mobile je sais
+   pas, ça risque de foutre le bordel") : les 2 groupes s'empilent en colonne (2 lignes
+   distinctes) — flex-direction:column sur le conteneur parent, chaque groupe restant
+   lui-même en ligne horizontale. En mobile (media query 768px plus bas), ces 2 groupes
+   redeviennent display:contents, désactivant cette mise en page pour retrouver
+   exactement le flex-wrap plat d'origine, déjà éprouvé sur petit écran. */
+.game-actions {
+    flex-direction: column;
+    align-items: flex-start;
+}
+
+.game-actions-row1,
+.game-actions-row2 {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
 /* Voir échange avec Guillaume : même apparence que les boutons voisins (padding, bordure,
    coins arrondis) pour rester cohérent dans la barre, même si c'est une case à cocher et
    non un bouton. */
@@ -2418,13 +2438,26 @@ button.kibitz-chip {
     font-style: italic;
 }
 
-/* Bouton d'export PBN sous la table du double mort (voir uiExportDealPBN dans app.js). */
+/* Voir échange avec Guillaume (session du 8 août — "Export PBN devrait être en haut à
+   droite... à droite de la ligne contrat final") : ligne d'en-tête en flex, le texte du
+   contrat à gauche et le bouton d'export (voir .dd-export-row ci-dessous, réutilisé tel
+   quel dedans) poussé à droite via margin-left:auto. */
+.contract-final-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+/* Bouton d'export PBN, désormais dans l'en-tête du contrat final (voir
+   .contract-final-header ci-dessus) plutôt que sous la table du double mort (voir
+   uiExportDealPBN dans app.js) — plus de margin-top, la ligne parente gère déjà l'espacement. */
 .dd-export-row {
     display: flex;
     align-items: center;
     gap: 10px;
     flex-wrap: wrap;
-    margin-top: 10px;
 }
 
 .dd-export-status {
@@ -3125,6 +3158,16 @@ table.dd-table td.dd-secondary-contract {
     .game-actions {
         gap: 6px;
         flex-wrap: wrap;
+        flex-direction: row;
+    }
+
+    /* Voir échange avec Guillaume (session du 8 août) : "pour le mobile je sais pas, ça
+       risque de foutre le bordel" — display:contents retire ces 2 conteneurs de la mise
+       en page (ils n'existent plus visuellement), leurs boutons rejoignant directement
+       le flex-wrap plat de .game-actions, exactement comme avant leur introduction. */
+    .game-actions-row1,
+    .game-actions-row2 {
+        display: contents;
     }
 
     .game-actions .btn {

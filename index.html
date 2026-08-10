@@ -395,31 +395,44 @@
                     <a href="https://capgui13.github.io/play/" class="btn btn-secondary btn-small" title="Retour à l'accueil">🏠</a>
                 </div>
             </div>
+            <!-- Voir échange avec Guillaume (session du 8 août — réorganisation des
+                 boutons) : 2 groupes désormais, pour un rendu en 2 lignes distinctes en
+                 desktop (voir .game-actions-row1/row2 dans styles.css) — ligne 1 : les
+                 actions courantes (vue d'ensemble/undo/recommencer/export), ligne 2 :
+                 les actions d'organisation de la table (rotation/sièges). En mobile,
+                 ces 2 groupes redeviennent transparents (display:contents, voir la media
+                 query 768px) pour ne pas perturber le flex-wrap existant, qui gérait déjà
+                 bien le débordement sur petit écran. -->
             <div class="game-actions">
-                <!-- Voir échange avec Guillaume (session asynchrone à deux) : accessible à
-                     tout le monde (pas réservé à l'hôte, contrairement aux boutons
-                     suivants) — utile pour se repérer d'un coup d'œil dans une session
-                     jouée à son rythme sur plusieurs jours, sans avoir à naviguer donne
-                     par donne pour savoir où en est chacune. -->
-                <button id="boardOverviewBtn" type="button" class="btn btn-secondary btn-small" onclick="uiOpenBoardOverview()"><span class="btn-label-full">📋 Vue d'ensemble</span><span class="btn-label-short">📋 Donnes</span></button>
-                <button id="requestUndoBtn" class="btn btn-secondary btn-small" onclick="uiRequestUndo()"><span class="btn-label-full">↩️ Demander un undo</span><span class="btn-label-short">↩️ Undo</span></button>
-                <button id="resetAuctionBtn" class="btn btn-secondary btn-small" onclick="uiResetAuction()"><span class="btn-label-full">↺ Recommencer l'enchère</span><span class="btn-label-short">↺ Recommencer</span></button>
-                <!-- Réservé à l'hôte (voir updateBoardControlVisibility) : voir échange avec
-                     Guillaume — rotation des sièges à 90° dans le sens horaire (N->E->S->O->N),
-                     utilisable à tout moment y compris en pleine enchère. Les mains restent
-                     fixées par position (N/E/S/O), donc ça change qui joue quelle main à cet
-                     instant précis, pas les cartes elles-mêmes ni l'historique déjà enchéri. -->
-                <button id="rotateSeatsBtn" type="button" class="btn btn-secondary btn-small" style="visibility:hidden; pointer-events:none;" onclick="uiRotateSeatsClockwise()"><span class="btn-label-full">🔄 Rotation 90°</span><span class="btn-label-short">🔄 Rotation</span></button>
-                <!-- Voir échange avec Guillaume (session du 24 juillet) : déplacé ici depuis
-                     hand-display-options — regroupé avec les autres actions réservées à
-                     l'hôte plutôt qu'isolé près des options d'affichage. Réservé à l'hôte —
-                     visibilité pilotée dans updateBoardControlVisibility, même traitement
-                     que "Rotation" juste au-dessus. -->
-                <button id="seatReorgBtn" type="button" class="btn btn-secondary btn-small" style="visibility:hidden; pointer-events:none;" onclick="uiOpenSeatReorgModal()"><span class="btn-label-full">🪑 Réorganiser les sièges</span><span class="btn-label-short">🪑 Sièges</span></button>
-                <!-- Visibilité gérée par updateBoardControlVisibility (host ou joueur assis) :
-                     voir échange avec Guillaume — récupérer les donnes jouées de toute la session
-                     (mains + enchère réelle + vulnérabilité) pour lui permettre de me faire des
-                     retours précis ("donne 2, Sud a contré mais..."). -->                <button id="exportSessionBtn" type="button" class="btn btn-secondary btn-small" style="display:none;" onclick="uiExportSessionPBN()"><span class="btn-label-full">📦 Exporter la session</span><span class="btn-label-short">📦 Session</span></button>
+                <div class="game-actions-row1">
+                    <!-- Voir échange avec Guillaume (session asynchrone à deux) : accessible à
+                         tout le monde (pas réservé à l'hôte, contrairement aux boutons
+                         suivants) — utile pour se repérer d'un coup d'œil dans une session
+                         jouée à son rythme sur plusieurs jours, sans avoir à naviguer donne
+                         par donne pour savoir où en est chacune. -->
+                    <button id="boardOverviewBtn" type="button" class="btn btn-secondary btn-small" onclick="uiOpenBoardOverview()"><span class="btn-label-full">📋 Vue d'ensemble</span><span class="btn-label-short">📋 Donnes</span></button>
+                    <button id="requestUndoBtn" class="btn btn-secondary btn-small" onclick="uiRequestUndo()"><span class="btn-label-full">↩️ Demander un undo</span><span class="btn-label-short">↩️ Undo</span></button>
+                    <button id="resetAuctionBtn" class="btn btn-secondary btn-small" onclick="uiResetAuction()"><span class="btn-label-full">↺ Recommencer l'enchère</span><span class="btn-label-short">↺ Recommencer</span></button>
+                    <!-- Visibilité gérée par updateBoardControlVisibility (host ou joueur assis) :
+                         voir échange avec Guillaume — récupérer les donnes jouées de toute la session
+                         (mains + enchère réelle + vulnérabilité) pour lui permettre de me faire des
+                         retours précis ("donne 2, Sud a contré mais..."). -->
+                    <button id="exportSessionBtn" type="button" class="btn btn-secondary btn-small" style="display:none;" onclick="uiExportSessionPBN()"><span class="btn-label-full">📦 Exporter la session</span><span class="btn-label-short">📦 Session</span></button>
+                </div>
+                <div class="game-actions-row2">
+                    <!-- Réservé à l'hôte (voir updateBoardControlVisibility) : voir échange avec
+                         Guillaume — rotation des sièges à 90° dans le sens horaire (N->E->S->O->N),
+                         utilisable à tout moment y compris en pleine enchère. Les mains restent
+                         fixées par position (N/E/S/O), donc ça change qui joue quelle main à cet
+                         instant précis, pas les cartes elles-mêmes ni l'historique déjà enchéri. -->
+                    <button id="rotateSeatsBtn" type="button" class="btn btn-secondary btn-small" style="visibility:hidden; pointer-events:none;" onclick="uiRotateSeatsClockwise()"><span class="btn-label-full">🔄 Rotation 90°</span><span class="btn-label-short">🔄 Rotation</span></button>
+                    <!-- Voir échange avec Guillaume (session du 24 juillet) : déplacé ici depuis
+                         hand-display-options — regroupé avec les autres actions réservées à
+                         l'hôte plutôt qu'isolé près des options d'affichage. Réservé à l'hôte —
+                         visibilité pilotée dans updateBoardControlVisibility, même traitement
+                         que "Rotation" juste au-dessus. -->
+                    <button id="seatReorgBtn" type="button" class="btn btn-secondary btn-small" style="visibility:hidden; pointer-events:none;" onclick="uiOpenSeatReorgModal()"><span class="btn-label-full">🪑 Réorganiser les sièges</span><span class="btn-label-short">🪑 Sièges</span></button>
+                </div>
                 <span id="undoStatusText" class="undo-status-text"></span>
             </div>
         </div>

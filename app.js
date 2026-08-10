@@ -1601,6 +1601,12 @@ function buildGuestHandlers() {
             const url = new URL(window.location.href);
             url.searchParams.set('room', roomCode);
             window.history.replaceState(null, '', url.toString());
+            // Voir échange avec Guillaume (session du 8 août — "le lien à copier devrait
+            // apparaître même pour un non hôte") : shareLinkInput n'était rempli QUE côté
+            // hôte (buildHostHandlers) — le bouton copier-lien était donc désormais
+            // visible pour tous, mais copiait une chaîne vide côté invité. Même URL déjà
+            // construite juste au-dessus, réutilisée ici.
+            document.getElementById('shareLinkInput').value = url.toString();
         },
         onGuestConnected: () => {
             hideConnectingOverlay();
@@ -3903,6 +3909,17 @@ function maybeRobotBid() {
 
 function enterGameScreen() {
     showScreen('screen-game');
+    // Voir échange avec Guillaume (session du 8 août — "le lien à copier devrait
+    // apparaître même pour un non hôte") : point d'entrée UNIQUE et universel — les
+    // chemins live (buildHostHandlers/buildGuestHandlers) le remplissaient déjà chacun
+    // de leur côté, mais la reprise cloud et le mode différé (NullPeerConnection) ne
+    // passent par AUCUN des deux, et n'auraient donc jamais rempli ce champ sans ça.
+    if (currentRoomCode) {
+        const url = new URL(window.location.href);
+        url.searchParams.set('room', currentRoomCode);
+        const input = document.getElementById('shareLinkInput');
+        if (input) input.value = url.toString();
+    }
     renderBoard();
 }
 
@@ -4012,7 +4029,12 @@ function renderBoard() {
 
 function updateBoardControlVisibility() {
     const resetBtn = document.getElementById('resetAuctionBtn');
-    if (resetBtn) resetBtn.style.display = canControlBoard() ? '' : 'none';
+    // Voir échange avec Guillaume (session du 8 août — "recommencer l'enchère ne devrait
+    // pas apparaître pour un non hôte") : réservé à l'hôte seul, pas canControlBoard()
+    // (qui autorise aussi tout joueur assis) — recommencer une enchère pour toute la
+    // table reste une décision d'organisation, comme la rotation des sièges juste en
+    // dessous.
+    if (resetBtn) resetBtn.style.display = myRole === 'host' ? '' : 'none';
     // Réservé à l'hôte (voir échange avec Guillaume) : changer qui est assis où reste une
     // décision d'organisation de la table, pas quelque chose qu'un simple joueur assis
     // devrait pouvoir déclencher pour tout le monde.
@@ -4065,8 +4087,12 @@ function renderGameHeader() {
         const hostSuffix = displayedHostName ? ` · Hôte : ${displayedHostName}` : '';
         roomCodeEl.textContent = currentRoomCode ? `Salle : ${currentRoomCode}${hostSuffix}` : '';
     }
+    // Voir échange avec Guillaume (session du 8 août — "le lien à copier devrait
+    // apparaître même pour un non hôte") : visible pour tout le monde désormais — copier
+    // le lien de la salle pour inviter quelqu'un d'autre n'a aucune raison d'être
+    // réservé à l'hôte.
     const headerCopyLinkBtn = document.getElementById('gameHeaderCopyLinkBtn');
-    if (headerCopyLinkBtn) headerCopyLinkBtn.style.display = (myRole === 'host') ? '' : 'none';
+    if (headerCopyLinkBtn) headerCopyLinkBtn.style.display = '';
 }
 
 // ===== Chat =====
@@ -5419,19 +5445,34 @@ function checkAuctionEnd() {
     }
 
     const contract = determineContract(auctionHistory);
+    // Voir échange avec Guillaume (session du 8 août — ""Export PBN" devrait être en
+    // haut à droite dans le carré du PAR, à droite de la ligne contrat final") : calculé
+    // ICI (avant de construire la ligne d'en-tête), pour savoir dès le départ si le
+    // bouton doit y apparaître — auparavant calculé après coup, forçant le bouton dans
+    // une rangée séparée sous le tableau entier.
+    const ddTableHtml = renderDDTable(currentDeal().ddTable, currentDeal().vulnerable);
     // Ne joue l'animation de révélation (voir .contract-reveal dans styles.css) qu'au
     // moment précis où le contrat apparaît, pas à chaque re-rendu (renderBoard tourne
     // pour bien d'autres raisons — reconnexion d'un joueur, etc. — tant que la donne
     // reste sur cet écran) : on la déclenche seulement s'il était masqué juste avant.
     const wasHidden = resultEl.style.display === 'none' || resultEl.style.display === '';
     resultEl.style.display = 'block';
+    // Voir échange avec Guillaume : bouton d'export PBN de cette donne, réservé à l'hôte
+    // (c'est lui qui a la main sur le déroulement de la partie), affiché seulement une
+    // fois le double mort disponible.
+    const exportBtnHtml = (myRole === 'host' && ddTableHtml) ? `
+        <span class="dd-export-row">
+            <button type="button" class="btn btn-secondary btn-small" id="dealExportBtn" onclick="uiExportDealPBN()">📤 Export PBN</button>
+            <span id="dealExportStatus" class="dd-export-status"></span>
+        </span>
+    ` : '';
     if (!contract) {
-        resultEl.innerHTML = "↩️ Donne passée — personne n'a annoncé.";
+        resultEl.innerHTML = `<div class="contract-final-header">↩️ Donne passée — personne n'a annoncé.${exportBtnHtml}</div>`;
     } else {
         const strainCls = SUIT_CLASSES[contract.strain] || 'notrump';
         const strainLabel = formatStrainLabel(contract.strain);
         const contractHtml = `<span class="call-suit ${strainCls}">${contract.level}${strainLabel}${escapeHtml(contract.doubled)}</span>`;
-        resultEl.innerHTML = `Contrat final : <strong>${contractHtml}</strong> par <strong>${seatFullName(contract.declarer)}</strong>`;
+        resultEl.innerHTML = `<div class="contract-final-header">Contrat final : <strong>${contractHtml}</strong> par <strong>${seatFullName(contract.declarer)}</strong>${exportBtnHtml}</div>`;
     }
     if (wasHidden) {
         // Retire puis relit offsetWidth avant de rajouter la classe : sans ce "force
@@ -5443,21 +5484,8 @@ function checkAuctionEnd() {
         resultEl.classList.add('contract-reveal');
     }
 
-    const ddTableHtml = renderDDTable(currentDeal().ddTable, currentDeal().vulnerable);
     if (ddTableHtml) {
         resultEl.innerHTML += ddTableHtml;
-        // Voir échange avec Guillaume : bouton d'export PBN de cette donne, réservé à
-        // l'hôte (c'est lui qui a la main sur le déroulement de la partie), affiché
-        // seulement une fois le double mort disponible — cohérent avec le fait que ce
-        // bouton vit "dans le module qui affiche le PAR".
-        if (myRole === 'host') {
-            resultEl.innerHTML += `
-                <div class="dd-export-row">
-                    <button type="button" class="btn btn-secondary btn-small" id="dealExportBtn" onclick="uiExportDealPBN()">📤 Export PBN</button>
-                    <span id="dealExportStatus" class="dd-export-status"></span>
-                </div>
-            `;
-        }
     }
 
     // Voir échange avec Guillaume ("une fois la donne finie, les 4 mains doivent
@@ -5594,6 +5622,23 @@ function seatsOfParticipant(pid) {
 // soit l'auteur — si un robot passait automatiquement juste après l'annonce de l'hôte
 // (avant qu'il ait le temps de cliquer "undo"), l'hôte annulait alors CE PASSE ROBOT au
 // lieu de sa propre annonce.
+// Voir échange avec Guillaume (session du 8 août — "faire un undo par l'hôte devrait
+// annuler la dernière enchère produite (si elle a été faite par un humain ; si c'est un
+// bot, annuler la dernière enchère produite par un humain)") : distincte de
+// findUndoTargetIndex ci-dessus (qui cible SA PROPRE dernière annonce pour une demande
+// d'un participant précis) — ici, l'hôte cliquant sur SON bouton d'undo direct vise la
+// toute dernière annonce de l'historique, MAIS en sautant les annonces de robots (sièges
+// non occupés par un humain au sens de seatAssignment) pour retomber sur la dernière
+// vraiment humaine. Renvoie -1 si l'historique entier n'a que des annonces de robots
+// (rien d'humain à annuler).
+function findHostUndoTargetIndex(history) {
+    for (let i = history.length - 1; i >= 0; i--) {
+        const occupant = seatAssignment[history[i].seat];
+        if (occupant && occupant !== SEAT_PENDING) return i;
+    }
+    return -1;
+}
+
 function findUndoTargetIndex(requesterId, history) {
     const seats = seatsOfParticipant(requesterId);
     for (let i = history.length - 1; i >= 0; i--) {
@@ -5679,7 +5724,17 @@ function hostHandleUndoRequest(msg) {
         return;
     }
 
-    const targetIndex = findUndoTargetIndex(msg.requesterId, auctionHistory);
+    // Voir échange avec Guillaume (session du 8 août — "faire un undo par l'hôte devrait
+    // annuler la dernière enchère produite (si elle a été faite par un humain ; si c'est
+    // un bot, annuler la dernière enchère produite par un humain)") : l'undo DIRECT de
+    // l'hôte (requesterId==='host' ou roomCreatorToken, voir plus bas) cible la dernière
+    // annonce HUMAINE de tout l'historique (findHostUndoTargetIndex), pas SA PROPRE
+    // dernière annonce (findUndoTargetIndex, qui reste utilisée pour un simple joueur
+    // assis demandant l'accord de l'hôte — celui-là ne peut annuler que la sienne).
+    const isHostDirectUndo = msg.requesterId === 'host' || msg.requesterId === roomCreatorToken;
+    const targetIndex = isHostDirectUndo
+        ? findHostUndoTargetIndex(auctionHistory)
+        : findUndoTargetIndex(msg.requesterId, auctionHistory);
     if (targetIndex < 0) {
         deliverToParticipant(msg.requesterId, { type: 'undo-rejected', boardIndex: msg.boardIndex, requesterId: msg.requesterId, reason: 'nothing' });
         return;
@@ -5694,7 +5749,7 @@ function hostHandleUndoRequest(msg) {
     // c'est le vrai jeton du créateur (voir roomCreatorToken, figé à la création/au
     // lancement, jamais réécrit). Sans ce second cas, un créateur en mode différé perdait
     // son droit d'arbitrage unilatéral.
-    if (msg.requesterId === 'host' || msg.requesterId === roomCreatorToken) {
+    if (isHostDirectUndo) {
         applyUndoAsHost({ boardIndex: msg.boardIndex, requesterId: msg.requesterId, historyLengthAtRequest: msg.historyLengthAtRequest, targetIndex });
         return;
     }
