@@ -4724,15 +4724,18 @@ function formatCallCellHtml(entry) {
 }
 
 // Libellé affiché dans l'en-tête du tableau d'enchères pour un siège donné : soit
-// l'abréviation N/E/S/O, soit le nom du joueur qui l'occupe (préférence showLedgerNames).
-// Un siège robot (non assigné) ou sans nom exploitable retombe sur l'abréviation.
+// le nom du joueur qui l'occupe (préférence showLedgerNames), soit le nom complet du
+// siège (Nord/Est/Sud/Ouest — voir échange avec Guillaume, session du 8 août, "je
+// voudrais que ce soit Nord/Est/Sud/Ouest au lieu de N/E/S/O" — plus l'abréviation
+// SEAT_ABBR_FR utilisée avant ici). Un siège robot (non assigné) ou sans nom
+// exploitable retombe sur le nom complet du siège.
 function ledgerSeatLabel(seat) {
-    if (!showLedgerNames) return SEAT_ABBR_FR[seat];
+    if (!showLedgerNames) return SEAT_FULL_NAME[seat];
     const pid = typeof seatAssignment !== 'undefined' ? seatAssignment[seat] : null;
     if (!pid) return 'Bot'; // siège non assigné : joué par le robot (voir maybeRobotBid)
     const p = participants.find(x => x.id === pid);
     const name = p && p.name ? p.name.trim() : '';
-    return name || SEAT_ABBR_FR[seat]; // quelqu'un est bien assigné ici, pas un bot : jamais "Bot" dans ce cas
+    return name || SEAT_FULL_NAME[seat]; // quelqu'un est bien assigné ici, pas un bot : jamais "Bot" dans ce cas
 }
 
 function renderAuctionLedger() {
@@ -5214,26 +5217,43 @@ function renderDDCellPairHtml(strain, posA, posB, ddTable, info, sideSummary, si
     };
     const a = buildCell(posA);
     const b = buildCell(posB);
-    if (a.text === b.text && a.cls === b.cls) {
-        return `<td colspan="2"${a.cls ? ` class="${a.cls}"` : ''}>${a.text}</td>`;
+    const merged = a.text === b.text && a.cls === b.cls;
+    if (merged) {
+        return { html: `<td colspan="2"${a.cls ? ` class="${a.cls}"` : ''}>${a.text}</td>`, merged };
     }
-    return `<td${a.cls ? ` class="${a.cls}"` : ''}>${a.text}</td><td${b.cls ? ` class="${b.cls}"` : ''}>${b.text}</td>`;
+    return { html: `<td${a.cls ? ` class="${a.cls}"` : ''}>${a.text}</td><td${b.cls ? ` class="${b.cls}"` : ''}>${b.text}</td>`, merged };
 }
 
 function renderDDTable(ddTable, dealVulnerable) {
     if (!ddTable) return '';
     const { info, sideSummary } = computeDDScores(ddTable, dealVulnerable);
     const sideVisibility = computeSacrificeAwareVisibility(ddTable, dealVulnerable, info, sideSummary);
+    let allNSMerged = true;
+    let allEWMerged = true;
     const rows = STRAIN_ORDER.map(strain => {
         const labelHtml = formatStrainLabel(strain);
-        const nsCells = renderDDCellPairHtml(strain, 'N', 'S', ddTable, info, sideSummary, sideVisibility);
-        const ewCells = renderDDCellPairHtml(strain, 'E', 'W', ddTable, info, sideSummary, sideVisibility);
-        return `<tr><th class="${STRAIN_CLASS[strain]}">${labelHtml}</th>${nsCells}${ewCells}</tr>`;
+        const ns = renderDDCellPairHtml(strain, 'N', 'S', ddTable, info, sideSummary, sideVisibility);
+        const ew = renderDDCellPairHtml(strain, 'E', 'W', ddTable, info, sideSummary, sideVisibility);
+        if (!ns.merged) allNSMerged = false;
+        if (!ew.merged) allEWMerged = false;
+        return `<tr><th class="${STRAIN_CLASS[strain]}">${labelHtml}</th>${ns.html}${ew.html}</tr>`;
     }).join('');
+    // Voir échange avec Guillaume (session du 8 août — "je parle des cases tout en haut,
+    // celle où il y a écrit 'N' et celle où il y a écrit 'S'") : l'en-tête lui-même
+    // fusionne en une seule case "NS"/"EO" quand TOUTES les lignes ont fusionné pour
+    // cette paire (pas juste certaines, voir allNSMerged/allEWMerged ci-dessus) — sinon
+    // les 2 en-têtes séparés restent nécessaires pour rester alignés avec des cellules
+    // qui, elles, ne fusionnent pas partout.
+    const headerHtml = allNSMerged
+        ? `<th colspan="2">NS</th>`
+        : `<th>${SEAT_ABBR_FR.N}</th><th>${SEAT_ABBR_FR.S}</th>`;
+    const headerHtmlEW = allEWMerged
+        ? `<th colspan="2">EO</th>`
+        : `<th>${SEAT_ABBR_FR.E}</th><th>${SEAT_ABBR_FR.W}</th>`;
     return `
         <div class="dd-table-title">Table du double mort</div>
         <table class="dd-table">
-            <thead><tr><th></th>${DD_TABLE_SEAT_ORDER.map(p => `<th>${SEAT_ABBR_FR[p]}</th>`).join('')}</tr></thead>
+            <thead><tr><th></th>${headerHtml}${headerHtmlEW}</tr></thead>
             <tbody>${rows}</tbody>
         </table>
     `;

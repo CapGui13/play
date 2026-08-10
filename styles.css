@@ -1882,23 +1882,24 @@ button.kibitz-chip {
     flex-shrink: 0;
 }
 
-.game-actions {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-wrap: wrap;
-}
-
 /* Voir échange avec Guillaume (session du 8 août — "réorganiser les boutons... 1ère
    ligne... 2ème ligne... tu fais ça pour l'affichage desktop, pour le mobile je sais
    pas, ça risque de foutre le bordel") : les 2 groupes s'empilent en colonne (2 lignes
-   distinctes) — flex-direction:column sur le conteneur parent, chaque groupe restant
-   lui-même en ligne horizontale. En mobile (media query 768px plus bas), ces 2 groupes
+   distinctes) — flex-direction:column sur le conteneur, chaque groupe restant lui-même
+   en ligne horizontale. En mobile (media query 768px plus bas), ces 2 groupes
    redeviennent display:contents, désactivant cette mise en page pour retrouver
-   exactement le flex-wrap plat d'origine, déjà éprouvé sur petit écran. */
+   exactement le flex-wrap plat d'origine, déjà éprouvé sur petit écran.
+   Voir échange avec Guillaume ("sur la page du non hôte, le exporter la session est
+   décalé") : bug trouvé — align-items:flex-start dimensionnait chaque rangée à son
+   PROPRE contenu plutôt qu'à la largeur du conteneur, ce qui pouvait faire retomber le
+   flex-wrap différemment selon le nombre de boutons effectivement visibles (donc selon
+   le rôle : un invité voit moins de boutons qu'un hôte). align-items:stretch donne
+   maintenant toute la largeur disponible aux 2 rangées, quel que soit leur contenu. */
 .game-actions {
+    display: flex;
+    align-items: stretch;
     flex-direction: column;
-    align-items: flex-start;
+    gap: 8px;
 }
 
 .game-actions-row1,
@@ -2345,6 +2346,14 @@ button.kibitz-chip {
     background-color: var(--text);
     background-clip: padding-box;
     color: var(--card);
+}
+
+/* Voir échange avec Guillaume (session du 8 août — "je voudrais que dans le tableau des
+   enchères produites, le nom du joueur concerné soit en rouge") : rouge spécifiquement
+   sur le libellé (nom ou position, selon showLedgerNames), le reste de la cellule
+   (barre de vulnérabilité) gardant son propre traitement existant ci-dessus. */
+.auction-ledger th.turn-col .ledger-seat-label {
+    color: var(--suit-red);
 }
 
 .ledger-seat-label {
