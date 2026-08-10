@@ -885,6 +885,36 @@ function kickOffBackgroundDD(dealsList) {
     for (let i = 0; i < dealsList.length; i += RANDOM_DEAL_DD_CHUNK_SIZE) {
         sendDDChunk(dealsList.slice(i, i + RANDOM_DEAL_DD_CHUNK_SIZE), generationId);
     }
+    scheduleDDWatchdog(dealsList, generationId);
+}
+
+// Voir échange avec Guillaume (session du 8 août — "des fois il ne se lance juste pas,
+// il faudrait un garde-fou pour check au bout d'un moment et relancer si ça a merdé") :
+// filet de sécurité GÉNÉRAL, indépendant des points de reprise existants (host-reconnect,
+// reprise cloud — qui ne retentent QUE lors d'un événement précis, jamais pendant qu'on
+// reste sur place à attendre). Après un délai généreux (largement au-dessus du temps
+// normal de calcul, tentatives internes de sendDDChunk comprises), si des donnes de CE
+// lot précis manquent encore ET qu'aucun lot plus récent n'a pris le relais entre-temps
+// (voir ddResultGenerationId), on retente automatiquement — une seule fois par lot
+// initial (pas de rappel récursif à ce garde-fou lui-même), pour ne jamais boucler à
+// l'infini si le problème est persistant plutôt qu'un aléa ponctuel.
+const DD_WATCHDOG_DELAY_MS = 20000;
+
+function scheduleDDWatchdog(dealsList, generationId) {
+    setTimeout(() => {
+        if (generationId !== ddResultGenerationId) return; // un lot plus récent a déjà pris le relais
+        const pool = deals || pendingParsedDeals;
+        if (!pool) return;
+        const stillMissing = dealsList.filter(d => {
+            const current = pool.find(p => p.board === d.board);
+            return current && !current.par && !current.ddTable;
+        });
+        if (stillMissing.length === 0) return;
+        pushDebugLog(`Double mort : ${stillMissing.length} donne(s) toujours sans résultat après le délai de sécurité (${DD_WATCHDOG_DELAY_MS / 1000}s) — nouvelle tentative automatique.`);
+        for (let i = 0; i < stillMissing.length; i += RANDOM_DEAL_DD_CHUNK_SIZE) {
+            sendDDChunk(stillMissing.slice(i, i + RANDOM_DEAL_DD_CHUNK_SIZE), generationId);
+        }
+    }, DD_WATCHDOG_DELAY_MS);
 }
 
 // Voir échange avec Guillaume (session du 23 juillet — "une donne au milieu sans PAR
