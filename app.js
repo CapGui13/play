@@ -6143,11 +6143,16 @@ function contractBadgeHtml(strain, level, declarerSeat, doubled) {
 
 // Main compacte sur une seule ligne (♠JT6 ♥T6 ♦KT932 ♣K32), pour tenir dans une ligne de
 // liste — contrairement à dealPreviewHandCardHtml (carte empilée, trop haute ici).
+// Voir échange avec Guillaume ("le nombre de points, légèrement à droite des cartes") :
+// badge HCP ajouté après les 4 couleurs, "XXH" en italique — même info que le badge HCP
+// des autres vues (renderMyHands/buildAllHandsHtml), format condensé pour tenir sur une
+// seule ligne ici plutôt que "XX HCP" comme ailleurs.
 function compactHandHtml(hand) {
     if (!hand) return '<span class="board-overview-hand-empty">—</span>';
-    return ['S', 'H', 'D', 'C'].map(suit =>
+    const suitsHtml = ['S', 'H', 'D', 'C'].map(suit =>
         `<span class="board-overview-hand-suit">${suitIconHtml(suit)}${formatRanksForDisplay(hand[suit]) || '—'}</span>`
     ).join('');
+    return `${suitsHtml}<span class="board-overview-hand-hcp">${computeHandHcp(hand)}H</span>`;
 }
 
 function renderBoardOverview() {

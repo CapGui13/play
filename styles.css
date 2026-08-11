@@ -1026,6 +1026,15 @@ a.btn {
     color: var(--text-muted);
 }
 
+/* Voir échange avec Guillaume ("le nombre de points, légèrement à droite des cartes...
+   en italique") : dernier élément du flex .board-overview-hand ci-dessus, son gap
+   existant (10px) donne déjà l'espacement voulu, pas besoin de marge dédiée. */
+.board-overview-hand-hcp {
+    font-style: italic;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+
 .board-overview-contract,
 .board-overview-par {
     display: flex;
@@ -1045,7 +1054,13 @@ a.btn {
 }
 
 .board-overview-status.is-pending { color: var(--text-muted); }
-.board-overview-status.is-waiting { color: var(--warn-amber); }
+/* Voir échange avec Guillaume ("le ? doit être en blanc plutôt qu'en jaune si ce n'est
+   pas le tour du joueur concerné") : var(--text), la même teinte "blanche" standard de
+   l'appli que le reste du texte courant, plutôt que l'ambre d'origine — réservait
+   jusqu'ici une couleur d'alerte à une simple attente normale, sans rien à signaler.
+   is-done (Passé, vert) et is-pending (—, gris atténué) restent inchangés : seule
+   is-waiting change ici. */
+.board-overview-status.is-waiting { color: var(--text); }
 .board-overview-status.is-done { color: #7fbf7f; }
 /* Voir échange avec Guillaume (session du 8 août — "le point d'interrogation... doit
    être en rouge si le joueur concerné est celui dont on attend l'enchère") : même
