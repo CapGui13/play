@@ -100,7 +100,7 @@
         <div class="nickname-prompt-card">
             <h2>Quel est votre pseudo ?</h2>
             <p>Il sera visible par les autres joueurs de la partie.</p>
-            <input type="text" id="nicknamePromptInput" class="name-input" maxlength="20" placeholder="Votre prénom" enterkeyhint="go" onkeydown="uiNicknamePromptKeydown(event)">
+            <input type="text" id="nicknamePromptInput" class="name-input" maxlength="20" enterkeyhint="go" onkeydown="uiNicknamePromptKeydown(event)">
             <button type="button" class="btn btn-primary" onclick="uiConfirmNicknamePrompt()">Rejoindre</button>
         </div>
     </div>
@@ -162,8 +162,16 @@
                  pas dans la barre de connexion persistante (visible même sur l'écran
                  d'accueil, où il n'a pas lieu d'être) — seulement une fois dans un salon
                  ou une partie, en haut à droite sur la même ligne que le titre. -->
-            <a href="https://capgui13.github.io/play/" class="btn btn-secondary btn-small" title="Retour à l'accueil">🏠</a>
-            <button type="button" class="btn btn-secondary btn-small" onclick="uiReportBug()" title="Signaler un bug">🐞</button>
+            <!-- Voir échange avec Guillaume ("l'icône maison devrait être plus à droite,
+                 plus proche de la coccinelle") : regroupés dans .lobby-header-actions —
+                 sans ce conteneur, .lobby-header-row (justify-content:space-between, voir
+                 styles.css) traitait les 3 enfants individuellement et étalait le bouton
+                 maison au milieu, entre le titre et la coccinelle, au lieu de le coller à
+                 elle. -->
+            <div class="lobby-header-actions">
+                <a href="https://capgui13.github.io/play/" class="btn btn-secondary btn-small" title="Retour à l'accueil">🏠</a>
+                <button type="button" class="btn btn-secondary btn-small" onclick="uiReportBug()" title="Signaler un bug">🐞</button>
+            </div>
         </div>
 
         <div id="lobbyRoomCodeBlock" style="display:none;">
@@ -175,10 +183,20 @@
             <label>Votre pseudo</label>
             <div class="name-input-row">
                 <input type="text" id="myNameInput" class="name-input" maxlength="20" oninput="uiUpdateMyName()" onblur="uiMyNameBlur()" onfocus="this.select()">
-                <!-- Voir échange avec Guillaume (session du 23 juillet) : bouton de transfert
-                     et toggle "Robots inactifs" regroupés dans cette colonne, pour que le
-                     second reste toujours ALIGNÉ SOUS le premier (même bord gauche), plutôt
-                     que chacun centré indépendamment sur sa propre ligne. -->
+            </div>
+            <!-- Voir échange avec Guillaume ("Votre pseudo devrait être centré au-dessus
+                 du formulaire, c'est le cas pour l'invité mais pas pour l'hôte") : sortis
+                 de .name-input-row, qui ne contient plus QUE le champ — sans ça, cette
+                 colonne partageait la ligne centrée avec le champ pseudo, décalant tout le
+                 groupe (donc le champ lui-même) hors du centre dès qu'un de ses deux
+                 contrôles apparaissait, uniquement côté hôte. Sa propre ligne, centrée elle
+                 aussi mais indépendamment, garde le champ pseudo pile centré dans les deux
+                 cas. -->
+            <div class="host-controls-row">
+                <!-- Bouton de transfert et toggle "Robots inactifs" regroupés dans cette
+                     colonne, pour que le second reste toujours ALIGNÉ SOUS le premier (même
+                     bord gauche), plutôt que chacun centré indépendamment sur sa propre
+                     ligne. -->
                 <div class="host-controls-column">
                     <!-- Un seul bouton, ici, plutôt qu'un par participant dans la liste (voir
                          échange avec Guillaume) : ouvre un menu déroulant listant les
@@ -558,18 +576,29 @@
     </div>
 </div>
 
-<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<!-- Voir échange avec Guillaume ("latence avant l'affichage du formulaire de pseudo") :
+     defer sur tous les scripts ci-dessous — sans ça, chacun se télécharge et s'exécute
+     l'un après l'autre, en série (peerjs → pusher → bidding-rules → bidding-engine, à lui
+     seul ~500 Ko → deal-parser → ... → app.js), alors que la logique qui affiche le
+     formulaire de pseudo (dans app.js, sur DOMContentLoaded) ne peut de toute façon
+     s'exécuter qu'une fois TOUS ces scripts chargés. defer les télécharge tous EN
+     PARALLÈLE (le navigateur ne bloque plus dessus un par un) tout en garantissant qu'ils
+     s'exécutent ensuite dans le même ordre qu'aujourd'hui — DOMContentLoaded continue de
+     n'être déclenché qu'une fois tous chargés (aucun changement de comportement), mais le
+     temps total pour y arriver chute nettement sur un premier chargement sans cache,
+     surtout en mobile. -->
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js" defer></script>
 <!-- Voir échange avec Guillaume ("j'aimerais que ce soit quasi instantané") : Pusher
      Channels, pour la diffusion en temps réel du mode différé (voir realtime-updates.js
      ci-dessous). Chargé même si le compte n'est pas encore configuré : subscribeToSessionUpdates
      s'en aperçoit et ne fait simplement rien (le sondage périodique prend le relais seul). -->
-<script src="https://js.pusher.com/8.4/pusher.min.js"></script>
-<script src="bidding-rules.js"></script>
-<script src="bidding-engine.js"></script>
-<script src="deal-parser.js"></script>
-<script src="peer-connection.js"></script>
-<script src="session-storage.js"></script>
-<script src="realtime-updates.js"></script>
-<script src="app.js"></script>
+<script src="https://js.pusher.com/8.4/pusher.min.js" defer></script>
+<script src="bidding-rules.js" defer></script>
+<script src="bidding-engine.js" defer></script>
+<script src="deal-parser.js" defer></script>
+<script src="peer-connection.js" defer></script>
+<script src="session-storage.js" defer></script>
+<script src="realtime-updates.js" defer></script>
+<script src="app.js" defer></script>
 </body>
 </html>

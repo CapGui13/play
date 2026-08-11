@@ -4836,6 +4836,18 @@ function ledgerSeatLabel(seat) {
     return name || SEAT_FULL_NAME[seat]; // quelqu'un est bien assigné ici, pas un bot : jamais "Bot" dans ce cas
 }
 
+// Voir échange avec Guillaume ("chaque joueur voit son nom en vert, son partenaire en
+// bleu, les 2 adversaires en rouge") : relation ENTRE ce siège et le point de vue de la
+// personne qui regarde (mySeats), pas une propriété du siège en lui-même — deux personnes
+// à la même table voient donc des couleurs différentes sur les mêmes 4 sièges. Un kibitz
+// (mySeats vide) n'a pas de camp : jamais de classe, couleur neutre par défaut.
+function seatRelationClass(seat) {
+    if (!mySeats || mySeats.length === 0) return '';
+    if (mySeats.includes(seat)) return 'seat-relation-mine';
+    if (mySeats.some(s => partnershipOf(s) === partnershipOf(seat))) return 'seat-relation-partner';
+    return 'seat-relation-opponent';
+}
+
 function renderAuctionLedger() {
     const deal = currentDeal();
     const header = document.getElementById('auctionLedgerHeader');
@@ -4855,7 +4867,12 @@ function renderAuctionLedger() {
         const pair = partnershipOf(s);
         const isVulnerable = deal.vulnerable === 'Both' || deal.vulnerable === pair;
         const vulnClass = isVulnerable ? 'vuln-bar-danger' : 'vuln-bar-safe';
-        const classes = [s === turnSeat ? 'turn-col' : ''].filter(Boolean).join(' ');
+        // Voir échange avec Guillaume ("le nom de celui dont c'est le tour ne devrait pas
+        // être en rouge, le fond blanc suffit déjà à l'indiquer") : turn-col garde son
+        // inversion de fond (voir styles.css), mais ne colore plus le texte lui-même —
+        // remplacé par seat-relation-* ci-dessus, une couleur PERMANENTE (pas liée au tour)
+        // reflétant la relation de ce siège avec le point de vue de qui regarde.
+        const classes = [s === turnSeat ? 'turn-col' : '', seatRelationClass(s)].filter(Boolean).join(' ');
         return `<th class="${classes}"${dropAttrs(s)}>
             <span class="ledger-seat-label">${escapeHtml(ledgerSeatLabel(s))}</span>
             <span class="vuln-bar ${vulnClass}"></span>
@@ -5431,8 +5448,14 @@ function setDealExportStatus(text, isError) {
 // dédiée. Nom de fichier horodaté à la seconde près : collision quasiment impossible mais,
 // le cas échéant, l'export échoue proprement (voir api/export-deal.js) plutôt que
 // d'écraser silencieusement un export précédent.
+// Voir échange avec Guillaume ("le bouton export PBN doit être disponible également pour
+// les invités") : canControlBoard() plutôt que myRole==='host' — n'importe quel joueur
+// assis (hôte ou invité), pas seulement l'hôte ; un simple kibitz reste exclu (aucun siège
+// à lui, rien de personnel à exporter). Aucune restriction technique ne l'empêchait déjà
+// côté serveur (le jeton d'écriture GitHub vit côté fonction Vercel, jamais dans le
+// navigateur) — seule la condition d'affichage ci-dessous, et ce garde, la limitaient.
 function uiExportDealPBN() {
-    if (myRole !== 'host') return;
+    if (!canControlBoard()) return;
     const deal = currentDeal();
     if (!deal) return;
 
@@ -5575,10 +5598,11 @@ function checkAuctionEnd() {
     // reste sur cet écran) : on la déclenche seulement s'il était masqué juste avant.
     const wasHidden = resultEl.style.display === 'none' || resultEl.style.display === '';
     resultEl.style.display = 'block';
-    // Voir échange avec Guillaume : bouton d'export PBN de cette donne, réservé à l'hôte
-    // (c'est lui qui a la main sur le déroulement de la partie), affiché seulement une
-    // fois le double mort disponible.
-    const exportBtnHtml = (myRole === 'host' && ddTableHtml) ? `
+    // Voir échange avec Guillaume ("le bouton export PBN doit être disponible également
+    // pour les invités") : canControlBoard() plutôt que myRole==='host' — voir le même
+    // commentaire détaillé sur uiExportDealPBN plus haut. Affiché seulement une fois le
+    // double mort disponible.
+    const exportBtnHtml = (canControlBoard() && ddTableHtml) ? `
         <span class="dd-export-row">
             <button type="button" class="btn btn-secondary btn-small" id="dealExportBtn" onclick="uiExportDealPBN()">📤 Export PBN</button>
             <span id="dealExportStatus" class="dd-export-status"></span>
@@ -6283,8 +6307,16 @@ function renderBoardSkipControls() {
     const fastForwardBtn = document.getElementById('fastForwardBoardBtn');
     if (!prevBtn || !nextBtn) return;
     const isHost = myRole === 'host';
-    prevBtn.style.display = isHost ? '' : 'none';
-    nextBtn.style.display = isHost ? '' : 'none';
+    // Voir échange avec Guillaume ("Donne #... devrait être à la même place pour l'invité
+    // que pour l'hôte, l'invité ne doit juste pas voir les 2 flèches") : visibility (pas
+    // display:none) — sans ça, les flèches masquées disparaissaient du flux flex
+    // (.board-nav-row), et #boardNumberLabel, leur voisin direct, se retrouvait décalé
+    // vers la gauche pour un invité par rapport à l'hôte (même principe déjà utilisé pour
+    // rotateBtn/seatReorgBtn, voir updateBoardControlVisibility).
+    prevBtn.style.visibility = isHost ? '' : 'hidden';
+    prevBtn.style.pointerEvents = isHost ? '' : 'none';
+    nextBtn.style.visibility = isHost ? '' : 'hidden';
+    nextBtn.style.pointerEvents = isHost ? '' : 'none';
     // Voir échange avec Guillaume ("la flèche avance rapide ne doit pas apparaître en cas
     // de jeu non différé") : "avance rapide" saute à la prochaine donne où c'est mon tour
     // AILLEURS — utile seulement en mode différé, où les donnes avancent indépendamment
@@ -6294,7 +6326,11 @@ function renderBoardSkipControls() {
     // l'hôte. Même repère que pollCloudForUpdates pour détecter le mode différé
     // (`peerConn instanceof NullPeerConnection`), fixé au lancement de la salle.
     const isDeferredRoom = peerConn instanceof NullPeerConnection;
-    if (fastForwardBtn) fastForwardBtn.style.display = (isHost && isDeferredRoom) ? '' : 'none';
+    const showFastForward = isHost && isDeferredRoom;
+    if (fastForwardBtn) {
+        fastForwardBtn.style.visibility = showFastForward ? '' : 'hidden';
+        fastForwardBtn.style.pointerEvents = showFastForward ? '' : 'none';
+    }
     if (!isHost || !deals) return;
     prevBtn.disabled = boardIndex <= 0;
     nextBtn.disabled = boardIndex >= deals.length - 1;

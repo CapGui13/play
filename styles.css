@@ -38,6 +38,14 @@
     --suit-red: #d94f43;
     --suit-orange: #f0a04b;
     --suit-blue: #4f8de0;
+
+    /* Voir échange avec Guillaume ("chaque joueur voit son nom en vert, son partenaire en
+       bleu, les 2 adversaires en rouge — pas des couleurs ternes, bien vives") : distinctes
+       des --suit-* ci-dessus (volontairement plus sourdes, pensées pour du texte de
+       couleur de carte, pas pour une alerte relationnelle qui doit sauter aux yeux). */
+    --relation-mine: #3ddc73;
+    --relation-partner: #2f9dff;
+    --relation-opponent: #ff4d4d;
 }
 
 @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Work+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap');
@@ -733,6 +741,19 @@ a.btn {
     position: relative;
 }
 
+/* Voir échange avec Guillaume ("Votre pseudo devrait être centré... pour l'hôte aussi") :
+   sa propre ligne centrée, séparée de .name-input-row (voir index.html) — margin-top fixe
+   plutôt que conditionnelle : ses enfants (host-controls-column) restent présents dans le
+   DOM même masqués (display:none, voir index.html), donc :empty ne les détecterait de
+   toute façon pas ; ce petit espace constant reste discret même quand rien n'y est visible
+   (cas de l'invité, ou de l'hôte tout seul avant qu'un autre participant rejoigne).
+   */
+.host-controls-row {
+    display: flex;
+    justify-content: center;
+    margin-top: 12px;
+}
+
 /* Voir échange avec Guillaume (session du 23 juillet) : colonne alignée à gauche (pas
    centrée) qui regroupe le bouton "Transférer l'hôte" et le toggle "Robots inactifs" — le
    second reste ainsi toujours sous le premier, même bord gauche, quel que soit lequel des
@@ -1125,6 +1146,12 @@ a.btn {
     justify-content: space-between;
     gap: 12px;
     margin-bottom: 8px;
+}
+
+.lobby-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
 }
 
 #screen-lobby h2 {
@@ -2363,18 +2390,30 @@ button.kibitz-chip {
     color: var(--card);
 }
 
-/* Voir échange avec Guillaume (session du 8 août — "je voudrais que dans le tableau des
-   enchères produites, le nom du joueur concerné soit en rouge") : rouge spécifiquement
-   sur le libellé (nom ou position, selon showLedgerNames), le reste de la cellule
-   (barre de vulnérabilité) gardant son propre traitement existant ci-dessus. */
-.auction-ledger th.turn-col .ledger-seat-label {
-    color: var(--suit-red);
-}
-
+/* Voir échange avec Guillaume ("le nom de celui dont c'est le tour ne devrait pas être en
+   rouge, le fond blanc suffit déjà") : l'ancienne règle qui coloriait .ledger-seat-label en
+   rouge sur turn-col a été retirée — remplacée par seat-relation-* ci-dessous, une couleur
+   PERMANENTE (indépendante du tour) reflétant qui est qui du point de vue de la personne
+   qui regarde, pas juste à qui c'est le tour. */
 .ledger-seat-label {
     display: block;
     padding-bottom: 6px;
 }
+
+/* Voir échange avec Guillaume ("chaque joueur voit son nom en vert, son partenaire en
+   bleu, les 2 adversaires en rouge — bien vives") : posées sur le <th> (voir
+   seatRelationClass dans app.js), pas seulement sur .ledger-seat-label, pour pouvoir
+   ajuster le contraste quand ce même siège a AUSSI turn-col (fond clair inversé, voir
+   règle .turn-col plus haut) — un vert/bleu/rouge pensé pour un fond sombre perd trop de
+   lisibilité tel quel sur fond clair, donc légèrement assombri dans ce cas précis
+   (color-mix vers --card) plutôt que réutilisé identique. */
+.auction-ledger th.seat-relation-mine .ledger-seat-label { color: var(--relation-mine); }
+.auction-ledger th.seat-relation-partner .ledger-seat-label { color: var(--relation-partner); }
+.auction-ledger th.seat-relation-opponent .ledger-seat-label { color: var(--relation-opponent); }
+
+.auction-ledger th.turn-col.seat-relation-mine .ledger-seat-label { color: color-mix(in srgb, var(--relation-mine) 70%, var(--card)); }
+.auction-ledger th.turn-col.seat-relation-partner .ledger-seat-label { color: color-mix(in srgb, var(--relation-partner) 70%, var(--card)); }
+.auction-ledger th.turn-col.seat-relation-opponent .ledger-seat-label { color: color-mix(in srgb, var(--relation-opponent) 70%, var(--card)); }
 
 .vuln-bar {
     display: block;
@@ -2470,10 +2509,16 @@ button.kibitz-chip {
 /* Voir échange avec Guillaume (session du 8 août — "Export PBN devrait être en haut à
    droite... à droite de la ligne contrat final") : ligne d'en-tête en flex, le texte du
    contrat à gauche et le bouton d'export (voir .dd-export-row ci-dessous, réutilisé tel
-   quel dedans) poussé à droite via margin-left:auto. */
+   quel dedans) poussé à droite via margin-left:auto.
+   Voir échange avec Guillaume ("le bouton Export PBN pousse la ligne 'Contrat final...'
+   vers le bas") : align-items:flex-start plutôt que center — le bouton (avec son padding)
+   est plus haut qu'une simple ligne de texte/badge, et centrer les deux enfants sur cette
+   hauteur commune faisait paraître le texte du contrat décalé vers le bas dès que le
+   bouton apparaissait (une fois le double mort disponible). flex-start les aligne tous
+   deux sur le HAUT de la ligne, indépendamment de leur propre hauteur. */
 .contract-final-header {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     justify-content: space-between;
     gap: 10px;
     flex-wrap: wrap;
