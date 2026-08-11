@@ -4428,6 +4428,12 @@ function wizzableNameHtml(p) {
     if (p.id === myParticipantId) {
         return `${nameSpan}<span class="room-board-wizz-btn" onclick="uiSelfWizz()" title="Tester l'effet wizz sur soi-même">🔔</span>`;
     }
+    // Voir échange avec Guillaume ("j'essaye de wizz l'autre mais ça ne marche pas, en
+    // mode différé") : pas de canal live en mode différé (NullPeerConnection, voir
+    // isWizzTargetReachable) — la cloche échouait donc en silence à chaque clic, sans
+    // rien indiquer d'autre qu'une ligne dans un journal masqué. Masquée ici plutôt que de
+    // laisser un geste qui ne peut structurellement jamais aboutir dans ce mode.
+    if (peerConn instanceof NullPeerConnection) return nameSpan;
     return `${nameSpan}<span class="room-board-wizz-btn" onclick="uiSendWizz('${p.id}')" title="Faire trembler l'écran de ${escapeHtml(p.name)}">🔔</span>`;
 }
 
