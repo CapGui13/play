@@ -2876,9 +2876,11 @@ function rotatedSeatAssignment(current) {
     return next;
 }
 
-// Réservé à l'hôte (voir updateBoardControlVisibility) : applique la rotation localement,
-// recalcule mySeats/autoPassSeats en conséquence, diffuse le nouvel état à tout le monde,
-// puis rafraîchit l'écran actuellement affiché (jeu ou salon selon le moment).
+// Réservé au VRAI créateur (voir updateBoardControlVisibility et échange avec Guillaume,
+// "en mode différé, l'invité ne devrait pas avoir... la rotation") : applique la rotation
+// localement, recalcule mySeats/autoPassSeats en conséquence, diffuse le nouvel état à
+// tout le monde, puis rafraîchit l'écran actuellement affiché (jeu ou salon selon le
+// moment).
 // Voir échange avec Guillaume : bascule le mode d'enchère des robots. Purement local à
 // l'hôte (voir robotBiddingMode) — pas de diffusion réseau nécessaire.
 function uiSetRobotBiddingMode(passOnly) {
@@ -2888,10 +2890,14 @@ function uiSetRobotBiddingMode(passOnly) {
 }
 
 function uiRotateSeatsClockwise() {
-    if (myRole !== 'host') return;
+    if (!isTrueOriginalHost()) return;
     seatAssignment = rotatedSeatAssignment(seatAssignment);
     autoPassSeats = SEATS.filter(seat => !seatAssignment[seat]);
-    mySeats = SEATS.filter(seat => seatAssignment[seat] === 'host');
+    // myParticipantId plutôt que la chaîne littérale 'host' (voir échange avec Guillaume,
+    // "2 modes : live / différé") : en mode différé, même le vrai créateur n'utilise plus
+    // jamais 'host' (voir isDeferredMode au lancement) — seul myParticipantId identifie
+    // correctement ses propres sièges dans les deux modes.
+    mySeats = SEATS.filter(seat => seatAssignment[seat] === myParticipantId);
 
     peerConn.send({ type: 'seats-rotated', seatAssignment, autoPassSeats });
     flashSeatsRotatedToast();
@@ -3288,10 +3294,12 @@ function uiCloseDealPreviewOnBackdrop(evt) {
 // fermeture") : ouvre la grille de réorganisation des sièges en cours de partie, en mode
 // BROUILLON — les changements faits dans la modale (voir uiStageSeatAssignment) ne
 // s'appliquent qu'au clic sur "Valider" (voir uiValidateSeatReorg), jamais en direct.
-// Réservé à l'hôte (le bouton lui-même est déjà masqué pour tout autre rôle, voir
-// updateBoardControlVisibility, mais on se protège quand même ici en cas d'appel direct).
+// Réservé au VRAI créateur (le bouton lui-même est déjà masqué pour tout autre rôle, voir
+// updateBoardControlVisibility, mais on se protège quand même ici en cas d'appel direct) —
+// isTrueOriginalHost(), pas myRole==='host' (voir échange avec Guillaume, "en mode
+// différé, l'invité ne devrait pas avoir... la réorganisation des sièges").
 function uiOpenSeatReorgModal() {
-    if (myRole !== 'host') return;
+    if (!isTrueOriginalHost()) return;
     seatReorgDraft = { ...seatAssignment };
     renderSeatReorgModalGrid();
     document.getElementById('seatReorgModal').style.display = 'flex';
@@ -3301,7 +3309,7 @@ function uiOpenSeatReorgModal() {
 // aucune diffusion réseau, aucun rafraîchissement de l'écran de jeu tant que "Valider"
 // n'a pas été cliqué (voir uiValidateSeatReorg).
 function uiStageSeatAssignment(seat, participantId) {
-    if (myRole !== 'host' || !seatReorgDraft) return;
+    if (!isTrueOriginalHost() || !seatReorgDraft) return;
     seatReorgDraft[seat] = participantId || null;
     renderSeatReorgModalGrid();
 }
@@ -3309,7 +3317,7 @@ function uiStageSeatAssignment(seat, participantId) {
 // Applique enfin le brouillon à l'assignation réelle (même logique que uiAssignSeat, mais
 // en un seul coup pour tous les sièges modifiés), diffuse, rafraîchit, puis ferme.
 function uiValidateSeatReorg() {
-    if (myRole !== 'host' || !seatReorgDraft) return;
+    if (!isTrueOriginalHost() || !seatReorgDraft) return;
     seatAssignment = { ...seatReorgDraft };
     // Voir échange avec Guillaume (session du 23 juillet — voir uiAssignSeat) : même
     // recalcul du statut robot des sièges.
@@ -4108,7 +4116,13 @@ function updateBoardControlVisibility() {
     // (qui autorise aussi tout joueur assis) — recommencer une enchère pour toute la
     // table reste une décision d'organisation, comme la rotation des sièges juste en
     // dessous.
-    if (resetBtn) resetBtn.style.display = myRole === 'host' ? '' : 'none';
+    // Voir échange avec Guillaume ("en mode différé, l'invité ne devrait pas avoir
+    // recommencer l'enchère, ni la rotation, ni la réorganisation des sièges") :
+    // isTrueOriginalHost() plutôt que myRole==='host' — en mode différé, TOUT participant
+    // qui reprend la salle obtient myRole='host' localement (voir uiResumeFromCloud, pur
+    // contrôle technique, pas une identité), donc ce critère seul montrait ces boutons à
+    // n'importe quel invité différé, pas seulement au vrai créateur.
+    if (resetBtn) resetBtn.style.display = isTrueOriginalHost() ? '' : 'none';
     // Réservé à l'hôte (voir échange avec Guillaume) : changer qui est assis où reste une
     // décision d'organisation de la table, pas quelque chose qu'un simple joueur assis
     // devrait pouvoir déclencher pour tout le monde.
@@ -4118,16 +4132,16 @@ function updateBoardControlVisibility() {
     // nombre de boutons visibles selon le rôle, et la ligne se coupe différemment pour
     // l'hôte que pour les autres.
     if (rotateBtn) {
-        rotateBtn.style.visibility = myRole === 'host' ? '' : 'hidden';
-        rotateBtn.style.pointerEvents = myRole === 'host' ? '' : 'none';
+        rotateBtn.style.visibility = isTrueOriginalHost() ? '' : 'hidden';
+        rotateBtn.style.pointerEvents = isTrueOriginalHost() ? '' : 'none';
     }
     // Voir échange avec Guillaume (session du 23 juillet) : même traitement que
     // "Rotation" juste au-dessus — réservé à l'hôte, seul à pouvoir réorganiser qui joue
     // où (voir uiOpenSeatReorgModal).
     const seatReorgBtn = document.getElementById('seatReorgBtn');
     if (seatReorgBtn) {
-        seatReorgBtn.style.visibility = myRole === 'host' ? '' : 'hidden';
-        seatReorgBtn.style.pointerEvents = myRole === 'host' ? '' : 'none';
+        seatReorgBtn.style.visibility = isTrueOriginalHost() ? '' : 'hidden';
+        seatReorgBtn.style.pointerEvents = isTrueOriginalHost() ? '' : 'none';
     }
     // Téléchargement local pur (voir uiExportSessionPBN) : contrairement à l'export PBN
     // d'une seule donne (qui écrit sur le repo GitHub, réservé à l'hôte), rien n'empêche
@@ -5659,14 +5673,27 @@ function renderUndoControls() {
     if (!btn) return;
     const visible = canControlBoard();
     btn.style.display = visible ? '' : 'none';
-    btn.disabled = !visible || !deals || auctionHistory.length === 0 || undoRequestPending || !!pendingUndoAsk;
+    // Voir échange avec Guillaume ("undo en mode différé") : même règle que côté
+    // hostHandleUndoRequest — un simple joueur (pas le vrai créateur) en mode différé ne
+    // peut annuler SA PROPRE dernière annonce que tant que son partenaire n'a rien annoncé
+    // depuis. Le vrai créateur n'est jamais concerné (son undo cible la dernière annonce
+    // humaine de toute la table, pas seulement la sienne — voir findHostUndoTargetIndex),
+    // ni le mode live (qui garde son propre mécanisme d'accord d'adversaire).
+    const isDeferredNonCreator = deals && (peerConn instanceof NullPeerConnection) && !isTrueOriginalHost();
+    const blockedByPartnerSince = isDeferredNonCreator
+        && findUndoTargetIndex(myParticipantId, auctionHistory) <= findPartnerLastCallIndex(myParticipantId, auctionHistory);
+    btn.disabled = !visible || !deals || auctionHistory.length === 0 || undoRequestPending || !!pendingUndoAsk || blockedByPartnerSince;
     // Deux <span> (voir index.html) plutôt qu'un textContent direct : .btn-label-full/
     // .btn-label-short sont affichés en alternance en CSS selon la largeur d'écran
     // (bouton complet sur desktop, abrégé sur mobile où la place manque).
     // Libellé différent pour l'hôte (voir échange avec Guillaume) : son undo s'applique
     // immédiatement, sans validation du camp d'en face (voir hostHandleUndoRequest) — "Faire
     // un undo" plutôt que "Demander", et jamais l'état intermédiaire "Demande envoyée..."
-    // qui n'a pas de sens quand ça s'applique tout de suite.
+    // qui n'a pas de sens quand ça s'applique tout de suite. Vrai aussi pour tout
+    // participant en mode différé (myRole==='host' localement pour tout le monde là-bas,
+    // voir uiResumeFromCloud) : son undo s'applique désormais directement lui aussi (voir
+    // hostHandleUndoRequest), jamais de "Demande envoyée..." qui n'aurait de toute façon
+    // personne en ligne pour y répondre.
     const isHost = myRole === 'host';
     const fullEl = btn.querySelector('.btn-label-full');
     const shortEl = btn.querySelector('.btn-label-short');
@@ -5751,6 +5778,26 @@ function findUndoTargetIndex(requesterId, history) {
     return -1;
 }
 
+// Voir échange avec Guillaume ("undo en mode différé") : index de la dernière annonce du
+// PARTENAIRE de ce participant (même camp, sièges qu'il ne contrôle PAS lui-même) — sert
+// uniquement à la règle d'undo du mode différé (voir hostHandleUndoRequest/
+// renderUndoControls), pas au mode live qui garde son propre mécanisme d'accord
+// d'adversaire. -1 si le partenaire (au sens : le reste de son camp) n'a encore rien
+// annoncé, ou si ce participant contrôle déjà tout son camp lui-même (aucun partenaire
+// distinct — voir échange avec Guillaume, "je jouais E/O" — dans ce cas l'undo n'est
+// jamais bloqué par cette règle, seul un adversaire a pu enchérir depuis, ce qui ne compte
+// pas).
+function findPartnerLastCallIndex(requesterId, history) {
+    const mySeats = seatsOfParticipant(requesterId);
+    if (mySeats.length === 0) return -1;
+    const myPartnerships = new Set(mySeats.map(partnershipOf));
+    const partnerSeats = SEATS.filter(seat => myPartnerships.has(partnershipOf(seat)) && !mySeats.includes(seat));
+    for (let i = history.length - 1; i >= 0; i--) {
+        if (partnerSeats.includes(history[i].seat)) return i;
+    }
+    return -1;
+}
+
 function guestIndexForParticipant(pid) {
     if (!pid || pid === 'host') return null;
     return Object.prototype.hasOwnProperty.call(guestIndexByToken, pid) ? guestIndexByToken[pid] : null;
@@ -5763,6 +5810,7 @@ function undoRejectReasonText(reason) {
         case 'busy': return 'Une autre demande est déjà en cours, réessayez.';
         case 'stale': return 'La situation a changé entre-temps, réessayez.';
         case 'nothing': return "Vous n'avez fait aucune annonce à annuler sur cette donne.";
+        case 'partner-since': return 'Votre partenaire a annoncé depuis — impossible d\'annuler cette annonce.';
         default: return "Impossible d'annuler pour le moment.";
     }
 }
@@ -5858,6 +5906,26 @@ function hostHandleUndoRequest(msg) {
         return;
     }
 
+    // Voir échange avec Guillaume ("undo en mode différé") : pas d'adversaire humain EN
+    // LIGNE à qui demander l'accord en mode différé (NullPeerConnection) — la bannière
+    // accepter/refuser ci-dessous ne serait jamais vue par personne d'autre que le
+    // demandeur lui-même (qui jouerait alors sa propre demande à sa place), et le délai de
+    // 20s ci-dessous finirait toujours par rejeter pour rien. Remplacé par une règle
+    // locale, sans validation d'autrui : ce simple joueur peut annuler SA PROPRE dernière
+    // annonce (targetIndex, déjà calculé ci-dessus via findUndoTargetIndex) tant que son
+    // PARTENAIRE n'a rien annoncé depuis (sinon la correction toucherait une décision déjà
+    // prise par le partenaire sur la base de cette annonce) — même règle appliquée à
+    // l'activation/désactivation du bouton, voir renderUndoControls.
+    if (peerConn instanceof NullPeerConnection) {
+        const partnerIdx = findPartnerLastCallIndex(msg.requesterId, auctionHistory);
+        if (targetIndex <= partnerIdx) {
+            deliverToParticipant(msg.requesterId, { type: 'undo-rejected', boardIndex: msg.boardIndex, requesterId: msg.requesterId, reason: 'partner-since' });
+            return;
+        }
+        applyUndoAsHost({ boardIndex: msg.boardIndex, requesterId: msg.requesterId, historyLengthAtRequest: msg.historyLengthAtRequest, targetIndex });
+        return;
+    }
+
     // Voir échange avec Guillaume ("si demande d'undo, il faut validation de l'host, pas
     // que ça marche automatiquement") : ce n'est plus l'ADVERSAIRE humain qui est
     // sollicité pour approuver la demande d'un simple joueur assis — c'est l'HÔTE
@@ -5944,8 +6012,12 @@ function uiAnswerUndo(approved) {
     }
 }
 
+// Réservé au VRAI créateur (le bouton lui-même est déjà masqué pour tout autre rôle, voir
+// updateBoardControlVisibility, mais on se protège quand même ici en cas d'appel direct —
+// voir échange avec Guillaume, "en mode différé, l'invité ne devrait pas avoir
+// recommencer l'enchère").
 function uiResetAuction() {
-    if (!canControlBoard()) return;
+    if (!isTrueOriginalHost() || !canControlBoard()) return;
     auctionHistory = [];
     deals[boardIndex].auctionHistory = auctionHistory; // reste la référence partagée
     hostPendingUndo = null;
