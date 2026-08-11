@@ -453,7 +453,14 @@ function uiToggleLedgerNames() {
     saveBoolPref('bridgeBidShowLedgerNames', showLedgerNames);
     const btn = document.getElementById('ledgerNamesToggleBtn');
     if (btn) btn.classList.toggle('is-active', showLedgerNames);
-    if (deals) renderAuctionLedger();
+    if (deals) {
+        renderAuctionLedger();
+        // Voir échange avec Guillaume : le diagramme des 4 mains (buildAllHandsHtml)
+        // utilise désormais la même préférence (ledgerSeatLabel) que l'en-tête du tableau
+        // d'enchères — sans ce re-rendu, il fallait attendre un tour d'enchère ou un autre
+        // changement d'option pour que la bascule s'y reflète.
+        renderAllHandsDiagram();
+    }
 }
 
 // Réservé à l'hôte QUI N'OCCUPE AUCUN SIÈGE (mode "maître du jeu" à 3, voir isKibbitz) :
@@ -4723,12 +4730,16 @@ function formatCallCellHtml(entry) {
     // return `<span class="call-with-explanation" tabindex="0" data-explanation="${escapeHtml(explanation)}" onclick="uiShowCallExplanation(this)">${inner}<span class="call-explain-dot" aria-hidden="true"></span></span>`;
 }
 
-// Libellé affiché dans l'en-tête du tableau d'enchères pour un siège donné : soit
-// le nom du joueur qui l'occupe (préférence showLedgerNames), soit le nom complet du
-// siège (Nord/Est/Sud/Ouest — voir échange avec Guillaume, session du 8 août, "je
-// voudrais que ce soit Nord/Est/Sud/Ouest au lieu de N/E/S/O" — plus l'abréviation
-// SEAT_ABBR_FR utilisée avant ici). Un siège robot (non assigné) ou sans nom
-// exploitable retombe sur le nom complet du siège.
+// Libellé affiché pour un siège donné : soit le nom du joueur qui l'occupe (préférence
+// showLedgerNames), soit le nom complet du siège (Nord/Est/Sud/Ouest — voir échange avec
+// Guillaume, session du 8 août, "je voudrais que ce soit Nord/Est/Sud/Ouest au lieu de
+// N/E/S/O" — plus l'abréviation SEAT_ABBR_FR utilisée avant ici). Un siège robot (non
+// assigné) ou sans nom exploitable retombe sur le nom complet du siège.
+// Utilisé à la fois dans l'en-tête du tableau d'enchères (renderAuctionLedger) et dans le
+// diagramme des 4 mains (buildAllHandsHtml — voir échange avec Guillaume : "je voudrais
+// que quand on active l'option noms, on ait également les noms sur l'affichage des 4
+// mains plutôt que les noms des positions") — même préférence, même logique de repli,
+// partagées entre les deux affichages plutôt que dupliquées.
 function ledgerSeatLabel(seat) {
     if (!showLedgerNames) return SEAT_FULL_NAME[seat];
     const pid = typeof seatAssignment !== 'undefined' ? seatAssignment[seat] : null;
@@ -4949,7 +4960,7 @@ function buildAllHandsHtml(deal) {
         return `
             <div class="hand-card hand-${seat} ${vulnClass} ${stateClass}">
                 <div class="hand-card-title">
-                    <span class="hand-card-title-name">${seatFullName(seat)}</span>
+                    <span class="hand-card-title-name">${ledgerSeatLabel(seat)}</span>
                     <span class="hand-card-badges">${hcpBadge}${krBadge}</span>
                 </div>
                 <div class="hand-cards">${lines}</div>

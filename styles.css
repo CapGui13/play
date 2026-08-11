@@ -3260,6 +3260,25 @@ table.dd-table td.dd-secondary-contract {
     #myHandsContainer.my-hands-multi .suit-symbol .suit-icon {
         font-size: 1rem;
     }
+
+    /* Voir échange avec Guillaume : "Donne suivante" apparaît en plein sur le diagramme
+       des 4 mains sur mobile une fois la donne finie. Cause réelle — #nextBoardPanel n'est
+       PAS un descendant de .contract-result dans le DOM (contrairement à ce que suggère le
+       commentaire au-dessus de .next-board-panel plus haut dans ce fichier) : c'est un
+       simple frère placé après .game-content-row. Son position:absolute se retrouve donc
+       sans ancêtre positionné réel, et se cale par rapport à TOUTE la page — right/bottom
+       14px du bas du document entier, pas de la case du contrat. Ça "marche" par coïncidence
+       en desktop tant que la hauteur totale de page reste stable, mais dès que l'enchère se
+       termine, la boîte d'enchères et l'indicateur de tour se vident et la page raccourcit
+       d'un coup — le bas du document remonte alors pile au niveau du diagramme des mains,
+       juste au-dessus. Plutôt que de rafistoler un ancrage relatif fiable, on repasse le
+       bouton en flux normal sur mobile : plus simple, plus robuste, et le résultat visuel
+       (aligné à droite, sous le reste) reste cohérent avec l'intention d'origine. */
+    .next-board-panel {
+        position: static;
+        text-align: right;
+        margin: 14px 0 0;
+    }
 }
 
 /* ===== Main du joueur — taille de police adaptative =====
