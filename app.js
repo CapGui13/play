@@ -1296,6 +1296,62 @@ function fallbackCopyDebugLog(text) {
     document.execCommand('copy');
 }
 
+// Voir échange avec Guillaume ("Report a bug" — récupérer le journal à la main sur
+// téléphone est galère, même avec le panneau de diagnostic visible : sélectionner du texte
+// dans une popup, changer d'appli, coller... trop d'étapes en pleine partie) : ce bouton
+// récupère tout SANS jamais avoir besoin d'ouvrir ce panneau, avec le contexte utile
+// (salle, rôle, sièges, navigateur) déjà inclus — plus la peine de demander "et t'étais
+// hôte ou invité ?" en plus du journal lui-même.
+const BUG_REPORT_EMAIL = 'guillaume_capron@yahoo.fr';
+
+function buildBugReportText(maxLogChars) {
+    const lines = [
+        `Salle : ${currentRoomCode || '(aucune)'}`,
+        `Rôle : ${myRole || '(aucun)'}`,
+        `Sièges : ${(mySeats && mySeats.length) ? mySeats.join(', ') : '(aucun)'}`,
+        `Heure : ${new Date().toLocaleString('fr-FR')}`,
+        `Navigateur : ${navigator.userAgent}`,
+        '',
+        '--- Journal ---'
+    ];
+
+    let log = debugLogLines.join('\n');
+    // Voir plus bas (uiReportBug) : maxLogChars diffère selon le canal — généreux pour le
+    // partage natif (pas de limite de longueur d'URL), plus serré pour mailto:, qui reste
+    // fiable seulement en dessous de quelques milliers de caractères sur pas mal de clients
+    // mail mobiles. On garde la FIN du journal (slice négatif) : c'est l'événement le plus
+    // récent — donc le plus probablement en cause — qui compte le plus en cas de troncature.
+    if (log.length > maxLogChars) {
+        log = `[…tronqué, ${debugLogLines.length} lignes au total, voir la fin…]\n` + log.slice(-maxLogChars);
+    }
+    lines.push(log || '(journal vide — le panneau de diagnostic n\'a peut-être pas été ouvert pendant la session)');
+
+    return lines.join('\n');
+}
+
+function uiReportBug() {
+    const subject = `Bug — Table d'enchères (salle ${currentRoomCode || '?'})`;
+
+    // Web Share API en priorité (mobile) : ouvre la feuille de partage native (Mail,
+    // Messages, Notes...), sans la limite de longueur des URL mailto: ci-dessous — on peut
+    // donc se permettre d'y mettre bien plus de journal.
+    if (navigator.share) {
+        const text = buildBugReportText(20000);
+        navigator.share({ title: subject, text }).catch(() => {
+            // Annulé par l'utilisateur (ou échec silencieux) : la feuille de partage s'est
+            // quand même affichée, rien à faire de plus ici — pas de repli automatique sur
+            // mailto: qui rouvrirait une seconde interface sans que ça ait été demandé.
+        });
+        return;
+    }
+
+    // Repli desktop / navigateurs sans Web Share : mailto: pré-rempli, journal plus court
+    // (voir commentaire de buildBugReportText) pour rester sous les limites de longueur
+    // d'URL des clients mail les plus stricts.
+    const text = buildBugReportText(1500);
+    window.location.href = `mailto:${BUG_REPORT_EMAIL}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(text)}`;
+}
+
 // ===== Écran d'accueil : créer / rejoindre =====
 
 function tokenForGuestIndex(guestIndex) {

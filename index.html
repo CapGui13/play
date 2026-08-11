@@ -25,6 +25,12 @@
 <div id="connectionBar" class="connection-bar">
     <span id="connectionStatus" class="connection-status">⚪ Pas encore connecté</span>
     <button type="button" id="reconnectBtn" class="btn btn-primary btn-small" style="display:none;" onclick="uiReconnect()">🔌 Se reconnecter</button>
+    <!-- Voir échange avec Guillaume ("Report a bug" — galère de manipuler le journal à la
+         main sur téléphone) : TOUJOURS visible, contrairement au panneau de diagnostic
+         (masqué, voir plus bas) — un souci peut survenir avant même d'avoir rejoint un
+         salon (ex. échec de connexion sur l'écran d'accueil), donc pas de show/hide par
+         écran ici comme pour chatToggleBtn. Voir uiReportBug() dans app.js. -->
+    <button type="button" id="bugReportBtn" class="debug-toggle-btn" title="Signaler un bug" onclick="uiReportBug()">🐛</button>
     <!-- Masqué par défaut : inutile (et non fonctionnel, personne à qui parler) tant qu'on
          est sur l'écran d'accueil, pas encore dans un salon/une partie. Affiché/masqué
          ensuite depuis showScreen() dans app.js selon l'écran courant. -->

@@ -229,6 +229,13 @@ body.on-landing-screen .connection-bar {
     font-size: 13px;
     padding: 2px 8px;
     cursor: pointer;
+}
+
+/* Voir échange avec Guillaume : margin-left:auto retiré de .debug-toggle-btn (classe
+   maintenant partagée avec #bugReportBtn, voir plus bas) et posé ICI spécifiquement — sinon,
+   avec deux boutons portant la même classe, chacun aurait tiré sur l'espace disponible et
+   ouvert un vide entre eux au lieu de les grouper ensemble à droite de la barre. */
+#chatToggleBtn {
     margin-left: auto;
 }
 
