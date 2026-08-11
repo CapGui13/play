@@ -82,9 +82,20 @@ let currentRoomCode = null; // pour uiReconnect() : on doit se souvenir du code 
 // essai précédent de se reconnaître périmé si un nouvel essai a pris le relais entre-temps.
 let guestJoinAttemptToken = 0;
 // Délai avant de tenter la reprise cloud EN PARALLÈLE de la tentative de connexion directe
-// (voir connectAsGuest) — largement suffisant pour laisser une vraie connexion live
-// s'établir normalement, mais bien plus court que le délai d'abandon de 45s.
-const EARLY_CLOUD_CHECK_DELAY_MS = 4000;
+// (voir connectAsGuest) — bien plus court que le délai d'abandon de 45s.
+// Voir échange avec Guillaume ("je rejoins depuis mon PC et je me retrouve avec des
+// privilèges d'hôte") : ancienne valeur (4000) beaucoup trop courte — une vraie connexion
+// P2P live entre deux réseaux différents (ex. mobile en 4G qui héberge, PC en WiFi qui
+// rejoint) peut légitimement prendre plusieurs secondes, surtout si un relais TURN est
+// nécessaire (négociation ICE). Le minuteur se déclenchait alors AVANT que la connexion
+// live n'aboutisse, et la reprise cloud prenait le relais à tort — passant l'invité en
+// myRole='host' LOCALEMENT (voir uiResumeFromCloud : c'est voulu pour le jeu asynchrone,
+// où n'importe qui doit pouvoir naviguer les donnes, mais ça donne exactement les mêmes
+// privilèges d'affichage que le vrai hôte, dont la réorganisation des sièges — puisque
+// toute l'interface se base uniquement sur myRole==='host'). 12s laisse une large marge à
+// une connexion live normale, y compris avec relais TURN, tout en restant nettement plus
+// rapide que 45s pour le cas légitime visé à l'origine (salle vraiment vide/expirée).
+const EARLY_CLOUD_CHECK_DELAY_MS = 12000;
 // Voir uiCreateRoom : nom du créateur d'origine, figé une fois pour toutes (jamais
 // réécrit par une reprise ou un transfert d'hôte) — voir renderGameHeader pour l'affichage.
 let roomCreatorName = null;
