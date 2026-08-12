@@ -2138,24 +2138,21 @@ let everConnectedAsGuest = false;
 function renderReconnectButton() {
     const btn = document.getElementById('reconnectBtn');
     if (!btn) return;
-    // Voir échange avec Guillaume (session du 23 juillet) : visible pour l'hôte aussi
-    // désormais. Attention — PAS le même critère que pour l'invité : isConnected() vaut
+    // Voir échange avec Guillaume ("je ne veux pas que ce bouton apparaisse [côté
+    // invité]") : masqué pour les invités désormais — la reconnexion automatique en
+    // arrière-plan (voir scheduleGuestAutoReconnect) tourne déjà en continu, toutes les
+    // GUEST_AUTO_RECONNECT_INTERVAL_MS ; ce bouton ne faisait alors plus que la même
+    // chose en avance de quelques secondes, un gain jugé trop marginal pour justifier sa
+    // présence. Gardé pour l'hôte, lui, qui n'a pas d'équivalent automatique aussi
+    // systématique (voir uiHostReconnect).
+    //
+    // Attention — PAS le même critère que pour l'invité : isConnected() vaut
     // signalingOpen ET au moins une connexion active, ce qui est le bon critère pour un
     // invité (une seule connexion, vers l'hôte) mais donnerait un faux positif pour
     // l'hôte dès qu'il est seul dans son propre salon (aucun invité connecté n'importe
     // vraiment) — sa PROPRE connexion (signalingOpen) est le seul critère qui compte pour
     // lui, indépendamment du nombre d'invités présents.
-    //
-    // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 4) : plus de cas particulier "sous-hôte
-    // désigné" à masquer ici — la reconnexion automatique en arrière-plan (voir
-    // scheduleGuestAutoReconnect) concerne maintenant TOUT invité déconnecté, pas
-    // seulement un sous-hôte. Le bouton reste utile malgré tout : un clic déclenche une
-    // tentative immédiate plutôt que d'attendre le prochain passage du minuteur
-    // automatique (jusqu'à GUEST_AUTO_RECONNECT_INTERVAL_MS de retard sinon).
-    const shouldShow = peerConn && (
-        (myRole === 'guest' && everConnectedAsGuest && !peerConn.isConnected())
-        || (myRole === 'host' && !peerConn.signalingOpen)
-    );
+    const shouldShow = peerConn && myRole === 'host' && !peerConn.signalingOpen;
     btn.style.display = shouldShow ? '' : 'none';
 }
 
