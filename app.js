@@ -139,6 +139,18 @@ let selfDisconnectedAt = null;
 // hoquette sans provoquer un changement d'hôte pour rien).
 const GUEST_TAKEOVER_GRACE_MS = 20000;
 
+// Voir échange avec Guillaume ("je rouvre la fenêtre de l'hôte bien avant 20s, mais
+// l'invité bascule en 'prise de relais' comme si rien n'avait changé") : la reconnexion
+// d'un INVITÉ n'a jamais été qu'un clic manuel sur "Se reconnecter" (uiReconnect) — rouvrir
+// la fenêtre de l'hôte, même immédiatement, ne change donc RIEN tout seul côté invité : le
+// minuteur de 20s continue de tourner sans se soucier du retour de l'hôte, et
+// attemptSubHostTakeover se déclenche à l'heure peu importe quand l'hôte est réellement
+// revenu. Ce minuteur retente silencieusement une reconnexion en tâche de fond pendant
+// qu'un invité reste déconnecté — annulé dès qu'onGuestConnected réussit (voir
+// buildGuestHandlers), donc sans effet une fois reconnecté.
+let guestAutoReconnectTimer = null;
+const GUEST_AUTO_RECONNECT_INTERVAL_MS = 4000;
+
 // (Hôte uniquement) jeton de reconnexion -> numéro de connexion PeerJS actif. Un invité
 // garde le même jeton (localStorage) à travers ses reconnexions, mais son guestIndex
 // change à chaque fois (nouvelle connexion PeerJS) : cette table fait le pont entre les
@@ -1740,6 +1752,10 @@ function buildGuestHandlers() {
             // sous le même code, peu importe lequel de son point de vue) — annule le
             // minuteur de reprise s'il était en cours, plus la peine.
             cancelSubHostTakeoverTimer();
+            // Voir échange avec Guillaume ("l'invité ne se reconnecte jamais tout seul") :
+            // même annulation pour le cycle de reconnexion automatique en arrière-plan
+            // (voir scheduleGuestAutoReconnect) — plus la peine une fois vraiment reconnecté.
+            cancelGuestAutoReconnectTimer();
             // Voir échange avec Guillaume (session du 23 juillet — "on fait idem pour
             // l'host") : toast vert AVANT de réinitialiser selfDisconnectedAt — il faut
             // encore savoir qu'on ÉTAIT déconnecté pour décider d'afficher ce toast (pas
@@ -1753,6 +1769,12 @@ function buildGuestHandlers() {
         onPeerDisconnected: () => {
             setConnectionStatus(false);
             scheduleSubHostTakeoverIfNeeded();
+            // Voir échange avec Guillaume ("l'invité ne se reconnecte jamais tout seul") :
+            // en plus de scheduleSubHostTakeoverIfNeeded (qui ne concerne que le sous-hôte
+            // désigné) — tout invité déconnecté retente maintenant automatiquement en
+            // arrière-plan, sans attendre un clic sur "Se reconnecter" ni les 20s du
+            // sous-hôte.
+            scheduleGuestAutoReconnect();
             // Voir échange avec Guillaume (session du 23 juillet — "le bouton ne sert à
             // rien pour le sous-hôte") : APRÈS scheduleSubHostTakeoverIfNeeded, pas avant
             // — renderReconnectButton doit voir subHostTakeoverTimer déjà posé pour
@@ -1779,6 +1801,7 @@ function buildGuestHandlers() {
         onSignalingDisconnected: () => {
             setConnectionStatus(false);
             scheduleSubHostTakeoverIfNeeded();
+            scheduleGuestAutoReconnect();
             renderReconnectButton();
             if (!selfDisconnectedAt) {
                 selfDisconnectedAt = Date.now();
@@ -1993,6 +2016,13 @@ function uiReconnect() {
         return;
     }
     if (myRole !== 'guest' || !currentRoomCode) return;
+    // Voir échange avec Guillaume ("l'invité ne se reconnecte jamais tout seul") : annule
+    // le cycle automatique en arrière-plan avant de repartir sur cette tentative manuelle
+    // — sinon un tick programmé plus tôt pourrait se déclencher en plein milieu et
+    // redémarrer une seconde tentative concurrente inutilement. Se reprogrammera tout
+    // seul si CETTE tentative échoue à son tour (voir onPeerDisconnected/
+    // onSignalingDisconnected).
+    cancelGuestAutoReconnectTimer();
     if (peerConn) peerConn.destroy();
     setConnectionStatus(false);
     peerConn = new BridgePeerConnection(buildGuestHandlers());
@@ -2780,6 +2810,45 @@ function cancelSubHostTakeoverTimer() {
     subHostDisconnectDetectedAt = null;
 }
 
+// Voir échange avec Guillaume ("l'invité ne se reconnecte jamais tout seul") : posé chez
+// TOUT invité déconnecté (pas seulement le sous-hôte désigné, contrairement à
+// scheduleSubHostTakeoverIfNeeded) — retente une reconnexion complète toutes les
+// GUEST_AUTO_RECONNECT_INTERVAL_MS, en tâche de fond, sans qu'aucun clic ne soit
+// nécessaire. Se reprogramme lui-même à chaque tentative tant que la déconnexion dure —
+// onGuestConnected (voir buildGuestHandlers) l'annule dès qu'une reconnexion réussit,
+// qu'elle vienne de ce minuteur ou d'un clic manuel entre-temps.
+function scheduleGuestAutoReconnect() {
+    if (myRole !== 'guest') return;
+    if (guestAutoReconnectTimer) return; // déjà programmé, pas la peine d'en reposer un
+    guestAutoReconnectTimer = setTimeout(() => {
+        guestAutoReconnectTimer = null;
+        attemptGuestAutoReconnect();
+    }, GUEST_AUTO_RECONNECT_INTERVAL_MS);
+}
+
+function cancelGuestAutoReconnectTimer() {
+    if (guestAutoReconnectTimer) {
+        clearTimeout(guestAutoReconnectTimer);
+        guestAutoReconnectTimer = null;
+    }
+}
+
+// Revérifie tout avant d'agir (le contexte a pu changer entre-temps, ex. déjà reconnecté
+// par un clic manuel juste avant que ce minuteur ne se déclenche) puis retente une
+// reconnexion complète, exactement comme uiReconnect — et se reprogramme pour la
+// prochaine tentative si celle-ci ne suffit pas à elle seule à rétablir la connexion
+// (onGuestConnected annulera ce cycle dès que ça aboutit réellement).
+function attemptGuestAutoReconnect() {
+    if (myRole !== 'guest' || !currentRoomCode) return;
+    if (peerConn && peerConn.isConnected()) return; // déjà reconnecté entre-temps
+    if (peerConn) peerConn.destroy();
+    peerConn = new BridgePeerConnection(buildGuestHandlers());
+    const token = getReconnectToken();
+    pushDebugLog(`Reconnexion automatique en arrière-plan au salon ${currentRoomCode} avec le jeton ${token.slice(0, 10)}…`);
+    peerConn.joinRoom(currentRoomCode, { reconnectToken: token, nickname: savedNickname, avatarColor: savedAvatarColor });
+    scheduleGuestAutoReconnect();
+}
+
 // Voir échange avec Guillaume (session du 23 juillet) : déclenchée quand le délai de
 // grâce expire sans reconnexion. Revérifie tout avant d'agir (le contexte a pu changer
 // entre-temps) puis tente de recréer la salle sous EXACTEMENT le même code (voir
@@ -2792,6 +2861,15 @@ function attemptSubHostTakeover() {
     if (myParticipantId !== currentSubHostId) return;
     if (peerConn && peerConn.isConnected()) return; // reconnecté entre-temps par un autre chemin, rien à faire
     if (!currentRoomCode) return; // filet de sécurité, ne devrait pas arriver
+
+    // Voir échange avec Guillaume ("l'invité ne se reconnecte jamais tout seul") : annulé
+    // ICI, avant toute chose — sans ça, un tick de reconnexion automatique déjà programmé
+    // (scheduleGuestAutoReconnect) pourrait se déclencher pendant la brève fenêtre où
+    // myRole vaut encore 'guest' (avant que promoteSelfToHostAfterTakeover ne le bascule
+    // en 'host', une fois la nouvelle salle hôte confirmée créée un peu plus bas) et
+    // détruire par erreur la connexion hôte flambant neuve en cours de création, la
+    // remplaçant par une tentative de reconnexion en tant qu'invité.
+    cancelGuestAutoReconnectTimer();
 
     const oldParticipantId = myParticipantId;
     const oldHostToken = currentHostReconnectToken;
