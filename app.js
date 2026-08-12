@@ -6768,11 +6768,21 @@ async function uiResumeHostSession(roomCode) {
         try {
             const cloudResult = await pullSessionState(saved.roomCode);
             if (cloudResult) {
+                // Voir échange avec Guillaume ("l'enchère de l'invité n'est pas visible
+                // à la réouverture de l'hôte") : trace précise de ce qui a été relu ici
+                // — la longueur de l'historique d'enchères de la première donne donne
+                // un indice immédiat si c'est bien à jour ou visiblement périmé.
+                const b0Len = (cloudResult.state && cloudResult.state.deals && cloudResult.state.deals[0]
+                    && cloudResult.state.deals[0].auctionHistory) ? cloudResult.state.deals[0].auctionHistory.length : 'n/a';
+                pushDebugLog(`Reprise hôte : état cloud relu, version ${cloudResult.version}, historique donne #1 = ${b0Len} annonce(s).`);
                 cloudResumeCandidate = cloudResult;
                 uiResumeFromCloud();
                 return;
+            } else {
+                pushDebugLog('Reprise hôte : aucun état cloud trouvé pour cette salle (pullSessionState a renvoyé null) — repli sur la sauvegarde locale.');
             }
         } catch (e) {
+            pushDebugLog('Reprise hôte : lecture cloud impossible (' + ((e && e.message) || e) + ') — repli sur la sauvegarde locale.');
             // Cloud injoignable (hors-ligne, panne passagère...) : tant pis, on continue
             // avec la sauvegarde locale ci-dessous plutôt que de bloquer la reprise.
         }
@@ -6993,34 +7003,47 @@ function pushCloudGameState() {
 // resynchronise sur le vrai état serveur plutôt que de laisser mon affichage optimiste
 // erroné en place (voir applyCloudUpdate, réutilisé tel quel pour ce cas).
 async function pushCallViaServerFallback(seat, call, explanation) {
-    if (!currentRoomCode || typeof pullSessionState !== 'function' || typeof pushSessionState !== 'function') return;
-
-    let pulled;
-    try {
-        pulled = await pullSessionState(currentRoomCode);
-    } catch (e) {
-        pushDebugLog('Remontée serveur de l\'annonce impossible (lecture) : ' + ((e && e.message) || e));
+    if (!currentRoomCode || typeof pullSessionState !== 'function' || typeof pushSessionState !== 'function') {
+        pushDebugLog(`Annonce ${call} (${seat}) : impossible de tenter le relais serveur (currentRoomCode ou fonctions cloud manquantes).`);
         return;
     }
-
-    const baseState = pulled ? pulled.state : buildCloudStatePayload();
-    const expectedVersion = pulled ? pulled.version : 0;
-    const idx = baseState.boardIndex;
-    const boardDeals = baseState.deals;
-    if (!boardDeals[idx]) return; // filet de sécurité, ne devrait pas arriver
-    if (!boardDeals[idx].auctionHistory) boardDeals[idx].auctionHistory = [];
-    const hist = boardDeals[idx].auctionHistory;
-
-    const expectedSeat = currentTurnSeat(boardDeals[idx].dealer, hist);
-    if (seat !== expectedSeat || !isCallLegal(hist, call, seat)) {
-        pushDebugLog(`Annonce ${call} (${seat}) abandonnée : plus valide par rapport à l'état serveur relu — resynchronisation.`);
-        if (pulled) applyCloudUpdate(pulled);
-        return;
-    }
-
-    hist.push(explanation ? { seat, call, explanation } : { seat, call });
-
+    // Voir échange avec Guillaume ("l'enchère de l'invité n'arrive jamais chez l'hôte,
+    // aucune trace dans le journal") : fonction entièrement enveloppée dans un try/catch
+    // désormais — une partie du corps (entre les deux try/catch précédents) pouvait
+    // échouer silencieusement (exception non interceptée = promesse rejetée sans aucune
+    // trace), laissant croire à tort que l'annonce était juste restée en attente alors
+    // qu'elle n'était jamais partie du tout. Log de départ ajouté aussi, pour confirmer
+    // sans ambiguïté que ce chemin a bien été emprunté.
+    pushDebugLog(`Annonce ${call} (${seat}) : tentative de remontée au serveur (déconnecté de l'hôte).`);
     try {
+        let pulled;
+        try {
+            pulled = await pullSessionState(currentRoomCode);
+        } catch (e) {
+            pushDebugLog('Remontée serveur de l\'annonce impossible (lecture) : ' + ((e && e.message) || e));
+            return;
+        }
+
+        const baseState = pulled ? pulled.state : buildCloudStatePayload();
+        const expectedVersion = pulled ? pulled.version : 0;
+        const idx = baseState.boardIndex;
+        const boardDeals = baseState.deals;
+        if (!boardDeals || !boardDeals[idx]) {
+            pushDebugLog(`Annonce ${call} (${seat}) abandonnée : état serveur relu inattendu (donne ${idx} introuvable).`);
+            return;
+        }
+        if (!boardDeals[idx].auctionHistory) boardDeals[idx].auctionHistory = [];
+        const hist = boardDeals[idx].auctionHistory;
+
+        const expectedSeat = currentTurnSeat(boardDeals[idx].dealer, hist);
+        if (seat !== expectedSeat || !isCallLegal(hist, call, seat)) {
+            pushDebugLog(`Annonce ${call} (${seat}) abandonnée : plus valide par rapport à l'état serveur relu (tour attendu : ${expectedSeat}) — resynchronisation.`);
+            if (pulled) applyCloudUpdate(pulled);
+            return;
+        }
+
+        hist.push(explanation ? { seat, call, explanation } : { seat, call });
+
         const result = await pushSessionState(currentRoomCode, { ...baseState, savedAt: Date.now() }, expectedVersion, {
             onConflict: (current) => {
                 // Quelqu'un d'autre a écrit entre ma lecture et ma tentative d'écrite —
@@ -7034,14 +7057,14 @@ async function pushCallViaServerFallback(seat, call, explanation) {
         });
         if (result) {
             lastKnownCloudVersion = result.version;
-            // Voir échange avec Guillaume ("je ne sais pas si ça a vraiment pris ce
-            // chemin") : seuls les cas d'échec/conflit journalisaient quelque chose
-            // jusqu'ici — le cas de succès, le plus courant, ne laissait aucune trace
-            // dans le journal, rendant un test après coup ambigu.
             pushDebugLog(`Annonce ${call} (${seat}) remontée au serveur avec succès (version ${result.version}).`);
+        } else {
+            pushDebugLog(`Annonce ${call} (${seat}) : pushSessionState n'a renvoyé aucun résultat (ni succès, ni conflit signalé) — à surveiller.`);
         }
     } catch (e) {
-        pushDebugLog('Remontée serveur de l\'annonce impossible (écriture) : ' + ((e && e.message) || e));
+        // Filet de sécurité ultime : capture toute exception inattendue ailleurs dans le
+        // corps de la fonction, pour ne plus jamais échouer en silence total.
+        pushDebugLog(`Annonce ${call} (${seat}) : échec inattendu de la remontée serveur — ` + ((e && (e.message || e.stack)) || e));
     }
 }
 
