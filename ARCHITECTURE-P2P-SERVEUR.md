@@ -181,6 +181,31 @@ réconciliation de façon reproductible.
    `NullPeerConnection` — les unifier pose la question "qui redevient l'hôte P2P au
    retour", un problème distinct à traiter séparément, pas à mélanger avec ce point
    d'entrée précis.
+
+   **[Revu — 12 août 2026, suite à un test de Guillaume]** Ce point laissé de côté
+   s'est révélé bloquant en pratique : "quand l'hôte revient [après avoir fermé sa
+   fenêtre], l'invité reste marqué déconnecté... et quand l'hôte clique pour aller à
+   la donne suivante, l'invité n'est pas bougé." Cause exacte — `uiResumeHostSession`
+   délègue presque toujours à `uiResumeFromCloud` (dès qu'un état cloud existe pour la
+   salle, ce qui est le cas en permanence depuis les étapes 3-5), et celle-ci créait
+   `NullPeerConnection` pour TOUT LE MONDE sans distinction, y compris le créateur
+   d'origine qui revient. Résultat : plus aucun vrai réseau P2P à rejoindre, un invité
+   qui tente de se reconnecter (`attemptGuestAutoReconnect`) ne trouve plus jamais
+   personne — coincé sur le relais serveur pour toujours, y compris pour ce qui n'y
+   passe volontairement jamais (changement de donne, voir `gotoBoard`, qui ne diffuse
+   QUE par `peerConn.send`, jamais par le cloud).
+
+   Corrigé en distinguant enfin les deux cas que "n'importe qui peut claim" mélangeait
+   jusqu'ici : SEUL le vrai créateur original (`myToken === creatorToken`) recrée
+   maintenant une vraie salle P2P au retour (dans `uiResumeFromCloud`, avec repli
+   propre en cas d'`unavailable-id` passager — réutilise le même schéma que
+   `hardResetHostConnection`). N'importe quel AUTRE participant qui reprend une
+   session différée garde `NullPeerConnection` exactement comme avant — plusieurs
+   personnes pourraient reprendre au même moment depuis des appareils différents,
+   une seule peut réellement détenir l'identifiant PeerJS de la salle ; pour le
+   créateur en revanche, aucune ambiguïté possible. `uiResumeHostSession` a reçu le
+   même correctif pour son propre repli local (chemin plus rarement emprunté, mais
+   pas mort : sert quand le cloud est injoignable au moment de la reprise).
 3. **[Fait (annonces uniquement) — 12 août 2026]** Routage par siège pour les
    annonces d'enchère :
    - Invité déconnecté de l'hôte en P2P → `uiMakeCall` bascule sur

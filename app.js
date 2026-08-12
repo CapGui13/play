@@ -6834,16 +6834,47 @@ async function uiResumeHostSession(roomCode) {
     prevSeatAssignmentSnapshot = null;
     prevParticipantsDisconnectedSnapshot = null;
 
-    // Voir échange avec Guillaume ("Impossible de reprendre : ce code est déjà utilisé") :
-    // cette reprise "même appareil" n'a pas plus besoin d'un vrai pair PeerJS que la
-    // reprise cloud (voir uiResumeFromCloud) — inutile de retenter d'occuper le même
-    // identifiant de salle sur le serveur de signalisation, avec le risque qu'il reste
-    // "coincé" (bribes d'une inscription précédente pas encore expirée côté serveur) et
-    // fasse échouer la reprise avec 'unavailable-id', de façon persistante à chaque
-    // nouvel essai. Si un partenaire ouvre le lien plus tard, il fera lui-même sa propre
-    // reprise cloud, sans jamais avoir besoin de se relier en direct à ce pair.
+    // Voir ARCHITECTURE-P2P-SERVEUR.md : recrée maintenant une vraie salle P2P (voir
+    // juste en dessous) plutôt que d'éviter le réseau — la raison d'origine de cet évitement
+    // (risque d'"unavailable-id" si un sous-hôte avait pris le même code entre-temps) a
+    // disparu avec l'élection de sous-hôte elle-même.
+    // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 2, révisée après le test de Guillaume —
+    // "quand l'hôte revient, l'invité reste marqué déconnecté, et la donne suivante ne le
+    // fait pas bouger") : recrée maintenant une vraie salle P2P, comme au tout premier
+    // lancement — au lieu de NullPeerConnection. L'ancien choix (voir git blame) était
+    // motivé par le risque d'"unavailable-id" si un sous-hôte avait entre-temps pris ce
+    // même code ; ce risque n'existe plus (plus d'élection de sous-hôte, voir étape 4).
+    // Sans un vrai P2P ici, un invité qui tentait de se reconnecter (voir
+    // attemptGuestAutoReconnect) ne trouvait plus jamais personne à qui parler — coincé
+    // sur le seul relais serveur pour toujours, y compris pour ce qui n'y passe
+    // volontairement jamais (changement de donne, voir "Ne touche jamais boardIndex ici"
+    // dans applyCloudUpdate).
     if (peerConn) peerConn.destroy();
-    peerConn = new NullPeerConnection();
+    const resumeOnOpenExtra = () => {
+        renderReconnectButton();
+        if (deals) renderBoard(); else renderLobby();
+    };
+    peerConn = new BridgePeerConnection(buildHostHandlers(resumeOnOpenExtra));
+    peerConn.handlers.onError = (err) => {
+        // Filet de sécurité seulement — très improbable désormais (plus personne d'autre
+        // ne peut légitimement détenir ce code), mais un délai de libération côté serveur
+        // de signalisation reste théoriquement possible juste après la fermeture de
+        // l'ancien Peer. Une seule retentative après un court délai plutôt que d'abandonner
+        // platement ; au-delà, juste journalisé (le bouton "Se reconnecter" reste
+        // disponible pour réessayer manuellement).
+        if (err && err.type === 'unavailable-id') {
+            pushDebugLog('Impossible de recréer la salle hôte (code pas encore libéré côté serveur) — nouvel essai dans un instant.');
+            setTimeout(() => {
+                if (myRole !== 'host' || (peerConn && peerConn.signalingOpen)) return;
+                if (peerConn) peerConn.destroy();
+                peerConn = new BridgePeerConnection(buildHostHandlers(resumeOnOpenExtra));
+                peerConn.createRoom(6, saved.roomCode);
+            }, 1500);
+            return;
+        }
+        pushDebugLog("Échec de la recréation de la salle hôte : " + ((err && (err.message || err.type)) || err));
+    };
+    peerConn.createRoom(6, saved.roomCode);
     startDeferredPolling();
 
     hideConnectingOverlay();
@@ -7304,13 +7335,10 @@ function uiResumeFromCloud() {
         st.participants.push({ id: myToken, name: savedNickname || 'Joueur', ...(savedAvatarColor ? { avatarColor: savedAvatarColor } : {}) });
     }
 
-    // Voir échange avec Guillaume ("on n'est plus obligé de passer par le P2P") : aucune
-    // connexion PeerJS n'est ouverte pour une reprise asynchrone — voir NullPeerConnection
-    // dans peer-connection.js. Tous les appels peerConn.send(...)/etc. disséminés dans le
-    // reste du fichier (mode live, inchangé) continuent de s'exécuter tels quels ; ils ne
-    // font simplement plus rien, faute d'invité à qui parler.
-    if (peerConn) peerConn.destroy();
-    peerConn = new NullPeerConnection();
+    // Voir plus bas (après restauration complète de l'état) : la connexion — réelle ou
+    // NullPeerConnection — dépend de si je suis le vrai créateur ou non, donc posée après
+    // avoir déterminé myToken === creatorToken avec certitude et restauré tout l'état
+    // nécessaire (buildHostHandlers y fait référence).
 
     // Restaure tout l'état en mémoire — même forme de payload que uiResumeHostSession(),
     // juste une source différente (le cloud plutôt que le localStorage de CET appareil).
@@ -7346,6 +7374,54 @@ function uiResumeFromCloud() {
     myParticipantId = myToken;
     mySeats = SEATS.filter(seat => seatAssignment[seat] === myParticipantId);
     currentRoomCode = codeToReclaim;
+
+    // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 2, révisée après le test de Guillaume —
+    // "quand l'hôte revient, l'invité reste marqué déconnecté, et la donne suivante ne le
+    // fait pas bouger") : SEUL le vrai créateur original recrée une vraie salle P2P ici —
+    // n'importe quel AUTRE participant qui reprend une session différée garde
+    // NullPeerConnection, exactement comme avant (voir "n'importe qui peut claim" plus
+    // haut : plusieurs personnes pourraient reprendre au même moment depuis des appareils
+    // différents, une seule d'entre elles peut réellement détenir l'identifiant PeerJS de
+    // la salle). Pour le créateur, en revanche, aucune ambiguïté possible — c'est
+    // structurellement la seule et unique personne légitime à ce rôle, donc recréer un
+    // vrai P2P ici est sans risque, et indispensable : sans ça, un invité qui tentait de
+    // se reconnecter (voir attemptGuestAutoReconnect) ne trouvait plus jamais personne à
+    // qui parler après le retour du créateur — coincé sur le seul relais serveur pour
+    // toujours, y compris pour ce qui n'y passe volontairement jamais (changement de
+    // donne, voir "Ne touche jamais boardIndex ici" dans applyCloudUpdate).
+    if (peerConn) peerConn.destroy();
+    if (creatorToken && myToken === creatorToken) {
+        const resumeOnOpenExtra = () => {
+            renderReconnectButton();
+            if (deals) renderBoard(); else renderLobby();
+        };
+        peerConn = new BridgePeerConnection(buildHostHandlers(resumeOnOpenExtra));
+        peerConn.handlers.onError = (err) => {
+            // Filet de sécurité seulement — très improbable (plus d'élection de
+            // sous-hôte, donc plus personne d'autre ne peut légitimement détenir ce
+            // code), mais un délai de libération côté serveur de signalisation reste
+            // théoriquement possible juste après la fermeture de l'ancien Peer.
+            if (err && err.type === 'unavailable-id') {
+                pushDebugLog('Impossible de recréer la salle hôte (code pas encore libéré côté serveur) — nouvel essai dans un instant.');
+                setTimeout(() => {
+                    if (myRole !== 'host' || (peerConn && peerConn.signalingOpen)) return;
+                    if (peerConn) peerConn.destroy();
+                    peerConn = new BridgePeerConnection(buildHostHandlers(resumeOnOpenExtra));
+                    peerConn.createRoom(6, codeToReclaim);
+                }, 1500);
+                return;
+            }
+            pushDebugLog("Échec de la recréation de la salle hôte : " + ((err && (err.message || err.type)) || err));
+        };
+        peerConn.createRoom(6, codeToReclaim);
+    } else {
+        // Voir échange avec Guillaume ("on n'est plus obligé de passer par le P2P") :
+        // inchangé pour tout participant qui n'est pas le créateur — aucune connexion
+        // PeerJS n'est ouverte. Tous les appels peerConn.send(...)/etc. disséminés dans
+        // le reste du fichier (mode live, inchangé) continuent de s'exécuter tels quels ;
+        // ils ne font simplement plus rien, faute d'invité à qui parler.
+        peerConn = new NullPeerConnection();
+    }
     startDeferredPolling();
     guestIndexByToken = {};
     hostPendingUndo = null;
