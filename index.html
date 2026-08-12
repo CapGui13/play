@@ -100,7 +100,15 @@
         <div class="nickname-prompt-card">
             <h2>Quel est votre pseudo ?</h2>
             <p>Il sera visible par les autres joueurs de la partie.</p>
-            <input type="text" id="nicknamePromptInput" class="name-input" maxlength="20" enterkeyhint="go" onkeydown="uiNicknamePromptKeydown(event)">
+            <!-- Voir échange avec Guillaume ("si la personne commence à taper, ça
+                 l'efface direct, pas ajouté à la suite") : pré-rempli avec le pseudo
+                 précédent (voir ensureNicknameThenProceed dans app.js) — onfocus="this.select()"
+                 sélectionne tout le texte dès l'arrivée sur le champ (y compris le focus
+                 automatique posé par JS à l'ouverture, pas seulement un clic), même
+                 principe déjà en place sur myNameInput dans le salon : la première touche
+                 tapée remplace la sélection entière plutôt que de s'insérer au milieu ou à
+                 la fin. -->
+            <input type="text" id="nicknamePromptInput" class="name-input" maxlength="20" enterkeyhint="go" onkeydown="uiNicknamePromptKeydown(event)" onfocus="this.select()">
             <button type="button" class="btn btn-primary" onclick="uiConfirmNicknamePrompt()">Rejoindre</button>
         </div>
     </div>

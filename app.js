@@ -1892,20 +1892,18 @@ function uiJoinRoom() {
     });
 }
 
-// Demande le pseudo avant de rejoindre une salle, UNIQUEMENT si aucun n'est encore
-// enregistré sur cet appareil (voir savedNickname) — un joueur qui est déjà passé une fois
-// par ici (ou par le salon, voir myNameInput) ne revoit jamais cette question. `action` est
-// exécutée immédiatement si un pseudo existe déjà, ou différée jusqu'à validation de la
-// modale sinon (voir uiConfirmNicknamePrompt).
+// Demande le pseudo avant de rejoindre une salle — voir échange avec Guillaume ("le
+// formulaire pourrait apparaître avec le précédent pseudo pré-rempli") : affiché à CHAQUE
+// fois désormais, plutôt que sauté entièrement quand un pseudo est déjà enregistré sur cet
+// appareil (voir savedNickname) — pré-rempli avec ce pseudo le cas échéant (voir
+// onfocus="this.select()" sur le champ, dans index.html : le premier caractère tapé
+// remplace tout plutôt que de s'ajouter à la suite). `action` reste toujours différée
+// jusqu'à validation de la modale (voir uiConfirmNicknamePrompt).
 let pendingJoinAfterNickname = null;
 function ensureNicknameThenProceed(action) {
-    if (savedNickname && savedNickname.trim()) {
-        action();
-        return;
-    }
     pendingJoinAfterNickname = action;
     const input = document.getElementById('nicknamePromptInput');
-    if (input) input.value = '';
+    if (input) input.value = savedNickname || '';
     const overlay = document.getElementById('nicknamePromptOverlay');
     if (overlay) overlay.style.display = 'flex';
     setTimeout(() => { if (input) input.focus(); }, 50);
