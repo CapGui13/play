@@ -3116,16 +3116,17 @@ table.dd-table td.dd-secondary-contract {
 }
 
 /* Voir échange avec Guillaume ("le bouton Donne suivante n'est pas du tout là où il
-   devrait être", capture d'écran desktop) : l'ancienne approche en position:absolute (voir
-   git blame) partait d'une hypothèse fausse — #nextBoardPanel n'a JAMAIS été un
-   descendant réel de .contract-result dans le DOM (voir index.html : c'est un simple frère
-   placé après .game-content-row, pas un enfant de la case du contrat). Son
-   position:absolute se calait donc sans ancêtre positionné réel, par rapport à TOUTE la
-   page — ça "marchait" par coïncidence tant que la hauteur totale de page restait stable,
-   mais se déréglait dès qu'elle changeait (voir le correctif mobile précédent, qui n'était
-   qu'un cas particulier du même problème, pas la vraie cause). Remplacé ici par du flux
-   normal, universellement (plus seulement sur mobile) : plus simple, plus robuste, aligné
-   à droite pour rester visuellement cohérent avec l'intention d'origine. */
+   devrait être", puis "je t'avais pas demandé à ce que ce bouton soit dans la zone des
+   PARs ?") : l'ancienne approche en position:absolute (voir git blame) partait d'une
+   hypothèse fausse — #nextBoardPanel n'a JAMAIS été un descendant réel de .contract-result
+   dans le DOM, seulement un frère placé après .game-content-row. Son position:absolute se
+   calait donc sans ancêtre positionné réel, par rapport à TOUTE la page. Corrigé une
+   première fois en repassant en flux normal, MAIS en le sortant par erreur de la case du
+   PAR au passage — alors que c'était justement l'emplacement voulu à l'origine. Résolu
+   pour de bon en abandonnant le nœud DOM séparé : voir checkAuctionEnd dans app.js, qui
+   injecte maintenant ce bouton directement dans le HTML de resultEl (la case du PAR
+   elle-même) via cette même classe, plutôt que de le positionner par-dessus depuis
+   l'extérieur. */
 .next-board-panel {
     text-align: right;
     margin-top: 12px;

@@ -4257,9 +4257,9 @@ let chatUnreadCount = 0;
 // souci, y compris en boucle sur le même écran.
 // Sur l'écran de jeu spécifiquement (voir échange avec Guillaume) : ancré DANS
 // .game-content-row, comme 3ème colonne à côté de .game-body (voir styles.css), plutôt
-// qu'à la toute fin de l'écran — sinon il s'empilerait sous nextBoardPanel, pas à droite
-// du contenu de jeu. Le salon, lui, n'a pas cette structure en colonnes : comportement
-// inchangé, ancré à la fin de l'écran.
+// qu'à la toute fin de l'écran — sinon il s'empilerait sous le reste du contenu de jeu
+// (tableau d'enchères, case du contrat), pas à droite. Le salon, lui, n'a pas cette
+// structure en colonnes : comportement inchangé, ancré à la fin de l'écran.
 function dockChatIntoScreen(screenId) {
     const panel = document.getElementById('chatPanel');
     const gameContentRow = screenId === 'screen-game' ? document.querySelector('.game-content-row') : null;
@@ -5592,7 +5592,6 @@ function flashSessionExportToast(text) {
 
 function checkAuctionEnd() {
     const resultEl = document.getElementById('contractResult');
-    const nextPanel = document.getElementById('nextBoardPanel');
     const diagramEl = document.getElementById('allHandsDiagram');
 
     const auctionOver = isAuctionOver(auctionHistory);
@@ -5614,7 +5613,6 @@ function checkAuctionEnd() {
 
     if (!auctionOver) {
         resultEl.style.display = 'none';
-        nextPanel.style.display = 'none';
         const myHandsEl = document.getElementById('myHandsContainer');
         if (showAllHandsEarly) {
             renderAllHandsDiagram();
@@ -5697,12 +5695,20 @@ function checkAuctionEnd() {
     // pas à n'importe quel joueur actif (canControlBoard()) — un simple joueur, ou un
     // kibitz, ne doit pas pouvoir faire avancer la table pour tout le monde.
     const iCanNavigate = myRole === 'host';
-    nextPanel.style.display = (isLastBoard || !iCanNavigate) ? 'none' : 'block';
 
     if (isLastBoard) {
         resultEl.innerHTML += '<div class="info-text">Dernière donne du fichier chargé.</div>';
     } else if (!iCanNavigate) {
         resultEl.innerHTML += '<div class="info-text">En attente que l\'hôte passe à la donne suivante.</div>';
+    } else {
+        // Voir échange avec Guillaume ("je t'avais pas demandé à ce que ce bouton soit
+        // dans la zone des PARs ?") : DANS resultEl (la case du PAR elle-même), comme
+        // demandé à l'origine — pas un nœud DOM séparé positionné par-dessus (l'ancienne
+        // approche en position:absolute ne s'ancrait en réalité jamais correctement, voir
+        // git blame). Une simple chaîne HTML ajoutée ici survit sans problème à la
+        // reconstruction complète de resultEl.innerHTML à chaque rendu, puisqu'elle en
+        // fait justement partie.
+        resultEl.innerHTML += '<div class="next-board-panel"><button type="button" class="btn btn-secondary btn-small" onclick="uiNextBoard()">Donne suivante →</button></div>';
     }
 }
 
