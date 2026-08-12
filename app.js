@@ -1342,15 +1342,16 @@ function buildBugReportText(maxLogChars) {
 function uiReportBug() {
     const subject = `Bug — Table d'enchères (salle ${currentRoomCode || '?'})`;
 
-    // Web Share API en priorité (mobile) : ouvre la feuille de partage native (Mail,
-    // Messages, Notes...), sans la limite de longueur des URL mailto: ci-dessous — on peut
-    // donc se permettre d'y mettre bien plus de journal.
-    if (navigator.share) {
+    // Voir échange avec Guillaume ("le bouton bug ouvre le partage natif de Windows sur
+    // PC") : isMobileOrTabletDevice() en plus de navigator.share — la seule présence de
+    // l'API ne suffit pas à distinguer mobile de desktop (voir son commentaire plus haut).
+    if (isMobileOrTabletDevice() && navigator.share) {
         const text = buildBugReportText(20000);
         navigator.share({ title: subject, text }).catch(() => {
             // Annulé par l'utilisateur (ou échec silencieux) : la feuille de partage s'est
             // quand même affichée, rien à faire de plus ici — pas de repli automatique sur
-            // mailto: qui rouvrirait une seconde interface sans que ça ait été demandé.
+            // la copie presse-papiers qui rouvrirait une seconde interface sans que ça ait
+            // été demandé.
         });
         return;
     }
@@ -6495,6 +6496,17 @@ function tryAutoApplyUpdate() {
 // le distinguer d'un vrai Mac se fait via le support tactile, qu'aucun Mac n'a.
 function isIosDevice() {
     return (/iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream)
+        || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+}
+
+// Voir échange avec Guillaume ("le bouton bug ouvre le partage natif de Windows sur PC,
+// c'est pas normal") : navigator.share (utilisé dans uiReportBug pour décider entre
+// feuille de partage et copie presse-papiers) existe AUSSI sur desktop — Chrome/Windows le
+// relaie vers le panneau "Partager" natif de Windows, comme on vient de le constater en
+// pratique. Sa seule présence ne permet donc pas de distinguer mobile de desktop ; détection
+// par user-agent à la place, même repli tactile que isIosDevice ci-dessus pour le cas iPad.
+function isMobileOrTabletDevice() {
+    return /Android|iPhone|iPad|iPod|Mobile|Windows Phone/i.test(navigator.userAgent)
         || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 }
 
