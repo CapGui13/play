@@ -1313,7 +1313,6 @@ function fallbackCopyDebugLog(text) {
 // récupère tout SANS jamais avoir besoin d'ouvrir ce panneau, avec le contexte utile
 // (salle, rôle, sièges, navigateur) déjà inclus — plus la peine de demander "et t'étais
 // hôte ou invité ?" en plus du journal lui-même.
-const BUG_REPORT_EMAIL = 'guillaume_capron@yahoo.fr';
 
 function buildBugReportText(maxLogChars) {
     const lines = [
@@ -1356,11 +1355,59 @@ function uiReportBug() {
         return;
     }
 
-    // Repli desktop / navigateurs sans Web Share : mailto: pré-rempli, journal plus court
-    // (voir commentaire de buildBugReportText) pour rester sous les limites de longueur
-    // d'URL des clients mail les plus stricts.
-    const text = buildBugReportText(1500);
-    window.location.href = `mailto:${BUG_REPORT_EMAIL}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(text)}`;
+    // Voir échange avec Guillaume ("sur desktop, je voudrais que ça copie juste les logs,
+    // comme ça j'ai qu'à cliquer et te le copier/coller") : plus de mailto: ici — sur PC,
+    // le rapport part directement dans le presse-papiers, prêt à coller où il veut (chat
+    // Claude, Slack, peu importe), sans ouvrir un client mail. Pas de limite de longueur à
+    // respecter ici non plus (aucune URL impliquée), même généreux que le partage natif.
+    const text = buildBugReportText(20000);
+    const toastEl = () => {
+        let toast = document.getElementById('bugReportToast');
+        if (!toast) {
+            toast = document.createElement('div');
+            toast.id = 'bugReportToast';
+            toast.className = 'call-explanation-toast'; // même style que les autres toasts, réutilisé tel quel
+            document.body.appendChild(toast);
+        }
+        return toast;
+    };
+    const flash = (msg) => {
+        const toast = toastEl();
+        toast.textContent = msg;
+        toast.classList.remove('visible');
+        void toast.offsetWidth;
+        toast.classList.add('visible');
+        clearTimeout(toast._hideTimer);
+        toast._hideTimer = setTimeout(() => toast.classList.remove('visible'), 2800);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text)
+            .then(() => flash('📋 Rapport copié — colle-le où tu veux.'))
+            .catch(() => fallbackCopyBugReport(text, flash));
+    } else {
+        fallbackCopyBugReport(text, flash);
+    }
+}
+
+// Repli pour les navigateurs sans l'API Clipboard moderne (ou qui la refusent, ex. contexte
+// non sécurisé) : même mécanique que fallbackCopyDebugLog (sélection + execCommand), mais
+// via un <textarea> temporaire plutôt que le panneau de diagnostic — ce dernier n'est pas
+// forcément ouvert (ni même présent dans le DOM avec du contenu à jour) au moment du clic
+// sur 🐞.
+function fallbackCopyBugReport(text, onDone) {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    try {
+        document.execCommand('copy');
+        onDone('📋 Rapport copié — colle-le où tu veux.');
+    } catch (e) {
+        onDone('❌ Échec de la copie — réessaie.');
+    }
+    document.body.removeChild(ta);
 }
 
 // ===== Écran d'accueil : créer / rejoindre =====

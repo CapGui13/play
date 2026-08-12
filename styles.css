@@ -2469,11 +2469,6 @@ button.kibitz-chip {
     margin-bottom: 16px;
     font-size: 0.95rem;
     text-align: center;
-    /* Voir échange avec Guillaume (session du 8 août — "je voudrais que le bouton 'Donne
-       suivante' s'affiche dans la case du PAR") : position:relative nécessaire ici pour
-       que .next-board-panel (position:absolute, voir plus bas) se positionne PAR
-       RAPPORT à cette case précise, pas à un ancêtre plus lointain. */
-    position: relative;
 }
 
 /* Petite mise en valeur au moment précis où le contrat final apparaît (pas à chaque
@@ -3120,20 +3115,20 @@ table.dd-table td.dd-secondary-contract {
     font-size: 0.72rem;
 }
 
-/* Voir échange avec Guillaume (session du 8 août — "je voudrais que le bouton 'Donne
-   suivante' s'affiche dans la case du PAR, en dessous de Export PBN... vers le bas de
-   la case, en face de la dernière ligne du tableau à peu près") : positionné en absolu
-   PAR RAPPORT à .contract-result (voir position:relative ajouté ci-dessus), aligné à
-   droite comme Export PBN, mais vers le bas plutôt qu'en haut — reste ainsi à une
-   position stable même si le contenu au-dessus (table du double mort, texte d'attente)
-   varie en hauteur d'une donne à l'autre. La logique JS de visibilité (voir
-   checkAuctionEnd dans app.js) reste entièrement inchangée : ce n'est qu'un
-   repositionnement visuel, pas un déplacement dans le DOM. */
+/* Voir échange avec Guillaume ("le bouton Donne suivante n'est pas du tout là où il
+   devrait être", capture d'écran desktop) : l'ancienne approche en position:absolute (voir
+   git blame) partait d'une hypothèse fausse — #nextBoardPanel n'a JAMAIS été un
+   descendant réel de .contract-result dans le DOM (voir index.html : c'est un simple frère
+   placé après .game-content-row, pas un enfant de la case du contrat). Son
+   position:absolute se calait donc sans ancêtre positionné réel, par rapport à TOUTE la
+   page — ça "marchait" par coïncidence tant que la hauteur totale de page restait stable,
+   mais se déréglait dès qu'elle changeait (voir le correctif mobile précédent, qui n'était
+   qu'un cas particulier du même problème, pas la vraie cause). Remplacé ici par du flux
+   normal, universellement (plus seulement sur mobile) : plus simple, plus robuste, aligné
+   à droite pour rester visuellement cohérent avec l'intention d'origine. */
 .next-board-panel {
-    position: absolute;
-    right: 14px;
-    bottom: 14px;
-    margin-top: 0;
+    text-align: right;
+    margin-top: 12px;
 }
 
 .info-text {
@@ -3319,25 +3314,6 @@ table.dd-table td.dd-secondary-contract {
 
     #myHandsContainer.my-hands-multi .suit-symbol .suit-icon {
         font-size: 1rem;
-    }
-
-    /* Voir échange avec Guillaume : "Donne suivante" apparaît en plein sur le diagramme
-       des 4 mains sur mobile une fois la donne finie. Cause réelle — #nextBoardPanel n'est
-       PAS un descendant de .contract-result dans le DOM (contrairement à ce que suggère le
-       commentaire au-dessus de .next-board-panel plus haut dans ce fichier) : c'est un
-       simple frère placé après .game-content-row. Son position:absolute se retrouve donc
-       sans ancêtre positionné réel, et se cale par rapport à TOUTE la page — right/bottom
-       14px du bas du document entier, pas de la case du contrat. Ça "marche" par coïncidence
-       en desktop tant que la hauteur totale de page reste stable, mais dès que l'enchère se
-       termine, la boîte d'enchères et l'indicateur de tour se vident et la page raccourcit
-       d'un coup — le bas du document remonte alors pile au niveau du diagramme des mains,
-       juste au-dessus. Plutôt que de rafistoler un ancrage relatif fiable, on repasse le
-       bouton en flux normal sur mobile : plus simple, plus robuste, et le résultat visuel
-       (aligné à droite, sous le reste) reste cohérent avec l'intention d'origine. */
-    .next-board-panel {
-        position: static;
-        text-align: right;
-        margin: 14px 0 0;
     }
 }
 
