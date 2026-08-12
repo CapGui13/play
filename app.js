@@ -106,47 +106,32 @@ let roomCreatorName = null;
 // migrer vers son vrai jeton dès son premier retour asynchrone.
 let roomCreatorToken = null;
 
-// ===== Reprise automatique d'hôte par le sous-hôte (voir échange avec Guillaume, session
-// du 23 juillet) =====
+// Voir ARCHITECTURE-P2P-SERVEUR.md (étape 4 — nettoyage) : la reprise automatique
+// d'hôte par un sous-hôte (élection d'un nouvel hôte P2P en cas de coupure prolongée,
+// session du 23 juillet) a été retirée — superflue maintenant que chaque siège route
+// individuellement vers le relais serveur en cas de coupure (voir étape 3), sans jamais
+// changer qui est l'hôte. C'était aussi la source de la quasi-totalité des bugs de
+// reconnexion rencontrés cette session (transfert d'hôte incohérent, double hôte,
+// retour de l'hôte original non reconnu...).
 //
-// Connues de CHAQUE participant (reçues via 'lobby-state', voir broadcastLobbyState) —
-// currentSubHostId : qui prendrait le relais si l'hôte disparaît ; currentHostReconnectToken
-// : le jeton de reconnexion PERSONNEL de l'hôte actuel (celui de son propre localStorage),
-// pour que, si un jour un sous-hôte prend sa place, l'ancien hôte revenant plus tard sous ce
-// jeton soit bien reconnu comme un simple retour, pas un inconnu (voir
-// uiAttemptSubHostTakeover, qui remappe l'entrée 'host' vers ce jeton avant de basculer).
-let currentSubHostId = null;
+// currentHostReconnectToken reste : le jeton de reconnexion de l'hôte ACTUEL (qui ne
+// change plus jamais en cours de partie) — utile pour qu'un invité sache identifier
+// correctement l'hôte dans ses propres échanges avec le serveur (voir
+// buildCloudStatePayload), reçu via 'lobby-state'/'start-game'/'resync' comme avant.
 let currentHostReconnectToken = null;
-// Minuteur du délai de grâce (voir GUEST_TAKEOVER_GRACE_MS) : posé dès que LE SOUS-HÔTE
-// perd sa connexion à l'hôte, annulé dès qu'il se reconnecte. `null` tant qu'aucune
-// coupure n'est en cours (ou si ce client n'est pas le sous-hôte).
-let subHostTakeoverTimer = null;
-// Voir échange avec Guillaume (session du 23 juillet) : horodatage de la détection réelle
-// de la coupure (posé au moment où le minuteur démarre, PAS au moment où la bascule
-// s'exécute effectivement 20s plus tard) — sert pour l'affichage "déconnecté depuis Xs"
-// une fois la bascule faite (voir promoteSelfToHostAfterTakeover), pour que ce compteur
-// reflète le vrai délai écoulé plutôt que de repartir de zéro à la bascule.
-let subHostDisconnectDetectedAt = null;
 // Voir échange avec Guillaume (session du 23 juillet — "un compteur qui défile") :
-// horodatage de NOTRE PROPRE déconnexion détectée (tout invité, pas seulement le sous-
-// hôte) — sert à afficher un compteur "0/20 sec" qui défile dans la bannière (voir
-// renderReconnectionBanner), pour rendre visible ce qui se passe pendant l'attente plutôt
-// que de laisser un message statique sans aucune indication de progression.
+// horodatage de NOTRE PROPRE déconnexion détectée — sert à afficher un compteur qui
+// défile dans la bannière de reconnexion (voir renderReconnectionBanner), pour rendre
+// visible ce qui se passe pendant l'attente plutôt que de laisser un message statique
+// sans aucune indication de progression.
 let selfDisconnectedAt = null;
-// Délai avant qu'un sous-hôte considère l'hôte définitivement parti et prenne le relais
-// (voir échange avec Guillaume — 20s : assez court pour rester "fluide" à l'échelle d'une
-// partie de bridge, assez long pour absorber un verrouillage d'écran iOS ou un Wi-Fi qui
-// hoquette sans provoquer un changement d'hôte pour rien).
-const GUEST_TAKEOVER_GRACE_MS = 20000;
 
 // Voir échange avec Guillaume ("je rouvre la fenêtre de l'hôte bien avant 20s, mais
 // l'invité bascule en 'prise de relais' comme si rien n'avait changé") : la reconnexion
 // d'un INVITÉ n'a jamais été qu'un clic manuel sur "Se reconnecter" (uiReconnect) — rouvrir
-// la fenêtre de l'hôte, même immédiatement, ne change donc RIEN tout seul côté invité : le
-// minuteur de 20s continue de tourner sans se soucier du retour de l'hôte, et
-// attemptSubHostTakeover se déclenche à l'heure peu importe quand l'hôte est réellement
-// revenu. Ce minuteur retente silencieusement une reconnexion en tâche de fond pendant
-// qu'un invité reste déconnecté — annulé dès qu'onGuestConnected réussit (voir
+// la fenêtre de l'hôte, même immédiatement, ne change donc RIEN tout seul côté invité sans
+// ce minuteur. Retente silencieusement une reconnexion en tâche de fond pendant qu'un
+// invité reste déconnecté — annulé dès qu'onGuestConnected réussit (voir
 // buildGuestHandlers), donc sans effet une fois reconnecté.
 let guestAutoReconnectTimer = null;
 const GUEST_AUTO_RECONNECT_INTERVAL_MS = 4000;
@@ -1467,8 +1452,7 @@ function uiCreateRoom() {
     participants = [{ id: 'host', name: savedNickname || 'Hôte', ...(savedAvatarColor ? { avatarColor: savedAvatarColor } : {}) }];
     // Voir échange avec Guillaume (session asynchrone à deux — "je ne veux pas de bascule
     // d'hôte") : figé une seule fois, ici, à la création — jamais réécrit ensuite, y
-    // compris par une reprise cloud ou un transfert d'hôte (voir promoteSelfToHostAfterTakeover,
-    // uiResumeFromCloud). L'affichage "Hôte : X" (voir renderGameHeader) utilise TOUJOURS
+    // compris par une reprise cloud ou un transfert d'hôte manuel (voir uiResumeFromCloud). L'affichage "Hôte : X" (voir renderGameHeader) utilise TOUJOURS
     // cette valeur plutôt que le participant technique 'host' du moment — qui, lui,
     // continue de basculer en coulisses (nécessaire pour que d'autres puissent encore se
     // connecter au même code), mais ne doit plus jamais se voir.
@@ -1619,10 +1603,11 @@ function buildHostHandlers(onOpenExtra) {
                     deals, boardIndex, auctionHistory,
                     yourSeats: seatsForThisGuest,
                     botSeats: autoPassSeats,
-                    // Voir échange avec Guillaume (session du 23 juillet) : même raison
-                    // que pour 'start-game' — connus dès cette (re)connexion, pas
-                    // seulement à réception d'un futur lobby-state.
-                    subHostId: computeSubHostId(),
+                    // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 4) : jeton de l'hôte
+                    // actuel, toujours utile pour qu'un invité identifie correctement
+                    // l'hôte dans ses propres échanges avec le serveur (voir
+                    // buildCloudStatePayload) — subHostId, lui, a disparu (plus
+                    // d'élection de sous-hôte).
                     hostReconnectToken: getReconnectToken(),
                     roomCreatorName,
                     // Voir échange avec Guillaume (session du 23 juillet) : permet au client
@@ -1747,14 +1732,9 @@ function buildGuestHandlers() {
             everConnectedAsGuest = true;
             setConnectionStatus(true);
             renderReconnectButton();
-            // Voir échange avec Guillaume (session du 23 juillet — reprise automatique
-            // d'hôte) : la connexion est rétablie (avec l'ancien hôte OU un nouvel hôte
-            // sous le même code, peu importe lequel de son point de vue) — annule le
-            // minuteur de reprise s'il était en cours, plus la peine.
-            cancelSubHostTakeoverTimer();
             // Voir échange avec Guillaume ("l'invité ne se reconnecte jamais tout seul") :
-            // même annulation pour le cycle de reconnexion automatique en arrière-plan
-            // (voir scheduleGuestAutoReconnect) — plus la peine une fois vraiment reconnecté.
+            // annule le cycle de reconnexion automatique en arrière-plan (voir
+            // scheduleGuestAutoReconnect) — plus la peine une fois vraiment reconnecté.
             cancelGuestAutoReconnectTimer();
             // Voir échange avec Guillaume (session du 23 juillet — "on fait idem pour
             // l'host") : toast vert AVANT de réinitialiser selfDisconnectedAt — il faut
@@ -1768,24 +1748,18 @@ function buildGuestHandlers() {
         },
         onPeerDisconnected: () => {
             setConnectionStatus(false);
-            scheduleSubHostTakeoverIfNeeded();
-            // Voir échange avec Guillaume ("l'invité ne se reconnecte jamais tout seul") :
-            // en plus de scheduleSubHostTakeoverIfNeeded (qui ne concerne que le sous-hôte
-            // désigné) — tout invité déconnecté retente maintenant automatiquement en
-            // arrière-plan, sans attendre un clic sur "Se reconnecter" ni les 20s du
-            // sous-hôte.
+            // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 4) : scheduleSubHostTakeoverIfNeeded
+            // a disparu d'ici (plus d'élection de sous-hôte) — seule reste la reconnexion
+            // automatique en arrière-plan (voir scheduleGuestAutoReconnect), qui
+            // concernait déjà TOUT invité déconnecté, pas seulement un sous-hôte désigné.
             scheduleGuestAutoReconnect();
-            // Voir échange avec Guillaume (session du 23 juillet — "le bouton ne sert à
-            // rien pour le sous-hôte") : APRÈS scheduleSubHostTakeoverIfNeeded, pas avant
-            // — renderReconnectButton doit voir subHostTakeoverTimer déjà posé pour
-            // décider correctement de le masquer ou non.
             renderReconnectButton();
             // Voir échange avec Guillaume (session du 23 juillet — compteur qui défile) :
-            // posé seulement s'il ne l'était pas déjà, comme subHostDisconnectDetectedAt —
-            // sinon un second événement de coupure pendant qu'on est déjà déconnecté
-            // repousserait le départ du compteur à chaque fois. Le toast (voir "on fait
-            // idem pour l'host") ne part qu'à ce moment précis (première détection), jamais
-            // répété pour les tentatives suivantes tant qu'on reste déconnecté.
+            // posé seulement s'il ne l'était pas déjà — sinon un second événement de
+            // coupure pendant qu'on est déjà déconnecté repousserait le départ du
+            // compteur à chaque fois. Le toast ne part qu'à ce moment précis (première
+            // détection), jamais répété pour les tentatives suivantes tant qu'on reste
+            // déconnecté.
             if (!selfDisconnectedAt) {
                 selfDisconnectedAt = Date.now();
                 if (deals) flashPresenceToast("🔌 Connexion à l'hôte perdue", false);
@@ -1800,7 +1774,6 @@ function buildGuestHandlers() {
         // inaperçue — ni le statut ni le bouton ne se mettaient à jour.
         onSignalingDisconnected: () => {
             setConnectionStatus(false);
-            scheduleSubHostTakeoverIfNeeded();
             scheduleGuestAutoReconnect();
             renderReconnectButton();
             if (!selfDisconnectedAt) {
@@ -2119,15 +2092,13 @@ function renderReconnectButton() {
     // vraiment) — sa PROPRE connexion (signalingOpen) est le seul critère qui compte pour
     // lui, indépendamment du nombre d'invités présents.
     //
-    // Masqué en plus pour le SOUS-HÔTE DÉSIGNÉ tant que SON PROPRE minuteur de reprise
-    // tourne (voir subHostTakeoverTimer) : un mécanisme automatique est déjà en cours pour
-    // lui (avec un compte à rebours visible dans la bannière, voir
-    // renderReconnectionBanner) — cliquer ce bouton ne peut rien accomplir tant que
-    // personne n'héberge encore la salle. Les AUTRES invités, eux, gardent le bouton :
-    // pour eux, rien d'automatique n'est en cours, et ça peut être un simple accroc de
-    // LEUR côté plutôt que la disparition de l'hôte.
-    const isSubHostAwaitingTakeover = myParticipantId === currentSubHostId && !!subHostTakeoverTimer;
-    const shouldShow = peerConn && !isSubHostAwaitingTakeover && (
+    // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 4) : plus de cas particulier "sous-hôte
+    // désigné" à masquer ici — la reconnexion automatique en arrière-plan (voir
+    // scheduleGuestAutoReconnect) concerne maintenant TOUT invité déconnecté, pas
+    // seulement un sous-hôte. Le bouton reste utile malgré tout : un clic déclenche une
+    // tentative immédiate plutôt que d'attendre le prochain passage du minuteur
+    // automatique (jusqu'à GUEST_AUTO_RECONNECT_INTERVAL_MS de retard sinon).
+    const shouldShow = peerConn && (
         (myRole === 'guest' && everConnectedAsGuest && !peerConn.isConnected())
         || (myRole === 'host' && !peerConn.signalingOpen)
     );
@@ -2748,75 +2719,13 @@ function uiDropOnKibitz(event) {
 
 const SEAT_CLOCKWISE_NEXT = { N: 'E', E: 'S', S: 'W', W: 'N' };
 
-// Voir échange avec Guillaume (session du 23 juillet — reprise automatique d'hôte) : le
-// partenaire assis EN FACE, pas le "prochain" dans le sens horaire (contrairement à
-// SEAT_CLOCKWISE_NEXT ci-dessus, qui sert à la rotation) — N/S sont partenaires, E/O sont
-// partenaires.
-const SEAT_ACROSS = { N: 'S', S: 'N', E: 'W', W: 'E' };
-
-// Désigne le "sous-hôte" : le participant humain qui prendra automatiquement le relais si
-// l'hôte disparaît sans revenir (voir échange avec Guillaume). Recalculée à chaque
-// diffusion d'état (broadcastLobbyState), jamais figée une fois pour toutes — reste donc
-// valable même si la situation change en cours de partie (le partenaire de l'hôte se
-// déconnecte à son tour, quelqu'un change de siège...).
-// Ordre de préférence :
-//   1. Le partenaire de l'hôte (siège en face), s'il est assis et connecté.
-//   2. Sinon, le premier joueur humain ASSIS à avoir rejoint (ordre du tableau
-//      `participants`, qui est l'ordre d'arrivée — voir onGuestConnected).
-//   3. Sinon (aucun autre joueur assis), le premier participant humain connecté tout
-//      court, kibitz compris — il faut bien un filet de secours.
-// Renvoie null s'il n'y a vraiment personne d'autre (partie solo, ou tout le monde
-// déconnecté).
-function computeSubHostId() {
-    const hostSeat = SEATS.find(seat => seatAssignment[seat] === 'host');
-    if (hostSeat) {
-        const partnerId = seatAssignment[SEAT_ACROSS[hostSeat]];
-        if (partnerId && partnerId !== 'host') {
-            const partner = participants.find(p => p.id === partnerId);
-            if (partner && !partner.disconnected) return partnerId;
-        }
-    }
-
-    const seatedIds = new Set(SEATS.map(seat => seatAssignment[seat]).filter(pid => pid && pid !== 'host'));
-    const firstSeatedHuman = participants.find(p => seatedIds.has(p.id) && !p.disconnected);
-    if (firstSeatedHuman) return firstSeatedHuman.id;
-
-    const firstConnectedHuman = participants.find(p => p.id !== 'host' && !p.disconnected);
-    return firstConnectedHuman ? firstConnectedHuman.id : null;
-}
-
-// Voir échange avec Guillaume (session du 23 juillet — reprise automatique d'hôte) : posé
-// UNIQUEMENT chez le sous-hôte désigné (voir currentSubHostId), dès qu'il perd sa propre
-// connexion à l'hôte. Si l'hôte ne réapparaît pas dans le délai de grâce, tentative de
-// reprise automatique. Annulé (cancelSubHostTakeoverTimer) dès qu'une reconnexion réussit,
-// peu importe si c'est l'ancien hôte qui est simplement revenu.
-function scheduleSubHostTakeoverIfNeeded() {
-    if (myRole !== 'guest') return;
-    if (!deals) return; // le sous-hôte n'existe qu'une fois la partie lancée (voir échange avec Guillaume) — pas de reprise pendant le salon
-    if (myParticipantId !== currentSubHostId) return; // seul le sous-hôte désigné programme quoi que ce soit
-    if (subHostTakeoverTimer) return; // déjà en cours (ex. deux événements de coupure rapprochés) — pas la peine d'en reposer un
-    subHostDisconnectDetectedAt = Date.now();
-    subHostTakeoverTimer = setTimeout(() => {
-        subHostTakeoverTimer = null;
-        attemptSubHostTakeover();
-    }, GUEST_TAKEOVER_GRACE_MS);
-}
-
-function cancelSubHostTakeoverTimer() {
-    if (subHostTakeoverTimer) {
-        clearTimeout(subHostTakeoverTimer);
-        subHostTakeoverTimer = null;
-    }
-    subHostDisconnectDetectedAt = null;
-}
-
 // Voir échange avec Guillaume ("l'invité ne se reconnecte jamais tout seul") : posé chez
-// TOUT invité déconnecté (pas seulement le sous-hôte désigné, contrairement à
-// scheduleSubHostTakeoverIfNeeded) — retente une reconnexion complète toutes les
-// GUEST_AUTO_RECONNECT_INTERVAL_MS, en tâche de fond, sans qu'aucun clic ne soit
-// nécessaire. Se reprogramme lui-même à chaque tentative tant que la déconnexion dure —
-// onGuestConnected (voir buildGuestHandlers) l'annule dès qu'une reconnexion réussit,
-// qu'elle vienne de ce minuteur ou d'un clic manuel entre-temps.
+// TOUT invité déconnecté (voir ARCHITECTURE-P2P-SERVEUR.md, étape 4 — l'ancienne
+// distinction "sous-hôte désigné seulement" a disparu) — retente une reconnexion complète
+// toutes les GUEST_AUTO_RECONNECT_INTERVAL_MS, en tâche de fond, sans qu'aucun clic ne
+// soit nécessaire. Se reprogramme lui-même à chaque tentative tant que la déconnexion
+// dure — onGuestConnected (voir buildGuestHandlers) l'annule dès qu'une reconnexion
+// réussit, qu'elle vienne de ce minuteur ou d'un clic manuel entre-temps.
 function scheduleGuestAutoReconnect() {
     if (myRole !== 'guest') return;
     if (guestAutoReconnectTimer) return; // déjà programmé, pas la peine d'en reposer un
@@ -2840,7 +2749,20 @@ function cancelGuestAutoReconnectTimer() {
 // (onGuestConnected annulera ce cycle dès que ça aboutit réellement).
 function attemptGuestAutoReconnect() {
     if (myRole !== 'guest' || !currentRoomCode) return;
-    if (peerConn && peerConn.isConnected()) return; // déjà reconnecté entre-temps
+    if (peerConn && peerConn.isConnected()) return; // déjà reconnecté entre-temps (onGuestConnected a dû annuler ce cycle)
+    // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 3) : tant que la reconnexion P2P n'a pas
+    // encore réussi, relit aussi l'état serveur en tâche de fond — sans ça, mon propre
+    // écran resterait figé au moment exact de la coupure jusqu'à ce que je me
+    // reconnecte vraiment, même si mon tour revient entre-temps via le relais serveur
+    // (le partenaire/l'adversaire d'en face a annoncé, puis l'hôte ou un autre siège a
+    // relayé cette annonce ailleurs). applyCloudUpdate est sûr à appeler ici même côté
+    // invité : sa partie "relais P2P" ne se déclenche que pour myRole==='host', le
+    // reste (recopie de l'état local) est neutre pour ce rôle.
+    if (deals && typeof pullSessionState === 'function') {
+        pullSessionState(currentRoomCode).then(result => {
+            if (result && result.version > lastKnownCloudVersion) applyCloudUpdate(result);
+        }).catch(() => { /* panne réseau passagère, on retentera au prochain tick */ });
+    }
     if (peerConn) peerConn.destroy();
     peerConn = new BridgePeerConnection(buildGuestHandlers());
     const token = getReconnectToken();
@@ -2849,139 +2771,10 @@ function attemptGuestAutoReconnect() {
     scheduleGuestAutoReconnect();
 }
 
-// Voir échange avec Guillaume (session du 23 juillet) : déclenchée quand le délai de
-// grâce expire sans reconnexion. Revérifie tout avant d'agir (le contexte a pu changer
-// entre-temps) puis tente de recréer la salle sous EXACTEMENT le même code (voir
-// createRoom dans peer-connection.js, étendu pour ça) — la bascule effective en hôte
-// (promoteSelfToHostAfterTakeover) n'a lieu qu'une fois cette reprise confirmée réussie,
-// jamais avant, pour ne jamais afficher un état "hôte" halluciné si ça échoue.
-function attemptSubHostTakeover() {
-    if (myRole !== 'guest') return;
-    if (!deals) return;
-    if (myParticipantId !== currentSubHostId) return;
-    if (peerConn && peerConn.isConnected()) return; // reconnecté entre-temps par un autre chemin, rien à faire
-    if (!currentRoomCode) return; // filet de sécurité, ne devrait pas arriver
-
-    // Voir échange avec Guillaume ("l'invité ne se reconnecte jamais tout seul") : annulé
-    // ICI, avant toute chose — sans ça, un tick de reconnexion automatique déjà programmé
-    // (scheduleGuestAutoReconnect) pourrait se déclencher pendant la brève fenêtre où
-    // myRole vaut encore 'guest' (avant que promoteSelfToHostAfterTakeover ne le bascule
-    // en 'host', une fois la nouvelle salle hôte confirmée créée un peu plus bas) et
-    // détruire par erreur la connexion hôte flambant neuve en cours de création, la
-    // remplaçant par une tentative de reconnexion en tant qu'invité.
-    cancelGuestAutoReconnectTimer();
-
-    const oldParticipantId = myParticipantId;
-    const oldHostToken = currentHostReconnectToken;
-    const codeToReclaim = currentRoomCode;
-    // Voir échange avec Guillaume (session du 23 juillet — "le compteur repart de zéro") :
-    // capturée ICI, AVANT peerConn.destroy() ci-dessous — détruire l'ancienne connexion
-    // redéclenche ses propres événements de déconnexion (le 'disconnected' PeerJS sous-
-    // jacent), qui repassent par scheduleSubHostTakeoverIfNeeded et reposent un NOUVEL
-    // horodatage (subHostTakeoverTimer vient justement d'être remis à null par le
-    // setTimeout qui a appelé cette fonction, donc son garde-fou ne bloque plus rien à cet
-    // instant précis) — en relisant la globale plus tard dans promoteSelfToHostAfterTakeover,
-    // on récupérait cette valeur fraîchement écrasée (≈ maintenant) au lieu de la vraie,
-    // d'où le compteur qui repartait de zéro à chaque bascule.
-    const detectedAt = subHostDisconnectDetectedAt;
-    pushDebugLog(`Hôte introuvable depuis ${GUEST_TAKEOVER_GRACE_MS / 1000}s — tentative de reprise du rôle d'hôte sous le code ${codeToReclaim} (sous-hôte désigné).`);
-
-    if (peerConn) peerConn.destroy();
-    const newPeerConn = new BridgePeerConnection(buildHostHandlers(() => {
-        promoteSelfToHostAfterTakeover(oldParticipantId, oldHostToken, detectedAt);
-    }));
-    peerConn = newPeerConn;
-    // Écrasé APRÈS construction (comme pour prepare-become-host) : en cas d'échec de la
-    // reprise (collision improbable — quelqu'un d'autre a déjà réclamé ce code entre-
-    // temps), on ne reste pas bloqué dans un entre-deux — on redevient un invité tout à
-    // fait normal, comme si cette tentative n'avait jamais eu lieu.
-    newPeerConn.handlers.onError = (err) => {
-        pushDebugLog('Échec de la reprise du rôle d\'hôte : ' + ((err && (err.message || err.type)) || err));
-        connectAsGuest(codeToReclaim, getReconnectToken(), savedNickname);
-    };
-    newPeerConn.createRoom(6, codeToReclaim);
-}
-
-// Bascule effective, appelée UNIQUEMENT une fois la salle recréée avec succès sous
-// l'ancien code (voir attemptSubHostTakeover). Remappe l'identité de l'ancien hôte vers
-// son PROPRE jeton de reconnexion (déjà connu via currentHostReconnectToken) plutôt que de
-// la perdre : s'il revient un jour, il sera reconnu comme un simple retour (voir
-// onGuestConnected), pas comme un inconnu.
-function promoteSelfToHostAfterTakeover(oldParticipantId, oldHostToken, detectedAt) {
-    // Voir échange avec Guillaume (session du 23 juillet) : reflète le moment où LA
-    // COUPURE a été détectée (capturé par attemptSubHostTakeover AVANT de détruire
-    // l'ancienne connexion, voir son commentaire), pas le moment où cette fonction
-    // s'exécute — sinon le compteur "déconnecté depuis Xs" affiché ensuite (voir
-    // renderReconnectionBanner) repartirait de zéro à chaque bascule au lieu de refléter
-    // le vrai délai total écoulé depuis la vraie coupure.
-    const disconnectedAt = detectedAt || Date.now();
-    if (oldHostToken) {
-        participants = participants.map(p => {
-            if (p.id === 'host') return { ...p, id: oldHostToken, disconnected: true, disconnectedAt };
-            if (p.id === oldParticipantId) return { ...p, id: 'host' };
-            return p;
-        });
-        SEATS.forEach(seat => {
-            if (seatAssignment[seat] === 'host') seatAssignment[seat] = oldHostToken;
-            else if (seatAssignment[seat] === oldParticipantId) seatAssignment[seat] = 'host';
-        });
-    } else {
-        // Filet improbable (jamais reçu de hostReconnectToken) : on bascule quand même,
-        // juste sans reconnaissance automatique si l'ancien hôte revient un jour.
-        participants = participants.map(p => (p.id === oldParticipantId ? { ...p, id: 'host' } : p));
-        SEATS.forEach(seat => { if (seatAssignment[seat] === oldParticipantId) seatAssignment[seat] = 'host'; });
-    }
-
-    myRole = 'host';
-    myParticipantId = 'host';
-    mySeats = SEATS.filter(seat => seatAssignment[seat] === 'host');
-    guestIndexByToken = {};
-    prevSeatAssignmentSnapshot = null;
-    prevParticipantsDisconnectedSnapshot = null;
-    hostPendingUndo = null;
-    hostTransferInProgress = false;
-    currentSubHostId = null; // périmé — recalculé au prochain broadcastLobbyState
-    subHostDisconnectDetectedAt = null;
-    // Voir échange avec Guillaume (session du 23 juillet) : par précaution, au cas où
-    // peerConn.destroy() (dans attemptSubHostTakeover) aurait réarmé un minuteur fantôme
-    // via les événements de déconnexion de l'ancienne connexion (voir le commentaire
-    // détaillé là-bas) — myRole vient de passer à 'host', donc ce minuteur ne ferait de
-    // toute façon plus rien d'utile, mais autant ne pas le laisser traîner.
-    cancelSubHostTakeoverTimer();
-
-    setConnectionStatus(true);
-    // Voir échange avec Guillaume (session du 23 juillet — "le bouton Se reconnecter
-    // persiste") : jamais rafraîchi ailleurs après la bascule — son affichage ne dépend
-    // que de myRole==='guest' (voir renderReconnectButton), qui vient justement de
-    // changer, mais rien ne le lui redisait explicitement.
-    renderReconnectButton();
-    updateBoardControlVisibility();
-    renderBoard();
-    flashSubHostTookOverToast();
-    // Voir échange avec Guillaume (session du 23 juillet — reprise via localStorage) :
-    // premier instantané sur CET appareil, qui est maintenant l'hôte légitime — les
-    // prochains changements (enchère, siège...) continueront à le tenir à jour via les
-    // mêmes points d'accroche que pour un hôte classique.
-    saveHostGameStateToStorage();
-}
-
-// Voir flashSeatsRotatedToast/flashChatMessageToast pour le même principe de toast
-// discret et temporaire.
-function flashSubHostTookOverToast() {
-    let toast = document.getElementById('subHostTookOverToast');
-    if (!toast) {
-        toast = document.createElement('div');
-        toast.id = 'subHostTookOverToast';
-        toast.className = 'call-explanation-toast';
-        document.body.appendChild(toast);
-    }
-    toast.textContent = "👑 L'hôte a été injoignable trop longtemps — vous prenez le relais.";
-    toast.classList.remove('visible');
-    void toast.offsetWidth;
-    toast.classList.add('visible');
-    clearTimeout(toast._hideTimer);
-    toast._hideTimer = setTimeout(() => toast.classList.remove('visible'), 5000);
-}
+// Voir ARCHITECTURE-P2P-SERVEUR.md (étape 4) : attemptSubHostTakeover,
+// promoteSelfToHostAfterTakeover et flashSubHostTookOverToast ont été retirés d'ici —
+// plus d'élection d'un nouvel hôte P2P en cas de coupure prolongée, superflue depuis le
+// routage par siège (étape 3). L'hôte ne change plus jamais en cours de partie.
 
 // Fait tourner l'assignation des sièges de 90° dans le sens horaire (voir échange avec
 // Guillaume) : qui était à N se retrouve à E, qui était à E se retrouve à S, etc. Les
@@ -3049,12 +2842,9 @@ function flashSeatsRotatedToast() {
 }
 
 function broadcastLobbyState() {
-    // Voir échange avec Guillaume (session du 23 juillet — reprise automatique d'hôte) :
-    // subHostId et hostReconnectToken voyagent avec CHAQUE diffusion d'état, pas seulement
-    // en cas de besoin — au moment où l'hôte disparaît, il n'y a justement plus moyen de
-    // rien lui demander, donc tout le monde doit déjà savoir à l'avance qui prendrait le
-    // relais et sous quelle identité l'ancien hôte pourrait revenir (voir
-    // computeSubHostId / uiAttemptSubHostTakeover plus bas).
+    // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 4) : subHostId a disparu d'ici (plus
+    // d'élection de sous-hôte) — hostReconnectToken reste, toujours utile pour qu'un
+    // invité identifie correctement l'hôte dans ses propres échanges avec le serveur.
     //
     // autoPassSeats inclus aussi (voir échange avec Guillaume — "le bot n'enchérit pas") :
     // peut changer en cours de partie (voir uiAssignSeat/uiDropOnSeat/uiDropOnKibitz), les
@@ -3064,7 +2854,6 @@ function broadcastLobbyState() {
         type: 'lobby-state',
         participants,
         seatAssignment,
-        subHostId: computeSubHostId(),
         hostReconnectToken: getReconnectToken(),
         autoPassSeats,
         // Voir échange avec Guillaume ("je ne veux pas de bascule d'hôte") : sans ça, un
@@ -3098,12 +2887,13 @@ function renderHostTransferWidget() {
     if (!widget) return;
 
     const isHost = myRole === 'host';
-    // Voir échange avec Guillaume ("pas de raison de transférer l'hôte en différé") : un
-    // siège encore SEAT_PENDING dans le salon signale déjà clairement une salle qui
-    // s'apprête à devenir différée au lancement (voir isDeferredMode dans
-    // uiStartGameAsHost) — transférer l'hôte à ce moment-là n'a pas plus de sens que
-    // pendant la partie elle-même, puisque c'est celui qui tient le rôle d'hôte AU
-    // LANCEMENT qui devient le créateur figé de la salle (voir roomCreatorToken).
+    // Voir échange avec Guillaume ("pas de raison de transférer l'hôte en différé") :
+    // un siège encore SEAT_PENDING dans le salon indique qu'un participant est encore
+    // attendu. Restriction laissée inchangée pour l'instant (voir
+    // ARCHITECTURE-P2P-SERVEUR.md — hors périmètre de l'étape 2, qui ne touche que
+    // uiStartGameAsHost) : à revisiter une fois le reste de la réorganisation en place,
+    // puisque sa justification d'origine référençait la branche "mode différé"
+    // maintenant retirée de uiStartGameAsHost.
     const hasPendingSeat = SEATS.some(seat => seatAssignment[seat] === SEAT_PENDING);
     const eligible = isHost && !deals && !hasPendingSeat
         ? participants.filter(p => p.id !== myParticipantId && !p.disconnected)
@@ -3567,56 +3357,46 @@ function uiStartGameAsHost() {
         autoPassSeats = botSeats;
         advanceRobotBidsOnAllBoards(boardIndex); // voir échange avec Guillaume — prérequis d'"avance rapide"/"vue d'ensemble"
 
-        // Voir échange avec Guillaume ("je veux 2 modes : live / différé") : le signal est
-        // déjà là, sans rien ajouter à l'interface — un siège encore SEAT_PENDING au
-        // moment du lancement ne peut signifier qu'une chose, personne d'autre n'est
-        // censé être présent tout de suite. Ce choix est figé pour toute la durée de la
-        // salle (pas de bascule en cours de route, voir échange avec Guillaume).
-        const isDeferredMode = SEATS.some(seat => seatAssignment[seat] === SEAT_PENDING);
-
-        if (isDeferredMode) {
-            // Voir échange avec Guillaume : jamais de connexion PeerJS pour ce mode, dès
-            // le lancement — pas seulement en cas de reprise (voir uiResumeFromCloud/
-            // uiResumeHostSession, qui appliquent déjà ce principe). Migration "host" ->
-            // mon vrai jeton une seule fois ici, pour que cette salle n'ait plus jamais
-            // besoin de la notion d'hôte réseau de toute sa durée (promoteSelfToHostAfterTakeover
-            // et le transfert d'hôte restent des mécanismes du mode live, jamais de celui-ci).
-            const myToken = getReconnectToken();
-            SEATS.forEach(seat => { if (seatAssignment[seat] === 'host') seatAssignment[seat] = myToken; });
-            const hostParticipant = participants.find(p => p.id === 'host');
-            if (hostParticipant) hostParticipant.id = myToken;
-            myParticipantId = myToken;
-            mySeats = SEATS.filter(seat => seatAssignment[seat] === myToken);
-            roomCreatorToken = myToken;
-            if (peerConn) peerConn.destroy();
-            peerConn = new NullPeerConnection();
-            startDeferredPolling();
-        } else {
-            // Mode live, entièrement inchangé : tout le monde est déjà assis (humain ou
-            // robot) au moment de lancer — vrai pair PeerJS déjà en place depuis le salon,
-            // hôte avec tous ses privilèges habituels.
-            mySeats = SEATS.filter(seat => seatAssignment[seat] === 'host');
-            participants.filter(p => p.id !== 'host' && !p.disconnected).forEach(p => {
-                const guestIndex = guestIndexForParticipant(p.id);
-                if (guestIndex == null) return;
-                const seatsForThisGuest = SEATS.filter(seat => seatAssignment[seat] === p.id);
-                // Voir échange avec Guillaume (session du 23 juillet — "rien ne se
-                // déclenche") : subHostId/hostReconnectToken inclus ICI aussi, pas
-                // seulement dans broadcastLobbyState ('lobby-state') — sans ça, un invité
-                // qui ne recevait plus jamais de lobby-state entre le lancement et une
-                // éventuelle coupure de l'hôte ne connaissait jamais le sous-hôte
-                // désigné, et la reprise automatique ne se déclenchait donc jamais.
-                peerConn.send({
-                    type: 'start-game',
-                    deals, yourSeats: seatsForThisGuest, botSeats,
-                    subHostId: computeSubHostId(),
-                    hostReconnectToken: getReconnectToken(),
-                    roomCreatorName
-                }, guestIndex);
-            });
-        }
+        // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 2) : plus de branche "mode différé"
+        // séparée ici — la salle garde TOUJOURS une vraie connexion P2P hôte, même avec
+        // un siège encore SEAT_PENDING. Ce dernier reste simplement inoccupé (déjà exclu
+        // de botSeats ci-dessus, puisque SEAT_PENDING est une sentinelle non-vide, pas
+        // une valeur absente) jusqu'à ce que quelqu'un le revendique en rejoignant — voir
+        // le "revendication automatique d'un siège en attente" dans onGuestConnected,
+        // qui fonctionne déjà que la partie soit lancée ou non. La sauvegarde cloud
+        // (saveHostGameStateToStorage → pushCloudGameState, tout en bas de cette
+        // fonction) tourne de toute façon à chaque changement d'état, qu'il y ait ou non
+        // un siège en attente — la reprise asynchrone de ce siège n'a donc besoin
+        // d'aucune tuyauterie séparée, elle continue de fonctionner exactement comme
+        // avant ce changement.
+        mySeats = SEATS.filter(seat => seatAssignment[seat] === 'host');
+        participants.filter(p => p.id !== 'host' && !p.disconnected).forEach(p => {
+            const guestIndex = guestIndexForParticipant(p.id);
+            if (guestIndex == null) return;
+            const seatsForThisGuest = SEATS.filter(seat => seatAssignment[seat] === p.id);
+            // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 4) : hostReconnectToken inclus
+            // ICI aussi, pas seulement dans broadcastLobbyState ('lobby-state') — sans
+            // ça, un invité qui ne recevait plus jamais de lobby-state entre le
+            // lancement et une éventuelle coupure de l'hôte ne connaissait jamais son
+            // identité pour ses propres échanges avec le serveur (voir
+            // buildCloudStatePayload). subHostId, lui, a disparu (plus d'élection de
+            // sous-hôte).
+            peerConn.send({
+                type: 'start-game',
+                deals, yourSeats: seatsForThisGuest, botSeats,
+                hostReconnectToken: getReconnectToken(),
+                roomCreatorName
+            }, guestIndex);
+        });
 
         saveHostGameStateToStorage(); // première sauvegarde, voir échange avec Guillaume (session du 23 juillet)
+        // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 3) : lancé désormais à CHAQUE partie,
+        // pas seulement en mode différé — pollCloudForUpdates lui-même ne fait rien tant
+        // que tout le monde reste en P2P (voir son propre garde-fou), donc rien ne
+        // change en pratique pour une partie où personne ne se déconnecte jamais. Prêt à
+        // réagir dès qu'un siège occupé passe en repli serveur, sans latence
+        // supplémentaire pour s'abonner à ce moment précis.
+        startDeferredPolling();
         enterGameScreen();
     };
 
@@ -3809,13 +3589,10 @@ function handlePeerData(msg, guestIndex) {
             newParticipants.forEach(p => { prevParticipantsDisconnectedSnapshot[p.id] = !!p.disconnected; });
 
             participants = newParticipants;
-            // Voir échange avec Guillaume (session du 23 juillet — reprise automatique
-            // d'hôte) : reçus à chaque diffusion, voir broadcastLobbyState/
-            // computeSubHostId — ce client sait ainsi en permanence qui prendrait le
-            // relais et sous quel jeton l'hôte actuel pourrait revenir, sans avoir
-            // besoin de le demander au moment où ça compterait vraiment (l'hôte ne
-            // répond plus, justement).
-            currentSubHostId = msg.subHostId || null;
+            // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 4) : currentSubHostId a disparu
+            // (plus d'élection de sous-hôte) — hostReconnectToken reste, reçu à chaque
+            // diffusion (voir broadcastLobbyState), toujours utile pour identifier
+            // correctement l'hôte dans mes propres échanges avec le serveur.
             currentHostReconnectToken = msg.hostReconnectToken || null;
             if (msg.roomCreatorName) roomCreatorName = msg.roomCreatorName;
             // Ce message est aussi renvoyé quand la connectivité change en pleine partie
@@ -3867,10 +3644,9 @@ function handlePeerData(msg, guestIndex) {
             boardIndex = 0;
             if (!deals[0].auctionHistory) deals[0].auctionHistory = [];
             auctionHistory = deals[0].auctionHistory;
-            // Voir échange avec Guillaume (session du 23 juillet) : connus dès le
-            // lancement de la partie, pas seulement à réception d'un futur lobby-state
-            // (voir uiStartGameAsHost, qui les inclut désormais aussi dans ce message).
-            currentSubHostId = msg.subHostId || null;
+            // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 4) : currentSubHostId a disparu
+            // d'ici (plus d'élection de sous-hôte) — hostReconnectToken reste, connu dès
+            // le lancement (voir uiStartGameAsHost, qui l'inclut dans ce message).
             currentHostReconnectToken = msg.hostReconnectToken || null;
             if (msg.roomCreatorName) roomCreatorName = msg.roomCreatorName;
             hostPendingUndo = null;
@@ -3889,9 +3665,8 @@ function handlePeerData(msg, guestIndex) {
             boardIndex = msg.boardIndex;
             auctionHistory = msg.auctionHistory || [];
             deals[boardIndex].auctionHistory = auctionHistory; // voir gotoBoard : reste la référence partagée à partir de maintenant
-            // Voir échange avec Guillaume (session du 23 juillet) : voir le commentaire
-            // équivalent dans 'start-game'.
-            currentSubHostId = msg.subHostId || null;
+            // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 4) : voir le commentaire
+            // équivalent dans 'start-game' — currentSubHostId a disparu.
             currentHostReconnectToken = msg.hostReconnectToken || null;
             if (msg.roomCreatorName) roomCreatorName = msg.roomCreatorName;
             hostPendingUndo = null;
@@ -3899,11 +3674,9 @@ function handlePeerData(msg, guestIndex) {
             enterGameScreen();
             // Voir échange avec Guillaume (session du 23 juillet) : élargi à TOUT
             // 'resync' — au départ réservé à un tout nouveau kibitz sans siège
-            // (isNewJoiner), mais un joueur qui REVIENT après une vraie coupure (y
-            // compris l'hôte original, de retour après qu'un sous-hôte a pris le relais
-            // en son absence, voir attemptSubHostTakeover) a tout autant besoin de voir
-            // le chat pour se resituer (qui est là, qu'est-ce qui s'est passé...), qu'il
-            // ait un siège ou non.
+            // (isNewJoiner), mais un joueur qui REVIENT après une vraie coupure a tout
+            // autant besoin de voir le chat pour se resituer (qui est là, qu'est-ce qui
+            // s'est passé...), qu'il ait un siège ou non.
             if (!chatPanelOpen) {
                 uiToggleChat(false);
             }
@@ -4175,9 +3948,9 @@ function flashPresenceToast(text, isConnect) {
 }
 
 // Voir échange avec Guillaume (session du 23 juillet) : ne gère plus QUE notre propre
-// déconnexion en cours (avec son compteur, voir GUEST_TAKEOVER_GRACE_MS) — les annonces
-// ponctuelles concernant les AUTRES participants (ou l'hôte, de notre point de vue) sont
-// passées à flashPresenceToast, un simple toast plutôt qu'une bannière persistante.
+// déconnexion en cours — les annonces ponctuelles concernant les AUTRES participants (ou
+// l'hôte, de notre point de vue) sont passées à flashPresenceToast, un simple toast plutôt
+// qu'une bannière persistante.
 function renderReconnectionBanner() {
     const banner = document.getElementById('reconnectionBanner');
     if (!banner) return;
@@ -4189,18 +3962,12 @@ function renderReconnectionBanner() {
 
     if (myRole === 'guest' && (!peerConn || !peerConn.isConnected())) {
         const elapsedS = selfDisconnectedAt ? Math.max(0, Math.floor((Date.now() - selfDisconnectedAt) / 1000)) : 0;
-        // Voir échange avec Guillaume (session du 23 juillet — "un truc qui défile") : le
-        // "/20" n'a de sens QUE pour le sous-hôte désigné (voir currentSubHostId) — c'est
-        // le seul pour qui ce délai déclenche quoi que ce soit (voir
-        // scheduleSubHostTakeoverIfNeeded). Pour tout le monde d'autre, afficher "/20"
-        // laisserait croire à tort qu'il se passera quelque chose à 20s les concernant
-        // eux aussi.
-        const isDesignatedSubHost = myParticipantId === currentSubHostId;
-        const counterText = isDesignatedSubHost
-            ? `${elapsedS}/${GUEST_TAKEOVER_GRACE_MS / 1000}s`
-            : `${elapsedS}s`;
+        // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 4) : plus de "/20" pour personne — ce
+        // délai n'existe plus (plus d'élection de sous-hôte, voir
+        // scheduleGuestAutoReconnect qui retente désormais indéfiniment pour tout le
+        // monde) — un simple compteur de secondes écoulées, identique pour tous.
         banner.className = 'reconnection-banner is-waiting';
-        banner.textContent = `🔌 Connexion perdue — reconnexion en cours... ${counterText}`;
+        banner.textContent = `🔌 Connexion perdue — reconnexion en cours... ${elapsedS}s`;
         banner.style.display = 'block';
         return;
     }
@@ -5058,15 +4825,12 @@ function renderBiddingBox() {
     }
 
     const turnSeat = currentTurnSeat(deal.dealer, auctionHistory);
-    // Voir échange avec Guillaume (session du 23 juillet) : geler la boîte d'enchères
-    // pour TOUT LE MONDE dès que la connexion à l'hôte est perdue — pas seulement pour le
-    // joueur dont c'est le tour. Personne n'est connecté à personne d'autre qu'à l'hôte
-    // (topologie en étoile), donc une coupure de l'hôte coupe tout le monde EN MÊME
-    // TEMPS. Sans ce garde-fou, un clic pendant la coupure s'appliquait localement sans
-    // jamais partir nulle part (voir uiMakeCall), créant un décalage silencieux entre ce
-    // qu'on croit avoir joué et la vraie table.
-    const disconnectedFromHost = myRole === 'guest' && (!peerConn || !peerConn.isConnected());
-    const myTurn = !disconnectedFromHost && mySeats && mySeats.includes(turnSeat);
+    // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 3) : ne gèle plus la boîte d'enchères
+    // pour un invité déconnecté de l'hôte — auparavant nécessaire (topologie en étoile,
+    // aucun autre chemin possible), ça ne l'est plus : uiMakeCall bascule désormais sur
+    // le relais serveur quand la connexion P2P à l'hôte manque (voir
+    // pushCallViaServerFallback), donc mon propre tour reste jouable même déconnecté.
+    const myTurn = mySeats && mySeats.includes(turnSeat);
 
     const turnOwnerId = seatAssignment[turnSeat];
     const turnOwner = turnOwnerId ? participants.find(p => p.id === turnOwnerId) : null;
@@ -5131,16 +4895,23 @@ function renderBiddingBox() {
 }
 
 function uiMakeCall(call) {
-    // Voir renderBiddingBox (même règle) : jamais d'enchère locale pendant une coupure
-    // avec l'hôte, même si cette fonction était appelée autrement qu'en cliquant un
-    // bouton déjà désactivé.
-    if (myRole === 'guest' && (!peerConn || !peerConn.isConnected())) return;
     const deal = currentDeal();
     const turnSeat = currentTurnSeat(deal.dealer, auctionHistory);
     if (!mySeats || !mySeats.includes(turnSeat)) return;
     if (!isCallLegal(auctionHistory, call, turnSeat)) return;
 
     applyCall(turnSeat, call);
+
+    // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 3) : jusqu'ici, un invité déconnecté de
+    // l'hôte ne pouvait tout simplement pas annoncer (voir renderBiddingBox, même règle
+    // — les boutons étaient déjà grisés dans ce cas). Bascule désormais sur le relais
+    // serveur au lieu d'abandonner — voir pushCallViaServerFallback, qui relit l'état
+    // serveur, rejoue cette annonce dessus et revalide avant de pousser (jamais un envoi
+    // à l'aveugle sur la seule foi de ma copie locale, potentiellement périmée).
+    if (myRole === 'guest' && (!peerConn || !peerConn.isConnected())) {
+        pushCallViaServerFallback(turnSeat, call);
+        return;
+    }
     peerConn.send({ type: 'call', boardIndex, seat: turnSeat, call });
 }
 
@@ -6687,8 +6458,9 @@ function clearHostingPregameMark() {
 // variables JS, survit à la fermeture complète du navigateur, voire à un redémarrage de
 // l'appareil. Limite assumée : ne fonctionne que sur le MÊME appareil et le MÊME
 // navigateur (localStorage est propre à cette combinaison), pas depuis un autre — pour
-// couvrir ce cas-là, voir plutôt la reprise automatique par le sous-hôte
-// (computeSubHostId), pensée précisément pour "un autre appareil prend le relais".
+// couvrir ce cas-là, voir plutôt le relais serveur par siège (voir
+// ARCHITECTURE-P2P-SERVEUR.md), pensé précisément pour "continuer depuis un autre appareil
+// sans l'hôte d'origine".
 const HOST_GAME_STATE_KEY = 'bridgeBidHostGameStates'; // carte {roomCode: payload}, voir échange avec Guillaume (session du 8 août — "multi room")
 // Passé ce délai, une session sauvegardée n'est plus proposée à la reprise — un chiffre
 // volontairement généreux (une session de club peut s'étaler sur plusieurs heures avec
@@ -6977,13 +6749,14 @@ async function uiResumeHostSession(roomCode) {
 // ===== Reprise "à froid" depuis le cloud (session asynchrone à deux, voir échange avec
 // Guillaume) =====
 //
-// Généralise attemptSubHostTakeover/promoteSelfToHostAfterTakeover plus haut : ces deux-là
-// supposent un sous-hôte PRÉ-DÉSIGNÉ qui reprend juste après une coupure VIVE (l'un des
-// deux était déjà connecté quand ça a coupé). Ici, personne n'était forcément connecté
-// depuis des heures — on repart de l'état sauvegardé dans le cloud (voir
-// session-storage.js), jamais de la mémoire locale, et N'IMPORTE QUEL participant muni du
-// lien peut reprendre (voir échange avec Guillaume : "n'importe qui peut claim") — soit en
-// retrouvant son propre siège (son jeton de reconnexion y figure déjà), soit en
+// Distinct du relais serveur par siège en cours de partie (voir
+// ARCHITECTURE-P2P-SERVEUR.md) : celui-ci suppose une connexion P2P déjà établie qui
+// vient de se couper, avec quelqu'un d'autre encore en ligne pour relayer. Ici, personne
+// n'était forcément connecté depuis des heures — on repart de l'état sauvegardé dans le
+// cloud (voir session-storage.js), jamais de la mémoire locale, et N'IMPORTE QUEL
+// participant muni du lien peut reprendre (voir échange avec Guillaume : "n'importe qui
+// peut claim") — soit en retrouvant son propre siège (son jeton de reconnexion y figure
+// déjà), soit en
 // revendiquant le premier siège encore SEAT_PENDING.
 
 let lastKnownCloudVersion = 0; // dernier numéro de version cloud connu, pour le verrou optimiste (voir session-storage.js)
@@ -7009,17 +6782,30 @@ function buildCloudStatePayload() {
     return {
         roomCode: currentRoomCode,
         deals, boardIndex, seatAssignment, participants, autoPassSeats, chatMessages,
-        roomCreatorName, roomCreatorToken,
-        // Voir promoteSelfToHostAfterTakeover : indispensable pour qu'un futur repreneur
-        // sache reconnaître l'hôte actuel s'il revient un jour, exactement comme pour la
-        // reprise par sous-hôte déjà en place.
-        hostReconnectToken: getReconnectToken(),
+        roomCreatorName,
+        // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 3) : roomCreatorToken n'est jamais
+        // renseigné localement côté invité (variable réservée à l'hôte) — l'utiliser
+        // tel quel écraserait la bonne valeur en cloud avec null si un invité pousse
+        // (voir le nouveau site d'appel dans uiMakeCall). currentHostReconnectToken,
+        // lui, EST tenu à jour côté invité aussi (voir 'start-game'/'resync'), donc
+        // fiable dans les deux cas — repli dessus si roomCreatorToken est vide ici.
+        roomCreatorToken: roomCreatorToken || currentHostReconnectToken,
+        // Même raisonnement : getReconnectToken() renvoie MON PROPRE jeton, pas
+        // forcément celui de l'hôte — correct seulement si je suis moi-même l'hôte.
+        hostReconnectToken: myRole === 'host' ? getReconnectToken() : (currentHostReconnectToken || getReconnectToken()),
         savedAt: Date.now()
     };
 }
 
+// Voir ARCHITECTURE-P2P-SERVEUR.md (étape 3) : n'était utilisable QUE par l'hôte
+// jusqu'ici — élargi à n'importe quel rôle, puisque cette fonction ne fait que pousser
+// l'état LOCAL de qui l'appelle, quel qu'il soit (voir buildCloudStatePayload, qui ne
+// lit que des variables déjà tenues à jour côté client, pas une info réservée à l'hôte).
+// Nouveau site d'appel : un invité déconnecté de l'hôte en P2P, qui pousse directement
+// sa propre annonce (voir uiMakeCall) — même filet de sécurité par verrou optimiste
+// (expectedVersion/409) que pour tout le monde, aucun traitement de faveur ici.
 function pushCloudGameState() {
-    if (myRole !== 'host' || !deals || !currentRoomCode) return;
+    if (!deals || !currentRoomCode) return;
     if (typeof pushSessionState !== 'function') return; // session-storage.js pas chargé (ex. pas encore branché dans index.html) : no-op silencieux
 
     if (cloudPushInFlight) {
@@ -7049,7 +6835,71 @@ function pushCloudGameState() {
     });
 }
 
-// ===== Sondage périodique du cloud (mode différé uniquement) =====
+// Voir ARCHITECTURE-P2P-SERVEUR.md (étape 3) : chemin de repli pour un invité dont la
+// connexion P2P à l'hôte est coupée au moment de vouloir annoncer (voir uiMakeCall). Ne
+// réutilise PAS buildCloudStatePayload/pushCloudGameState directement sur l'état local :
+// celui-ci peut être en avance (mon propre affichage optimiste) ou en retard (si je n'ai
+// pas suivi les derniers changements pendant ma coupure) par rapport à ce que le serveur
+// connaît vraiment — on relit donc le serveur d'abord, on rejoue CETTE annonce sur SA
+// version de l'historique, et on revalide avant de pousser. Si elle n'est plus légale
+// (quelqu'un/quelque chose a changé la situation ailleurs entre-temps), on abandonne et on
+// resynchronise sur le vrai état serveur plutôt que de laisser mon affichage optimiste
+// erroné en place (voir applyCloudUpdate, réutilisé tel quel pour ce cas).
+async function pushCallViaServerFallback(seat, call, explanation) {
+    if (!currentRoomCode || typeof pullSessionState !== 'function' || typeof pushSessionState !== 'function') return;
+
+    let pulled;
+    try {
+        pulled = await pullSessionState(currentRoomCode);
+    } catch (e) {
+        pushDebugLog('Remontée serveur de l\'annonce impossible (lecture) : ' + ((e && e.message) || e));
+        return;
+    }
+
+    const baseState = pulled ? pulled.state : buildCloudStatePayload();
+    const expectedVersion = pulled ? pulled.version : 0;
+    const idx = baseState.boardIndex;
+    const boardDeals = baseState.deals;
+    if (!boardDeals[idx]) return; // filet de sécurité, ne devrait pas arriver
+    if (!boardDeals[idx].auctionHistory) boardDeals[idx].auctionHistory = [];
+    const hist = boardDeals[idx].auctionHistory;
+
+    const expectedSeat = currentTurnSeat(boardDeals[idx].dealer, hist);
+    if (seat !== expectedSeat || !isCallLegal(hist, call, seat)) {
+        pushDebugLog(`Annonce ${call} (${seat}) abandonnée : plus valide par rapport à l'état serveur relu — resynchronisation.`);
+        if (pulled) applyCloudUpdate(pulled);
+        return;
+    }
+
+    hist.push(explanation ? { seat, call, explanation } : { seat, call });
+
+    try {
+        const result = await pushSessionState(currentRoomCode, { ...baseState, savedAt: Date.now() }, expectedVersion, {
+            onConflict: (current) => {
+                // Quelqu'un d'autre a écrit entre ma lecture et ma tentative d'écrite —
+                // pas la peine de retenter en boucle ici (contrairement à
+                // pushCloudGameState) : la prochaine chose que je ferai (mon propre
+                // sondage/abonnement, voir startDeferredPolling) relira et
+                // resynchronisera de toute façon.
+                if (current) lastKnownCloudVersion = current.version;
+                pushDebugLog(`Annonce ${call} (${seat}) : conflit de version au moment de pousser, abandon (une resynchronisation suivra).`);
+            }
+        });
+        if (result) lastKnownCloudVersion = result.version;
+    } catch (e) {
+        pushDebugLog('Remontée serveur de l\'annonce impossible (écriture) : ' + ((e && e.message) || e));
+    }
+}
+
+// ===== Synchronisation cloud (voir ARCHITECTURE-P2P-SERVEUR.md, étape 3) =====
+//
+// Anciennement "sondage périodique du cloud (mode différé uniquement)" — élargi : ne
+// sert plus seulement au mode différé pur, mais aussi de filet de secours en mode live
+// dès qu'AU MOINS UN siège occupé n'est plus joignable en P2P (voir pollCloudForUpdates,
+// dont le garde-fou a changé en conséquence). Tant que tout le monde reste en P2P, ce
+// mécanisme ne fait strictement rien (aucun coût réseau ajouté) — voir le principe "le
+// serveur est un chemin normal pour un siège donné, jamais un repli permanent" dans le
+// document de conception.
 //
 // Voir échange avec Guillaume ("B est dans la partie, mais n'apparaît pas chez A tant
 // qu'on ne rafraîchit pas") : conséquence directe et attendue de l'absence de P2P en mode
@@ -7072,7 +6922,7 @@ let deferredPollIntervalId = null;
 // même session). Voir stopDeferredPolling pour l'arrêt (mode live, ou changement de rôle).
 function startDeferredPolling() {
     if (typeof subscribeToSessionUpdates === 'function' && currentRoomCode) {
-        subscribeToSessionUpdates(currentRoomCode, pollCloudForUpdates);
+        subscribeToSessionUpdates(currentRoomCode, onCloudPusherEvent);
     }
     if (deferredPollIntervalId) return;
     deferredPollIntervalId = setInterval(pollCloudForUpdates, DEFERRED_POLL_INTERVAL_MS);
@@ -7083,8 +6933,46 @@ function startDeferredPolling() {
     document.addEventListener('visibilitychange', onVisibilityChangeForDeferredPolling);
 }
 
+// Voir ARCHITECTURE-P2P-SERVEUR.md (étape 5) : appelé avec le contenu de l'événement
+// Pusher lui-même, plutôt que de systématiquement relire via GET (voir l'ancien
+// comportement, où subscribeToSessionUpdates appelait directement pollCloudForUpdates
+// sans rien lui passer). Deux formes possibles, décidées côté serveur selon la taille
+// (voir api/session.js, PUSHER_EVENT_MAX_BYTES) :
+//   - {version, updatedAt, state} : état déjà là, appliqué directement (aucun aller-
+//     retour supplémentaire — c'est le vrai gain de latence).
+//   - {version, updatedAt} seul : repli, on relit via GET comme avant (pollCloudForUpdates).
+// Même garde-fou que pollCloudForUpdates : ne fait rien tant qu'on est pleinement en P2P.
+function onCloudPusherEvent(data) {
+    if (myRole !== 'host' || !currentRoomCode) return;
+    if (!(peerConn instanceof NullPeerConnection) && !hasDisconnectedOccupiedSeat()) return;
+    if (!data || typeof data.version !== 'number' || data.version <= lastKnownCloudVersion) return;
+    if (cloudPushInFlight || cloudPushQueued) return; // pas la peine de relire ce qu'on vient tout juste d'envoyer
+
+    if (data.state) {
+        applyCloudUpdate(data);
+    } else {
+        pollCloudForUpdates(); // état pas embarqué (payload trop gros) : repli sur l'ancien chemin
+    }
+}
+
 function onVisibilityChangeForDeferredPolling() {
     if (document.visibilityState === 'visible') pollCloudForUpdates();
+}
+
+// Voir ARCHITECTURE-P2P-SERVEUR.md (étape 3) : condition de déclenchement du relais
+// serveur en mode live — vrai dès qu'un siège RÉELLEMENT OCCUPÉ (pas un robot, pas
+// SEAT_PENDING) appartient à un participant actuellement marqué déconnecté. `p.disconnected`
+// est déjà tenu à jour côté hôte à chaque connexion/déconnexion P2P (voir
+// onGuestConnected et onPeerDisconnected/onSignalingDisconnected côté... hôte, pour les
+// invités qui SE déconnectent de lui) — rien de neuf à faire tourner ici, juste une
+// lecture de ce qui existe déjà.
+function hasDisconnectedOccupiedSeat() {
+    return SEATS.some(seat => {
+        const occupant = seatAssignment[seat];
+        if (!occupant || occupant === SEAT_PENDING) return false;
+        const p = participants.find(x => x.id === occupant);
+        return !!(p && p.disconnected);
+    });
 }
 
 function stopDeferredPolling() {
@@ -7097,9 +6985,16 @@ function stopDeferredPolling() {
 }
 
 async function pollCloudForUpdates() {
-    // Ne sonde qu'en mode différé (voir NullPeerConnection) — le mode live a son propre
-    // canal en direct (PeerJS), bien plus réactif, et n'a besoin de rien de tout ça.
-    if (myRole !== 'host' || !currentRoomCode || !(peerConn instanceof NullPeerConnection)) return;
+    if (myRole !== 'host' || !currentRoomCode) return;
+    // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 3) : sonde toujours en mode différé pur
+    // (NullPeerConnection, inchangé), et DÉSORMAIS AUSSI en mode live dès qu'au moins un
+    // siège occupé n'est plus joignable en P2P (voir hasDisconnectedOccupiedSeat) — c'est
+    // par ce chemin qu'une annonce poussée en repli serveur par un invité déconnecté
+    // (voir pushCallViaServerFallback) est récupérée puis relayée en P2P à qui reste
+    // connecté (voir applyCloudUpdate). Tant que tout le monde est en P2P, cette
+    // condition est fausse et rien ne se passe ici — aucun coût réseau ajouté au cas
+    // normal.
+    if (!(peerConn instanceof NullPeerConnection) && !hasDisconnectedOccupiedSeat()) return;
     // Ne sonde pas pendant qu'on est nous-mêmes en train d'écrire (voir pushCloudGameState)
     // — pas la peine de relire ce qu'on vient tout juste d'envoyer.
     if (cloudPushInFlight || cloudPushQueued) return;
@@ -7119,6 +7014,16 @@ async function pollCloudForUpdates() {
 // recalculer l'identité — seulement d'absorber ce qui a changé ailleurs).
 function applyCloudUpdate(result) {
     const st = result.state;
+    // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 3) : capturé AVANT tout remplacement, pour
+    // pouvoir relayer en P2P (plus bas) uniquement les annonces réellement NOUVELLES
+    // apportées par cette mise à jour cloud — jamais question de rejouer tout
+    // l'historique à chaque fois, seulement ce qui manquait.
+    const oldBoardIndexForRelay = boardIndex;
+    const oldAuctionForRelay = (deals && deals[oldBoardIndexForRelay] && deals[oldBoardIndexForRelay].auctionHistory)
+        ? deals[oldBoardIndexForRelay].auctionHistory
+        : [];
+    const oldAuctionLengthForRelay = oldAuctionForRelay.length;
+
     deals = st.deals;
     seatAssignment = st.seatAssignment || seatAssignment;
     participants = st.participants || participants;
@@ -7139,6 +7044,23 @@ function applyCloudUpdate(result) {
     if (!deals[boardIndex]) boardIndex = 0;
     if (!deals[boardIndex].auctionHistory) deals[boardIndex].auctionHistory = [];
     auctionHistory = deals[boardIndex].auctionHistory;
+
+    // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 3) : relais P2P des annonces
+    // nouvellement apprises via le cloud — sans ça, un invité resté connecté en P2P ne
+    // verrait JAMAIS l'annonce d'un siège passé par le relais serveur avant de se
+    // reconnecter lui-même (ce qui peut arriver bien après, voire jamais si la partie se
+    // termine avant). Seulement si on est encore hôte, avec une vraie connexion P2P
+    // (pas NullPeerConnection — rien à relayer en pur mode différé), et seulement si on
+    // est resté sur la MÊME donne (jamais question de relayer un changement de donne par
+    // ce canal, seulement des annonces).
+    if (myRole === 'host' && peerConn && !(peerConn instanceof NullPeerConnection)
+        && boardIndex === oldBoardIndexForRelay && auctionHistory.length > oldAuctionLengthForRelay) {
+        for (let i = oldAuctionLengthForRelay; i < auctionHistory.length; i++) {
+            const entry = auctionHistory[i];
+            peerConn.send({ type: 'call', boardIndex, seat: entry.seat, call: entry.call, explanation: entry.explanation });
+        }
+        pushDebugLog(`${auctionHistory.length - oldAuctionLengthForRelay} annonce(s) apprise(s) via le cloud, relayée(s) en P2P.`);
+    }
 
     renderBoard();
     if (chatPanelOpen) {
