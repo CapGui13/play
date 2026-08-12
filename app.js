@@ -1732,6 +1732,13 @@ function buildGuestHandlers() {
             everConnectedAsGuest = true;
             setConnectionStatus(true);
             renderReconnectButton();
+            // Voir échange avec Guillaume ("si un joueur avait déjà été dans une
+            // session, on ne doit pas lui redemander [son pseudo]") : marqué à CHAQUE
+            // connexion réussie (premier join comme reconnexion), pas seulement une
+            // fois — pour que le TTL (voir GUEST_ACTIVE_ROOM_TTL_MS) reste glissant
+            // tant que la session est vraiment active, plutôt que de figer une seule
+            // estampille au tout premier join.
+            markGuestActiveRoom(currentRoomCode);
             // Voir échange avec Guillaume ("l'invité ne se reconnecte jamais tout seul") :
             // annule le cycle de reconnexion automatique en arrière-plan (voir
             // scheduleGuestAutoReconnect) — plus la peine une fois vraiment reconnecté.
@@ -1868,6 +1875,34 @@ function uiJoinCodeInputKeydown(event) {
     uiJoinRoom();
 }
 
+// Voir échange avec Guillaume ("si un joueur avait déjà été dans une session, on ne doit
+// pas lui redemander [son pseudo]") : distingue "rejoindre une salle où j'étais déjà
+// activement présent" (silencieux, pas de modale) de "rejoindre une salle pour la première
+// fois" (modale toujours affichée, voir ensureNicknameThenProceed). Marqué à chaque
+// connexion invité réussie (voir onGuestConnected), purgé des entrées trop vieilles à
+// chaque écriture — TTL généreux (une session de club peut s'étaler sur plusieurs heures
+// avec pauses), même esprit que HOST_GAME_STATE_EXPIRY_MS côté hôte.
+const GUEST_ACTIVE_ROOMS_KEY = 'bridgeBidGuestActiveRooms';
+const GUEST_ACTIVE_ROOM_TTL_MS = 6 * 60 * 60 * 1000;
+
+function markGuestActiveRoom(roomCode) {
+    if (!roomCode) return;
+    let map = {};
+    try { map = JSON.parse(localStorage.getItem(GUEST_ACTIVE_ROOMS_KEY) || '{}'); } catch (e) { map = {}; }
+    const now = Date.now();
+    Object.keys(map).forEach(code => { if (now - map[code] > GUEST_ACTIVE_ROOM_TTL_MS) delete map[code]; });
+    map[roomCode.toUpperCase()] = now;
+    try { localStorage.setItem(GUEST_ACTIVE_ROOMS_KEY, JSON.stringify(map)); } catch (e) { /* tant pis, pas bloquant */ }
+}
+
+function isGuestActiveRoom(roomCode) {
+    if (!roomCode) return false;
+    let map = {};
+    try { map = JSON.parse(localStorage.getItem(GUEST_ACTIVE_ROOMS_KEY) || '{}'); } catch (e) { return false; }
+    const savedAt = map[roomCode.toUpperCase()];
+    return !!savedAt && (Date.now() - savedAt <= GUEST_ACTIVE_ROOM_TTL_MS);
+}
+
 function uiJoinRoom() {
     document.getElementById('landingError').style.display = 'none';
     const code = document.getElementById('joinCodeInput').value.trim();
@@ -1879,6 +1914,19 @@ function uiJoinRoom() {
     // demande de mettre son pseudo") : couvre à la fois un code tapé à la main ici ET un
     // lien direct ?room=XXXX (voir DOMContentLoaded plus bas, qui appelle aussi uiJoinRoom)
     // — un seul point de passage pour les deux façons d'arriver dans une salle.
+    //
+    // Voir juste au-dessus (isGuestActiveRoom) : si cet appareil était déjà activement
+    // dans CETTE salle précise (ex. fenêtre fermée puis rouverte en pleine partie), on
+    // saute la modale — inutile de redemander un pseudo qu'on connaît déjà pour une
+    // session à laquelle on participe déjà, contrairement à une toute nouvelle salle.
+    if (isGuestActiveRoom(code)) {
+        chatMessages = [];
+        chatUnreadCount = 0;
+        updateChatUnreadBadge();
+        showConnectingOverlay('Connexion en cours…');
+        connectAsGuest(code, getReconnectToken(), savedNickname);
+        return;
+    }
     ensureNicknameThenProceed(() => {
         chatMessages = [];
         chatUnreadCount = 0;
@@ -6885,7 +6933,14 @@ async function pushCallViaServerFallback(seat, call, explanation) {
                 pushDebugLog(`Annonce ${call} (${seat}) : conflit de version au moment de pousser, abandon (une resynchronisation suivra).`);
             }
         });
-        if (result) lastKnownCloudVersion = result.version;
+        if (result) {
+            lastKnownCloudVersion = result.version;
+            // Voir échange avec Guillaume ("je ne sais pas si ça a vraiment pris ce
+            // chemin") : seuls les cas d'échec/conflit journalisaient quelque chose
+            // jusqu'ici — le cas de succès, le plus courant, ne laissait aucune trace
+            // dans le journal, rendant un test après coup ambigu.
+            pushDebugLog(`Annonce ${call} (${seat}) remontée au serveur avec succès (version ${result.version}).`);
+        }
     } catch (e) {
         pushDebugLog('Remontée serveur de l\'annonce impossible (écriture) : ' + ((e && e.message) || e));
     }
