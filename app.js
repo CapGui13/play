@@ -2638,9 +2638,17 @@ function uiAssignSeat(seat, participantId) {
     if (deals) autoPassSeats = SEATS.filter(s => !seatAssignment[s]);
     broadcastLobbyState();
     renderLobby();
-    // Voir échange avec Guillaume (session du 23 juillet) : cette grille est maintenant
-    // aussi accessible EN COURS DE PARTIE (voir uiOpenSeatReorgModal) — même
-    // rafraîchissement de l'écran de jeu que pour le glisser-déposer (uiDropOnSeat).
+    // Voir échange avec Guillaume ("ce qui n'est pas encore couvert" — changement de
+    // sièges via le relais serveur) : sans ça, un participant en repli serveur (voir
+    // ARCHITECTURE-P2P-SERVEUR.md, étape 3) ne voyait JAMAIS un changement de siège
+    // avant de se reconnecter en P2P — rien ne le poussait jusqu'ici vers le cloud. Sans
+    // effet avant le lancement de la partie (voir la garde `!deals` à l'intérieur de la
+    // fonction elle-même).
+    saveHostGameStateToStorage();
+    // Voir échange avec Guillaume (session du 23 juillet — "le bot n'enchérit pas") :
+    // cette grille est maintenant aussi accessible EN COURS DE PARTIE (voir
+    // uiOpenSeatReorgModal) — même rafraîchissement de l'écran de jeu que pour le
+    // glisser-déposer (uiDropOnSeat).
     if (deals) {
         mySeats = SEATS.filter(s => seatAssignment[s] === myParticipantId);
         renderBoard();
@@ -2737,6 +2745,9 @@ function uiDropOnSeat(event, targetSeat) {
     if (deals) autoPassSeats = SEATS.filter(s => !seatAssignment[s]);
     broadcastLobbyState();
     renderLobby();
+    // Voir échange avec Guillaume ("changement de sièges via le relais serveur") : même
+    // ajout que uiAssignSeat — sans effet avant le lancement de la partie.
+    saveHostGameStateToStorage();
     // Voir échange avec Guillaume (session du 23 juillet) : réassignation de siège
     // maintenant possible EN COURS DE PARTIE (voir renderRoomBoard/renderAuctionLedger) —
     // renderLobby() seul ne touche pas l'écran de jeu, donc à rafraîchir explicitement ici
@@ -2758,6 +2769,9 @@ function uiDropOnKibitz(event) {
     if (deals) autoPassSeats = SEATS.filter(s => !seatAssignment[s]);
     broadcastLobbyState();
     renderLobby();
+    // Voir échange avec Guillaume ("changement de sièges via le relais serveur") : même
+    // ajout que uiAssignSeat/uiDropOnSeat.
+    saveHostGameStateToStorage();
     // Voir uiDropOnSeat ci-dessus : même rafraîchissement du côté écran de jeu.
     if (deals) {
         mySeats = SEATS.filter(seat => seatAssignment[seat] === myParticipantId);
@@ -2866,6 +2880,9 @@ function uiRotateSeatsClockwise() {
 
     peerConn.send({ type: 'seats-rotated', seatAssignment, autoPassSeats });
     flashSeatsRotatedToast();
+    // Voir échange avec Guillaume ("changement de sièges via le relais serveur") : même
+    // ajout que uiAssignSeat.
+    saveHostGameStateToStorage();
 
     if (deals) { renderBoard(); } else { renderLobby(); }
 }
@@ -3286,6 +3303,9 @@ function uiValidateSeatReorg() {
     if (deals) autoPassSeats = SEATS.filter(s => !seatAssignment[s]);
     broadcastLobbyState();
     renderLobby();
+    // Voir échange avec Guillaume ("changement de sièges via le relais serveur") : même
+    // ajout que uiAssignSeat.
+    saveHostGameStateToStorage();
     if (deals) {
         mySeats = SEATS.filter(s => seatAssignment[s] === myParticipantId);
         renderBoard();
@@ -4325,11 +4345,59 @@ function uiSendChatMessage() {
     const me = participants.find(p => p.id === myParticipantId);
     const msg = { type: 'chat', senderId: myParticipantId, senderName: me ? me.name : '?', text };
     addChatMessage(msg);
+    // Voir échange avec Guillaume ("chat via le relais serveur") : un invité déconnecté
+    // de l'hôte ne peut de toute façon pas passer par peerConn.send (qui échoue en
+    // silence contre une connexion fermée, voir BridgePeerConnection.send) — bascule sur
+    // le même principe que pushCallViaServerFallback : pousse directement au serveur au
+    // lieu d'attendre un relais qui n'arrivera jamais dans ce cas.
+    if (myRole === 'guest' && (!peerConn || !peerConn.isConnected())) {
+        pushChatViaServerFallback(msg);
+        return;
+    }
     // Même appel pour l'hôte (diffuse directement à tous les invités) et pour un invité
     // (envoie à l'hôte, qui relaiera) : send() sans guestIndex explicite diffuse déjà à
     // toutes les connexions actives de ce peer, qui n'en a qu'une seule (l'hôte) côté
     // invité — voir peer-connection.js.
     peerConn.send(msg);
+}
+
+// Voir échange avec Guillaume ("chat via le relais serveur") : même principe que
+// pushCallViaServerFallback — relit l'état serveur, ajoute CE message à sa liste de chat,
+// puis repousse avec le verrou de version. Pas de "légalité" à revalider ici
+// (contrairement à une annonce) : un message de chat n'a pas de tour, il s'ajoute
+// simplement à la suite.
+async function pushChatViaServerFallback(msg) {
+    if (!currentRoomCode || typeof pullSessionState !== 'function' || typeof pushSessionState !== 'function') return;
+
+    let pulled;
+    try {
+        pulled = await pullSessionState(currentRoomCode);
+    } catch (e) {
+        pushDebugLog('Remontée serveur du message de chat impossible (lecture) : ' + ((e && e.message) || e));
+        return;
+    }
+
+    const baseState = pulled ? pulled.state : buildCloudStatePayload();
+    const expectedVersion = pulled ? pulled.version : 0;
+    if (!baseState.chatMessages) baseState.chatMessages = [];
+    baseState.chatMessages.push(msg);
+
+    try {
+        const result = await pushSessionState(currentRoomCode, { ...baseState, savedAt: Date.now() }, expectedVersion, {
+            onConflict: (current) => {
+                // Même raisonnement que pushCallViaServerFallback : pas de retentative
+                // en boucle ici, le prochain sondage/abonnement rattrapera le coup.
+                if (current) lastKnownCloudVersion = current.version;
+                pushDebugLog('Message de chat : conflit de version au moment de pousser, abandon (une resynchronisation suivra).');
+            }
+        });
+        if (result) {
+            lastKnownCloudVersion = result.version;
+            pushDebugLog(`Message de chat remonté au serveur avec succès (version ${result.version}).`);
+        }
+    } catch (e) {
+        pushDebugLog('Remontée serveur du message de chat impossible (écriture) : ' + ((e && e.message) || e));
+    }
 }
 
 // ===== Panneau "Salle" (qui est présent pendant la partie) =====
@@ -7070,14 +7138,18 @@ async function pollCloudForUpdates() {
 function applyCloudUpdate(result) {
     const st = result.state;
     // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 3) : capturé AVANT tout remplacement, pour
-    // pouvoir relayer en P2P (plus bas) uniquement les annonces réellement NOUVELLES
-    // apportées par cette mise à jour cloud — jamais question de rejouer tout
-    // l'historique à chaque fois, seulement ce qui manquait.
+    // pouvoir relayer en P2P (plus bas) uniquement ce qui est réellement NOUVEAU apporté
+    // par cette mise à jour cloud — jamais question de rejouer tout depuis le début à
+    // chaque fois, seulement ce qui manquait.
     const oldBoardIndexForRelay = boardIndex;
     const oldAuctionForRelay = (deals && deals[oldBoardIndexForRelay] && deals[oldBoardIndexForRelay].auctionHistory)
         ? deals[oldBoardIndexForRelay].auctionHistory
         : [];
     const oldAuctionLengthForRelay = oldAuctionForRelay.length;
+    // Voir échange avec Guillaume ("chat/sièges via le relais serveur") : même principe,
+    // étendu au-delà des seules annonces.
+    const oldChatLengthForRelay = chatMessages ? chatMessages.length : 0;
+    const oldSeatAssignmentJsonForRelay = JSON.stringify(seatAssignment);
 
     deals = st.deals;
     seatAssignment = st.seatAssignment || seatAssignment;
@@ -7100,21 +7172,42 @@ function applyCloudUpdate(result) {
     if (!deals[boardIndex].auctionHistory) deals[boardIndex].auctionHistory = [];
     auctionHistory = deals[boardIndex].auctionHistory;
 
-    // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 3) : relais P2P des annonces
-    // nouvellement apprises via le cloud — sans ça, un invité resté connecté en P2P ne
-    // verrait JAMAIS l'annonce d'un siège passé par le relais serveur avant de se
-    // reconnecter lui-même (ce qui peut arriver bien après, voire jamais si la partie se
-    // termine avant). Seulement si on est encore hôte, avec une vraie connexion P2P
-    // (pas NullPeerConnection — rien à relayer en pur mode différé), et seulement si on
-    // est resté sur la MÊME donne (jamais question de relayer un changement de donne par
-    // ce canal, seulement des annonces).
-    if (myRole === 'host' && peerConn && !(peerConn instanceof NullPeerConnection)
-        && boardIndex === oldBoardIndexForRelay && auctionHistory.length > oldAuctionLengthForRelay) {
+    // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 3) : relais P2P de ce qui vient d'être
+    // appris via le cloud — sans ça, un invité resté connecté en P2P ne verrait JAMAIS
+    // l'annonce/le message/le changement de siège d'un participant passé par le relais
+    // serveur avant que ce dernier ne se reconnecte lui-même (ce qui peut arriver bien
+    // après, voire jamais si la partie se termine avant). Seulement si on est encore
+    // hôte, avec une vraie connexion P2P (pas NullPeerConnection — rien à relayer en pur
+    // mode différé).
+    const canRelay = myRole === 'host' && peerConn && !(peerConn instanceof NullPeerConnection);
+
+    // Annonces : seulement si on est resté sur la MÊME donne (jamais question de relayer
+    // un changement de donne par ce canal, seulement des annonces).
+    if (canRelay && boardIndex === oldBoardIndexForRelay && auctionHistory.length > oldAuctionLengthForRelay) {
         for (let i = oldAuctionLengthForRelay; i < auctionHistory.length; i++) {
             const entry = auctionHistory[i];
             peerConn.send({ type: 'call', boardIndex, seat: entry.seat, call: entry.call, explanation: entry.explanation });
         }
         pushDebugLog(`${auctionHistory.length - oldAuctionLengthForRelay} annonce(s) apprise(s) via le cloud, relayée(s) en P2P.`);
+    }
+
+    // Messages de chat (voir échange avec Guillaume) : même logique, chaque nouveau
+    // message relayé individuellement — addChatMessage (côté récepteur) l'ajoute et
+    // rafraîchit l'affichage, exactement comme un message reçu en direct.
+    if (canRelay && chatMessages.length > oldChatLengthForRelay) {
+        for (let i = oldChatLengthForRelay; i < chatMessages.length; i++) {
+            peerConn.send(chatMessages[i]);
+        }
+        pushDebugLog(`${chatMessages.length - oldChatLengthForRelay} message(s) de chat appris via le cloud, relayé(s) en P2P.`);
+    }
+
+    // Changement de sièges (voir échange avec Guillaume) : diffuse l'état complet des
+    // sièges plutôt qu'un delta (contrairement aux deux ci-dessus) — broadcastLobbyState
+    // envoie déjà tout ce qu'il faut (participants, seatAssignment, autoPassSeats), pas
+    // la peine de reconstruire un message dédié pour ça.
+    if (canRelay && JSON.stringify(seatAssignment) !== oldSeatAssignmentJsonForRelay) {
+        broadcastLobbyState();
+        pushDebugLog('Changement de sièges appris via le cloud, relayé en P2P.');
     }
 
     renderBoard();

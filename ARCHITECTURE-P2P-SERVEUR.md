@@ -200,20 +200,45 @@ réconciliation de façon reproductible.
      `scheduleGuestAutoReconnect`) pour ne pas rester figé si son tour revient avant
      qu'il ne se reconnecte vraiment.
 
-   **Volontairement pas encore couvert, à traiter dans une passe ultérieure** :
-   - Chat, wizz, changement de sièges via le relais serveur (voir le tableau plus haut)
-     — seules les annonces d'enchère sont couvertes pour l'instant.
-   - Hystérésis formelle au retour P2P (le document en parlait plus haut) — pas
-     implémentée telle quelle ; l'intervalle de sondage (20s) et Pusher (déclenché
-     seulement à l'écriture) amortissent déjà un peu un flip-flop, mais rien de
-     garanti en cas de connexion vraiment instable.
-   - Cas de l'hôte hors ligne : inchangé (voir section dédiée plus haut), toujours pas
-     de relais pour les annonces de l'hôte lui-même.
+   **[Testé et validé — 12 août 2026]** Un invité qui annonce alors qu'il est
+   réellement coupé de l'hôte : l'enchère atteint l'hôte en ~1 seconde via le relais
+   serveur, puis se relaie en P2P à tout le monde. Voir le journal de test complet
+   dans la conversation — comportement conforme à ce qui était visé.
 
-   **À tester en priorité** : un invité qui annonce alors qu'il est réellement coupé
-   de l'hôte (pas seulement en train de se reconnecter) — c'est le chemin neuf, jamais
-   exécuté avant cette étape, et je n'ai aucun moyen de le tester en conditions réelles
-   moi-même (pas d'environnement multi-appareils/réseau réel disponible ici).
+   **[Fait — 12 août 2026] Chat et changements de sièges via le relais serveur** :
+   - `uiSendChatMessage` bascule sur `pushChatViaServerFallback` (même principe que
+     `pushCallViaServerFallback` : relit l'état serveur, ajoute le message, repousse
+     avec verrou de version) quand l'invité est déconnecté — sans ça, `peerConn.send`
+     échouait silencieusement contre une connexion fermée, le message ne partait
+     jamais.
+   - `uiAssignSeat`, `uiDropOnSeat`, `uiDropOnKibitz`, `uiRotateSeatsClockwise`,
+     `uiValidateSeatReorg` (actions hôte) appellent maintenant `saveHostGameStateToStorage()`
+     — elles ne poussaient jamais vers le cloud jusqu'ici, un participant en repli
+     serveur ne voyait donc jamais un changement de siège avant de se reconnecter en
+     P2P.
+   - `applyCloudUpdate` relaie désormais aussi (en plus des annonces) les nouveaux
+     messages de chat et les changements de sièges appris via le cloud vers les
+     invités restés connectés en P2P — sans ça, un invité qui n'est jamais passé par
+     le cloud lui-même ne recevait jamais ce qu'un AUTRE participant en repli serveur
+     venait de faire.
+   - Wizz : vérifié déjà couvert sans changement — la cloche se masque dès que le
+     destinataire visé est marqué déconnecté (`p.disconnected`), quel que soit le
+     mode ; c'est la bonne règle, une notification "instantanée" différée n'aurait pas
+     de sens pour ce genre de geste.
+
+   **[Réévalué, pas retenue — 12 août 2026] Hystérésis formelle au retour P2P** : en
+   pratique, le risque de "flip-flop" qu'elle visait à prévenir est déjà limité par la
+   construction actuelle — la reconnexion automatique ne retente jamais plus vite que
+   `GUEST_AUTO_RECONNECT_INTERVAL_MS` (4s), et la bascule serveur côté hôte
+   (`hasDisconnectedOccupiedSeat`) est une simple vérification réactive, jamais un
+   abonnement qu'on active/désactive en boucle. Une connexion vraiment instable
+   causerait au pire des `resync` un peu plus fréquents que nécessaire (gaspillage de
+   bande passante mineur), pas de dérive incontrôlée. Pas de complexité ajoutée pour
+   un problème qui ne s'est pas manifesté concrètement — à revisiter si un vrai cas
+   d'oscillation visible apparaît en testant.
+
+   **Reste ouvert** : le cas de l'hôte hors ligne (inchangé, voir section dédiée plus
+   haut — toujours pas de relais pour les annonces de l'hôte lui-même).
 4. **[Fait — 12 août 2026]** Nettoyage (voir section "Ce qui disparaît" plus haut) :
    `computeSubHostId`, `currentSubHostId`, `scheduleSubHostTakeoverIfNeeded`,
    `cancelSubHostTakeoverTimer`, `attemptSubHostTakeover`,
