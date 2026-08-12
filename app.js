@@ -1743,6 +1743,12 @@ function buildGuestHandlers() {
             // annule le cycle de reconnexion automatique en arrière-plan (voir
             // scheduleGuestAutoReconnect) — plus la peine une fois vraiment reconnecté.
             cancelGuestAutoReconnectTimer();
+            // Voir échange avec Guillaume ("l'enchère disparaît une fois reconnecté") :
+            // invalide toute relecture cloud encore en vol (voir guestPullSequence) —
+            // 'resync', juste en dessous, est maintenant la source de vérité ; une
+            // réponse de relecture qui arriverait après coup, même lancée juste avant
+            // cette reconnexion, ne doit plus jamais pouvoir l'écraser.
+            guestPullSequence++;
             // Voir échange avec Guillaume (session du 23 juillet — "on fait idem pour
             // l'host") : toast vert AVANT de réinitialiser selfDisconnectedAt — il faut
             // encore savoir qu'on ÉTAIT déconnecté pour décider d'afficher ce toast (pas
@@ -2809,6 +2815,17 @@ function cancelGuestAutoReconnectTimer() {
 // reconnexion complète, exactement comme uiReconnect — et se reprogramme pour la
 // prochaine tentative si celle-ci ne suffit pas à elle seule à rétablir la connexion
 // (onGuestConnected annulera ce cycle dès que ça aboutit réellement).
+// Voir échange avec Guillaume ("l'enchère disparaît une fois reconnecté") : incrémenté à
+// chaque nouvelle relecture lancée dans attemptGuestAutoReconnect, ET à chaque
+// reconnexion P2P réussie (voir onGuestConnected) — sert à rejeter une réponse arrivée en
+// retard d'une relecture PRÉCÉDENTE, lancée avant que l'état ait bougé (ma propre annonce
+// via le relais serveur, ou une reconnexion P2P entre-temps). Sans ça, plusieurs
+// relectures se chevauchaient (une nouvelle lancée toutes les 4s, sans jamais annuler ni
+// attendre la précédente) et pouvaient revenir DANS LE DÉSORDRE — la dernière à répondre
+// l'emportait, pas la plus récente à avoir été lancée, écrasant parfois un état déjà
+// correctement synchronisé (par la reconnexion) avec une version plus vieille.
+let guestPullSequence = 0;
+
 function attemptGuestAutoReconnect() {
     if (myRole !== 'guest' || !currentRoomCode) return;
     if (peerConn && peerConn.isConnected()) return; // déjà reconnecté entre-temps (onGuestConnected a dû annuler ce cycle)
@@ -2821,7 +2838,14 @@ function attemptGuestAutoReconnect() {
     // invité : sa partie "relais P2P" ne se déclenche que pour myRole==='host', le
     // reste (recopie de l'état local) est neutre pour ce rôle.
     if (deals && typeof pullSessionState === 'function') {
+        const mySequence = ++guestPullSequence;
         pullSessionState(currentRoomCode).then(result => {
+            // Voir plus haut (guestPullSequence) : une reconnexion P2P (ou une relecture
+            // plus récente) a pu aboutir entre-temps — ignore cette réponse si c'est le
+            // cas, plutôt que d'écraser un état déjà à jour avec quelque chose de plus
+            // vieux.
+            if (mySequence !== guestPullSequence) return;
+            if (peerConn && peerConn.isConnected()) return;
             if (result && result.version > lastKnownCloudVersion) applyCloudUpdate(result);
         }).catch(() => { /* panne réseau passagère, on retentera au prochain tick */ });
     }
