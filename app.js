@@ -1755,9 +1755,15 @@ function buildGuestHandlers() {
             // au tout premier succès de connexion, où il n'y a rien à "reconnecter").
             if (deals && selfDisconnectedAt) flashPresenceToast('✅ Reconnecté à la partie', true);
             selfDisconnectedAt = null;
+            // Voir échange avec Guillaume ("l'hôte devrait être affiché comme
+            // déconnecté dans le chat") : levé ici — 'resync' ne renvoie jamais
+            // `participants`, donc rien d'autre ne le remettrait à false tout seul.
+            const hostEntry = participants.find(p => p.id === 'host');
+            if (hostEntry) hostEntry.disconnected = false;
             // Dégèle la boîte d'enchères tout de suite (voir renderBiddingBox) — sans
             // ça, il faudrait attendre le prochain événement de jeu pour que ça se voie.
             if (deals) renderBoard();
+            if (chatPanelOpen) { renderRoomBoard(); renderChat(); }
         },
         onPeerDisconnected: () => {
             setConnectionStatus(false);
@@ -1767,6 +1773,13 @@ function buildGuestHandlers() {
             // concernait déjà TOUT invité déconnecté, pas seulement un sous-hôte désigné.
             scheduleGuestAutoReconnect();
             renderReconnectButton();
+            // Voir échange avec Guillaume ("l'hôte devrait être affiché comme déconnecté
+            // dans le chat") : marqué localement ici — 'resync' (au retour) ne renvoie
+            // jamais `participants`, donc rien d'autre ne le ferait sinon. Toujours
+            // 'host' en littéral ici (jamais un jeton) : ce chemin ne concerne QUE le
+            // mode live, où l'hôte garde toujours cette identité fixe.
+            const hostEntry = participants.find(p => p.id === 'host');
+            if (hostEntry) hostEntry.disconnected = true;
             // Voir échange avec Guillaume (session du 23 juillet — compteur qui défile) :
             // posé seulement s'il ne l'était pas déjà — sinon un second événement de
             // coupure pendant qu'on est déjà déconnecté repousserait le départ du
@@ -1780,6 +1793,12 @@ function buildGuestHandlers() {
             // Gèle la boîte d'enchères tout de suite (voir renderBiddingBox), pas
             // seulement au prochain événement de jeu.
             if (deals) renderBoard();
+            // Voir renderBoard() (session du 23 juillet — "ça n'affiche plus à la 2e
+            // déconnexion") : renderRoomBoard()/renderChat() vivent à part, pas
+            // rafraîchis par renderBoard() lui-même — sans cet appel explicite ici, le
+            // statut "déconnecté" de l'hôte dans le chat n'apparaîtrait qu'au hasard
+            // d'un autre événement.
+            if (chatPanelOpen) { renderRoomBoard(); renderChat(); }
         },
         // Voir échange avec Guillaume ("le bouton Se reconnecter n'apparaît pas") : sans ce
         // handler, une coupure de la connexion au serveur de signalisation (WebSocket) qui
@@ -1789,11 +1808,14 @@ function buildGuestHandlers() {
             setConnectionStatus(false);
             scheduleGuestAutoReconnect();
             renderReconnectButton();
+            const hostEntry = participants.find(p => p.id === 'host');
+            if (hostEntry) hostEntry.disconnected = true;
             if (!selfDisconnectedAt) {
                 selfDisconnectedAt = Date.now();
                 if (deals) flashPresenceToast("🔌 Connexion à l'hôte perdue", false);
             }
             if (deals) renderBoard();
+            if (chatPanelOpen) { renderRoomBoard(); renderChat(); }
         },
         onSlowConnection: () => {
             // Masque l'overlay ici (voir échange avec Guillaume) : sinon le message
@@ -4036,31 +4058,15 @@ function flashPresenceToast(text, isConnect) {
     toast._hideTimer = setTimeout(() => toast.classList.remove('visible'), 4000);
 }
 
-// Voir échange avec Guillaume (session du 23 juillet) : ne gère plus QUE notre propre
-// déconnexion en cours — les annonces ponctuelles concernant les AUTRES participants (ou
-// l'hôte, de notre point de vue) sont passées à flashPresenceToast, un simple toast plutôt
-// qu'une bannière persistante.
+// Voir échange avec Guillaume ("je ne veux que le message, pas le bandeau avec le temps
+// qui défile") : la bannière persistante (avec son compteur de secondes) a été retirée —
+// seul le toast rouge initial (flashPresenceToast, "🔌 Connexion à l'hôte perdue")
+// signale désormais une déconnexion, plus rien de permanent à l'écran pendant toute la
+// durée de la coupure. L'élément HTML #reconnectionBanner reste en place (masqué en
+// permanence) plutôt que retiré, au cas où ce choix serait révisé plus tard.
 function renderReconnectionBanner() {
     const banner = document.getElementById('reconnectionBanner');
     if (!banner) return;
-
-    if (!deals) {
-        banner.style.display = 'none';
-        return;
-    }
-
-    if (myRole === 'guest' && (!peerConn || !peerConn.isConnected())) {
-        const elapsedS = selfDisconnectedAt ? Math.max(0, Math.floor((Date.now() - selfDisconnectedAt) / 1000)) : 0;
-        // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 4) : plus de "/20" pour personne — ce
-        // délai n'existe plus (plus d'élection de sous-hôte, voir
-        // scheduleGuestAutoReconnect qui retente désormais indéfiniment pour tout le
-        // monde) — un simple compteur de secondes écoulées, identique pour tous.
-        banner.className = 'reconnection-banner is-waiting';
-        banner.textContent = `🔌 Connexion perdue — reconnexion en cours... ${elapsedS}s`;
-        banner.style.display = 'block';
-        return;
-    }
-
     banner.style.display = 'none';
 }
 
