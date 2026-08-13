@@ -5853,27 +5853,34 @@ function renderUndoControls() {
     // hostHandleUndoRequest — un simple joueur (pas le vrai créateur) en mode différé ne
     // peut annuler SA PROPRE dernière annonce que tant que son partenaire n'a rien annoncé
     // depuis. Le vrai créateur n'est jamais concerné (son undo cible la dernière annonce
-    // humaine de toute la table, pas seulement la sienne — voir findHostUndoTargetIndex),
-    // ni le mode live (qui garde son propre mécanisme d'accord d'adversaire).
+    // humaine de toute la table, pas seulement la sienne — voir findHostUndoTargetIndex).
+    //
+    // Voir ARCHITECTURE-P2P-SERVEUR.md ("l'hôte n'a pas reçu la demande d'undo pendant
+    // qu'il était hors ligne, et elle a fini par disparaître") : même règle étendue à un
+    // invité EN MODE LIVE mais actuellement déconnecté de l'hôte (voir
+    // pushUndoViaServerFallback) — techniquement dans la même situation qu'un participant
+    // du mode différé pour cette annonce précise : personne à qui demander l'accord, donc
+    // même repli sur la règle locale plutôt que d'attendre une réponse qui n'arrivera
+    // jamais.
     const isDeferredNonCreator = deals && (peerConn instanceof NullPeerConnection) && !isTrueOriginalHost();
-    const blockedByPartnerSince = isDeferredNonCreator
+    const isDisconnectedGuest = deals && myRole === 'guest' && (!peerConn || !peerConn.isConnected());
+    const appliesImmediately = myRole === 'host' || isDeferredNonCreator || isDisconnectedGuest;
+    const blockedByPartnerSince = (isDeferredNonCreator || isDisconnectedGuest)
         && findUndoTargetIndex(myParticipantId, auctionHistory) <= findPartnerLastCallIndex(myParticipantId, auctionHistory);
     btn.disabled = !visible || !deals || auctionHistory.length === 0 || undoRequestPending || !!pendingUndoAsk || blockedByPartnerSince;
     // Deux <span> (voir index.html) plutôt qu'un textContent direct : .btn-label-full/
     // .btn-label-short sont affichés en alternance en CSS selon la largeur d'écran
     // (bouton complet sur desktop, abrégé sur mobile où la place manque).
-    // Libellé différent pour l'hôte (voir échange avec Guillaume) : son undo s'applique
-    // immédiatement, sans validation du camp d'en face (voir hostHandleUndoRequest) — "Faire
-    // un undo" plutôt que "Demander", et jamais l'état intermédiaire "Demande envoyée..."
-    // qui n'a pas de sens quand ça s'applique tout de suite. Vrai aussi pour tout
-    // participant en mode différé (myRole==='host' localement pour tout le monde là-bas,
-    // voir uiResumeFromCloud) : son undo s'applique désormais directement lui aussi (voir
-    // hostHandleUndoRequest), jamais de "Demande envoyée..." qui n'aurait de toute façon
-    // personne en ligne pour y répondre.
-    const isHost = myRole === 'host';
+    // Libellé différent selon le cas (voir échange avec Guillaume) : "Faire un undo"
+    // s'applique immédiatement, sans validation du camp d'en face — vrai pour l'hôte
+    // (voir hostHandleUndoRequest), pour tout participant en mode différé
+    // (myRole==='host' localement pour tout le monde là-bas, voir uiResumeFromCloud), ET
+    // désormais pour un invité déconnecté en mode live (voir juste au-dessus) — jamais de
+    // "Demande envoyée..." qui n'aurait de toute façon personne en ligne pour y répondre
+    // dans ces trois cas.
     const fullEl = btn.querySelector('.btn-label-full');
     const shortEl = btn.querySelector('.btn-label-short');
-    if (isHost) {
+    if (appliesImmediately) {
         if (fullEl) fullEl.textContent = '↩️ Faire un undo';
         if (shortEl) shortEl.textContent = '↩️ Undo';
     } else {
@@ -6035,8 +6042,99 @@ function uiRequestUndo() {
 
     if (myRole === 'host') {
         hostHandleUndoRequest(msg);
+    } else if (!peerConn || !peerConn.isConnected()) {
+        // Voir échange avec Guillaume ("l'hôte n'a pas reçu la demande d'undo pendant
+        // qu'il était hors ligne, et elle a fini par disparaître") : peerConn.send()
+        // échoue silencieusement contre une connexion fermée (voir
+        // BridgePeerConnection.send) — sans ce repli, la demande partait dans le vide et
+        // le minuteur de 20s ci-dessus finissait par afficher "Personne n'a répondu à
+        // temps", ce qui n'était même pas vrai (personne n'avait rien REÇU du tout).
+        pushUndoViaServerFallback();
     } else {
         peerConn.send(msg);
+    }
+}
+
+// Voir échange avec Guillaume ("l'hôte n'a pas reçu la demande d'undo pendant qu'il était
+// hors ligne") : même principe que pushCallViaServerFallback — relit l'état serveur,
+// applique la même règle locale que le mode différé (ma propre dernière annonce, tant que
+// mon partenaire n'a rien annoncé depuis), tronque l'historique en conséquence, puis
+// repousse avec le verrou de version. Contrairement à une annonce, pas d'affichage
+// optimiste préalable : on valide contre l'état serveur AVANT de toucher à quoi que ce
+// soit localement — une annulation est plus délicate à défaire proprement qu'une simple
+// enchère de trop si jamais elle s'avérait invalide entre-temps.
+async function pushUndoViaServerFallback() {
+    const done = () => { undoRequestPending = false; renderUndoControls(); };
+
+    if (!currentRoomCode || typeof pullSessionState !== 'function' || typeof pushSessionState !== 'function') {
+        pushDebugLog('Undo : impossible de tenter le relais serveur (currentRoomCode ou fonctions cloud manquantes).');
+        done();
+        return;
+    }
+    pushDebugLog('Undo : tentative de remontée au serveur (déconnecté de l\'hôte).');
+
+    try {
+        let pulled;
+        try {
+            pulled = await pullSessionState(currentRoomCode);
+        } catch (e) {
+            pushDebugLog('Undo : lecture serveur impossible (' + ((e && e.message) || e) + ').');
+            done();
+            return;
+        }
+
+        const baseState = pulled ? pulled.state : buildCloudStatePayload();
+        const expectedVersion = pulled ? pulled.version : 0;
+        const idx = baseState.boardIndex;
+        const boardDeals = baseState.deals;
+        if (!boardDeals || !boardDeals[idx]) {
+            pushDebugLog(`Undo abandonné : donne ${idx} introuvable dans l'état serveur relu.`);
+            done();
+            return;
+        }
+        if (!boardDeals[idx].auctionHistory) boardDeals[idx].auctionHistory = [];
+        const hist = boardDeals[idx].auctionHistory;
+
+        const targetIndex = findUndoTargetIndex(myParticipantId, hist);
+        const partnerIndex = findPartnerLastCallIndex(myParticipantId, hist);
+        if (targetIndex < 0 || targetIndex <= partnerIndex) {
+            pushDebugLog('Undo abandonné : plus valide par rapport à l\'état serveur relu (rien à moi à annuler, ou mon partenaire a annoncé depuis) — resynchronisation.');
+            setUndoStatus(undoRejectReasonText(targetIndex < 0 ? 'nothing' : 'partner-since'));
+            if (pulled) applyCloudUpdate(pulled);
+            done();
+            return;
+        }
+
+        hist.length = targetIndex;
+
+        const result = await pushSessionState(currentRoomCode, { ...baseState, savedAt: Date.now() }, expectedVersion, {
+            onConflict: (current) => {
+                // Même raisonnement que pushCallViaServerFallback : pas de retentative
+                // en boucle ici, le prochain sondage/reconnexion rattrapera le coup.
+                if (current) lastKnownCloudVersion = current.version;
+                pushDebugLog('Undo : conflit de version au moment de pousser, abandon (une resynchronisation suivra).');
+            }
+        });
+        if (result) {
+            lastKnownCloudVersion = result.version;
+            pushDebugLog(`Undo remonté au serveur avec succès (version ${result.version}).`);
+            // Applique aussi tout de suite en local (retour visuel immédiat), seulement
+            // si c'est bien la donne actuellement affichée — sinon, la prochaine
+            // relecture périodique/reconnexion s'en chargera (voir "Ne touche jamais
+            // boardIndex ici" dans applyCloudUpdate, même esprit ici : jamais question
+            // de changer ce qui est affiché à l'écran sous les pieds de quelqu'un).
+            if (idx === boardIndex) {
+                auctionHistory.length = targetIndex;
+                renderAuctionLedger();
+                renderBiddingBox();
+                renderMyHands();
+                checkAuctionEnd();
+            }
+        }
+    } catch (e) {
+        pushDebugLog('Undo : échec inattendu de la remontée serveur — ' + ((e && (e.message || e.stack)) || e));
+    } finally {
+        done();
     }
 }
 
@@ -6162,6 +6260,11 @@ function applyUndoAsHost(pending) {
     checkAuctionEnd();
     clearUndoUiState();
     peerConn.send({ type: 'undo-apply', boardIndex: pending.boardIndex, newLength: pending.targetIndex });
+    // Voir échange avec Guillaume ("vérifie s'il n'y a pas des problèmes de même ordre") :
+    // manquait entièrement ici — sans ça, un invité en repli serveur ne voyait jamais
+    // qu'une annulation avait eu lieu, sa propre relecture périodique retombant sur un
+    // historique jamais mis à jour côté cloud.
+    saveHostGameStateToStorage();
     maybeRobotBid(); // si l'annulation redonne la main à un siège robot, il doit rejouer
 }
 
@@ -6203,6 +6306,10 @@ function uiResetAuction() {
     renderMyHands();
     checkAuctionEnd();
     peerConn.send({ type: 'reset-auction', boardIndex });
+    // Voir échange avec Guillaume ("vérifie s'il n'y a pas des problèmes de même ordre") :
+    // même oubli qu'applyUndoAsHost — sans ça, un invité en repli serveur ne voyait
+    // jamais qu'une enchère venait d'être recommencée.
+    saveHostGameStateToStorage();
     maybeRobotBid(); // sans effet si on n'est pas l'hôte (voir maybeRobotBid) ; utile si le
                       // dealer (ou tout siège en tête d'enchère après reset) est un robot
 }
@@ -7387,6 +7494,17 @@ function applyCloudUpdate(result) {
             peerConn.send({ type: 'call', boardIndex, seat: entry.seat, call: entry.call, explanation: entry.explanation });
         }
         pushDebugLog(`${auctionHistory.length - oldAuctionLengthForRelay} annonce(s) apprise(s) via le cloud, relayée(s) en P2P.`);
+    }
+
+    // Voir échange avec Guillaume ("vérifie s'il n'y a pas des problèmes de même ordre") :
+    // le cas INVERSE ci-dessus (l'historique RACCOURCIT) manquait entièrement — c'est
+    // exactement ce qui se produit quand un participant en repli serveur fait son propre
+    // undo (voir pushUndoViaServerFallback) : sans ce relais, un invité resté connecté en
+    // P2P ne voyait jamais qu'une annulation avait eu lieu ailleurs, tant qu'il ne se
+    // reconnectait pas lui-même.
+    if (canRelay && boardIndex === oldBoardIndexForRelay && auctionHistory.length < oldAuctionLengthForRelay) {
+        peerConn.send({ type: 'undo-apply', boardIndex, newLength: auctionHistory.length });
+        pushDebugLog(`Annulation apprise via le cloud (historique ramené à ${auctionHistory.length} annonce(s)), relayée en P2P.`);
     }
 
     // Messages de chat (voir échange avec Guillaume) : même logique, chaque nouveau
