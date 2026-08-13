@@ -7539,9 +7539,11 @@ function uiResumeFromCloud() {
     });
 
     // Voir échange avec Guillaume ("je ne veux pas de bascule d'hôte") : myParticipantId
-    // reste MON PROPRE jeton — jamais renommé en la chaîne littérale 'host'. myRole='host'
-    // ici sert uniquement à m'accorder le contrôle local complet (navigation de donne,
-    // arbitrage d'undo — voir canControlBoard et consorts), pas une identité à endosser.
+    // reste MON PROPRE jeton par défaut — jamais renommé en la chaîne littérale 'host' —
+    // sauf dans le cas précis ci-dessous (vrai créateur, vraie connexion P2P), où c'est au
+    // contraire indispensable (voir plus bas). myRole='host' ici sert dans tous les cas à
+    // m'accorder le contrôle local complet (navigation de donne, arbitrage d'undo — voir
+    // canControlBoard et consorts), pas une identité à endosser en soi.
     myRole = 'host';
     myParticipantId = myToken;
     mySeats = SEATS.filter(seat => seatAssignment[seat] === myParticipantId);
@@ -7563,6 +7565,26 @@ function uiResumeFromCloud() {
     // donne, voir "Ne touche jamais boardIndex ici" dans applyCloudUpdate).
     if (peerConn) peerConn.destroy();
     if (creatorToken && myToken === creatorToken) {
+        // Voir échange avec Guillaume ("le wizz vise l'hôte mais rate — sa cible n'est
+        // pas 'host' littéralement") : remappage INVERSE de celui du "Cas 0" tout en
+        // haut de cette fonction — celui-ci migre volontairement 'host' vers myToken,
+        // pensé pour le modèle "hôte local" (NullPeerConnection, jamais de vrai réseau).
+        // Mais ICI, on rebascule ce même créateur sur une VRAIE salle P2P — et tout le
+        // reste du code (guestIndexByToken, la comparaison stricte
+        // `msg.targetId !== 'host'` dans le handler 'wizz', etc.) suppose que l'hôte
+        // P2P s'appelle littéralement 'host'. Sans ce remappage, l'hôte restait
+        // identifié par son jeton personnel aux yeux de tout le monde une fois
+        // reconnecté — un invité visant "la cloche de l'hôte" envoyait donc vers ce
+        // jeton, jamais reconnu comme étant 'host' à la réception (bug remonté :
+        // "relais abandonné, cible plus dans guestIndexByToken"). isTrueOriginalHost()
+        // reste correct sans y toucher : elle accepte déjà 'host' comme raccourci (voir
+        // sa définition), donc pas besoin non plus de modifier roomCreatorToken.
+        SEATS.forEach(seat => { if (seatAssignment[seat] === myToken) seatAssignment[seat] = 'host'; });
+        const meAsParticipant = participants.find(p => p.id === myToken);
+        if (meAsParticipant) meAsParticipant.id = 'host';
+        myParticipantId = 'host';
+        mySeats = SEATS.filter(seat => seatAssignment[seat] === 'host');
+
         const resumeOnOpenExtra = () => {
             renderReconnectButton();
             if (deals) renderBoard(); else renderLobby();
