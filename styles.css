@@ -202,11 +202,20 @@ body {
     color: var(--text);
 }
 
-/* Sur l'écran d'accueil, rien n'est encore connecté : le trait sous la barre n'a rien à
-   séparer visuellement, il fait juste ligne parasite en haut de page (voir échange avec
-   Guillaume). Classe posée par showScreen() dans app.js. */
+/* Voir échange avec Guillaume ("la petite barre en haut n'a aucune utilité à apparaître
+   sur la version desktop... je croyais te l'avoir dit précédemment") : l'ancien correctif
+   ci-dessous (border-bottom-color: transparent) ne retirait que le trait de séparation —
+   la barre elle-même restait rendue, avec son propre fond coloré et sa hauteur réservée,
+   même totalement vide de contenu (rien n'est encore connecté sur l'écran d'accueil).
+   display:none la retire pour de bon ; le padding-top de body, qui lui réservait sa place,
+   est retiré juste en dessous pour ne pas laisser un vide à sa place. Classe posée par
+   showScreen() dans app.js. */
 body.on-landing-screen .connection-bar {
-    border-bottom-color: transparent;
+    display: none;
+}
+
+body.on-landing-screen {
+    padding-top: var(--safe-top);
 }
 
 .connection-status.connected { color: #7fd99a; }
