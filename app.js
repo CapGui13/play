@@ -3898,9 +3898,20 @@ function handlePeerData(msg, guestIndex) {
         case 'wizz': {
             if (myRole === 'host' && msg.targetId !== 'host') {
                 const targetGuestIndex = guestIndexByToken[msg.targetId];
-                if (targetGuestIndex !== undefined) peerConn.send(msg, targetGuestIndex);
+                // Voir échange avec Guillaume ("le wizz ne marche pas, aucune trace même
+                // juste après") : trace ajoutée ici aussi — si le relais échoue
+                // silencieusement (cible plus dans guestIndexByToken, ou send() qui
+                // échoue contre une connexion pas tout à fait ouverte), rien ne le disait
+                // jusqu'ici.
+                if (targetGuestIndex !== undefined) {
+                    peerConn.send(msg, targetGuestIndex);
+                    pushDebugLog(`Wizz reçu de ${msg.senderName || '?'}, relayé vers ${msg.targetId.slice(0, 10)}… (index ${targetGuestIndex}).`);
+                } else {
+                    pushDebugLog(`Wizz reçu de ${msg.senderName || '?'} pour ${msg.targetId.slice(0, 10)}… : relais abandonné, cible plus dans guestIndexByToken.`);
+                }
                 break;
             }
+            pushDebugLog(`Wizz reçu de ${msg.senderName || '?'} — déclenchement de l'effet.`);
             triggerWizzEffect();
             break;
         }
@@ -4587,9 +4598,26 @@ function isWizzTargetReachable(targetId) {
 }
 
 function uiSendWizz(targetId) {
-    if (!peerConn || targetId === myParticipantId) return;
+    // Voir échange avec Guillaume ("le wizz ne marche pas, aucune trace dans le journal
+    // même juste après avoir cliqué") : log de départ ajouté ici, avant même le premier
+    // retour anticipé — jusqu'ici, seul le cas "connexion pas encore prête" laissait une
+    // trace ; tous les autres retours silencieux (peerConn absent, cooldown, envoi
+    // "réussi" mais peut-être jamais reçu côté destinataire) ne laissaient absolument
+    // rien, rendant impossible de savoir jusqu'où le clic était allé.
+    pushDebugLog(`Wizz vers ${targetId.slice(0, 10)}… : clic reçu.`);
+    if (!peerConn) {
+        pushDebugLog(`Wizz vers ${targetId.slice(0, 10)}… abandonné : aucune connexion (peerConn absent).`);
+        return;
+    }
+    if (targetId === myParticipantId) {
+        pushDebugLog(`Wizz vers ${targetId.slice(0, 10)}… abandonné : cible = moi-même (ne devrait pas arriver depuis ce bouton).`);
+        return;
+    }
     const now = Date.now();
-    if (wizzCooldownUntil[targetId] && now < wizzCooldownUntil[targetId]) return; // encore en sablier, on ignore silencieusement
+    if (wizzCooldownUntil[targetId] && now < wizzCooldownUntil[targetId]) {
+        pushDebugLog(`Wizz vers ${targetId.slice(0, 10)}… abandonné : encore en sablier (${Math.ceil((wizzCooldownUntil[targetId] - now) / 1000)}s restantes).`);
+        return;
+    }
 
     // Voir échange avec Guillaume (session du 8 août — "le wizz ne marchait plus, je
     // pouvais juste pas le faire") : bug trouvé — le cooldown était posé AVANT même de
@@ -4614,12 +4642,17 @@ function uiSendWizz(targetId) {
         // L'hôte connaît directement la connexion du destinataire : envoi ciblé, pas de
         // relais nécessaire.
         const guestIndex = guestIndexByToken[targetId];
-        if (guestIndex === undefined) return; // plus connecté entre-temps, tant pis
+        if (guestIndex === undefined) {
+            pushDebugLog(`Wizz vers ${targetId.slice(0, 10)}… abandonné : plus dans guestIndexByToken (déconnecté entre-temps ?).`);
+            return; // plus connecté entre-temps, tant pis
+        }
         peerConn.send(msg, guestIndex);
+        pushDebugLog(`Wizz vers ${targetId.slice(0, 10)}… envoyé (ciblé, index ${guestIndex}).`);
     } else {
         // Invité : un seul destinataire réseau possible (l'hôte), qui relaiera si besoin
         // (voir handlePeerData, cas 'wizz' avec targetId !== 'host').
         peerConn.send(msg);
+        pushDebugLog(`Wizz vers ${targetId.slice(0, 10)}… envoyé à l'hôte (à charge pour lui de relayer si besoin).`);
     }
 }
 
@@ -6866,6 +6899,15 @@ async function uiResumeHostSession(roomCode) {
         return;
     }
 
+    // Voir échange avec Guillaume ("la ligne 'Reprise hôte' n'apparaît pas dans le
+    // journal combiné") : posé ICI, le plus tôt possible — pushDebugLog (voir plus haut)
+    // n'envoie une ligne vers le journal PARTAGÉ de la salle que si currentRoomCode est
+    // déjà renseigné au moment de l'appel. Sans ce réglage précoce, tout ce qui se
+    // journalise pendant cette reprise (y compris la ligne de diagnostic juste en
+    // dessous) restait local uniquement, invisible pour quiconque irait relire le
+    // journal combiné depuis un autre appareil.
+    currentRoomCode = saved.roomCode;
+
     if (typeof pullSessionState === 'function') {
         try {
             const cloudResult = await pullSessionState(saved.roomCode);
@@ -7395,6 +7437,11 @@ window.addEventListener('pagehide', () => {
 // propre message d'erreur "Aucune partie trouvée" ou non).
 async function offerCloudResume(code) {
     if (typeof pullSessionState !== 'function') return false;
+    // Voir échange avec Guillaume ("la ligne 'Reprise hôte' n'apparaît pas dans le
+    // journal combiné") : même correctif que uiResumeHostSession — posé tôt pour que les
+    // lignes journalisées ici (dont l'erreur juste en dessous) remontent bien vers le
+    // journal partagé de la salle, pas seulement en local.
+    currentRoomCode = code;
     let result;
     try {
         result = await pullSessionState(code);
