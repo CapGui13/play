@@ -89,3 +89,46 @@ async function pushSessionState(roomCode, state, expectedVersion, { onConflict, 
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = { pullSessionState, pushSessionState };
 }
+
+// ===== Journal de diagnostic partagé entre tous les participants (voir échange avec
+// Guillaume — "je voudrais pouvoir tout te transmettre en un clic, sans avoir besoin du
+// journal d'un joueur spécifique") =====
+//
+// Même esprit que pullSessionState/pushSessionState ci-dessus, mais vers api/session-log.js
+// plutôt que api/session.js — un journal de diagnostic combiné, pas l'état de la partie.
+
+function sessionLogApiUrl(roomCode) {
+    return `${SESSION_API_BASE}/api/session-log?code=${encodeURIComponent(roomCode)}&_=${Date.now()}`;
+}
+
+// Pousse un lot de nouvelles lignes de journal. `entries` : [{ from, text, ts }, ...].
+// Volontairement silencieux en cas d'échec (voir pushDebugLogQueue dans app.js, qui
+// réessaiera au prochain lot plutôt que de bloquer sur celui-ci) — un journal de
+// diagnostic manqué ne doit jamais gêner la partie elle-même.
+async function pushSessionLogEntries(roomCode, entries) {
+    if (!entries || entries.length === 0) return;
+    try {
+        await fetch(sessionLogApiUrl(roomCode), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ entries }),
+            keepalive: true
+        });
+    } catch (e) {
+        console.warn('[session-storage] push journal partagé échoué (sans conséquence pour la partie) :', e);
+    }
+}
+
+// Récupère le journal combiné de toute la salle, trié par heure d'arrivée. Renvoie un
+// tableau d'entrées (jamais null — un journal vide donne un tableau vide, pas une erreur).
+async function pullSessionLog(roomCode) {
+    const resp = await fetch(sessionLogApiUrl(roomCode), { method: 'GET', cache: 'no-store' });
+    if (!resp.ok) throw new Error(`pullSessionLog: HTTP ${resp.status}`);
+    const body = await resp.json();
+    return (body && body.entries) || [];
+}
+
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports.pushSessionLogEntries = pushSessionLogEntries;
+    module.exports.pullSessionLog = pullSessionLog;
+}

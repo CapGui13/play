@@ -1270,6 +1270,41 @@ function showLandingError(msg) {
 
 const debugLogLines = [];
 
+// Voir échange avec Guillaume ("un clic pour tout transmettre, sans avoir besoin du
+// journal d'un joueur spécifique") : chaque ligne journalisée localement est aussi mise
+// en file pour une remontée périodique vers le journal PARTAGÉ de la salle (voir
+// api/session-log.js, côté repo api-gen) — pas une requête par ligne (bien trop de
+// trafic vu la fréquence des lignes ICE), un lot toutes les REMOTE_LOG_FLUSH_INTERVAL_MS
+// suffit largement pour un usage de diagnostic après coup, pas pour du temps réel.
+let pendingRemoteLogEntries = [];
+const REMOTE_LOG_FLUSH_INTERVAL_MS = 8000;
+let remoteLogFlushTimer = null;
+
+function scheduleRemoteLogFlush() {
+    if (remoteLogFlushTimer) return;
+    remoteLogFlushTimer = setTimeout(() => {
+        remoteLogFlushTimer = null;
+        flushRemoteLogQueue();
+    }, REMOTE_LOG_FLUSH_INTERVAL_MS);
+}
+
+function flushRemoteLogQueue() {
+    if (!currentRoomCode || typeof pushSessionLogEntries !== 'function' || pendingRemoteLogEntries.length === 0) return Promise.resolve();
+    const batch = pendingRemoteLogEntries;
+    pendingRemoteLogEntries = [];
+    return pushSessionLogEntries(currentRoomCode, batch);
+}
+
+// Étiquette identifiant CE participant dans le journal combiné — sans elle, un journal à
+// 4 joueurs mélangés serait illisible (impossible de savoir qui a fait quoi).
+function debugLogFromLabel() {
+    const me = participants.find(p => p.id === myParticipantId);
+    const name = me ? me.name : (myRole === 'host' ? 'Hôte' : '?');
+    const roleLabel = myRole === 'host' ? 'hôte' : 'invité';
+    const seatsLabel = (mySeats && mySeats.length) ? `, ${mySeats.join('/')}` : '';
+    return `${name} (${roleLabel}${seatsLabel})`;
+}
+
 function pushDebugLog(line) {
     const timestamp = new Date().toLocaleTimeString('fr-FR');
     debugLogLines.push(`[${timestamp}] ${line}`);
@@ -1277,6 +1312,13 @@ function pushDebugLog(line) {
     if (content) {
         content.textContent = debugLogLines.join('\n');
         content.scrollTop = content.scrollHeight;
+    }
+    // Pas la peine tant qu'on n'a pas encore rejoint de salle (currentRoomCode) : les
+    // tout premiers logs, avant même de rejoindre, ne peuvent de toute façon aller nulle
+    // part de partagé.
+    if (currentRoomCode) {
+        pendingRemoteLogEntries.push({ from: debugLogFromLabel(), text: line, ts: Date.now() });
+        scheduleRemoteLogFlush();
     }
 }
 
@@ -1311,39 +1353,72 @@ function fallbackCopyDebugLog(text) {
 // (salle, rôle, sièges, navigateur) déjà inclus — plus la peine de demander "et t'étais
 // hôte ou invité ?" en plus du journal lui-même.
 
-function buildBugReportText(maxLogChars) {
+// Voir échange avec Guillaume ("un clic pour tout transmettre, sans avoir besoin du
+// journal d'un joueur spécifique") : devenue async — essaie d'abord le journal COMBINÉ de
+// toute la salle (voir api/session-log.js, côté repo api-gen), en flushant d'abord ma
+// propre file en attente pour ne rien manquer de tout frais avant de relire tout le
+// monde. Repli sur mon seul journal local si le serveur est injoignable, ou si je ne suis
+// dans aucune salle.
+async function buildBugReportText(maxLogChars) {
     const lines = [
         `Salle : ${currentRoomCode || '(aucune)'}`,
         `Rôle : ${myRole || '(aucun)'}`,
         `Sièges : ${(mySeats && mySeats.length) ? mySeats.join(', ') : '(aucun)'}`,
         `Heure : ${new Date().toLocaleString('fr-FR')}`,
         `Navigateur : ${navigator.userAgent}`,
-        '',
-        '--- Journal ---'
+        ''
     ];
 
-    let log = debugLogLines.join('\n');
+    let combinedEntries = null;
+    if (currentRoomCode && typeof pullSessionLog === 'function') {
+        try {
+            await flushRemoteLogQueue(); // pousse d'abord tout ce qui est encore en file localement
+            combinedEntries = await pullSessionLog(currentRoomCode);
+        } catch (e) {
+            // Tant pis, repli sur le journal local ci-dessous.
+        }
+    }
+
+    let log, totalLineCount;
+    if (combinedEntries && combinedEntries.length > 0) {
+        // Trié par heure d'arrivée : les entrées de plusieurs participants arrivent dans
+        // le désordre (chacun pousse son propre lot toutes les REMOTE_LOG_FLUSH_INTERVAL_MS,
+        // indépendamment des autres).
+        const sorted = combinedEntries.slice().sort((a, b) => (a.ts || 0) - (b.ts || 0));
+        const formatted = sorted.map(e => {
+            const t = e.ts ? new Date(e.ts).toLocaleTimeString('fr-FR') : '?';
+            return `[${t}] ${e.from || '?'} — ${e.text}`;
+        });
+        lines.push(`--- Journal combiné de la salle (${sorted.length} lignes, tous participants) ---`);
+        log = formatted.join('\n');
+        totalLineCount = formatted.length;
+    } else {
+        lines.push('--- Journal (local uniquement — journal partagé indisponible ou vide) ---');
+        log = debugLogLines.join('\n');
+        totalLineCount = debugLogLines.length;
+    }
+
     // Voir plus bas (uiReportBug) : maxLogChars diffère selon le canal — généreux pour le
     // partage natif (pas de limite de longueur d'URL), plus serré pour mailto:, qui reste
     // fiable seulement en dessous de quelques milliers de caractères sur pas mal de clients
     // mail mobiles. On garde la FIN du journal (slice négatif) : c'est l'événement le plus
     // récent — donc le plus probablement en cause — qui compte le plus en cas de troncature.
     if (log.length > maxLogChars) {
-        log = `[…tronqué, ${debugLogLines.length} lignes au total, voir la fin…]\n` + log.slice(-maxLogChars);
+        log = `[…tronqué, ${totalLineCount} lignes au total, voir la fin…]\n` + log.slice(-maxLogChars);
     }
-    lines.push(log || '(journal vide — le panneau de diagnostic n\'a peut-être pas été ouvert pendant la session)');
+    lines.push(log || '(journal vide)');
 
     return lines.join('\n');
 }
 
-function uiReportBug() {
+async function uiReportBug() {
     const subject = `Bug — Table d'enchères (salle ${currentRoomCode || '?'})`;
 
     // Voir échange avec Guillaume ("le bouton bug ouvre le partage natif de Windows sur
     // PC") : isMobileOrTabletDevice() en plus de navigator.share — la seule présence de
     // l'API ne suffit pas à distinguer mobile de desktop (voir son commentaire plus haut).
     if (isMobileOrTabletDevice() && navigator.share) {
-        const text = buildBugReportText(20000);
+        const text = await buildBugReportText(20000);
         navigator.share({ title: subject, text }).catch(() => {
             // Annulé par l'utilisateur (ou échec silencieux) : la feuille de partage s'est
             // quand même affichée, rien à faire de plus ici — pas de repli automatique sur
@@ -1358,7 +1433,7 @@ function uiReportBug() {
     // le rapport part directement dans le presse-papiers, prêt à coller où il veut (chat
     // Claude, Slack, peu importe), sans ouvrir un client mail. Pas de limite de longueur à
     // respecter ici non plus (aucune URL impliquée), même généreux que le partage natif.
-    const text = buildBugReportText(20000);
+    const text = await buildBugReportText(20000);
     const toastEl = () => {
         let toast = document.getElementById('bugReportToast');
         if (!toast) {
