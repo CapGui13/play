@@ -3382,32 +3382,45 @@ table.dd-table td.dd-secondary-contract {
 .hand-cards { font-size: clamp(0.85rem, 3.2vw, 0.95rem); }
 .suit-symbol .suit-icon { font-size: clamp(1rem, 3.6vw, 1.1rem); }
 
-/* Correctif affichage des noms dans la vue 4 mains : le nom dispose de toute la largeur
-   de la carte sur sa propre ligne. Les badges HCP/K&R restent alignés à droite juste
-   dessous. On évite ainsi toute ellipse du pseudo sans permettre aux badges de se décaler. */
+/* Vue 4 mains : deux lignes maximum dans l'en-tête.
+   Ligne 1 = nom à gauche + HCP à droite. Ligne 2 = K&R à droite.
+   Le nom reste sur une seule ligne et sa taille est réduite par les classes name-long /
+   name-very-long posées par app.js, au lieu de créer une troisième ligne ou une ellipse. */
 .all-hands-diagram .hand-card-title {
-    grid-template-columns: minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr) auto;
     grid-template-rows: auto auto;
     row-gap: 5px;
-    column-gap: 0;
+    column-gap: 6px;
 }
 
 .all-hands-diagram .hand-card-title-name {
     grid-column: 1;
     grid-row: 1;
-    width: 100%;
+    min-width: 0;
     max-width: 100%;
     overflow: visible;
     text-overflow: clip;
     white-space: nowrap;
 }
 
+/* Le wrapper des badges ne doit pas créer sa propre colonne/ligne : ses deux badges
+   deviennent directement des éléments de la grille du titre. */
 .all-hands-diagram .hand-card-badges {
-    grid-column: 1;
+    display: contents;
+}
+
+.all-hands-diagram .hand-card-badges .hand-hcp-badge:first-child {
+    grid-column: 2;
+    grid-row: 1;
+    justify-self: end;
+    align-self: start;
+}
+
+.all-hands-diagram .hand-card-badges .hand-hcp-badge:nth-child(2) {
+    grid-column: 2;
     grid-row: 2;
-    width: 100%;
-    min-width: 0;
-    align-items: flex-end;
+    justify-self: end;
+    align-self: start;
 }
 
 /* État du moteur PONS v2.61 — affiché avant le lancement pour confirmer que le WASM réel
