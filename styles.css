@@ -3409,3 +3409,24 @@ table.dd-table td.dd-secondary-contract {
     min-width: 0;
     align-items: flex-end;
 }
+
+/* État du moteur PONS v2.61 — affiché avant le lancement pour confirmer que le WASM réel
+   est actif. Reprend le style du PLAY fourni avec PONS v2.61(9). */
+.wbridge-status {
+    max-width: 980px;
+    margin: 8px auto 12px;
+    padding: 8px 12px;
+    border-radius: 10px;
+    font-size: 0.92rem;
+    line-height: 1.3;
+    text-align: left;
+    box-sizing: border-box;
+}
+.wbridge-status.is-online {
+    background: rgba(35, 150, 90, 0.12);
+    border: 1px solid rgba(35, 150, 90, 0.35);
+}
+.wbridge-status.is-offline {
+    background: rgba(160, 110, 25, 0.10);
+    border: 1px solid rgba(160, 110, 25, 0.28);
+}

@@ -7,7 +7,7 @@
 // valeur ci-dessous est réécrite AUTOMATIQUEMENT à chaque déploiement par
 // .github/workflows/deploy.yml (dérivée du SHA du commit) : ne pas l'éditer à la main, ça
 // n'aurait d'effet que le temps d'un test local avant le prochain push.
-const CACHE_NAME = 'bridge-encheres-dev';
+const CACHE_NAME = 'bridge-encheres-pons-v261-9-strict-wasm-1';
 
 // Ressources de la même origine : mises en cache de façon fiable via cache.addAll (un seul
 // échec fait échouer toute l'installation, ce qui est le comportement voulu ici — ce sont
@@ -19,6 +19,13 @@ const CORE_ASSETS = [
     './app.js',
     './bidding-rules.js',
     './bidding-engine.js',
+    './pons/canonical-rules-v1.js',
+    './pons/bridge-engine-v1-browser.js',
+    './pons/fiches-engine-v1-app.js',
+    './pons/pons-semantic.js',
+    './pons/pons-critic.js',
+    './pons/pons-engine.js',
+    './pons/pons-wasm-embedded.js',
     './deal-parser.js',
     './peer-connection.js',
     './session-storage.js',

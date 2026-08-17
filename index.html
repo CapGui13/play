@@ -254,6 +254,9 @@
             </div>
         </div>
 
+        <div id="ponsBuildBadge" style="max-width:980px;margin:6px auto;font:700 12px Segoe UI;color:#d9b84c;">VERSION ACTIVE : PONS BIG v2.61 — portable strict</div>
+        <div id="ponsEngineStatus" class="wbridge-status is-offline">🧠 PONS : chargement du moteur WebAssembly…</div>
+
         <div id="hostSetupPanel" class="host-setup-panel" style="display:none;">
             <h3>Charger les donnes</h3>
             <div class="form-group">
@@ -581,29 +584,28 @@
     </div>
 </div>
 
-<!-- Voir échange avec Guillaume ("latence avant l'affichage du formulaire de pseudo") :
-     defer sur tous les scripts ci-dessous — sans ça, chacun se télécharge et s'exécute
-     l'un après l'autre, en série (peerjs → pusher → bidding-rules → bidding-engine, à lui
-     seul ~500 Ko → deal-parser → ... → app.js), alors que la logique qui affiche le
-     formulaire de pseudo (dans app.js, sur DOMContentLoaded) ne peut de toute façon
-     s'exécuter qu'une fois TOUS ces scripts chargés. defer les télécharge tous EN
-     PARALLÈLE (le navigateur ne bloque plus dessus un par un) tout en garantissant qu'ils
-     s'exécutent ensuite dans le même ordre qu'aujourd'hui — DOMContentLoaded continue de
-     n'être déclenché qu'une fois tous chargés (aucun changement de comportement), mais le
-     temps total pour y arriver chute nettement sur un premier chargement sans cache,
-     surtout en mobile. -->
-<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js" defer></script>
-<!-- Voir échange avec Guillaume ("j'aimerais que ce soit quasi instantané") : Pusher
-     Channels, pour la diffusion en temps réel du mode différé (voir realtime-updates.js
-     ci-dessous). Chargé même si le compte n'est pas encore configuré : subscribeToSessionUpdates
-     s'en aperçoit et ne fait simplement rien (le sondage périodique prend le relais seul). -->
-<script src="https://js.pusher.com/8.4/pusher.min.js" defer></script>
-<script src="bidding-rules.js" defer></script>
-<script src="bidding-engine.js" defer></script>
-<script src="deal-parser.js" defer></script>
-<script src="peer-connection.js" defer></script>
-<script src="session-storage.js" defer></script>
-<script src="realtime-updates.js" defer></script>
-<script src="app.js" defer></script>
+<!-- PONS v2.61 strict : chargement séquentiel volontaire, dans le même ordre que le
+     PLAY livré avec PONS_v2.61(9). Ici la priorité est l'identité de comportement du
+     moteur, pas l'optimisation de chargement par defer. -->
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<!-- Pusher Channels pour la diffusion temps réel. -->
+<script src="https://js.pusher.com/8.4/pusher.min.js"></script>
+<script src="bidding-rules.js"></script>
+<!-- L'ancien moteur PLAY reste chargé uniquement pour les utilitaires/fallback canonique,
+     exactement comme bidding-engine-legacy.js dans PONS v2.61(9). -->
+<script src="bidding-engine.js"></script>
+<!-- PONS v2.61(9) : même ordre de chargement que le PLAY livré avec PONS. -->
+<script src="pons/canonical-rules-v1.js"></script>
+<script src="pons/bridge-engine-v1-browser.js"></script>
+<script src="pons/fiches-engine-v1-app.js?v=20260810-006"></script>
+<script src="pons/pons-semantic.js?v=20260812-semantic05-v216"></script>
+<script src="pons/pons-critic.js?v=20260815-v251-realworld-p0"></script>
+<script src="pons/pons-wasm-embedded.js?v=20260817-v2619-portable"></script>
+<script src="pons/pons-engine.js?v=20260817-v2619-portable-strict"></script>
+<script src="deal-parser.js"></script>
+<script src="peer-connection.js"></script>
+<script src="session-storage.js"></script>
+<script src="realtime-updates.js"></script>
+<script src="app.js"></script>
 </body>
 </html>

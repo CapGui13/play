@@ -4018,6 +4018,9 @@ function relayIfHost(msg, fromGuestIndex) {
 }
 
 function advanceRobotBidsOnBoard(idx) {
+    // PONS est asynchrone (WASM). Ne jamais pré-calculer une donne PONS avec le moteur
+    // synchrone de secours : cela mélangerait deux systèmes sur la même session.
+    if (window.PonsEngine) return;
     if (!deals || !deals[idx]) return;
     const deal = deals[idx];
     if (!deal.auctionHistory) deal.auctionHistory = [];
@@ -4038,13 +4041,84 @@ function advanceRobotBidsOnBoard(idx) {
     }
 }
 
-// Applique advanceRobotBidsOnBoard à toutes les donnes — sauf, si précisé, celle
-// actuellement affichée (`excludeIdx`), pour lui laisser son animation habituelle via
-// maybeRobotBid() une fois entré sur l'écran de jeu (voir uiStartGameAsHost,
-// uiResumeHostSession, uiResumeFromCloud). Idempotent : sans effet sur une donne déjà
-// entièrement avancée, donc sûr à rappeler après n'importe quelle restauration d'état.
+// Quand les quatre sièges sont des robots, les donnes hors écran peuvent être résolues
+// rapidement avec exactement le même PONS que la donne visible. Cela remplace seulement
+// l'ancien pré-calcul synchrone, impossible avec le moteur WASM asynchrone.
+let fullBotBackgroundGeneration = 0;
+const fullBotBoardsResolving = new Set();
+
+function isFullBotTable() {
+    return !!autoPassSeats && autoPassSeats.length === SEATS.length
+        && SEATS.every(seat => !seatAssignment[seat]);
+}
+
+async function resolveFullBotBoardInBackground(idx, generation) {
+    if (!deals || !deals[idx] || generation !== fullBotBackgroundGeneration) return;
+    const deal = deals[idx];
+    if (!deal.auctionHistory) deal.auctionHistory = [];
+    const hist = deal.auctionHistory;
+    if (isAuctionOver(hist)) return;
+
+    fullBotBoardsResolving.add(idx);
+    try {
+        let safety = 0;
+        while (!isAuctionOver(hist) && safety < 60) {
+            if (generation !== fullBotBackgroundGeneration || !isFullBotTable()) return;
+            const turnSeat = currentTurnSeat(deal.dealer, hist);
+            if (!autoPassSeats.includes(turnSeat)) return;
+
+            let call, explanation;
+            if (robotBiddingMode === 'passOnly') {
+                call = 'PASS';
+                explanation = 'Mode « passe en boucle » activé';
+            } else if (window.PonsEngine) {
+                try {
+                    ({ call, explanation } = await window.PonsEngine.decideRobotCallForApp(turnSeat, deal, hist, autoPassSeats));
+                } catch (err) {
+                    console.error('[PLAY/PONS strict] calcul arrière-plan arrêté : PONS indisponible', err);
+                    return;
+                }
+            } else {
+                ({ call, explanation } = decideRobotCall(turnSeat, deal, hist));
+            }
+
+            if (generation !== fullBotBackgroundGeneration) return;
+            if (!isCallLegal(hist, call, turnSeat)) {
+                console.warn('[Robot PONS arrière-plan] annonce illégale reçue, repli Passe', call);
+                call = 'PASS';
+                explanation = `${explanation || 'Moteur robot'} · annonce illégale rejetée par PLAY`;
+            }
+            hist.push(explanation ? { seat: turnSeat, call, explanation } : { seat: turnSeat, call });
+            safety++;
+        }
+    } finally {
+        fullBotBoardsResolving.delete(idx);
+        if (deals && boardIndex === idx) renderBoard();
+        saveHostGameStateToStorage();
+    }
+}
+
+async function resolveAllOtherFullBotBoards(excludeIdx) {
+    if (!deals || !isFullBotTable()) return;
+    const generation = ++fullBotBackgroundGeneration;
+    for (let idx = 0; idx < deals.length; idx++) {
+        if (generation !== fullBotBackgroundGeneration || !isFullBotTable()) return;
+        if (idx === excludeIdx || isAuctionOver(deals[idx].auctionHistory || [])) continue;
+        await resolveFullBotBoardInBackground(idx, generation);
+    }
+}
+
+// Applique le pré-calcul aux autres donnes sans jamais mélanger PONS et le moteur legacy.
 function advanceRobotBidsOnAllBoards(excludeIdx) {
     if (!deals) return;
+    if (window.PonsEngine) {
+        if (isFullBotTable()) {
+            resolveAllOtherFullBotBoards(excludeIdx).catch(err =>
+                console.warn('[Robot PONS arrière-plan] pré-calcul interrompu', err)
+            );
+        }
+        return;
+    }
     deals.forEach((_, idx) => {
         if (idx === excludeIdx) return;
         advanceRobotBidsOnBoard(idx);
@@ -4054,6 +4128,7 @@ function advanceRobotBidsOnAllBoards(excludeIdx) {
 function maybeRobotBid() {
     if (allPassInProgress) return;
     if (myRole !== 'host') return;
+    if (fullBotBoardsResolving.has(boardIndex)) return;
     if (!autoPassSeats || autoPassSeats.length === 0) return;
     if (!deals || isAuctionOver(auctionHistory)) return;
 
@@ -4064,22 +4139,41 @@ function maybeRobotBid() {
     const boardAtSchedule = boardIndex;
     const historyLengthAtSchedule = auctionHistory.length;
 
-    setTimeout(() => {
+    setTimeout(async () => {
+        if (allPassInProgress) return;
         if (boardIndex !== boardAtSchedule) return;
         if (auctionHistory.length !== historyLengthAtSchedule) return;
         if (isAuctionOver(auctionHistory)) return;
         const stillTurnSeat = currentTurnSeat(currentDeal().dealer, auctionHistory);
         if (stillTurnSeat !== turnSeat) return;
 
-        // Mode "passe en boucle" (voir échange avec Guillaume, robotBiddingMode) : saute
-        // complètement decideRobotCall, aucune analyse de la main, toujours passe.
         let call, explanation;
         if (robotBiddingMode === 'passOnly') {
             call = 'PASS';
             explanation = 'Mode « passe en boucle » activé';
+        } else if (window.PonsEngine) {
+            try {
+                ({ call, explanation } = await window.PonsEngine.decideRobotCallForApp(turnSeat, currentDeal(), auctionHistory, autoPassSeats));
+            } catch (err) {
+                console.error("[PLAY/PONS strict] robot bloqué : PONS v2.61 n'est pas disponible", err);
+                return;
+            }
         } else {
             ({ call, explanation } = decideRobotCall(turnSeat, currentDeal(), auctionHistory));
         }
+
+        // PONS est asynchrone : vérifier que rien n'a changé pendant son calcul.
+        if (allPassInProgress) return;
+        if (boardIndex !== boardAtSchedule) return;
+        if (auctionHistory.length !== historyLengthAtSchedule) return;
+        if (isAuctionOver(auctionHistory)) return;
+        if (currentTurnSeat(currentDeal().dealer, auctionHistory) !== turnSeat) return;
+        if (!isCallLegal(auctionHistory, call, turnSeat)) {
+            console.warn('[Robot PONS] annonce illégale reçue, repli Passe', call);
+            call = 'PASS';
+            explanation = `${explanation || 'Moteur robot'} · annonce illégale rejetée par PLAY`;
+        }
+
         applyCall(turnSeat, call, explanation);
         peerConn.send({ type: 'call', boardIndex, seat: turnSeat, call, explanation });
     }, 300);
