@@ -3381,3 +3381,31 @@ table.dd-table td.dd-secondary-contract {
    mobile et une police disproportionnée sur desktop. */
 .hand-cards { font-size: clamp(0.85rem, 3.2vw, 0.95rem); }
 .suit-symbol .suit-icon { font-size: clamp(1rem, 3.6vw, 1.1rem); }
+
+/* Correctif affichage des noms dans la vue 4 mains : le nom dispose de toute la largeur
+   de la carte sur sa propre ligne. Les badges HCP/K&R restent alignés à droite juste
+   dessous. On évite ainsi toute ellipse du pseudo sans permettre aux badges de se décaler. */
+.all-hands-diagram .hand-card-title {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto;
+    row-gap: 5px;
+    column-gap: 0;
+}
+
+.all-hands-diagram .hand-card-title-name {
+    grid-column: 1;
+    grid-row: 1;
+    width: 100%;
+    max-width: 100%;
+    overflow: visible;
+    text-overflow: clip;
+    white-space: nowrap;
+}
+
+.all-hands-diagram .hand-card-badges {
+    grid-column: 1;
+    grid-row: 2;
+    width: 100%;
+    min-width: 0;
+    align-items: flex-end;
+}
