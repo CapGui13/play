@@ -5017,6 +5017,11 @@ function renderAuctionLedger() {
     const toggleBtn = document.getElementById('ledgerNamesToggleBtn');
     if (toggleBtn) toggleBtn.classList.toggle('is-active', showLedgerNames);
     const turnSeat = isAuctionOver(auctionHistory) ? null : currentTurnSeat(deal.dealer, auctionHistory);
+    // Les effets pulsants servent uniquement à attirer l'attention de la personne qui doit
+    // réellement enchérir sur CET appareil. Le repère de tour (fond clair via turn-col) reste
+    // visible pour tout le monde, mais le clignotement nom/colonne n'est local qu'au joueur
+    // qui contrôle le siège courant.
+    const localTurnAttention = !!(turnSeat && mySeats && mySeats.includes(turnSeat));
     // Voir échange avec Guillaume (session du 23 juillet) : cible de dépôt pour
     // réassigner un siège en pleine partie (glisser un kibitz depuis le chat, voir
     // renderRoomBoard) — mêmes gestionnaires que dans le salon (uiAllowDrop,
@@ -5035,7 +5040,11 @@ function renderAuctionLedger() {
         // inversion de fond (voir styles.css), mais ne colore plus le texte lui-même —
         // remplacé par seat-relation-* ci-dessus, une couleur PERMANENTE (pas liée au tour)
         // reflétant la relation de ce siège avec le point de vue de qui regarde.
-        const classes = [s === turnSeat ? 'turn-col' : '', seatRelationClass(s)].filter(Boolean).join(' ');
+        const classes = [
+            s === turnSeat ? 'turn-col' : '',
+            (s === turnSeat && localTurnAttention) ? 'local-turn-attention' : '',
+            seatRelationClass(s)
+        ].filter(Boolean).join(' ');
         const seatLabel = ledgerSeatLabel(s);
         const nameSizeClass = playerNameLengthClass(seatLabel);
         return `<th class="${classes}"${dropAttrs(s)}>
@@ -5076,7 +5085,7 @@ function renderAuctionLedger() {
             flatIndex++;
             const cellClasses = [];
             if (isLatest) cellClasses.push('is-latest-call');
-            if (i === turnSeatIndex) cellClasses.push('turn-column-cell');
+            if (localTurnAttention && i === turnSeatIndex) cellClasses.push('turn-column-cell');
             const cls = cellClasses.length ? ` class="${cellClasses.join(' ')}"` : '';
             return `<td${cls}>${row[i] != null ? row[i] : ''}</td>`;
         });

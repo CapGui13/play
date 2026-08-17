@@ -2229,17 +2229,17 @@ button.kibitz-chip {
 @media (prefers-reduced-motion: reduce) {
     .turn-indicator.my-turn { animation: none; }
     .bidding-box.my-turn { animation: none; }
-    .auction-ledger th.turn-col .ledger-seat-label { animation: none; }
+    .auction-ledger th.turn-col.local-turn-attention .ledger-seat-label { animation: none; }
     .auction-ledger td.turn-column-cell { animation: none; }
     .auction-ledger td.is-latest-call { animation: none; }
     .contract-result.contract-reveal { animation: none; }
 }
 
 .hand-card-title {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    gap: 8px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+    column-gap: 8px;
     font-family: var(--font-display);
     font-weight: 600;
     font-size: 0.95rem;
@@ -2248,7 +2248,12 @@ button.kibitz-chip {
     color: color-mix(in srgb, var(--felt-mid) 55%, var(--text));
 }
 
-.hand-card-title-name { flex-shrink: 0; }
+.hand-card-title-name {
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
 
 /* Noms de joueurs longs : on réduit la police plutôt que de pousser les badges HCP/K&R
    sur le côté ou sur une ligne supplémentaire. Les classes sont posées par app.js selon
@@ -2258,9 +2263,12 @@ button.kibitz-chip {
 
 .hand-card-badges {
     display: flex;
+    flex-direction: column;
+    align-items: flex-end;
     gap: 6px;
-    flex-wrap: wrap;
-    justify-content: flex-end;
+    flex-wrap: nowrap;
+    justify-content: flex-start;
+    min-width: max-content;
     /* Voir échange avec Guillaume : réserve la hauteur d'un badge même quand aucun n'est
        affiché (HCP/K&R masqués) — sans ça, la carte change de hauteur en bascule/masquant
        les badges, ce qui décalait la main affichée (centrée verticalement dans son
@@ -2438,7 +2446,7 @@ button.kibitz-chip {
 .auction-ledger th.turn-col.seat-relation-opponent .ledger-seat-label { color: color-mix(in srgb, var(--relation-opponent) 70%, var(--card)); }
 
 /* Tour en cours : le nom pulse du vert vers presque noir, tout en gardant le fond clair. */
-.auction-ledger th.turn-col .ledger-seat-label {
+.auction-ledger th.turn-col.local-turn-attention .ledger-seat-label {
     animation: turn-name-pulse 2.4s ease-in-out infinite;
 }
 
