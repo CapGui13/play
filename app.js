@@ -277,6 +277,9 @@ let showLedgerNames = loadBoolPref('bridgeBidShowLedgerNames', false); // noms d
 // (Hôte uniquement) Voir les 4 mains à tout moment pendant la partie, même en pleine
 // enchère — voir uiToggleHostSeeAllHands. Jamais envoyé aux autres joueurs.
 let hostSeeAllHands = loadBoolPref('bridgeBidHostSeeAllHands', false);
+// Pendant une enchère avec les 4 mains visibles et un PAR disponible : false = enchères, true = PAR.
+let showParDuringAuction = false;
+let allPassInProgress = false;
 
 const FRENCH_RANK_LETTER = { K: 'R', Q: 'D', J: 'V', T: 'X' };
 
@@ -1008,10 +1011,10 @@ function applyDDResultToBoard(boardNumber, table) {
     pool[idx].ddTable = table;
 
     if (deals && pool === deals) {
-        // La partie est déjà lancée. Si on regarde justement cette donne-là et que
-        // l'enchère est terminée, on rafraîchit l'affichage pour faire apparaître le PAR
-        // sans attendre un changement de donne.
-        if (idx === boardIndex && isAuctionOver(auctionHistory)) checkAuctionEnd();
+        // La partie est déjà lancée. Si on regarde justement cette donne-là, rafraîchir
+        // dès que le PAR doit être visible : à la fin de l'enchère, ou immédiatement quand
+        // les 4 mains sont déjà affichées (hôte en mode 4 mains / kibbitz).
+        if (idx === boardIndex && (isAuctionOver(auctionHistory) || (isTrueOriginalHost() && hostSeeAllHands) || isKibbitz())) checkAuctionEnd();
 
         // Relais aux invités : eux n'ont reçu qu'un instantané figé des donnes au moment
         // du 'start-game' (voir uiStartGameAsHost) — un résultat de double mort arrivé
@@ -3925,7 +3928,7 @@ function handlePeerData(msg, guestIndex) {
             const idx = deals.findIndex(d => d.board === msg.boardNumber);
             if (idx === -1) break;
             deals[idx].ddTable = msg.table;
-            if (idx === boardIndex && isAuctionOver(auctionHistory)) checkAuctionEnd();
+            if (idx === boardIndex && (isAuctionOver(auctionHistory) || (isTrueOriginalHost() && hostSeeAllHands) || isKibbitz())) checkAuctionEnd();
             break;
         }
 
@@ -4049,6 +4052,7 @@ function advanceRobotBidsOnAllBoards(excludeIdx) {
 }
 
 function maybeRobotBid() {
+    if (allPassInProgress) return;
     if (myRole !== 'host') return;
     if (!autoPassSeats || autoPassSeats.length === 0) return;
     if (!deals || isAuctionOver(auctionHistory)) return;
@@ -4195,6 +4199,13 @@ function updateBoardControlVisibility() {
     // contrôle technique, pas une identité), donc ce critère seul montrait ces boutons à
     // n'importe quel invité différé, pas seulement au vrai créateur.
     if (resetBtn) resetBtn.style.display = isTrueOriginalHost() ? '' : 'none';
+    const allPassBtn = document.getElementById('allPassBtn');
+    if (allPassBtn) {
+        const canAllPass = isTrueOriginalHost();
+        allPassBtn.style.visibility = canAllPass ? '' : 'hidden';
+        allPassBtn.style.pointerEvents = canAllPass ? '' : 'none';
+        allPassBtn.disabled = !canAllPass || !deals || isAuctionOver(auctionHistory);
+    }
     // Réservé à l'hôte (voir échange avec Guillaume) : changer qui est assis où reste une
     // décision d'organisation de la table, pas quelque chose qu'un simple joueur assis
     // devrait pouvoir déclencher pour tout le monde.
@@ -4978,6 +4989,16 @@ function ledgerSeatLabel(seat) {
     return name || SEAT_FULL_NAME[seat]; // quelqu'un est bien assigné ici, pas un bot : jamais "Bot" dans ce cas
 }
 
+// Réduit automatiquement la taille des noms longs dans les zones étroites (cartes des
+// 4 mains et en-têtes du tableau d'enchères). Les seuils sont volontairement simples et
+// locaux à l'affichage : ils n'altèrent jamais le pseudo lui-même.
+function playerNameLengthClass(label) {
+    const len = String(label || '').trim().length;
+    if (len >= 13) return 'name-very-long';
+    if (len >= 9) return 'name-long';
+    return '';
+}
+
 // Voir échange avec Guillaume ("chaque joueur voit son nom en vert, son partenaire en
 // bleu, les 2 adversaires en rouge") : relation ENTRE ce siège et le point de vue de la
 // personne qui regarde (mySeats), pas une propriété du siège en lui-même — deux personnes
@@ -5015,8 +5036,10 @@ function renderAuctionLedger() {
         // remplacé par seat-relation-* ci-dessus, une couleur PERMANENTE (pas liée au tour)
         // reflétant la relation de ce siège avec le point de vue de qui regarde.
         const classes = [s === turnSeat ? 'turn-col' : '', seatRelationClass(s)].filter(Boolean).join(' ');
+        const seatLabel = ledgerSeatLabel(s);
+        const nameSizeClass = playerNameLengthClass(seatLabel);
         return `<th class="${classes}"${dropAttrs(s)}>
-            <span class="ledger-seat-label">${escapeHtml(ledgerSeatLabel(s))}</span>
+            <span class="ledger-seat-label${nameSizeClass ? ' ' + nameSizeClass : ''}">${escapeHtml(seatLabel)}</span>
             <span class="vuln-bar ${vulnClass}"></span>
         </th>`;
     }).join('');
@@ -5047,10 +5070,14 @@ function renderAuctionLedger() {
     const body = document.getElementById('auctionLedgerBody');
     let flatIndex = 0;
     body.innerHTML = rows.map(row => {
+        const turnSeatIndex = turnSeat ? SEATS.indexOf(turnSeat) : -1;
         const cells = [0, 1, 2, 3].map(i => {
             const isLatest = flatIndex === lastIndex && shouldFlashLatest;
             flatIndex++;
-            const cls = isLatest ? ' class="is-latest-call"' : '';
+            const cellClasses = [];
+            if (isLatest) cellClasses.push('is-latest-call');
+            if (i === turnSeatIndex) cellClasses.push('turn-column-cell');
+            const cls = cellClasses.length ? ` class="${cellClasses.join(' ')}"` : '';
             return `<td${cls}>${row[i] != null ? row[i] : ''}</td>`;
         });
         return `<tr>${cells.join('')}</tr>`;
@@ -5206,11 +5233,13 @@ function buildAllHandsHtml(deal) {
         const krBadge = `<span class="hand-hcp-badge"${showKr ? '' : ' style="visibility:hidden;"'}>K&R ${computeKaplanRubens(hand).toFixed(2)}</span>`;
         const vulnClass = handCardVulnClass(seat, deal.vulnerable);
         const stateClass = showActiveState ? (seat === turnSeat ? 'hand-card-active' : 'hand-card-inactive') : '';
+        const seatLabel = ledgerSeatLabel(seat);
+        const nameSizeClass = playerNameLengthClass(seatLabel);
 
         return `
             <div class="hand-card hand-${seat} ${vulnClass} ${stateClass}">
                 <div class="hand-card-title">
-                    <span class="hand-card-title-name">${ledgerSeatLabel(seat)}</span>
+                    <span class="hand-card-title-name${nameSizeClass ? ' ' + nameSizeClass : ''}">${seatLabel}</span>
                     <span class="hand-card-badges">${hcpBadge}${krBadge}</span>
                 </div>
                 <div class="hand-cards">${lines}</div>
@@ -5688,6 +5717,16 @@ function flashSessionExportToast(text) {
     toast._hideTimer = setTimeout(() => toast.classList.remove('visible'), 2800);
 }
 
+function uiToggleParBiddingView() {
+    if (!deals || isAuctionOver(auctionHistory)) return;
+    const hostForcedReveal = isTrueOriginalHost() && hostSeeAllHands;
+    const showAllHandsEarly = hostForcedReveal || isKibbitz();
+    if (!showAllHandsEarly || !currentDeal() || !currentDeal().ddTable) return;
+    showParDuringAuction = !showParDuringAuction;
+    renderBiddingBox();
+    checkAuctionEnd();
+}
+
 function checkAuctionEnd() {
     const resultEl = document.getElementById('contractResult');
     const diagramEl = document.getElementById('allHandsDiagram');
@@ -5710,24 +5749,60 @@ function checkAuctionEnd() {
     const showAllHandsEarly = hostForcedReveal || isKibbitz();
 
     if (!auctionOver) {
-        resultEl.style.display = 'none';
         const myHandsEl = document.getElementById('myHandsContainer');
+        const biddingBoxEl = document.getElementById('biddingBox');
+        const turnIndicatorEl = document.getElementById('turnIndicator');
+        const toggleWrap = document.getElementById('parBiddingToggleWrap');
+        const toggleBtn = document.getElementById('parBiddingToggleBtn');
+        const ddTableHtml = showAllHandsEarly ? renderDDTable(currentDeal().ddTable, currentDeal().vulnerable) : '';
+
         if (showAllHandsEarly) {
             renderAllHandsDiagram();
             diagramEl.style.display = 'grid';
-            // Voir échange avec Guillaume : les 4 mains REMPLACENT la main du joueur dans
-            // ce même panneau de gauche, pas de cohabitation des deux à la fois.
             if (myHandsEl) myHandsEl.style.display = 'none';
         } else {
             diagramEl.style.display = 'none';
             if (myHandsEl) myHandsEl.style.display = '';
-            // Voir échange avec Guillaume : rendu (masqué) et hauteur synchronisée même ici
-            // — sans ça, la réservation de hauteur ne se mettait à jour qu'après la
-            // toute première bascule sur "voir les 4 mains", pas dès le début d'une donne.
             renderAllHandsDiagram();
+        }
+
+        if (showAllHandsEarly) {
+            if (toggleWrap) toggleWrap.style.display = 'flex';
+            if (toggleBtn) {
+                toggleBtn.disabled = !ddTableHtml;
+                toggleBtn.textContent = ddTableHtml
+                    ? (showParDuringAuction ? '🎴 Voir les enchères' : '📊 Voir le PAR')
+                    : '⏳ PAR en calcul…';
+            }
+            if (ddTableHtml && showParDuringAuction) {
+                resultEl.innerHTML = ddTableHtml;
+                resultEl.style.display = 'block';
+                if (biddingBoxEl) biddingBoxEl.style.display = 'none';
+                if (turnIndicatorEl) turnIndicatorEl.style.display = 'none';
+            } else {
+                if (!ddTableHtml) showParDuringAuction = false;
+                resultEl.style.display = 'none';
+                if (biddingBoxEl) biddingBoxEl.style.display = '';
+                if (turnIndicatorEl) turnIndicatorEl.style.display = '';
+            }
+        } else {
+            showParDuringAuction = false;
+            if (toggleWrap) toggleWrap.style.display = 'none';
+            if (toggleBtn) toggleBtn.disabled = false;
+            resultEl.style.display = 'none';
+            if (biddingBoxEl) biddingBoxEl.style.display = '';
+            if (turnIndicatorEl) turnIndicatorEl.style.display = '';
         }
         return;
     }
+
+    showParDuringAuction = false;
+    const toggleWrap = document.getElementById('parBiddingToggleWrap');
+    if (toggleWrap) toggleWrap.style.display = 'none';
+    const biddingBoxEl = document.getElementById('biddingBox');
+    const turnIndicatorEl = document.getElementById('turnIndicator');
+    if (biddingBoxEl) biddingBoxEl.style.display = '';
+    if (turnIndicatorEl) turnIndicatorEl.style.display = '';
 
     const contract = determineContract(auctionHistory);
     // Voir échange avec Guillaume (session du 8 août — ""Export PBN" devrait être en
@@ -5740,7 +5815,7 @@ function checkAuctionEnd() {
     // moment précis où le contrat apparaît, pas à chaque re-rendu (renderBoard tourne
     // pour bien d'autres raisons — reconnexion d'un joueur, etc. — tant que la donne
     // reste sur cet écran) : on la déclenche seulement s'il était masqué juste avant.
-    const wasHidden = resultEl.style.display === 'none' || resultEl.style.display === '';
+    const wasHidden = resultEl.style.display === 'none' || resultEl.style.display === '' || !resultEl.querySelector('.contract-final-header');
     resultEl.style.display = 'block';
     // Voir échange avec Guillaume ("le bouton export PBN doit être disponible également
     // pour les invités") : canControlBoard() plutôt que myRole==='host' — voir le même
@@ -6295,8 +6370,37 @@ function uiAnswerUndo(approved) {
 // updateBoardControlVisibility, mais on se protège quand même ici en cas d'appel direct —
 // voir échange avec Guillaume, "en mode différé, l'invité ne devrait pas avoir
 // recommencer l'enchère").
+function uiAllPass() {
+    if (!isTrueOriginalHost() || !deals || isAuctionOver(auctionHistory) || allPassInProgress) return;
+
+    allPassInProgress = true;
+    showParDuringAuction = false;
+    try {
+        const deal = currentDeal();
+        let safety = 0;
+        while (!isAuctionOver(auctionHistory) && safety < 4) {
+            const seat = currentTurnSeat(deal.dealer, auctionHistory);
+            if (!isCallLegal(auctionHistory, 'PASS', seat)) break;
+            auctionHistory.push({ seat, call: 'PASS' });
+            if (peerConn) peerConn.send({ type: 'call', boardIndex, seat, call: 'PASS' });
+            safety++;
+        }
+    } finally {
+        allPassInProgress = false;
+    }
+
+    renderAuctionLedger();
+    renderBiddingBox();
+    renderMyHands();
+    checkAuctionEnd();
+    renderUndoControls();
+    updateBoardControlVisibility();
+    saveHostGameStateToStorage();
+}
+
 function uiResetAuction() {
     if (!isTrueOriginalHost() || !canControlBoard()) return;
+    showParDuringAuction = false;
     auctionHistory = [];
     deals[boardIndex].auctionHistory = auctionHistory; // reste la référence partagée
     hostPendingUndo = null;
@@ -6325,6 +6429,7 @@ function uiResetAuction() {
 // juillet, uniquement une fois l'enchère terminée, voir checkAuctionEnd) et par les
 // flèches ◀▶ de navigation libre, également réservées à l'hôte.
 function gotoBoard(newIndex) {
+    showParDuringAuction = false;
     boardIndex = newIndex;
     if (!deals[boardIndex].auctionHistory) deals[boardIndex].auctionHistory = [];
     auctionHistory = deals[boardIndex].auctionHistory;

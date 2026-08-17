@@ -2229,6 +2229,8 @@ button.kibitz-chip {
 @media (prefers-reduced-motion: reduce) {
     .turn-indicator.my-turn { animation: none; }
     .bidding-box.my-turn { animation: none; }
+    .auction-ledger th.turn-col .ledger-seat-label { animation: none; }
+    .auction-ledger td.turn-column-cell { animation: none; }
     .auction-ledger td.is-latest-call { animation: none; }
     .contract-result.contract-reveal { animation: none; }
 }
@@ -2247,6 +2249,12 @@ button.kibitz-chip {
 }
 
 .hand-card-title-name { flex-shrink: 0; }
+
+/* Noms de joueurs longs : on réduit la police plutôt que de pousser les badges HCP/K&R
+   sur le côté ou sur une ligne supplémentaire. Les classes sont posées par app.js selon
+   la longueur du libellé. */
+.hand-card-title-name.name-long { font-size: 0.78rem; }
+.hand-card-title-name.name-very-long { font-size: 0.68rem; }
 
 .hand-card-badges {
     display: flex;
@@ -2409,6 +2417,11 @@ button.kibitz-chip {
     padding-bottom: 6px;
 }
 
+/* Même adaptation dans les quatre colonnes du tableau d'enchères, où la largeur
+   disponible est encore plus faible sur téléphone. */
+.ledger-seat-label.name-long { font-size: 0.78rem; }
+.ledger-seat-label.name-very-long { font-size: 0.68rem; }
+
 /* Voir échange avec Guillaume ("chaque joueur voit son nom en vert, son partenaire en
    bleu, les 2 adversaires en rouge — bien vives") : posées sur le <th> (voir
    seatRelationClass dans app.js), pas seulement sur .ledger-seat-label, pour pouvoir
@@ -2423,6 +2436,16 @@ button.kibitz-chip {
 .auction-ledger th.turn-col.seat-relation-mine .ledger-seat-label { color: color-mix(in srgb, var(--relation-mine) 70%, var(--card)); }
 .auction-ledger th.turn-col.seat-relation-partner .ledger-seat-label { color: color-mix(in srgb, var(--relation-partner) 70%, var(--card)); }
 .auction-ledger th.turn-col.seat-relation-opponent .ledger-seat-label { color: color-mix(in srgb, var(--relation-opponent) 70%, var(--card)); }
+
+/* Tour en cours : le nom pulse du vert vers presque noir, tout en gardant le fond clair. */
+.auction-ledger th.turn-col .ledger-seat-label {
+    animation: turn-name-pulse 2.4s ease-in-out infinite;
+}
+
+@keyframes turn-name-pulse {
+    0%, 100% { color: #22c55e; }
+    50% { color: #101612; }
+}
 
 .vuln-bar {
     display: block;
@@ -2451,6 +2474,16 @@ button.kibitz-chip {
     border: 1px solid var(--border);
 }
 
+/* Toutes les cases sous le joueur dont c'est le tour pulsent vers le rouge. */
+.auction-ledger td.turn-column-cell {
+    animation: turn-column-red-pulse 2.4s ease-in-out infinite;
+}
+
+@keyframes turn-column-red-pulse {
+    0%, 100% { background-color: var(--card); }
+    50% { background-color: #6b1f24; }
+}
+
 /* Flash bref sur la toute dernière enchère jouée (voir renderAuctionLedger dans app.js,
    qui marque cette cellule précise à chaque rendu) : le fond part d'une teinte or vive
    puis s'estompe vers le fond normal de la cellule en une fraction de seconde — repérable
@@ -2469,6 +2502,12 @@ button.kibitz-chip {
 .auction-ledger .call-suit.diamonds { color: #f2b879; color: color-mix(in srgb, var(--suit-orange) 70%, var(--text)); }
 .auction-ledger .call-suit.clubs { color: #81abe1; color: color-mix(in srgb, var(--suit-blue) 70%, var(--text)); }
 .auction-ledger .call-suit.notrump { color: var(--text); }
+
+.par-bidding-toggle-wrap {
+    display: flex;
+    justify-content: center;
+    margin: 8px 0 10px;
+}
 
 .contract-result {
     background: rgba(201, 162, 39, 0.15);
