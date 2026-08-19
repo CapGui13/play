@@ -2532,7 +2532,7 @@ button.kibitz-chip {
    c'est le point d'aboutissement de toute l'enchère, ça mérite un peu plus qu'un
    affichage sec. transform+opacity uniquement (pas de box-shadow animée), 350ms. */
 .contract-result.contract-reveal {
-    animation: ui-quick-fade-in 0.22s ease-out;
+    animation: ui-quick-fade-in 325ms ease-out;
 }
 
 @keyframes ui-quick-fade-in {
@@ -2541,7 +2541,7 @@ button.kibitz-chip {
 }
 
 .ui-quick-fade-in {
-    animation: ui-quick-fade-in 0.22s ease-out;
+    animation: ui-quick-fade-in 325ms ease-out;
 }
 
 .contract-result .info-text {
@@ -3479,7 +3479,7 @@ table.dd-table td.dd-secondary-contract {
         grid-area: 1 / 1;
         align-self: start;
         min-width: 0;
-        transition: opacity 0.22s ease;
+        transition: opacity 325ms ease;
     }
 
     .auction-view-stack.is-mobile-stacked.show-bidding > .contract-result {

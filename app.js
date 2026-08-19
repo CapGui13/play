@@ -5941,13 +5941,18 @@ function setAuctionVisualMode(mode, { parCapable = false, ddTableHtml = '' } = {
     const shouldStackMobile = mobile && (parCapable || mode === 'final');
     const modeChanged = lastAuctionVisualMode !== mode;
 
+    // Toujours alimenter la vue PAR avec le double mort de LA DONNE COURANTE avant de
+    // l'afficher. L'ancienne version ne le faisait que dans la branche mobile : sur
+    // desktop, la première donne affichait donc un cadre vide ; à partir de la deuxième,
+    // un ancien HTML pouvait masquer le défaut.
+    if (mode === 'par' && ddTableHtml) {
+        resultEl.innerHTML = ddTableHtml;
+    } else if (shouldStackMobile && mode !== 'final' && !ddTableHtml) {
+        // Gabarit mobile uniquement pendant le calcul du vrai PAR.
+        resultEl.innerHTML = renderDDTablePlaceholder();
+    }
+
     if (shouldStackMobile) {
-        // Pendant l'enchère, le gabarit existe dès le premier rendu, même si le DD n'est
-        // pas encore revenu. Cela remplace l'ancien min-height calculé quelques secondes
-        // plus tard, qui était précisément le "blanc retardé" observé sous les boutons.
-        if (mode !== 'final') {
-            resultEl.innerHTML = ddTableHtml || renderDDTablePlaceholder();
-        }
 
         resultEl.style.display = 'block';
         biddingViewEl.style.display = 'block';
