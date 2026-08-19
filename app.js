@@ -425,7 +425,21 @@ function computeKaplanRubens(hand) {
     return p + p2 / 10 + p3 + pdist - d;
 }
 
+// Sur mobile, une option d'affichage des mains ne doit pas déplacer brutalement la zone
+// d'enchère si celle-ci est justement visible. On réutilise volontairement le même ancrage
+// que pour les changements de hauteur du relevé : il ne s'active que pendant l'enchère,
+// hors vue PAR, et seulement si la boîte d'enchères est réellement dans le viewport.
+// Si l'utilisateur est remonté regarder les mains, aucune prise de contrôle du scroll.
+function captureHandDisplayOptionViewportAnchor() {
+    return captureMobileLedgerViewportAnchor();
+}
+
+function restoreHandDisplayOptionViewportAnchor(anchor) {
+    scheduleMobileLedgerViewportRestore(anchor);
+}
+
 function uiToggleFrenchRanks() {
+    const mobileBiddingAnchor = captureHandDisplayOptionViewportAnchor();
     useFrenchRanks = !useFrenchRanks;
     saveBoolPref('bridgeBidFrenchRanks', useFrenchRanks);
     renderHandDisplayOptionButtons();
@@ -436,26 +450,31 @@ function uiToggleFrenchRanks() {
         // sans ce même critère ici, ces boutons semblaient "sans effet" dans ce cas,
         // puisqu'ils ne rafraîchissaient que myHandsContainer, invisible à ce moment-là.
         renderAllHandsDiagram(); // toujours, même masqué (voir échange avec Guillaume) : garde la hauteur réservée synchronisée quoi qu'il arrive
+        restoreHandDisplayOptionViewportAnchor(mobileBiddingAnchor);
     }
 }
 
 function uiToggleShowHcp() {
+    const mobileBiddingAnchor = captureHandDisplayOptionViewportAnchor();
     showHcp = !showHcp;
     saveBoolPref('bridgeBidShowHcp', showHcp);
     renderHandDisplayOptionButtons();
     if (deals) {
         renderMyHands();
         renderAllHandsDiagram(); // toujours, même masqué (voir échange avec Guillaume) : garde la hauteur réservée synchronisée quoi qu'il arrive
+        restoreHandDisplayOptionViewportAnchor(mobileBiddingAnchor);
     }
 }
 
 function uiToggleShowKr() {
+    const mobileBiddingAnchor = captureHandDisplayOptionViewportAnchor();
     showKr = !showKr;
     saveBoolPref('bridgeBidShowKr', showKr);
     renderHandDisplayOptionButtons();
     if (deals) {
         renderMyHands();
         renderAllHandsDiagram(); // toujours, même masqué (voir échange avec Guillaume) : garde la hauteur réservée synchronisée quoi qu'il arrive
+        restoreHandDisplayOptionViewportAnchor(mobileBiddingAnchor);
     }
 }
 
