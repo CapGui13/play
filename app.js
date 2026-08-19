@@ -1012,9 +1012,10 @@ function applyDDResultToBoard(boardNumber, table) {
 
     if (deals && pool === deals) {
         // La partie est déjà lancée. Si on regarde justement cette donne-là, rafraîchir
-        // dès que le PAR doit être visible : à la fin de l'enchère, ou immédiatement quand
-        // les 4 mains sont déjà affichées (hôte en mode 4 mains / kibbitz).
-        if (idx === boardIndex && (isAuctionOver(auctionHistory) || (isTrueOriginalHost() && hostSeeAllHands) || isKibbitz())) checkAuctionEnd();
+        // dès que le PAR doit être visible : à la fin de l'enchère, ou immédiatement pour
+        // le vrai hôte / un kibbitz. Le bouton PAR du vrai hôte ne dépend plus de
+        // hostSeeAllHands, donc l'arrivée tardive du DD doit aussi rafraîchir ce bouton.
+        if (idx === boardIndex && (isAuctionOver(auctionHistory) || isTrueOriginalHost() || isKibbitz())) checkAuctionEnd();
 
         // Relais aux invités : eux n'ont reçu qu'un instantané figé des donnes au moment
         // du 'start-game' (voir uiStartGameAsHost) — un résultat de double mort arrivé
@@ -3928,7 +3929,7 @@ function handlePeerData(msg, guestIndex) {
             const idx = deals.findIndex(d => d.board === msg.boardNumber);
             if (idx === -1) break;
             deals[idx].ddTable = msg.table;
-            if (idx === boardIndex && (isAuctionOver(auctionHistory) || (isTrueOriginalHost() && hostSeeAllHands) || isKibbitz())) checkAuctionEnd();
+            if (idx === boardIndex && (isAuctionOver(auctionHistory) || isTrueOriginalHost() || isKibbitz())) checkAuctionEnd();
             break;
         }
 
@@ -5895,8 +5896,9 @@ function flashSessionExportToast(text) {
 
 
 // Sur mobile uniquement, garde le panneau d'enchères à la hauteur du plus grand des
-// deux affichages (boîte d'enchères / PAR). Ainsi, le contour extérieur ne "saute" plus
-// quand on bascule avec le bouton Voir le PAR / Voir les enchères.
+// deux affichages (boîte d'enchères / PAR). IMPORTANT : on mesure maintenant sur un CLONE
+// invisible du panneau, jamais en modifiant temporairement le DOM affiché. Cela évite
+// qu'une mesure de hauteur puisse interférer avec le bouton Voir le PAR ou son état.
 // Desktop n'utilise pas cette hauteur (voir media query dans styles.css).
 function syncMobileAuctionPanelStableHeight(resultEl, biddingBoxEl, turnIndicatorEl, ddTableHtml) {
     const panel = (resultEl && resultEl.closest('.auction-panel'))
@@ -5909,56 +5911,61 @@ function syncMobileAuctionPanelStableHeight(resultEl, biddingBoxEl, turnIndicato
         return;
     }
 
-    // Le PAR doit être présent dans le DOM pour pouvoir mesurer son état, même lorsqu'il
-    // est actuellement masqué.
-    resultEl.innerHTML = ddTableHtml;
+    // Mesure hors écran sur une copie : aucun display/visibility/innerHTML du panneau réel
+    // n'est touché, donc aucun risque de faire disparaître un contrôle vivant.
+    const clone = panel.cloneNode(true);
+    clone.removeAttribute('id');
+    clone.style.position = 'fixed';
+    clone.style.left = '-10000px';
+    clone.style.top = '0';
+    clone.style.visibility = 'hidden';
+    clone.style.pointerEvents = 'none';
+    clone.style.width = `${panel.getBoundingClientRect().width}px`;
+    clone.style.minHeight = '0';
+    clone.style.setProperty('--mobile-auction-panel-min-height', '0px');
+    document.body.appendChild(clone);
 
-    const saved = {
-        resultDisplay: resultEl.style.display,
-        resultVisibility: resultEl.style.visibility,
-        biddingDisplay: biddingBoxEl.style.display,
-        biddingVisibility: biddingBoxEl.style.visibility,
-        turnDisplay: turnIndicatorEl.style.display,
-        turnVisibility: turnIndicatorEl.style.visibility
-    };
+    const cloneResult = clone.querySelector('#contractResult');
+    const cloneBidding = clone.querySelector('#biddingBox');
+    const cloneTurn = clone.querySelector('#turnIndicator');
+    const cloneToggle = clone.querySelector('#parBiddingToggleWrap');
 
-    // Retire la hauteur calculée au rendu précédent afin de mesurer les hauteurs naturelles.
-    panel.style.removeProperty('--mobile-auction-panel-min-height');
+    let biddingHeight = 0;
+    let parHeight = 0;
+    if (cloneResult && cloneBidding && cloneTurn) {
+        if (cloneToggle) cloneToggle.style.display = 'flex';
 
-    // Mesure 1 : affichage normal des boutons + indicateur de tour.
-    resultEl.style.display = 'none';
-    biddingBoxEl.style.display = '';
-    turnIndicatorEl.style.display = '';
-    const biddingHeight = Math.ceil(panel.getBoundingClientRect().height);
+        // État enchères.
+        cloneResult.style.display = 'none';
+        cloneBidding.style.display = '';
+        cloneTurn.style.display = '';
+        biddingHeight = Math.ceil(clone.getBoundingClientRect().height);
 
-    // Mesure 2 : affichage du PAR. Les éléments sont rendus dans le flux pour obtenir leur
-    // vraie hauteur, mais visibility:hidden évite tout flash visuel pendant cette mesure
-    // synchrone.
-    resultEl.style.display = 'block';
-    resultEl.style.visibility = 'hidden';
-    biddingBoxEl.style.display = 'none';
-    turnIndicatorEl.style.display = 'none';
-    const parHeight = Math.ceil(panel.getBoundingClientRect().height);
+        // État PAR.
+        cloneResult.innerHTML = ddTableHtml;
+        cloneResult.style.display = 'block';
+        cloneBidding.style.display = 'none';
+        cloneTurn.style.display = 'none';
+        parHeight = Math.ceil(clone.getBoundingClientRect().height);
+    }
 
-    // Restaure exactement l'état que checkAuctionEnd() était en train de gérer.
-    resultEl.style.display = saved.resultDisplay;
-    resultEl.style.visibility = saved.resultVisibility;
-    biddingBoxEl.style.display = saved.biddingDisplay;
-    biddingBoxEl.style.visibility = saved.biddingVisibility;
-    turnIndicatorEl.style.display = saved.turnDisplay;
-    turnIndicatorEl.style.visibility = saved.turnVisibility;
+    clone.remove();
 
-    panel.style.setProperty(
-        '--mobile-auction-panel-min-height',
-        `${Math.max(biddingHeight, parHeight)}px`
-    );
+    const stableHeight = Math.max(biddingHeight, parHeight);
+    if (stableHeight > 0) {
+        panel.style.setProperty('--mobile-auction-panel-min-height', `${stableHeight}px`);
+    } else {
+        panel.style.removeProperty('--mobile-auction-panel-min-height');
+    }
 }
 
 function uiToggleParBiddingView() {
     if (!deals || isAuctionOver(auctionHistory)) return;
-    const hostForcedReveal = isTrueOriginalHost() && hostSeeAllHands;
-    const showAllHandsEarly = hostForcedReveal || isKibbitz();
-    if (!showAllHandsEarly || !currentDeal() || !currentDeal().ddTable) return;
+    // Le PAR pendant l'enchère est un privilège du vrai hôte, même s'il n'a PAS activé
+    // « Voir les 4 mains ». Un kibbitz y a également accès. Ne pas lier ce bouton à
+    // hostSeeAllHands : sinon l'hôte peut perdre le bouton alors qu'il reste l'organisateur.
+    const canViewParDuringAuction = isTrueOriginalHost() || isKibbitz();
+    if (!canViewParDuringAuction || !currentDeal() || !currentDeal().ddTable) return;
     showParDuringAuction = !showParDuringAuction;
     renderBiddingBox();
     checkAuctionEnd();
@@ -5984,6 +5991,8 @@ function checkAuctionEnd() {
     // tricher sur sa propre main, voir isTrueOriginalHost pour le détail).
     const hostForcedReveal = isTrueOriginalHost() && hostSeeAllHands;
     const showAllHandsEarly = hostForcedReveal || isKibbitz();
+    // Indépendant de « Voir les 4 mains » : le vrai hôte garde toujours son bouton PAR.
+    const canViewParDuringAuction = isTrueOriginalHost() || isKibbitz();
 
     if (!auctionOver) {
         const myHandsEl = document.getElementById('myHandsContainer');
@@ -5991,7 +6000,7 @@ function checkAuctionEnd() {
         const turnIndicatorEl = document.getElementById('turnIndicator');
         const toggleWrap = document.getElementById('parBiddingToggleWrap');
         const toggleBtn = document.getElementById('parBiddingToggleBtn');
-        const ddTableHtml = showAllHandsEarly ? renderDDTable(currentDeal().ddTable, currentDeal().vulnerable) : '';
+        const ddTableHtml = canViewParDuringAuction ? renderDDTable(currentDeal().ddTable, currentDeal().vulnerable) : '';
 
         // Mobile : mesure les deux vues AVANT d'appliquer celle demandée, puis réserve la
         // hauteur de la plus grande. Sur desktop, la fonction enlève simplement sa variable.
@@ -6007,7 +6016,7 @@ function checkAuctionEnd() {
             renderAllHandsDiagram();
         }
 
-        if (showAllHandsEarly) {
+        if (canViewParDuringAuction) {
             if (toggleWrap) toggleWrap.style.display = 'flex';
             if (toggleBtn) {
                 toggleBtn.disabled = !ddTableHtml;
