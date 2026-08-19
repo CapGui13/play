@@ -5322,7 +5322,7 @@ function renderBiddingBox() {
         return `<button type="button" class="call-btn bid-level-btn${selected ? ' selected' : ''}" ${legal ? '' : 'disabled'} aria-pressed="${selected ? 'true' : 'false'}" onclick="uiSelectBidLevel(${level})">${level}</button>`;
     }).join('');
 
-    const strainRow = TWO_STEP_BID_STRAINS.map(strain => {
+    const strainButtons = TWO_STEP_BID_STRAINS.map(strain => {
         const call = selectedBiddingLevel == null ? null : `${selectedBiddingLevel}${strain}`;
         const legal = !!(myTurn && call && isCallLegal(auctionHistory, call, turnSeat));
         const label = formatStrainLabel(strain);
@@ -5333,22 +5333,27 @@ function renderBiddingBox() {
         return `<button type="button" class="call-btn bid-strain-btn ${suitClass}" ${legal ? '' : 'disabled'} title="${title}" onclick="uiSelectBidStrain('${strain}')">${label}</button>`;
     }).join('');
 
-    const specialLabels = { PASS: 'Passe', X: 'X', XX: 'XX' };
-    const specialClasses = {
-        PASS: 'call-btn-pass',
-        X: 'call-btn-double',
-        XX: 'call-btn-redouble'
-    };
-    const specialRow = ['PASS', 'X', 'XX'].map(call => {
-        const legal = myTurn && isCallLegal(auctionHistory, call, turnSeat);
-        return `<button type="button" class="call-btn call-btn-special ${specialClasses[call]}" ${legal ? '' : 'disabled'} onclick="uiMakeCall('${call}')">${specialLabels[call]}</button>`;
-    }).join('');
+    // Emplacement unique X / XX :
+    // - si le SURCONTRE est légal dans l'état courant, la touche devient XX ;
+    // - sinon elle affiche X, actif seulement si le CONTRE est légal ;
+    // - si ni X ni XX n'est légal, on conserve X mais grisé.
+    // `isCallLegal` reste l'oracle : on ne déduit pas la légalité du seul dernier carton.
+    const redoubleAvailable = isCallLegal(auctionHistory, 'XX', turnSeat);
+    const doubleAvailable = isCallLegal(auctionHistory, 'X', turnSeat);
+    const xSlotCall = redoubleAvailable ? 'XX' : 'X';
+    const xSlotLegal = !!(myTurn && (redoubleAvailable || doubleAvailable));
+    const xSlotClass = xSlotCall === 'XX' ? 'call-btn-redouble' : 'call-btn-double';
+
+    const passLegal = !!(myTurn && isCallLegal(auctionHistory, 'PASS', turnSeat));
+    const passButton = `<button type="button" class="call-btn call-btn-special call-btn-pass" ${passLegal ? '' : 'disabled'} onclick="uiMakeCall('PASS')">Passe</button>`;
+    const xSlotButton = `<button type="button" class="call-btn call-btn-special ${xSlotClass}" ${xSlotLegal ? '' : 'disabled'} onclick="uiMakeCall('${xSlotCall}')">${xSlotCall}</button>`;
 
     box.innerHTML = `
         <div class="two-step-bidding-controls">
             <div class="bid-level-row" aria-label="Choisir le palier">${levelRow}</div>
-            <div class="bid-strain-row" aria-label="Choisir la couleur">${strainRow}</div>
-            <div class="two-step-special-row">${specialRow}</div>
+            <div class="bid-action-strain-row" aria-label="Passe, contre ou surcontre, puis couleur">
+                ${passButton}${xSlotButton}${strainButtons}
+            </div>
         </div>
     `;
 }
