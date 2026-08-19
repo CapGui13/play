@@ -3545,49 +3545,55 @@ function uiStartGameAsHost() {
 
         const botSeats = SEATS.filter(seat => !seatAssignment[seat]);
         autoPassSeats = botSeats;
-        advanceRobotBidsOnAllBoards(boardIndex); // voir échange avec Guillaume — prérequis d'"avance rapide"/"vue d'ensemble"
 
-        // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 2) : plus de branche "mode différé"
-        // séparée ici — la salle garde TOUJOURS une vraie connexion P2P hôte, même avec
-        // un siège encore SEAT_PENDING. Ce dernier reste simplement inoccupé (déjà exclu
-        // de botSeats ci-dessus, puisque SEAT_PENDING est une sentinelle non-vide, pas
-        // une valeur absente) jusqu'à ce que quelqu'un le revendique en rejoignant — voir
-        // le "revendication automatique d'un siège en attente" dans onGuestConnected,
-        // qui fonctionne déjà que la partie soit lancée ou non. La sauvegarde cloud
-        // (saveHostGameStateToStorage → pushCloudGameState, tout en bas de cette
-        // fonction) tourne de toute façon à chaque changement d'état, qu'il y ait ou non
-        // un siège en attente — la reprise asynchrone de ce siège n'a donc besoin
-        // d'aucune tuyauterie séparée, elle continue de fonctionner exactement comme
-        // avant ce changement.
+        // Toutes les informations nécessaires à l'affichage de la première donne sont
+        // maintenant prêtes. Calculer les autres donnes, sérialiser toute la séance pour
+        // le réseau/localStorage et démarrer le polling n'ont AUCUNE raison de retarder
+        // le premier paint de la boîte d'enchères.
         mySeats = SEATS.filter(seat => seatAssignment[seat] === 'host');
-        participants.filter(p => p.id !== 'host' && !p.disconnected).forEach(p => {
-            const guestIndex = guestIndexForParticipant(p.id);
-            if (guestIndex == null) return;
-            const seatsForThisGuest = SEATS.filter(seat => seatAssignment[seat] === p.id);
-            // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 4) : hostReconnectToken inclus
-            // ICI aussi, pas seulement dans broadcastLobbyState ('lobby-state') — sans
-            // ça, un invité qui ne recevait plus jamais de lobby-state entre le
-            // lancement et une éventuelle coupure de l'hôte ne connaissait jamais son
-            // identité pour ses propres échanges avec le serveur (voir
-            // buildCloudStatePayload). subHostId, lui, a disparu (plus d'élection de
-            // sous-hôte).
-            peerConn.send({
-                type: 'start-game',
-                deals, yourSeats: seatsForThisGuest, botSeats,
-                hostReconnectToken: getReconnectToken(),
-                roomCreatorName
-            }, guestIndex);
-        });
 
-        saveHostGameStateToStorage(); // première sauvegarde, voir échange avec Guillaume (session du 23 juillet)
-        // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 3) : lancé désormais à CHAQUE partie,
-        // pas seulement en mode différé — pollCloudForUpdates lui-même ne fait rien tant
-        // que tout le monde reste en P2P (voir son propre garde-fou), donc rien ne
-        // change en pratique pour une partie où personne ne se déconnecte jamais. Prêt à
-        // réagir dès qu'un siège occupé passe en repli serveur, sans latence
-        // supplémentaire pour s'abonner à ce moment précis.
-        startDeferredPolling();
+        // Affichage prioritaire : sur mobile c'est ce qui supprime la latence perceptible
+        // des boutons au lancement d'une nouvelle séance. On rend la première donne
+        // immédiatement, puis on laisse réellement un paint au navigateur.
         enterGameScreen();
+
+        const finishSessionStartAfterFirstPaint = () => {
+            // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 2) : plus de branche "mode différé"
+            // séparée ici — la salle garde TOUJOURS une vraie connexion P2P hôte, même
+            // avec un siège encore SEAT_PENDING.
+            //
+            // Envoyer d'abord start-game : les invités ne doivent pas attendre le
+            // pré-calcul éventuel des autres donnes.
+            participants.filter(p => p.id !== 'host' && !p.disconnected).forEach(p => {
+                const guestIndex = guestIndexForParticipant(p.id);
+                if (guestIndex == null) return;
+                const seatsForThisGuest = SEATS.filter(seat => seatAssignment[seat] === p.id);
+                peerConn.send({
+                    type: 'start-game',
+                    deals, yourSeats: seatsForThisGuest, botSeats,
+                    hostReconnectToken: getReconnectToken(),
+                    roomCreatorName
+                }, guestIndex);
+            });
+
+            // Prérequis d'"avance rapide"/"vue d'ensemble", mais strictement hors du
+            // chemin critique du premier affichage. Si le moteur moderne n'est pas encore
+            // prêt et que le repli legacy est synchrone, il ne peut plus retarder les
+            // boutons de la première donne.
+            advanceRobotBidsOnAllBoards(boardIndex);
+
+            saveHostGameStateToStorage(); // première sauvegarde
+            // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 3) : polling de repli serveur.
+            startDeferredPolling();
+        };
+
+        // Deux frames : la première applique le DOM du jeu, la seconde garantit qu'un
+        // paint a eu l'occasion de se produire avant les travaux de fond ci-dessus.
+        if (window.requestAnimationFrame) {
+            requestAnimationFrame(() => requestAnimationFrame(finishSessionStartAfterFirstPaint));
+        } else {
+            setTimeout(finishSessionStartAfterFirstPaint, 0);
+        }
     };
 
     // Source effectivement active : le fichier local prime sur la bibliothèque si les deux
@@ -6109,8 +6115,12 @@ function checkAuctionEnd() {
     if (toggleWrap) toggleWrap.style.display = 'none';
     const biddingBoxEl = document.getElementById('biddingBox');
     const turnIndicatorEl = document.getElementById('turnIndicator');
-    if (biddingBoxEl) biddingBoxEl.style.display = '';
-    if (turnIndicatorEl) turnIndicatorEl.style.display = '';
+    // Enchère terminée : renderBiddingBox() vide déjà son contenu. Il faut aussi retirer
+    // le conteneur du flux, sinon ses padding/bordure/background restent visibles sous le
+    // PAR sous la forme d'un petit rectangle arrondi vide (surtout évident sur desktop).
+    // À la donne suivante, la branche !auctionOver ci-dessus les remet explicitement.
+    if (biddingBoxEl) biddingBoxEl.style.display = 'none';
+    if (turnIndicatorEl) turnIndicatorEl.style.display = 'none';
 
     const contract = determineContract(auctionHistory);
     // Voir échange avec Guillaume (session du 8 août — ""Export PBN" devrait être en
