@@ -3198,13 +3198,6 @@ table.dd-table td.dd-secondary-contract {
    Regroupées ici plutôt qu'éclatées dans chaque section, pour qu'on voie d'un coup d'œil
    tout ce qui change sur petit écran. */
 @media (max-width: 700px) {
-    /* Hauteur stable du grand rectangle d'enchères lors de la bascule Enchères ↔ PAR.
-       La valeur est mesurée dynamiquement en JS comme le maximum des deux vues.
-       Cette règle n'existe volontairement que sur mobile : desktop reste inchangé. */
-    .auction-panel {
-        min-height: var(--mobile-auction-panel-min-height, 0);
-    }
-
     /* Marges extérieures resserrées : sur un écran de ~360-390px de large, les paddings
        pensés pour desktop (20px de partout + 36px dans le salon, etc.) empilés les uns
        sur les autres finissaient par manger presque un tiers de la largeur utile. */
@@ -3459,8 +3452,16 @@ table.dd-table td.dd-secondary-contract {
     }
 }
 
+/* Stabilisation Enchères ↔ PAR sur toute la plage où le jeu passe en layout mobile
+   (même breakpoint 760px que .game-body). Aucun effet au-dessus de 760px. */
+@media (max-width: 760px) {
+    .auction-panel {
+        min-height: var(--mobile-auction-panel-min-height, 0);
+    }
+}
+
 /* ===== Boîte d'enchères à deux temps : palier puis souche =====
-   Interaction : 1..7, puis SA / ♠ / ♥ / ♦ / ♣. Les appels internes restent inchangés. */
+   Interaction : 1..7, puis ♣ / ♦ / ♥ / ♠ / SA (T / K / C / P / SA). Les appels internes restent inchangés. */
 .bidding-box {
     margin-bottom: 12px;
     padding: 9px;

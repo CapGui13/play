@@ -3558,12 +3558,17 @@ function uiStartGameAsHost() {
         enterGameScreen();
 
         const finishSessionStartAfterFirstPaint = () => {
+            // Prérequis d'"avance rapide"/"vue d'ensemble", mais strictement hors du
+            // chemin critique du premier affichage. On conserve volontairement l'ordre
+            // historique PRE-CALCUL -> ENVOI start-game : avec le moteur legacy, ce
+            // pré-calcul peut être synchrone et enrichir les autres donnes. Les invités
+            // doivent recevoir le même snapshot que l'hôte pour que goto-board restaure
+            // ensuite exactement les mêmes historiques.
+            advanceRobotBidsOnAllBoards(boardIndex);
+
             // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 2) : plus de branche "mode différé"
             // séparée ici — la salle garde TOUJOURS une vraie connexion P2P hôte, même
             // avec un siège encore SEAT_PENDING.
-            //
-            // Envoyer d'abord start-game : les invités ne doivent pas attendre le
-            // pré-calcul éventuel des autres donnes.
             participants.filter(p => p.id !== 'host' && !p.disconnected).forEach(p => {
                 const guestIndex = guestIndexForParticipant(p.id);
                 if (guestIndex == null) return;
@@ -3575,12 +3580,6 @@ function uiStartGameAsHost() {
                     roomCreatorName
                 }, guestIndex);
             });
-
-            // Prérequis d'"avance rapide"/"vue d'ensemble", mais strictement hors du
-            // chemin critique du premier affichage. Si le moteur moderne n'est pas encore
-            // prêt et que le repli legacy est synchrone, il ne peut plus retarder les
-            // boutons de la première donne.
-            advanceRobotBidsOnAllBoards(boardIndex);
 
             saveHostGameStateToStorage(); // première sauvegarde
             // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 3) : polling de repli serveur.
@@ -5916,7 +5915,7 @@ function syncMobileAuctionPanelStableHeight(resultEl, biddingBoxEl, turnIndicato
         || (biddingBoxEl && biddingBoxEl.closest('.auction-panel'));
     if (!panel) return;
 
-    const mobile = window.matchMedia && window.matchMedia('(max-width: 700px)').matches;
+    const mobile = window.matchMedia && window.matchMedia('(max-width: 760px)').matches;
     if (!mobile || !ddTableHtml || !resultEl || !biddingBoxEl || !turnIndicatorEl) {
         mobileAuctionPanelMeasureToken++;
         panel.style.removeProperty('--mobile-auction-panel-min-height');
