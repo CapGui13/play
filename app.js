@@ -3531,6 +3531,9 @@ function uiStartGameAsHost() {
         const hostParticipantAtLaunch = participants.find(p => p.id === myParticipantId);
         if (hostParticipantAtLaunch) roomCreatorName = hostParticipantAtLaunch.name;
 
+        // Une nouvelle séance invalide toute passe de pré-calcul legacy encore planifiée
+        // par une séance précédente dans le même onglet.
+        cancelStartupLegacyRobotPrecalc();
         deals = orderedDeals;
         boardIndex = 0;
         if (!deals[0].auctionHistory) deals[0].auctionHistory = [];
@@ -3559,14 +3562,13 @@ function uiStartGameAsHost() {
         enterGameScreen();
 
         const finishSessionStartAfterFirstPaint = () => {
-            // Prérequis d'"avance rapide"/"vue d'ensemble", mais strictement hors du
-            // chemin critique du premier affichage. On conserve volontairement l'ordre
-            // historique PRE-CALCUL -> ENVOI start-game : avec le moteur legacy, ce
-            // pré-calcul peut être synchrone et enrichir les autres donnes. Les invités
-            // doivent recevoir le même snapshot que l'hôte pour que goto-board restaure
-            // ensuite exactement les mêmes historiques.
-            advanceRobotBidsOnAllBoards(boardIndex);
-
+            // La première donne est déjà peinte. On lance maintenant la séance SANS
+            // recalculer d'un bloc toutes les donnes futures : sur le moteur legacy ce
+            // pré-calcul était synchrone et pouvait monopoliser le thread principal juste
+            // après l'apparition des boutons. Hôte et invités démarrent donc avec le MÊME
+            // snapshot initial, puis les autres donnes sont enrichies progressivement en
+            // arrière-plan (voir scheduleStartupLegacyRobotPrecalc / precalc-board).
+            //
             // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 2) : plus de branche "mode différé"
             // séparée ici — la salle garde TOUJOURS une vraie connexion P2P hôte, même
             // avec un siège encore SEAT_PENDING.
@@ -3582,9 +3584,21 @@ function uiStartGameAsHost() {
                 }, guestIndex);
             });
 
-            saveHostGameStateToStorage(); // première sauvegarde
+            saveHostGameStateToStorage(); // première sauvegarde du snapshot réellement lancé
             // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 3) : polling de repli serveur.
             startDeferredPolling();
+
+            // PONS/WASM avait déjà son propre chemin asynchrone ; le legacy, lui, est
+            // désormais découpé donne par donne et ne bloque plus toutes les donnes dans
+            // une seule tâche. Dans les deux cas, goto-board transporte dorénavant aussi
+            // l'historique de la donne cible : même si l'hôte saute immédiatement vers une
+            // donne encore en cours de préparation, l'invité reçoit toujours le snapshot
+            // autoritaire exact de l'hôte.
+            if (window.PonsEngine) {
+                advanceRobotBidsOnAllBoards(boardIndex);
+            } else {
+                scheduleStartupLegacyRobotPrecalc(boardIndex);
+            }
         };
 
         // Deux frames : la première applique le DOM du jeu, la seconde garantit qu'un
@@ -3927,6 +3941,36 @@ function handlePeerData(msg, guestIndex) {
             break;
         }
 
+        // Une donne FUTURE a été pré-calculée progressivement par l'hôte après le
+        // lancement. Le message ne transporte que son historique d'enchères, pas toute la
+        // séance : les invités restent ainsi synchronisés sans ressérialiser `deals` en
+        // entier à chaque petite tranche de travail. Un hôte n'accepte jamais ce message
+        // d'un invité : la source de vérité reste strictement l'hôte.
+        case 'precalc-board': {
+            if (myRole === 'host' || !deals) break;
+            const idx = Number(msg.boardIndex);
+            if (!Number.isInteger(idx) || idx < 0 || idx >= deals.length || !Array.isArray(msg.auctionHistory)) break;
+            const localHistory = deals[idx].auctionHistory || [];
+            // Un snapshot de fond ne peut qu'ÉTENDRE l'historique déjà connu. S'il est
+            // plus court ou diverge (ex. une annonce/undo plus récent a déjà été reçu),
+            // on l'ignore au lieu d'écraser un état plus frais.
+            const localIsPrefix = localHistory.length <= msg.auctionHistory.length
+                && localHistory.every((entry, i) => {
+                    const incoming = msg.auctionHistory[i];
+                    return incoming && entry.seat === incoming.seat && entry.call === incoming.call;
+                });
+            if (!localIsPrefix) break;
+            deals[idx].auctionHistory = msg.auctionHistory;
+            if (idx === boardIndex) {
+                auctionHistory = deals[idx].auctionHistory;
+                renderBoard();
+            } else {
+                const overview = document.getElementById('boardOverviewModal');
+                if (overview && overview.style.display !== 'none') renderBoardOverview();
+            }
+            break;
+        }
+
         // Résultat de double mort arrivé APRÈS le lancement de la partie (voir
         // applyDDResultToBoard côté hôte, qui envoie ce message) — un invité n'a reçu
         // qu'un instantané figé des donnes via 'start-game', donc ce relais est le seul
@@ -3959,9 +4003,16 @@ function handlePeerData(msg, guestIndex) {
         case 'goto-board': {
             if (!deals) return;
             boardIndex = msg.boardIndex;
-            // Voir gotoBoard (fonction miroir côté hôte) : restaure l'historique déjà
-            // vécu sur cette donne plutôt que de toujours repartir de zéro.
-            if (!deals[boardIndex].auctionHistory) deals[boardIndex].auctionHistory = [];
+            // Depuis le pré-calcul progressif au lancement, goto-board transporte aussi
+            // l'historique AUTORITAIRE de la donne cible. Ainsi un saut très rapide vers
+            // une donne encore non diffusée par precalc-board ne peut jamais laisser un
+            // invité avec un snapshot différent de celui de l'hôte. Compatibilité avec
+            // les anciens messages : si le champ manque, on garde la copie locale.
+            if (Array.isArray(msg.auctionHistory)) {
+                deals[boardIndex].auctionHistory = msg.auctionHistory;
+            } else if (!deals[boardIndex].auctionHistory) {
+                deals[boardIndex].auctionHistory = [];
+            }
             auctionHistory = deals[boardIndex].auctionHistory;
             hostPendingUndo = null;
             clearUndoUiState();
@@ -4101,8 +4152,17 @@ async function resolveFullBotBoardInBackground(idx, generation) {
         }
     } finally {
         fullBotBoardsResolving.delete(idx);
-        if (deals && boardIndex === idx) renderBoard();
-        saveHostGameStateToStorage();
+        // Le pré-calcul PONS est déjà asynchrone. Depuis le lancement progressif, il doit
+        // toutefois diffuser lui aussi l'historique obtenu : sinon les invités resteraient
+        // avec le snapshot initial jusqu'au premier goto-board. Garde d'identité stricte :
+        // si une nouvelle séance a remplacé `deals` pendant l'await, l'ancien resolver ne
+        // doit surtout pas publier/rendre/sauvegarder la nouvelle donne par accident.
+        const stillSameDeal = deals && deals[idx] === deal && generation === fullBotBackgroundGeneration;
+        if (stillSameDeal) {
+            broadcastPrecalculatedBoard(idx);
+            if (boardIndex === idx) renderBoard();
+            saveHostGameStateToStorage();
+        }
     }
 }
 
@@ -4131,6 +4191,97 @@ function advanceRobotBidsOnAllBoards(excludeIdx) {
         if (idx === excludeIdx) return;
         advanceRobotBidsOnBoard(idx);
     });
+}
+
+// ===== Lancement fluide : pré-calcul legacy progressif =====
+//
+// `advanceRobotBidsOnAllBoards()` reste inchangé pour les chemins historiques qui ont
+// explicitement besoin d'un état immédiatement complet (reprise, vue d'ensemble, etc.).
+// Seul le lancement d'une NOUVELLE séance utilise ce scheduler : une seule donne legacy
+// est préparée par créneau libre, puis le navigateur récupère la main avant la suivante.
+// Cela évite un long bloc synchrone juste après le premier paint sans changer les règles
+// d'enchère ni le contenu final des historiques.
+let startupLegacyPrecalcGeneration = 0;
+let startupLegacyPrecalcHandle = null;
+let startupLegacyPrecalcHandleKind = null;
+
+function cloneAuctionHistoryForWire(hist) {
+    return (hist || []).map(entry => ({ ...entry }));
+}
+
+function broadcastPrecalculatedBoard(idx) {
+    if (myRole !== 'host' || !deals || !deals[idx] || !peerConn) return;
+    peerConn.send({
+        type: 'precalc-board',
+        boardIndex: idx,
+        auctionHistory: cloneAuctionHistoryForWire(deals[idx].auctionHistory || [])
+    });
+}
+
+function cancelStartupLegacyRobotPrecalc() {
+    startupLegacyPrecalcGeneration++;
+    if (startupLegacyPrecalcHandle != null) {
+        if (startupLegacyPrecalcHandleKind === 'idle' && window.cancelIdleCallback) {
+            window.cancelIdleCallback(startupLegacyPrecalcHandle);
+        } else {
+            clearTimeout(startupLegacyPrecalcHandle);
+        }
+    }
+    startupLegacyPrecalcHandle = null;
+    startupLegacyPrecalcHandleKind = null;
+}
+
+function scheduleStartupLegacyRobotPrecalc(excludeIdx) {
+    cancelStartupLegacyRobotPrecalc();
+    if (!deals || window.PonsEngine) return;
+
+    const generation = startupLegacyPrecalcGeneration;
+    const queue = deals.map((_, idx) => idx).filter(idx => idx !== excludeIdx);
+    let cursor = 0;
+
+    const scheduleNext = (run) => {
+        if (generation !== startupLegacyPrecalcGeneration || cursor >= queue.length) return;
+        if (window.requestIdleCallback) {
+            startupLegacyPrecalcHandleKind = 'idle';
+            startupLegacyPrecalcHandle = window.requestIdleCallback(run, { timeout: 120 });
+        } else {
+            // Safari/iOS ne fournit pas requestIdleCallback : 16 ms laisse au minimum
+            // l'occasion d'un frame et des événements utilisateur entre deux donnes.
+            startupLegacyPrecalcHandleKind = 'timeout';
+            startupLegacyPrecalcHandle = setTimeout(run, 16);
+        }
+    };
+
+    const runOneBoard = () => {
+        startupLegacyPrecalcHandle = null;
+        startupLegacyPrecalcHandleKind = null;
+        if (generation !== startupLegacyPrecalcGeneration || !deals || window.PonsEngine) return;
+
+        if (cursor >= queue.length) {
+            saveHostGameStateToStorage();
+            return;
+        }
+
+        const idx = queue[cursor++];
+        // Si l'utilisateur a déjà navigué sur cette donne, le chemin visible (gotoBoard /
+        // maybeRobotBid) est prioritaire. Ne jamais la modifier silencieusement derrière
+        // son dos ; on passe simplement à la suivante.
+        if (idx !== boardIndex) {
+            advanceRobotBidsOnBoard(idx);
+            broadcastPrecalculatedBoard(idx);
+        }
+
+        if (cursor < queue.length) {
+            scheduleNext(runOneBoard);
+        } else {
+            // Une seule sauvegarde consolidée en fin de passe : évite de sérialiser toute
+            // la séance et de pousser le cloud après CHAQUE donne, ce qui recréerait une
+            // autre forme de charge juste après le démarrage.
+            saveHostGameStateToStorage();
+        }
+    };
+
+    scheduleNext(runOneBoard);
 }
 
 function maybeRobotBid() {
@@ -6841,13 +6992,27 @@ function uiResetAuction() {
 // flèches ◀▶ de navigation libre, également réservées à l'hôte.
 function gotoBoard(newIndex) {
     showParDuringAuction = false;
+
+    // Cas rare mais important : l'hôte saute vers une donne future avant que le scheduler
+    // de lancement legacy ne l'ait préparée. On ne change pas la sémantique historique :
+    // cette seule donne est avancée immédiatement jusqu'au prochain tour humain. Le coût
+    // éventuel est localisé à ce saut volontaire, au lieu de bloquer toutes les donnes au
+    // lancement. PONS/WASM reste sur son chemin asynchrone habituel.
+    if (!window.PonsEngine && deals && deals[newIndex]) {
+        advanceRobotBidsOnBoard(newIndex);
+    }
+
     boardIndex = newIndex;
     if (!deals[boardIndex].auctionHistory) deals[boardIndex].auctionHistory = [];
     auctionHistory = deals[boardIndex].auctionHistory;
     hostPendingUndo = null;
     clearUndoUiState();
     renderBoard();
-    peerConn.send({ type: 'goto-board', boardIndex });
+    peerConn.send({
+        type: 'goto-board',
+        boardIndex,
+        auctionHistory: cloneAuctionHistoryForWire(auctionHistory)
+    });
     saveHostGameStateToStorage();
 }
 
