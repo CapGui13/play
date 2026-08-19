@@ -5113,7 +5113,68 @@ function seatRelationClass(seat) {
     return 'seat-relation-opponent';
 }
 
+// Mobile : lorsqu'une nouvelle rangée apparaît/disparaît dans le relevé, elle ne doit
+// pas pousser brutalement la boîte d'enchères dans le viewport. On laisse le tableau
+// grandir/rétrécir naturellement (aucune hauteur fixe, aucune limite de longueur), mais
+// on mémorise la position des boutons puis on compense exactement le déplacement par le
+// scroll. Le desktop reste totalement inchangé.
+let pendingMobileLedgerViewportAnchor = null;
+let pendingMobileLedgerViewportRaf = 0;
+
+function captureMobileLedgerViewportAnchor() {
+    if (window.innerWidth > 760 || !deals || isAuctionOver(auctionHistory)) return null;
+
+    const stack = document.getElementById('auctionViewStack');
+    // Si l'utilisateur regarde le PAR pendant l'enchère, ne jamais le déplacer à cause
+    // d'une évolution du relevé qui se trouve au-dessus.
+    if (stack && stack.classList.contains('show-par')) return null;
+
+    const box = document.getElementById('biddingBox');
+    if (!box || !box.querySelector('.two-step-bidding-controls')) return null;
+    const style = getComputedStyle(box);
+    if (style.display === 'none' || style.visibility === 'hidden') return null;
+
+    const rect = box.getBoundingClientRect();
+    const viewportHeight = (window.visualViewport && window.visualViewport.height) || window.innerHeight;
+    // Correction seulement lorsque les boutons sont réellement dans/près de ce que
+    // l'utilisateur regarde. S'il a remonté la page pour consulter autre chose, aucune
+    // prise de contrôle automatique du scroll.
+    if (rect.bottom <= 0 || rect.top >= viewportHeight) return null;
+
+    return { element: box, top: rect.top };
+}
+
+function scheduleMobileLedgerViewportRestore(anchor) {
+    if (!anchor) return;
+
+    // Si plusieurs rendus arrivent avant le prochain frame, conserver l'ancre du PREMIER :
+    // la compensation couvrira alors le déplacement cumulé sans risque de double scroll.
+    if (!pendingMobileLedgerViewportAnchor) pendingMobileLedgerViewportAnchor = anchor;
+    if (pendingMobileLedgerViewportRaf) return;
+
+    pendingMobileLedgerViewportRaf = requestAnimationFrame(() => {
+        pendingMobileLedgerViewportRaf = 0;
+        const saved = pendingMobileLedgerViewportAnchor;
+        pendingMobileLedgerViewportAnchor = null;
+        if (!saved || !saved.element || !saved.element.isConnected) return;
+        if (window.innerWidth > 760 || !deals || isAuctionOver(auctionHistory)) return;
+
+        const stack = document.getElementById('auctionViewStack');
+        if (stack && stack.classList.contains('show-par')) return;
+
+        const newTop = saved.element.getBoundingClientRect().top;
+        const delta = newTop - saved.top;
+        if (Math.abs(delta) > 0.5) {
+            window.scrollBy(0, delta);
+        }
+    });
+}
+
 function renderAuctionLedger() {
+    const mobileLedgerAnchor = captureMobileLedgerViewportAnchor();
+    const body = document.getElementById('auctionLedgerBody');
+    const previousRowCount = body ? body.children.length : 0;
+
     const deal = currentDeal();
     const header = document.getElementById('auctionLedgerHeader');
     const toggleBtn = document.getElementById('ledgerNamesToggleBtn');
@@ -5178,7 +5239,6 @@ function renderAuctionLedger() {
         if (i + 4 >= slots.length) break;
     }
 
-    const body = document.getElementById('auctionLedgerBody');
     let flatIndex = 0;
     body.innerHTML = rows.map(row => {
         const turnSeatIndex = turnSeat ? SEATS.indexOf(turnSeat) : -1;
@@ -5193,6 +5253,13 @@ function renderAuctionLedger() {
         });
         return `<tr>${cells.join('')}</tr>`;
     }).join('');
+
+    // Une annonce qui reste dans la même rangée ne change pas la géométrie : aucune
+    // correction. La compensation n'intervient qu'à la création/suppression réelle d'une
+    // rangée (séquence longue, undo, reset...).
+    if (body.children.length !== previousRowCount) {
+        scheduleMobileLedgerViewportRestore(mobileLedgerAnchor);
+    }
 }
 
 // Sélection temporaire du palier pour la boîte d'enchères en deux temps.
