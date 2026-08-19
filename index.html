@@ -522,12 +522,15 @@
                         <div id="parBiddingToggleWrap" class="par-bidding-toggle-wrap" style="display:none;">
                             <button id="parBiddingToggleBtn" type="button" class="btn btn-secondary btn-small" onclick="uiToggleParBiddingView()">📊 Voir le PAR</button>
                         </div>
-                        <div id="contractResult" class="contract-result" style="display:none;"></div>
+
+                        <div id="auctionViewStack" class="auction-view-stack">
+                            <div id="contractResult" class="contract-result" style="display:none;"></div>
+                            <div id="auctionBiddingView" class="auction-bidding-view">
+                                <div id="biddingBox" class="bidding-box"></div>
+                                <div id="turnIndicator" class="turn-indicator"></div>
+                            </div>
+                        </div>
                     </div>
-
-                    <div id="biddingBox" class="bidding-box"></div>
-
-                    <div id="turnIndicator" class="turn-indicator"></div>
                 </div>
             </div>
         </div>

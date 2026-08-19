@@ -2532,12 +2532,16 @@ button.kibitz-chip {
    c'est le point d'aboutissement de toute l'enchère, ça mérite un peu plus qu'un
    affichage sec. transform+opacity uniquement (pas de box-shadow animée), 350ms. */
 .contract-result.contract-reveal {
-    animation: contract-reveal 0.35s ease-out;
+    animation: ui-quick-fade-in 0.16s ease-out;
 }
 
-@keyframes contract-reveal {
-    from { opacity: 0; transform: scale(0.94); }
-    to { opacity: 1; transform: scale(1); }
+@keyframes ui-quick-fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+.ui-quick-fade-in {
+    animation: ui-quick-fade-in 0.16s ease-out;
 }
 
 .contract-result .info-text {
@@ -3452,11 +3456,50 @@ table.dd-table td.dd-secondary-contract {
     }
 }
 
-/* Stabilisation Enchères ↔ PAR sur toute la plage où le jeu passe en layout mobile
-   (même breakpoint 760px que .game-body). Aucun effet au-dessus de 760px. */
+/* ===== Bascule Enchères / PAR =====
+   Desktop : la géométrie reste celle d'origine ; seule la vue entrante reçoit un fondu.
+   Mobile : les deux vues partagent la même cellule de grille. La vue masquée reste dans
+   le calcul de hauteur (opacity:0) : le panneau garde donc immédiatement la hauteur de la
+   plus grande vue, sans calcul JS différé et sans "blanc retardé" quand le PAR arrive. */
+.auction-view-stack {
+    min-width: 0;
+}
+
+.auction-bidding-view {
+    min-width: 0;
+}
+
 @media (max-width: 760px) {
-    .auction-panel {
-        min-height: var(--mobile-auction-panel-min-height, 0);
+    .auction-view-stack.is-mobile-stacked {
+        display: grid;
+    }
+
+    .auction-view-stack.is-mobile-stacked > .contract-result,
+    .auction-view-stack.is-mobile-stacked > .auction-bidding-view {
+        grid-area: 1 / 1;
+        align-self: start;
+        min-width: 0;
+        transition: opacity 0.15s ease;
+    }
+
+    .auction-view-stack.is-mobile-stacked.show-bidding > .contract-result {
+        opacity: 0;
+        pointer-events: none;
+    }
+
+    .auction-view-stack.is-mobile-stacked.show-bidding > .auction-bidding-view {
+        opacity: 1;
+        pointer-events: auto;
+    }
+
+    .auction-view-stack.is-mobile-stacked.show-par > .contract-result {
+        opacity: 1;
+        pointer-events: auto;
+    }
+
+    .auction-view-stack.is-mobile-stacked.show-par > .auction-bidding-view {
+        opacity: 0;
+        pointer-events: none;
     }
 }
 

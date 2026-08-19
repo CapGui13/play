@@ -5900,84 +5900,85 @@ function flashSessionExportToast(text) {
 }
 
 
-// Sur mobile uniquement, garde le panneau d'enchères à la hauteur du plus grand des
-// deux affichages (boîte d'enchères / PAR).
-//
-// IMPORTANT PERFORMANCE : la mesure se fait APRÈS le premier rendu via requestAnimationFrame,
-// jamais dans le chemin synchrone d'entrée dans une nouvelle séance. Ainsi la boîte et ses
-// boutons sont peints immédiatement ; le calcul de hauteur du clone invisible arrive juste
-// après, avant que l'utilisateur ait le temps de basculer vers le PAR.
-// Desktop n'utilise pas cette hauteur (voir media query dans styles.css).
-let mobileAuctionPanelMeasureToken = 0;
+// Placeholder de double mort utilisé UNIQUEMENT comme gabarit de hauteur sur mobile
+// pendant que le vrai PAR est encore en calcul. Même nombre de lignes/cellules que la
+// table finale : quand le résultat arrive, sa hauteur ne change donc pas.
+function renderDDTablePlaceholder() {
+    const rows = STRAIN_ORDER.map(strain => `
+        <tr>
+            <th class="${STRAIN_CLASS[strain]}">${formatStrainLabel(strain)}</th>
+            <td>–</td><td>–</td><td>–</td><td>–</td>
+        </tr>
+    `).join('');
+    return `
+        <div class="dd-table-title">Table du double mort</div>
+        <table class="dd-table" aria-hidden="true">
+            <thead><tr><th></th><th>N</th><th>S</th><th>E</th><th>O</th></tr></thead>
+            <tbody>${rows}</tbody>
+        </table>
+    `;
+}
 
-function syncMobileAuctionPanelStableHeight(resultEl, biddingBoxEl, turnIndicatorEl, ddTableHtml) {
-    const panel = (resultEl && resultEl.closest('.auction-panel'))
-        || (biddingBoxEl && biddingBoxEl.closest('.auction-panel'));
-    if (!panel) return;
+let lastAuctionVisualMode = null;
+
+function replayQuickFade(el) {
+    if (!el) return;
+    el.classList.remove('ui-quick-fade-in');
+    void el.offsetWidth;
+    el.classList.add('ui-quick-fade-in');
+}
+
+// Centralise Enchères ↔ PAR.
+// - mobile : superposition CSS, donc hauteur stable dès le premier rendu et crossfade.
+// - desktop : display normal comme avant, avec simple fondu de la vue entrante.
+function setAuctionVisualMode(mode, { parCapable = false, ddTableHtml = '' } = {}) {
+    const stack = document.getElementById('auctionViewStack');
+    const resultEl = document.getElementById('contractResult');
+    const biddingViewEl = document.getElementById('auctionBiddingView');
+    if (!stack || !resultEl || !biddingViewEl) return;
 
     const mobile = window.matchMedia && window.matchMedia('(max-width: 760px)').matches;
-    if (!mobile || !ddTableHtml || !resultEl || !biddingBoxEl || !turnIndicatorEl) {
-        mobileAuctionPanelMeasureToken++;
-        panel.style.removeProperty('--mobile-auction-panel-min-height');
-        return;
+    const shouldStackMobile = mobile && (parCapable || mode === 'final');
+    const modeChanged = lastAuctionVisualMode !== mode;
+
+    if (shouldStackMobile) {
+        // Pendant l'enchère, le gabarit existe dès le premier rendu, même si le DD n'est
+        // pas encore revenu. Cela remplace l'ancien min-height calculé quelques secondes
+        // plus tard, qui était précisément le "blanc retardé" observé sous les boutons.
+        if (mode !== 'final') {
+            resultEl.innerHTML = ddTableHtml || renderDDTablePlaceholder();
+        }
+
+        resultEl.style.display = 'block';
+        biddingViewEl.style.display = 'block';
+        stack.classList.add('is-mobile-stacked');
+        stack.classList.toggle('show-par', mode === 'par' || mode === 'final');
+        stack.classList.toggle('show-bidding', mode === 'bidding');
+
+        const resultHidden = mode === 'bidding';
+        resultEl.setAttribute('aria-hidden', resultHidden ? 'true' : 'false');
+        biddingViewEl.setAttribute('aria-hidden', resultHidden ? 'false' : 'true');
+        if ('inert' in biddingViewEl) biddingViewEl.inert = !resultHidden;
+        if ('inert' in resultEl) resultEl.inert = resultHidden;
+    } else {
+        stack.classList.remove('is-mobile-stacked', 'show-par', 'show-bidding');
+        resultEl.removeAttribute('aria-hidden');
+        biddingViewEl.removeAttribute('aria-hidden');
+        if ('inert' in biddingViewEl) biddingViewEl.inert = false;
+        if ('inert' in resultEl) resultEl.inert = false;
+
+        if (mode === 'bidding') {
+            resultEl.style.display = 'none';
+            biddingViewEl.style.display = '';
+            if (modeChanged) replayQuickFade(biddingViewEl);
+        } else {
+            resultEl.style.display = 'block';
+            biddingViewEl.style.display = 'none';
+            if (modeChanged && mode !== 'final') replayQuickFade(resultEl);
+        }
     }
 
-    const token = ++mobileAuctionPanelMeasureToken;
-
-    // Deux rAF : le premier laisse le DOM réel (notamment les boutons d'enchères) être
-    // présenté au navigateur ; le second effectue la mesure hors écran. Les appels plus
-    // récents invalident automatiquement les anciennes mesures via `token`.
-    requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-            if (token !== mobileAuctionPanelMeasureToken || !panel.isConnected) return;
-
-            // Mesure hors écran sur une copie : aucun display/visibility/innerHTML du
-            // panneau réel n'est touché.
-            const clone = panel.cloneNode(true);
-            clone.removeAttribute('id');
-            clone.style.position = 'fixed';
-            clone.style.left = '-10000px';
-            clone.style.top = '0';
-            clone.style.visibility = 'hidden';
-            clone.style.pointerEvents = 'none';
-            clone.style.width = `${panel.getBoundingClientRect().width}px`;
-            clone.style.minHeight = '0';
-            clone.style.setProperty('--mobile-auction-panel-min-height', '0px');
-            document.body.appendChild(clone);
-
-            const cloneResult = clone.querySelector('#contractResult');
-            const cloneBidding = clone.querySelector('#biddingBox');
-            const cloneTurn = clone.querySelector('#turnIndicator');
-            const cloneToggle = clone.querySelector('#parBiddingToggleWrap');
-
-            let biddingHeight = 0;
-            let parHeight = 0;
-            if (cloneResult && cloneBidding && cloneTurn) {
-                if (cloneToggle) cloneToggle.style.display = 'flex';
-
-                // État enchères.
-                cloneResult.style.display = 'none';
-                cloneBidding.style.display = '';
-                cloneTurn.style.display = '';
-                biddingHeight = Math.ceil(clone.getBoundingClientRect().height);
-
-                // État PAR.
-                cloneResult.innerHTML = ddTableHtml;
-                cloneResult.style.display = 'block';
-                cloneBidding.style.display = 'none';
-                cloneTurn.style.display = 'none';
-                parHeight = Math.ceil(clone.getBoundingClientRect().height);
-            }
-
-            clone.remove();
-
-            if (token !== mobileAuctionPanelMeasureToken || !panel.isConnected) return;
-            const stableHeight = Math.max(biddingHeight, parHeight);
-            if (stableHeight > 0) {
-                panel.style.setProperty('--mobile-auction-panel-min-height', `${stableHeight}px`);
-            }
-        });
-    });
+    lastAuctionVisualMode = mode;
 }
 
 // Lors de la FIN d'une enchère sur mobile, le remplacement de la/les main(s) du joueur
@@ -6053,23 +6054,23 @@ function checkAuctionEnd() {
 
     if (!auctionOver) {
         const myHandsEl = document.getElementById('myHandsContainer');
-        const biddingBoxEl = document.getElementById('biddingBox');
-        const turnIndicatorEl = document.getElementById('turnIndicator');
         const toggleWrap = document.getElementById('parBiddingToggleWrap');
         const toggleBtn = document.getElementById('parBiddingToggleBtn');
         const ddTableHtml = canViewParDuringAuction ? renderDDTable(currentDeal().ddTable, currentDeal().vulnerable) : '';
 
-        // Mobile : mesure les deux vues AVANT d'appliquer celle demandée, puis réserve la
-        // hauteur de la plus grande. Sur desktop, la fonction enlève simplement sa variable.
-        syncMobileAuctionPanelStableHeight(resultEl, biddingBoxEl, turnIndicatorEl, ddTableHtml);
-
         if (showAllHandsEarly) {
+            const wasDiagramHidden = getComputedStyle(diagramEl).display === 'none';
             renderAllHandsDiagram();
             diagramEl.style.display = 'grid';
+            if (wasDiagramHidden) replayQuickFade(diagramEl);
             if (myHandsEl) myHandsEl.style.display = 'none';
         } else {
+            const wasMyHandsHidden = myHandsEl && getComputedStyle(myHandsEl).display === 'none';
             diagramEl.style.display = 'none';
-            if (myHandsEl) myHandsEl.style.display = '';
+            if (myHandsEl) {
+                myHandsEl.style.display = '';
+                if (wasMyHandsHidden) replayQuickFade(myHandsEl);
+            }
             // Desktop : pré-rendu nécessaire pour syncHandsPanelMinHeight().
             // Mobile : cette réservation de hauteur est volontairement désactivée, donc
             // construire les 4 mains invisibles ici ne sert à rien et retarde le premier
@@ -6085,41 +6086,23 @@ function checkAuctionEnd() {
                     ? (showParDuringAuction ? '🎴 Voir les enchères' : '📊 Voir le PAR')
                     : '⏳ PAR en calcul…';
             }
-            if (ddTableHtml && showParDuringAuction) {
-                resultEl.innerHTML = ddTableHtml;
-                resultEl.style.display = 'block';
-                if (biddingBoxEl) biddingBoxEl.style.display = 'none';
-                if (turnIndicatorEl) turnIndicatorEl.style.display = 'none';
-            } else {
-                if (!ddTableHtml) showParDuringAuction = false;
-                resultEl.style.display = 'none';
-                if (biddingBoxEl) biddingBoxEl.style.display = '';
-                if (turnIndicatorEl) turnIndicatorEl.style.display = '';
-            }
+            if (!ddTableHtml) showParDuringAuction = false;
+            setAuctionVisualMode(
+                (ddTableHtml && showParDuringAuction) ? 'par' : 'bidding',
+                { parCapable: true, ddTableHtml }
+            );
         } else {
             showParDuringAuction = false;
             if (toggleWrap) toggleWrap.style.display = 'none';
             if (toggleBtn) toggleBtn.disabled = false;
-            resultEl.style.display = 'none';
-            if (biddingBoxEl) biddingBoxEl.style.display = '';
-            if (turnIndicatorEl) turnIndicatorEl.style.display = '';
+            setAuctionVisualMode('bidding', { parCapable: false });
         }
         return;
     }
 
     showParDuringAuction = false;
-    const auctionPanelEl = resultEl ? resultEl.closest('.auction-panel') : null;
-    if (auctionPanelEl) auctionPanelEl.style.removeProperty('--mobile-auction-panel-min-height');
     const toggleWrap = document.getElementById('parBiddingToggleWrap');
     if (toggleWrap) toggleWrap.style.display = 'none';
-    const biddingBoxEl = document.getElementById('biddingBox');
-    const turnIndicatorEl = document.getElementById('turnIndicator');
-    // Enchère terminée : renderBiddingBox() vide déjà son contenu. Il faut aussi retirer
-    // le conteneur du flux, sinon ses padding/bordure/background restent visibles sous le
-    // PAR sous la forme d'un petit rectangle arrondi vide (surtout évident sur desktop).
-    // À la donne suivante, la branche !auctionOver ci-dessus les remet explicitement.
-    if (biddingBoxEl) biddingBoxEl.style.display = 'none';
-    if (turnIndicatorEl) turnIndicatorEl.style.display = 'none';
 
     const contract = determineContract(auctionHistory);
     // Voir échange avec Guillaume (session du 8 août — ""Export PBN" devrait être en
@@ -6132,8 +6115,7 @@ function checkAuctionEnd() {
     // moment précis où le contrat apparaît, pas à chaque re-rendu (renderBoard tourne
     // pour bien d'autres raisons — reconnexion d'un joueur, etc. — tant que la donne
     // reste sur cet écran) : on la déclenche seulement s'il était masqué juste avant.
-    const wasHidden = resultEl.style.display === 'none' || resultEl.style.display === '' || !resultEl.querySelector('.contract-final-header');
-    resultEl.style.display = 'block';
+    const wasHidden = lastAuctionVisualMode !== 'final' || !resultEl.querySelector('.contract-final-header');
     // Voir échange avec Guillaume ("le bouton export PBN doit être disponible également
     // pour les invités") : canControlBoard() plutôt que myRole==='host' — voir le même
     // commentaire détaillé sur uiExportDealPBN plus haut. Affiché seulement une fois le
@@ -6173,8 +6155,10 @@ function checkAuctionEnd() {
     // haut, if (!auctionOver)), jamais après. Un essai précédent avait rendu ceci
     // conditionnel pour l'hôte, ce qui n'était pas ce qui était demandé — revenu à
     // l'affichage inconditionnel d'origine.
+    const finalHandsWereHidden = getComputedStyle(diagramEl).display === 'none';
     renderAllHandsDiagram();
     diagramEl.style.display = 'grid';
+    if (finalHandsWereHidden) replayQuickFade(diagramEl);
     {
         const myHandsEl = document.getElementById('myHandsContainer');
         if (myHandsEl) myHandsEl.style.display = 'none';
@@ -6200,6 +6184,8 @@ function checkAuctionEnd() {
         // fait justement partie.
         resultEl.innerHTML += '<div class="next-board-panel"><button type="button" class="btn btn-secondary btn-small" onclick="uiNextBoard()">Donne suivante →</button></div>';
     }
+
+    setAuctionVisualMode('final', { parCapable: true, ddTableHtml });
 
     // Mobile uniquement : les tailles réelles restent inchangées, on maintient simplement
     // le même point de vue quand les 4 mains apparaissent à la fin de l'enchère.
