@@ -3198,6 +3198,13 @@ table.dd-table td.dd-secondary-contract {
    Regroupées ici plutôt qu'éclatées dans chaque section, pour qu'on voie d'un coup d'œil
    tout ce qui change sur petit écran. */
 @media (max-width: 700px) {
+    /* Hauteur stable du grand rectangle d'enchères lors de la bascule Enchères ↔ PAR.
+       La valeur est mesurée dynamiquement en JS comme le maximum des deux vues.
+       Cette règle n'existe volontairement que sur mobile : desktop reste inchangé. */
+    .auction-panel {
+        min-height: var(--mobile-auction-panel-min-height, 0);
+    }
+
     /* Marges extérieures resserrées : sur un écran de ~360-390px de large, les paddings
        pensés pour desktop (20px de partout + 36px dans le salon, etc.) empilés les uns
        sur les autres finissaient par manger presque un tiers de la largeur utile. */
@@ -3522,9 +3529,9 @@ table.dd-table td.dd-secondary-contract {
 /* 1 → 7 : touches ivoire, inspirées d'une vraie bidding box mais dans la palette PONS. */
 .bidding-box .bid-level-btn {
     color: #123529;
-    /* Chiffres 1–7 : police sans serif à chiffres alignés.
-       Fraunces donnait un décalage optique surtout visible sur 2 et 6. */
-    font-family: var(--font-body);
+    /* Retour au dessin Fraunces d'origine, avec chiffres de même hauteur/assise.
+       On conserve ainsi le style initial tout en corrigeant l'alignement de 2 et 6. */
+    font-family: var(--font-display);
     font-size: 1.18rem;
     font-weight: 700;
     font-variant-numeric: lining-nums tabular-nums;
@@ -3551,7 +3558,7 @@ table.dd-table td.dd-secondary-contract {
         inset 0 1px 0 rgba(255, 255, 255, 0.52);
 }
 
-/* Souches dans l'ordre demandé : SA, P, C, K, T. */
+/* Souches dans l'ordre demandé : T, K, C, P, SA. */
 .bidding-box .bid-strain-btn {
     font-size: 1.18rem;
     border: 1px solid rgba(224, 188, 74, 0.72);

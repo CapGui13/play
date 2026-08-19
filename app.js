@@ -5893,6 +5893,67 @@ function flashSessionExportToast(text) {
     toast._hideTimer = setTimeout(() => toast.classList.remove('visible'), 2800);
 }
 
+
+// Sur mobile uniquement, garde le panneau d'enchères à la hauteur du plus grand des
+// deux affichages (boîte d'enchères / PAR). Ainsi, le contour extérieur ne "saute" plus
+// quand on bascule avec le bouton Voir le PAR / Voir les enchères.
+// Desktop n'utilise pas cette hauteur (voir media query dans styles.css).
+function syncMobileAuctionPanelStableHeight(resultEl, biddingBoxEl, turnIndicatorEl, ddTableHtml) {
+    const panel = (resultEl && resultEl.closest('.auction-panel'))
+        || (biddingBoxEl && biddingBoxEl.closest('.auction-panel'));
+    if (!panel) return;
+
+    const mobile = window.matchMedia && window.matchMedia('(max-width: 700px)').matches;
+    if (!mobile || !ddTableHtml || !resultEl || !biddingBoxEl || !turnIndicatorEl) {
+        panel.style.removeProperty('--mobile-auction-panel-min-height');
+        return;
+    }
+
+    // Le PAR doit être présent dans le DOM pour pouvoir mesurer son état, même lorsqu'il
+    // est actuellement masqué.
+    resultEl.innerHTML = ddTableHtml;
+
+    const saved = {
+        resultDisplay: resultEl.style.display,
+        resultVisibility: resultEl.style.visibility,
+        biddingDisplay: biddingBoxEl.style.display,
+        biddingVisibility: biddingBoxEl.style.visibility,
+        turnDisplay: turnIndicatorEl.style.display,
+        turnVisibility: turnIndicatorEl.style.visibility
+    };
+
+    // Retire la hauteur calculée au rendu précédent afin de mesurer les hauteurs naturelles.
+    panel.style.removeProperty('--mobile-auction-panel-min-height');
+
+    // Mesure 1 : affichage normal des boutons + indicateur de tour.
+    resultEl.style.display = 'none';
+    biddingBoxEl.style.display = '';
+    turnIndicatorEl.style.display = '';
+    const biddingHeight = Math.ceil(panel.getBoundingClientRect().height);
+
+    // Mesure 2 : affichage du PAR. Les éléments sont rendus dans le flux pour obtenir leur
+    // vraie hauteur, mais visibility:hidden évite tout flash visuel pendant cette mesure
+    // synchrone.
+    resultEl.style.display = 'block';
+    resultEl.style.visibility = 'hidden';
+    biddingBoxEl.style.display = 'none';
+    turnIndicatorEl.style.display = 'none';
+    const parHeight = Math.ceil(panel.getBoundingClientRect().height);
+
+    // Restaure exactement l'état que checkAuctionEnd() était en train de gérer.
+    resultEl.style.display = saved.resultDisplay;
+    resultEl.style.visibility = saved.resultVisibility;
+    biddingBoxEl.style.display = saved.biddingDisplay;
+    biddingBoxEl.style.visibility = saved.biddingVisibility;
+    turnIndicatorEl.style.display = saved.turnDisplay;
+    turnIndicatorEl.style.visibility = saved.turnVisibility;
+
+    panel.style.setProperty(
+        '--mobile-auction-panel-min-height',
+        `${Math.max(biddingHeight, parHeight)}px`
+    );
+}
+
 function uiToggleParBiddingView() {
     if (!deals || isAuctionOver(auctionHistory)) return;
     const hostForcedReveal = isTrueOriginalHost() && hostSeeAllHands;
@@ -5931,6 +5992,10 @@ function checkAuctionEnd() {
         const toggleWrap = document.getElementById('parBiddingToggleWrap');
         const toggleBtn = document.getElementById('parBiddingToggleBtn');
         const ddTableHtml = showAllHandsEarly ? renderDDTable(currentDeal().ddTable, currentDeal().vulnerable) : '';
+
+        // Mobile : mesure les deux vues AVANT d'appliquer celle demandée, puis réserve la
+        // hauteur de la plus grande. Sur desktop, la fonction enlève simplement sa variable.
+        syncMobileAuctionPanelStableHeight(resultEl, biddingBoxEl, turnIndicatorEl, ddTableHtml);
 
         if (showAllHandsEarly) {
             renderAllHandsDiagram();
@@ -5973,6 +6038,8 @@ function checkAuctionEnd() {
     }
 
     showParDuringAuction = false;
+    const auctionPanelEl = resultEl ? resultEl.closest('.auction-panel') : null;
+    if (auctionPanelEl) auctionPanelEl.style.removeProperty('--mobile-auction-panel-min-height');
     const toggleWrap = document.getElementById('parBiddingToggleWrap');
     if (toggleWrap) toggleWrap.style.display = 'none';
     const biddingBoxEl = document.getElementById('biddingBox');
