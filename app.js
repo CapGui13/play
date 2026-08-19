@@ -5946,15 +5946,18 @@ function setAuctionVisualMode(mode, { parCapable = false, ddTableHtml = '' } = {
     const shouldStackMobile = mobile && (parCapable || mode === 'final');
     const modeChanged = lastAuctionVisualMode !== mode;
 
-    // Toujours alimenter la vue PAR avec le double mort de LA DONNE COURANTE avant de
-    // l'afficher. L'ancienne version ne le faisait que dans la branche mobile : sur
-    // desktop, la première donne affichait donc un cadre vide ; à partir de la deuxième,
-    // un ancien HTML pouvait masquer le défaut.
-    if (mode === 'par' && ddTableHtml) {
+    // Toujours alimenter la vue PAR avec le double mort de LA DONNE COURANTE.
+    // Sur mobile, même quand on affiche encore les boutons, la vue PAR invisible doit
+    // déjà contenir le PAR courant (ou son gabarit si le calcul n'est pas terminé) :
+    // elle participe à la hauteur de la pile et empêche tout resizing au clic. Cela
+    // évite aussi de conserver, sur la donne suivante, le résultat final de la donne
+    // précédente dans la vue invisible.
+    if (shouldStackMobile && mode !== 'final') {
+        resultEl.innerHTML = ddTableHtml || renderDDTablePlaceholder();
+    } else if (mode === 'par' && ddTableHtml) {
+        // Desktop : injection explicite au moment d'afficher le PAR — indispensable dès
+        // la première donne, où aucun ancien contenu n'existe encore dans contractResult.
         resultEl.innerHTML = ddTableHtml;
-    } else if (shouldStackMobile && mode !== 'final' && !ddTableHtml) {
-        // Gabarit mobile uniquement pendant le calcul du vrai PAR.
-        resultEl.innerHTML = renderDDTablePlaceholder();
     }
 
     if (shouldStackMobile) {

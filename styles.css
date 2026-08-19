@@ -3699,6 +3699,16 @@ table.dd-table td.dd-secondary-contract {
     }
 }
 
+/* Filet de sécurité pour les très petits écrans (320px et moins environ) :
+   "Passe" reste entièrement contenu dans sa colonne sans toucher la touche X. */
+@media (max-width: 330px) {
+    .bidding-box .bid-action-strain-row .call-btn-pass {
+        padding-left: 0;
+        padding-right: 0;
+        font-size: 0.70rem;
+    }
+}
+
 
 /* ===== Salon d'attente : informations moteur masquées =====
    Le moteur reste chargé et fonctionnel ; seuls les éléments visuels qui mentionnent
