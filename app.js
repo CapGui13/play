@@ -5187,12 +5187,63 @@ function renderAuctionLedger() {
     }).join('');
 }
 
+// Sélection temporaire du palier pour la boîte d'enchères en deux temps.
+// Le moteur conserve ses appels canoniques (1C/1D/1H/1S/1NT, etc.) : cette variable
+// ne concerne que l'interface. Elle est remise à zéro dès qu'une annonce est jouée,
+// lorsque le tour change, ou à la fin de l'enchère.
+let selectedBiddingLevel = null;
+// Si le même navigateur contrôle plusieurs sièges, `myTurn` peut rester vrai après une
+// annonce alors que le joueur à la table a changé. On mémorise donc explicitement le siège
+// dont la boîte est affichée, afin de repartir du palier minimal légal à CHAQUE nouveau tour.
+let selectedBiddingTurnSeat = null;
+
+// Ordre d'affichage demandé : Trèfle, Carreau, Cœur, Pique, SA.
+// Convention mnémotechnique française : T, K, C, P, SA.
+// Les codes internes restent ceux de bidding-rules.js.
+const TWO_STEP_BID_STRAINS = ['C', 'D', 'H', 'S', 'NT'];
+
+function uiSelectBidLevel(level) {
+    const numericLevel = Number(level);
+    if (!Number.isInteger(numericLevel) || numericLevel < 1 || numericLevel > 7) return;
+
+    const deal = currentDeal();
+    const turnSeat = currentTurnSeat(deal.dealer, auctionHistory);
+    const myTurn = mySeats && mySeats.includes(turnSeat);
+    if (!myTurn) return;
+
+    // Un palier n'est sélectionnable que s'il reste au moins une souche légale à ce palier.
+    const hasLegalStrain = TWO_STEP_BID_STRAINS.some(strain =>
+        isCallLegal(auctionHistory, `${numericLevel}${strain}`, turnSeat)
+    );
+    if (!hasLegalStrain) return;
+
+    selectedBiddingLevel = numericLevel;
+    renderBiddingBox();
+}
+
+function uiSelectBidStrain(strain) {
+    if (selectedBiddingLevel == null || !TWO_STEP_BID_STRAINS.includes(strain)) return;
+
+    const deal = currentDeal();
+    const turnSeat = currentTurnSeat(deal.dealer, auctionHistory);
+    if (!mySeats || !mySeats.includes(turnSeat)) return;
+
+    const call = `${selectedBiddingLevel}${strain}`;
+    if (!isCallLegal(auctionHistory, call, turnSeat)) return;
+
+    // Réinitialisé avant uiMakeCall : applyCall() rerend immédiatement la boîte.
+    selectedBiddingLevel = null;
+    uiMakeCall(call);
+}
+
 function renderBiddingBox() {
     const box = document.getElementById('biddingBox');
     const turnPanel = document.getElementById('turnIndicator');
     const deal = currentDeal();
 
     if (isAuctionOver(auctionHistory)) {
+        selectedBiddingLevel = null;
+        selectedBiddingTurnSeat = null;
         box.innerHTML = '';
         box.classList.remove('my-turn');
         // Voir échange avec Guillaume (session du 8 août — "il y a parfois une
@@ -5207,23 +5258,21 @@ function renderBiddingBox() {
 
     const turnSeat = currentTurnSeat(deal.dealer, auctionHistory);
     // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 3) : ne gèle plus la boîte d'enchères
-    // pour un invité déconnecté de l'hôte — auparavant nécessaire (topologie en étoile,
-    // aucun autre chemin possible), ça ne l'est plus : uiMakeCall bascule désormais sur
-    // le relais serveur quand la connexion P2P à l'hôte manque (voir
-    // pushCallViaServerFallback), donc mon propre tour reste jouable même déconnecté.
+    // pour un invité déconnecté de l'hôte — uiMakeCall peut utiliser le relais serveur.
     const myTurn = mySeats && mySeats.includes(turnSeat);
+
+    // Nouveau joueur à l'enchère = nouvelle sélection. C'est important même si le même
+    // utilisateur contrôle deux sièges consécutifs : `myTurn` resterait vrai, mais le palier
+    // choisi au tour précédent ne doit jamais être conservé pour le siège suivant.
+    if (selectedBiddingTurnSeat !== turnSeat) {
+        selectedBiddingLevel = null;
+        selectedBiddingTurnSeat = turnSeat;
+    }
 
     const turnOwnerId = seatAssignment[turnSeat];
     const turnOwner = turnOwnerId ? participants.find(p => p.id === turnOwnerId) : null;
     const ownerDisconnected = !!(turnOwner && turnOwner.disconnected);
 
-    // Voir échange avec Guillaume (session du 23 juillet) : PAS de message dédié ici pour
-    // disconnectedFromHost — ce serait un doublon avec la bannière de reconnexion en haut
-    // de l'écran (voir renderReconnectionBanner, qui couvre maintenant aussi le cas où
-    // c'est NOUS qui sommes déconnectés), affichée à un autre endroit de la page. Seul le
-    // gel des boutons compte ici (voir `legal` plus bas) ; le texte se contente de rester
-    // sur son état normal (À vous d'enchérir / En attente de X...), qui redevient
-    // simplement inerte pendant la coupure plutôt que de raconter deux fois la même chose.
     if (myTurn) {
         turnPanel.textContent = `À vous d'enchérir (${seatFullName(turnSeat)})`;
     } else if (ownerDisconnected) {
@@ -5232,46 +5281,69 @@ function renderBiddingBox() {
         turnPanel.textContent = `En attente de ${seatFullName(turnSeat)}...`;
     }
     turnPanel.className = 'turn-indicator ' + (ownerDisconnected ? 'disconnected-turn' : (myTurn ? 'my-turn' : 'their-turn'));
-    // Voir échange avec Guillaume (session du 8 août — "j'aimerais cet effet tout autour
-    // de ses touches d'enchères") : même halo pulsant que turnPanel (voir .my-turn dans
-    // styles.css), appliqué cette fois directement sur la boîte des boutons — plus
-    // visible pour le joueur concerné que le seul texte au-dessus, qui peut passer
-    // inaperçu.
     box.classList.toggle('my-turn', myTurn);
 
+    // Une sélection de palier ne doit jamais survivre au passage du tour à un autre joueur.
+    if (!myTurn) selectedBiddingLevel = null;
+
+    // Liste des paliers encore jouables. Si le palier sélectionné est devenu illégal
+    // (par exemple après un rerendu synchronisé), on repart proprement sans sélection.
+    const legalLevels = new Set();
+    if (myTurn) {
+        for (let level = 1; level <= 7; level++) {
+            if (TWO_STEP_BID_STRAINS.some(strain =>
+                isCallLegal(auctionHistory, `${level}${strain}`, turnSeat)
+            )) {
+                legalLevels.add(level);
+            }
+        }
+    }
+    if (selectedBiddingLevel != null && !legalLevels.has(selectedBiddingLevel)) {
+        selectedBiddingLevel = null;
+    }
+
+    // Pré-sélection automatique du PALIER MINIMAL encore légal au début du tour.
+    // Exemple : après 1SA, aucune enchère au palier de 1 n'est encore possible ; 2♣ est la
+    // première enchère contractuelle légale, donc le bouton « 2 » est sélectionné d'office.
+    // La souche n'est PAS choisie automatiquement : le joueur clique ensuite T/K/C/P/SA.
+    if (myTurn && selectedBiddingLevel == null && legalLevels.size > 0) {
+        selectedBiddingLevel = Math.min(...legalLevels);
+    }
+
+    const levelRow = Array.from({ length: 7 }, (_, i) => i + 1).map(level => {
+        const legal = legalLevels.has(level);
+        const selected = selectedBiddingLevel === level;
+        return `<button type="button" class="call-btn bid-level-btn${selected ? ' selected' : ''}" ${legal ? '' : 'disabled'} aria-pressed="${selected ? 'true' : 'false'}" onclick="uiSelectBidLevel(${level})">${level}</button>`;
+    }).join('');
+
+    const strainRow = TWO_STEP_BID_STRAINS.map(strain => {
+        const call = selectedBiddingLevel == null ? null : `${selectedBiddingLevel}${strain}`;
+        const legal = !!(myTurn && call && isCallLegal(auctionHistory, call, turnSeat));
+        const label = formatStrainLabel(strain);
+        const suitClass = SUIT_CLASSES[strain] || 'notrump';
+        const title = selectedBiddingLevel == null
+            ? 'Choisissez d’abord un palier'
+            : `${selectedBiddingLevel}${strain === 'NT' ? 'SA' : SUIT_SYMBOLS[strain]}`;
+        return `<button type="button" class="call-btn bid-strain-btn ${suitClass}" ${legal ? '' : 'disabled'} title="${title}" onclick="uiSelectBidStrain('${strain}')">${label}</button>`;
+    }).join('');
+
     const specialLabels = { PASS: 'Passe', X: 'X', XX: 'XX' };
-    // Voir échange avec Guillaume : ligne spéciale calée sur la même grille à 5 colonnes
-    // que les rangées d'enchères — X sur la colonne 4 (1♦) et XX sur la colonne 5 (1♣),
-    // pour un alignement précis avec la rangée du dessous. Passe en position absolue (voir
-    // .call-btn-pass dans styles.css), largeur et décalage calculés en CSS — pas besoin de
-    // grid-column ici, une fois en position absolue il sort du flux de la grille.
-    const specialSpec = {
-        PASS: { col: null, extraClass: 'call-btn-pass' },
-        X: { col: 4, extraClass: 'call-btn-double' },
-        XX: { col: 5, extraClass: 'call-btn-redouble' }
+    const specialClasses = {
+        PASS: 'call-btn-pass',
+        X: 'call-btn-double',
+        XX: 'call-btn-redouble'
     };
     const specialRow = ['PASS', 'X', 'XX'].map(call => {
         const legal = myTurn && isCallLegal(auctionHistory, call, turnSeat);
-        const { col, extraClass } = specialSpec[call];
-        const colStyle = col ? ` style="grid-column: ${col};"` : '';
-        return `<button class="call-btn call-btn-special ${extraClass}"${colStyle} ${legal ? '' : 'disabled'} onclick="uiMakeCall('${call}')">${specialLabels[call]}</button>`;
+        return `<button type="button" class="call-btn call-btn-special ${specialClasses[call]}" ${legal ? '' : 'disabled'} onclick="uiMakeCall('${call}')">${specialLabels[call]}</button>`;
     }).join('');
 
-    const bidRows = [];
-    for (let level = 1; level <= 7; level++) {
-        const cells = STRAINS.map(strain => {
-            const call = `${level}${strain}`;
-            const legal = myTurn && isCallLegal(auctionHistory, call, turnSeat);
-            const label = formatStrainLabel(strain);
-            const suitClass = SUIT_CLASSES[strain] || 'notrump';
-            return `<button class="call-btn ${suitClass}" ${legal ? '' : 'disabled'} onclick="uiMakeCall('${call}')">${level}${label}</button>`;
-        }).join('');
-        bidRows.push(`<div class="bid-row">${cells}</div>`);
-    }
-
     box.innerHTML = `
-        <div class="special-calls-row">${specialRow}</div>
-        <div class="bid-grid">${bidRows.join('')}</div>
+        <div class="two-step-bidding-controls">
+            <div class="bid-level-row" aria-label="Choisir le palier">${levelRow}</div>
+            <div class="bid-strain-row" aria-label="Choisir la couleur">${strainRow}</div>
+            <div class="two-step-special-row">${specialRow}</div>
+        </div>
     `;
 }
 
@@ -5281,6 +5353,7 @@ function uiMakeCall(call) {
     if (!mySeats || !mySeats.includes(turnSeat)) return;
     if (!isCallLegal(auctionHistory, call, turnSeat)) return;
 
+    selectedBiddingLevel = null;
     applyCall(turnSeat, call);
 
     // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 3) : jusqu'ici, un invité déconnecté de

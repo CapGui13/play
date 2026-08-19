@@ -3451,3 +3451,188 @@ table.dd-table td.dd-secondary-contract {
         display: none !important;
     }
 }
+
+/* ===== Boîte d'enchères à deux temps : palier puis souche =====
+   Interaction : 1..7, puis SA / ♠ / ♥ / ♦ / ♣. Les appels internes restent inchangés. */
+.bidding-box {
+    margin-bottom: 12px;
+    padding: 9px;
+    border-radius: 12px;
+    border: 1px solid rgba(201, 162, 39, 0.28);
+    background: linear-gradient(180deg, rgba(20, 92, 67, 0.22), rgba(0, 0, 0, 0.08));
+}
+
+.bidding-box.my-turn {
+    padding: 9px; /* évite tout saut de mise en page quand le halo apparaît */
+    border-radius: 12px;
+    animation: turn-glow 2.4s ease-in-out infinite;
+}
+
+.two-step-bidding-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.bid-level-row {
+    display: grid;
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+    gap: 6px;
+}
+
+.bid-strain-row {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 7px;
+}
+
+.two-step-special-row {
+    display: grid;
+    grid-template-columns: 1.18fr 1fr 1fr;
+    gap: 7px;
+    margin-top: 1px;
+}
+
+.bidding-box .call-btn {
+    min-width: 0;
+    height: 46px;
+    padding: 0 6px;
+    border-radius: 9px;
+    font-family: var(--font-body);
+    font-weight: 700;
+    cursor: pointer;
+    transition: transform 0.11s ease, box-shadow 0.14s ease, filter 0.14s ease, opacity 0.14s ease;
+}
+
+.bidding-box .call-btn:not(:disabled):hover {
+    transform: translateY(-1px);
+    filter: brightness(1.06);
+}
+
+.bidding-box .call-btn:not(:disabled):active {
+    transform: translateY(0) scale(0.97);
+}
+
+.bidding-box .call-btn:disabled {
+    opacity: 0.27;
+    cursor: not-allowed;
+    filter: saturate(0.55);
+}
+
+/* 1 → 7 : touches ivoire, inspirées d'une vraie bidding box mais dans la palette PONS. */
+.bidding-box .bid-level-btn {
+    color: #123529;
+    font-family: var(--font-display);
+    font-size: 1.18rem;
+    font-weight: 700;
+    border: 1px solid rgba(224, 188, 74, 0.9);
+    background: linear-gradient(180deg, #fff9e8 0%, #eee1ba 100%);
+    box-shadow:
+        0 3px 8px rgba(0, 0, 0, 0.18),
+        inset 0 1px 0 rgba(255, 255, 255, 0.95),
+        inset 0 -1px 0 rgba(163, 128, 28, 0.18);
+}
+
+.bidding-box .bid-level-btn.selected {
+    color: #102b21;
+    border-color: #f1cf62;
+    background: linear-gradient(180deg, #f2cf63 0%, #caa12d 100%);
+    box-shadow:
+        0 0 0 2px rgba(246, 217, 118, 0.32),
+        0 4px 10px rgba(0, 0, 0, 0.24),
+        inset 0 1px 0 rgba(255, 255, 255, 0.52);
+}
+
+/* Souches dans l'ordre demandé : SA, P, C, K, T. */
+.bidding-box .bid-strain-btn {
+    font-size: 1.18rem;
+    border: 1px solid rgba(224, 188, 74, 0.72);
+    background: linear-gradient(180deg, rgba(246, 241, 227, 0.13), rgba(246, 241, 227, 0.055));
+    box-shadow:
+        0 3px 8px rgba(0, 0, 0, 0.17),
+        inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.bidding-box .bid-strain-btn .suit-icon {
+    font-size: 1.42rem;
+    line-height: 1;
+    vertical-align: -0.04em;
+}
+
+.bidding-box .bid-strain-btn.notrump {
+    color: #fff;
+    background: linear-gradient(180deg, #4278b9 0%, #2c5d95 100%);
+    border-color: #76a3d7;
+}
+
+.bidding-box .bid-strain-btn.spades {
+    color: #fff;
+    background: linear-gradient(180deg, #59636f 0%, #3f4852 100%);
+    border-color: #8f9ba8;
+}
+.bidding-box .bid-strain-btn.spades .suit-icon.spades { color: #fff; }
+
+.bidding-box .bid-strain-btn.hearts {
+    color: #ffdce2;
+    background: linear-gradient(180deg, #b94f61 0%, #8d3948 100%);
+    border-color: #e98698;
+}
+.bidding-box .bid-strain-btn.hearts .suit-icon.hearts { color: #ffdce2; }
+
+.bidding-box .bid-strain-btn.diamonds {
+    color: #ffe6b1;
+    background: linear-gradient(180deg, #b67c25 0%, #875a19 100%);
+    border-color: #e2ad53;
+}
+.bidding-box .bid-strain-btn.diamonds .suit-icon.diamonds { color: #ffe6b1; }
+
+.bidding-box .bid-strain-btn.clubs {
+    color: #b9d7ff;
+    background: linear-gradient(180deg, #386d9e 0%, #28547c 100%);
+    border-color: #6f9bc6;
+}
+.bidding-box .bid-strain-btn.clubs .suit-icon.clubs { color: #b9d7ff; }
+
+/* Passe / X / XX restent des annonces directes, sans sélection de palier. */
+.bidding-box .two-step-special-row .call-btn-special {
+    height: 42px;
+    font-size: 0.92rem;
+    border: 1px solid rgba(224, 188, 74, 0.55);
+    box-shadow: 0 3px 8px rgba(0, 0, 0, 0.16), inset 0 1px 0 rgba(255,255,255,0.08);
+}
+
+.bidding-box .two-step-special-row .call-btn-pass {
+    position: static;
+    width: auto;
+    height: 42px;
+    background: linear-gradient(180deg, #3b8b55 0%, #286a40 100%);
+    color: #fff;
+    border-color: #6eb07f;
+}
+
+.bidding-box .two-step-special-row .call-btn-double {
+    background: linear-gradient(180deg, #df3b34 0%, #b92b27 100%);
+    color: #fff;
+    border-color: #ee6d67;
+}
+
+.bidding-box .two-step-special-row .call-btn-redouble {
+    background: linear-gradient(180deg, #356da3 0%, #28547e 100%);
+    color: #fff;
+    border-color: #6f9bc5;
+}
+
+@media (max-width: 520px) {
+    .bidding-box { padding: 7px; }
+    .bidding-box.my-turn { padding: 7px; }
+    .two-step-bidding-controls { gap: 6px; }
+    .bid-level-row { gap: 4px; }
+    .bid-strain-row, .two-step-special-row { gap: 5px; }
+    .bidding-box .call-btn { height: 42px; border-radius: 8px; }
+    .bidding-box .bid-level-btn { font-size: 1.05rem; }
+    .bidding-box .bid-strain-btn { font-size: 1.05rem; }
+    .bidding-box .bid-strain-btn .suit-icon { font-size: 1.28rem; }
+    .bidding-box .two-step-special-row .call-btn-special,
+    .bidding-box .two-step-special-row .call-btn-pass { height: 40px; }
+}
+
