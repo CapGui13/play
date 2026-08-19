@@ -5896,10 +5896,15 @@ function flashSessionExportToast(text) {
 
 
 // Sur mobile uniquement, garde le panneau d'enchères à la hauteur du plus grand des
-// deux affichages (boîte d'enchères / PAR). IMPORTANT : on mesure maintenant sur un CLONE
-// invisible du panneau, jamais en modifiant temporairement le DOM affiché. Cela évite
-// qu'une mesure de hauteur puisse interférer avec le bouton Voir le PAR ou son état.
+// deux affichages (boîte d'enchères / PAR).
+//
+// IMPORTANT PERFORMANCE : la mesure se fait APRÈS le premier rendu via requestAnimationFrame,
+// jamais dans le chemin synchrone d'entrée dans une nouvelle séance. Ainsi la boîte et ses
+// boutons sont peints immédiatement ; le calcul de hauteur du clone invisible arrive juste
+// après, avant que l'utilisateur ait le temps de basculer vers le PAR.
 // Desktop n'utilise pas cette hauteur (voir media query dans styles.css).
+let mobileAuctionPanelMeasureToken = 0;
+
 function syncMobileAuctionPanelStableHeight(resultEl, biddingBoxEl, turnIndicatorEl, ddTableHtml) {
     const panel = (resultEl && resultEl.closest('.auction-panel'))
         || (biddingBoxEl && biddingBoxEl.closest('.auction-panel'));
@@ -5907,56 +5912,102 @@ function syncMobileAuctionPanelStableHeight(resultEl, biddingBoxEl, turnIndicato
 
     const mobile = window.matchMedia && window.matchMedia('(max-width: 700px)').matches;
     if (!mobile || !ddTableHtml || !resultEl || !biddingBoxEl || !turnIndicatorEl) {
+        mobileAuctionPanelMeasureToken++;
         panel.style.removeProperty('--mobile-auction-panel-min-height');
         return;
     }
 
-    // Mesure hors écran sur une copie : aucun display/visibility/innerHTML du panneau réel
-    // n'est touché, donc aucun risque de faire disparaître un contrôle vivant.
-    const clone = panel.cloneNode(true);
-    clone.removeAttribute('id');
-    clone.style.position = 'fixed';
-    clone.style.left = '-10000px';
-    clone.style.top = '0';
-    clone.style.visibility = 'hidden';
-    clone.style.pointerEvents = 'none';
-    clone.style.width = `${panel.getBoundingClientRect().width}px`;
-    clone.style.minHeight = '0';
-    clone.style.setProperty('--mobile-auction-panel-min-height', '0px');
-    document.body.appendChild(clone);
+    const token = ++mobileAuctionPanelMeasureToken;
 
-    const cloneResult = clone.querySelector('#contractResult');
-    const cloneBidding = clone.querySelector('#biddingBox');
-    const cloneTurn = clone.querySelector('#turnIndicator');
-    const cloneToggle = clone.querySelector('#parBiddingToggleWrap');
+    // Deux rAF : le premier laisse le DOM réel (notamment les boutons d'enchères) être
+    // présenté au navigateur ; le second effectue la mesure hors écran. Les appels plus
+    // récents invalident automatiquement les anciennes mesures via `token`.
+    requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+            if (token !== mobileAuctionPanelMeasureToken || !panel.isConnected) return;
 
-    let biddingHeight = 0;
-    let parHeight = 0;
-    if (cloneResult && cloneBidding && cloneTurn) {
-        if (cloneToggle) cloneToggle.style.display = 'flex';
+            // Mesure hors écran sur une copie : aucun display/visibility/innerHTML du
+            // panneau réel n'est touché.
+            const clone = panel.cloneNode(true);
+            clone.removeAttribute('id');
+            clone.style.position = 'fixed';
+            clone.style.left = '-10000px';
+            clone.style.top = '0';
+            clone.style.visibility = 'hidden';
+            clone.style.pointerEvents = 'none';
+            clone.style.width = `${panel.getBoundingClientRect().width}px`;
+            clone.style.minHeight = '0';
+            clone.style.setProperty('--mobile-auction-panel-min-height', '0px');
+            document.body.appendChild(clone);
 
-        // État enchères.
-        cloneResult.style.display = 'none';
-        cloneBidding.style.display = '';
-        cloneTurn.style.display = '';
-        biddingHeight = Math.ceil(clone.getBoundingClientRect().height);
+            const cloneResult = clone.querySelector('#contractResult');
+            const cloneBidding = clone.querySelector('#biddingBox');
+            const cloneTurn = clone.querySelector('#turnIndicator');
+            const cloneToggle = clone.querySelector('#parBiddingToggleWrap');
 
-        // État PAR.
-        cloneResult.innerHTML = ddTableHtml;
-        cloneResult.style.display = 'block';
-        cloneBidding.style.display = 'none';
-        cloneTurn.style.display = 'none';
-        parHeight = Math.ceil(clone.getBoundingClientRect().height);
-    }
+            let biddingHeight = 0;
+            let parHeight = 0;
+            if (cloneResult && cloneBidding && cloneTurn) {
+                if (cloneToggle) cloneToggle.style.display = 'flex';
 
-    clone.remove();
+                // État enchères.
+                cloneResult.style.display = 'none';
+                cloneBidding.style.display = '';
+                cloneTurn.style.display = '';
+                biddingHeight = Math.ceil(clone.getBoundingClientRect().height);
 
-    const stableHeight = Math.max(biddingHeight, parHeight);
-    if (stableHeight > 0) {
-        panel.style.setProperty('--mobile-auction-panel-min-height', `${stableHeight}px`);
-    } else {
-        panel.style.removeProperty('--mobile-auction-panel-min-height');
-    }
+                // État PAR.
+                cloneResult.innerHTML = ddTableHtml;
+                cloneResult.style.display = 'block';
+                cloneBidding.style.display = 'none';
+                cloneTurn.style.display = 'none';
+                parHeight = Math.ceil(clone.getBoundingClientRect().height);
+            }
+
+            clone.remove();
+
+            if (token !== mobileAuctionPanelMeasureToken || !panel.isConnected) return;
+            const stableHeight = Math.max(biddingHeight, parHeight);
+            if (stableHeight > 0) {
+                panel.style.setProperty('--mobile-auction-panel-min-height', `${stableHeight}px`);
+            }
+        });
+    });
+}
+
+// Lors de la FIN d'une enchère sur mobile, le remplacement de la/les main(s) du joueur
+// par les 4 mains augmente la hauteur de la zone située AU-DESSUS du panneau central.
+// On ne change aucune taille : on compense uniquement le scroll au même frame de rendu
+// pour que le panneau d'enchères/PAR reste exactement au même endroit dans le viewport.
+// Si les 4 mains étaient déjà visibles (host "Voir les 4 mains" / kibbitz), rien à faire.
+function captureMobileAuctionEndViewportAnchor(auctionOver, diagramEl) {
+    if (!auctionOver || window.innerWidth > 760 || !diagramEl) return null;
+    if (getComputedStyle(diagramEl).display !== 'none') return null;
+
+    const panel = document.querySelector('.auction-panel');
+    if (!panel) return null;
+
+    const rect = panel.getBoundingClientRect();
+    const viewportHeight = (window.visualViewport && window.visualViewport.height) || window.innerHeight;
+    // Ne corrige que si le panneau est réellement dans/près du viewport : si l'utilisateur
+    // regarde ailleurs, on ne lui impose aucun déplacement.
+    if (rect.bottom <= 0 || rect.top >= viewportHeight) return null;
+
+    return { element: panel, top: rect.top };
+}
+
+function restoreMobileAuctionEndViewportAnchor(anchor) {
+    if (!anchor || !anchor.element) return;
+    requestAnimationFrame(() => {
+        if (!anchor.element.isConnected) return;
+        const newTop = anchor.element.getBoundingClientRect().top;
+        const delta = newTop - anchor.top;
+        if (Math.abs(delta) > 0.5) {
+            // Déplacement instantané, sans animation : le changement de contenu et la
+            // compensation sont peints ensemble, donc pas de "saut" visible.
+            window.scrollBy(0, delta);
+        }
+    });
 }
 
 function uiToggleParBiddingView() {
@@ -5976,6 +6027,7 @@ function checkAuctionEnd() {
     const diagramEl = document.getElementById('allHandsDiagram');
 
     const auctionOver = isAuctionOver(auctionHistory);
+    const mobileAuctionEndAnchor = captureMobileAuctionEndViewportAnchor(auctionOver, diagramEl);
     // L'hôte peut choisir de voir les 4 mains à tout moment (voir uiToggleHostSeeAllHands),
     // même pendant l'enchère — un outil réservé à lui seul (vérifier une donne, aider un
     // débutant en direct...), jamais envoyé ni visible pour les autres joueurs. Un
@@ -6013,7 +6065,11 @@ function checkAuctionEnd() {
         } else {
             diagramEl.style.display = 'none';
             if (myHandsEl) myHandsEl.style.display = '';
-            renderAllHandsDiagram();
+            // Desktop : pré-rendu nécessaire pour syncHandsPanelMinHeight().
+            // Mobile : cette réservation de hauteur est volontairement désactivée, donc
+            // construire les 4 mains invisibles ici ne sert à rien et retarde le premier
+            // affichage des boutons au chargement d'une nouvelle séance.
+            if (window.innerWidth > 760) renderAllHandsDiagram();
         }
 
         if (canViewParDuringAuction) {
@@ -6135,6 +6191,10 @@ function checkAuctionEnd() {
         // fait justement partie.
         resultEl.innerHTML += '<div class="next-board-panel"><button type="button" class="btn btn-secondary btn-small" onclick="uiNextBoard()">Donne suivante →</button></div>';
     }
+
+    // Mobile uniquement : les tailles réelles restent inchangées, on maintient simplement
+    // le même point de vue quand les 4 mains apparaissent à la fin de l'enchère.
+    restoreMobileAuctionEndViewportAnchor(mobileAuctionEndAnchor);
 }
 
 // ===== Demande d'annulation (undo) =====
