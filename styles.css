@@ -3522,9 +3522,17 @@ table.dd-table td.dd-secondary-contract {
 /* 1 → 7 : touches ivoire, inspirées d'une vraie bidding box mais dans la palette PONS. */
 .bidding-box .bid-level-btn {
     color: #123529;
-    font-family: var(--font-display);
+    /* Chiffres 1–7 : police sans serif à chiffres alignés.
+       Fraunces donnait un décalage optique surtout visible sur 2 et 6. */
+    font-family: var(--font-body);
     font-size: 1.18rem;
     font-weight: 700;
+    font-variant-numeric: lining-nums tabular-nums;
+    font-feature-settings: "lnum" 1, "tnum" 1;
+    line-height: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     border: 1px solid rgba(224, 188, 74, 0.9);
     background: linear-gradient(180deg, #fff9e8 0%, #eee1ba 100%);
     box-shadow:
@@ -3636,3 +3644,12 @@ table.dd-table td.dd-secondary-contract {
     .bidding-box .two-step-special-row .call-btn-pass { height: 40px; }
 }
 
+
+/* ===== Salon d'attente : informations moteur masquées =====
+   Le moteur reste chargé et fonctionnel ; seuls les éléments visuels qui mentionnent
+   PONS dans le salon sont retirés de l'interface. Les IDs restent dans le DOM pour ne
+   pas casser un éventuel code du moteur qui les met à jour. */
+#screen-lobby #ponsBuildBadge,
+#screen-lobby #ponsEngineStatus {
+    display: none !important;
+}
