@@ -3504,7 +3504,7 @@ table.dd-table td.dd-secondary-contract {
 }
 
 /* ===== Boîte d'enchères à deux temps : palier puis souche =====
-   Interaction : ligne 1 = 1..7 ; ligne 2 = Passe / X(XX) / ♣ / ♦ / ♥ / ♠ / SA. Les appels internes restent inchangés. */
+   Interaction : 1..7, puis ♣ / ♦ / ♥ / ♠ / SA (T / K / C / P / SA). Les appels internes restent inchangés. */
 .bidding-box {
     margin-bottom: 12px;
     padding: 9px;
@@ -3531,10 +3531,17 @@ table.dd-table td.dd-secondary-contract {
     gap: 6px;
 }
 
-.bid-action-strain-row {
+.bid-strain-row {
     display: grid;
-    grid-template-columns: repeat(7, minmax(0, 1fr));
-    gap: 6px;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 7px;
+}
+
+.two-step-special-row {
+    display: grid;
+    grid-template-columns: 1.18fr 1fr 1fr;
+    gap: 7px;
+    margin-top: 1px;
 }
 
 .bidding-box .call-btn {
@@ -3645,37 +3652,30 @@ table.dd-table td.dd-secondary-contract {
 }
 .bidding-box .bid-strain-btn.clubs .suit-icon.clubs { color: #b9d7ff; }
 
-/* Deuxième ligne : Passe / X ou XX / T / K / C / P / SA.
-   Passe et X/XX ont exactement la même largeur/hauteur que les cinq souches. */
-.bidding-box .bid-action-strain-row .call-btn-special {
-    position: static;
-    width: auto;
-    height: 46px;
-    padding: 0 4px;
-    font-size: 0.88rem;
-    white-space: nowrap;
+/* Passe / X / XX restent des annonces directes, sans sélection de palier. */
+.bidding-box .two-step-special-row .call-btn-special {
+    height: 42px;
+    font-size: 0.92rem;
     border: 1px solid rgba(224, 188, 74, 0.55);
     box-shadow: 0 3px 8px rgba(0, 0, 0, 0.16), inset 0 1px 0 rgba(255,255,255,0.08);
 }
 
-.bidding-box .bid-action-strain-row .call-btn-pass {
+.bidding-box .two-step-special-row .call-btn-pass {
     position: static;
-    left: auto;
-    top: auto;
     width: auto;
-    height: 46px;
+    height: 42px;
     background: linear-gradient(180deg, #3b8b55 0%, #286a40 100%);
     color: #fff;
     border-color: #6eb07f;
 }
 
-.bidding-box .bid-action-strain-row .call-btn-double {
+.bidding-box .two-step-special-row .call-btn-double {
     background: linear-gradient(180deg, #df3b34 0%, #b92b27 100%);
     color: #fff;
     border-color: #ee6d67;
 }
 
-.bidding-box .bid-action-strain-row .call-btn-redouble {
+.bidding-box .two-step-special-row .call-btn-redouble {
     background: linear-gradient(180deg, #356da3 0%, #28547e 100%);
     color: #fff;
     border-color: #6f9bc5;
@@ -3685,28 +3685,14 @@ table.dd-table td.dd-secondary-contract {
     .bidding-box { padding: 7px; }
     .bidding-box.my-turn { padding: 7px; }
     .two-step-bidding-controls { gap: 6px; }
-    .bid-level-row,
-    .bid-action-strain-row { gap: 4px; }
+    .bid-level-row { gap: 4px; }
+    .bid-strain-row, .two-step-special-row { gap: 5px; }
     .bidding-box .call-btn { height: 42px; border-radius: 8px; }
     .bidding-box .bid-level-btn { font-size: 1.05rem; }
     .bidding-box .bid-strain-btn { font-size: 1.05rem; }
     .bidding-box .bid-strain-btn .suit-icon { font-size: 1.28rem; }
-    .bidding-box .bid-action-strain-row .call-btn-special,
-    .bidding-box .bid-action-strain-row .call-btn-pass {
-        height: 42px;
-        padding: 0 2px;
-        font-size: 0.76rem;
-    }
-}
-
-/* Filet de sécurité pour les très petits écrans (320px et moins environ) :
-   "Passe" reste entièrement contenu dans sa colonne sans toucher la touche X. */
-@media (max-width: 330px) {
-    .bidding-box .bid-action-strain-row .call-btn-pass {
-        padding-left: 0;
-        padding-right: 0;
-        font-size: 0.70rem;
-    }
+    .bidding-box .two-step-special-row .call-btn-special,
+    .bidding-box .two-step-special-row .call-btn-pass { height: 40px; }
 }
 
 

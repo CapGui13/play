@@ -3555,6 +3555,7 @@ function uiStartGameAsHost() {
         // Affichage prioritaire : sur mobile c'est ce qui supprime la latence perceptible
         // des boutons au lancement d'une nouvelle séance. On rend la première donne
         // immédiatement, puis on laisse réellement un paint au navigateur.
+        resetAuctionVisualModeForNewSession();
         enterGameScreen();
 
         const finishSessionStartAfterFirstPaint = () => {
@@ -3846,6 +3847,7 @@ function handlePeerData(msg, guestIndex) {
             if (msg.roomCreatorName) roomCreatorName = msg.roomCreatorName;
             hostPendingUndo = null;
             clearUndoUiState();
+            resetAuctionVisualModeForNewSession();
             enterGameScreen();
             break;
         }
@@ -5322,7 +5324,7 @@ function renderBiddingBox() {
         return `<button type="button" class="call-btn bid-level-btn${selected ? ' selected' : ''}" ${legal ? '' : 'disabled'} aria-pressed="${selected ? 'true' : 'false'}" onclick="uiSelectBidLevel(${level})">${level}</button>`;
     }).join('');
 
-    const strainButtons = TWO_STEP_BID_STRAINS.map(strain => {
+    const strainRow = TWO_STEP_BID_STRAINS.map(strain => {
         const call = selectedBiddingLevel == null ? null : `${selectedBiddingLevel}${strain}`;
         const legal = !!(myTurn && call && isCallLegal(auctionHistory, call, turnSeat));
         const label = formatStrainLabel(strain);
@@ -5333,27 +5335,22 @@ function renderBiddingBox() {
         return `<button type="button" class="call-btn bid-strain-btn ${suitClass}" ${legal ? '' : 'disabled'} title="${title}" onclick="uiSelectBidStrain('${strain}')">${label}</button>`;
     }).join('');
 
-    // Emplacement unique X / XX :
-    // - si le SURCONTRE est légal dans l'état courant, la touche devient XX ;
-    // - sinon elle affiche X, actif seulement si le CONTRE est légal ;
-    // - si ni X ni XX n'est légal, on conserve X mais grisé.
-    // `isCallLegal` reste l'oracle : on ne déduit pas la légalité du seul dernier carton.
-    const redoubleAvailable = isCallLegal(auctionHistory, 'XX', turnSeat);
-    const doubleAvailable = isCallLegal(auctionHistory, 'X', turnSeat);
-    const xSlotCall = redoubleAvailable ? 'XX' : 'X';
-    const xSlotLegal = !!(myTurn && (redoubleAvailable || doubleAvailable));
-    const xSlotClass = xSlotCall === 'XX' ? 'call-btn-redouble' : 'call-btn-double';
-
-    const passLegal = !!(myTurn && isCallLegal(auctionHistory, 'PASS', turnSeat));
-    const passButton = `<button type="button" class="call-btn call-btn-special call-btn-pass" ${passLegal ? '' : 'disabled'} onclick="uiMakeCall('PASS')">Passe</button>`;
-    const xSlotButton = `<button type="button" class="call-btn call-btn-special ${xSlotClass}" ${xSlotLegal ? '' : 'disabled'} onclick="uiMakeCall('${xSlotCall}')">${xSlotCall}</button>`;
+    const specialLabels = { PASS: 'Passe', X: 'X', XX: 'XX' };
+    const specialClasses = {
+        PASS: 'call-btn-pass',
+        X: 'call-btn-double',
+        XX: 'call-btn-redouble'
+    };
+    const specialRow = ['PASS', 'X', 'XX'].map(call => {
+        const legal = myTurn && isCallLegal(auctionHistory, call, turnSeat);
+        return `<button type="button" class="call-btn call-btn-special ${specialClasses[call]}" ${legal ? '' : 'disabled'} onclick="uiMakeCall('${call}')">${specialLabels[call]}</button>`;
+    }).join('');
 
     box.innerHTML = `
         <div class="two-step-bidding-controls">
             <div class="bid-level-row" aria-label="Choisir le palier">${levelRow}</div>
-            <div class="bid-action-strain-row" aria-label="Passe, contre ou surcontre, puis couleur">
-                ${passButton}${xSlotButton}${strainButtons}
-            </div>
+            <div class="bid-strain-row" aria-label="Choisir la couleur">${strainRow}</div>
+            <div class="two-step-special-row">${specialRow}</div>
         </div>
     `;
 }
@@ -5925,6 +5922,33 @@ function renderDDTablePlaceholder() {
 }
 
 let lastAuctionVisualMode = null;
+
+// Nouvelle séance : repartir d'un état visuel neutre AVANT le premier renderBoard.
+// Sans ce reset, une séance lancée dans le même onglet après une donne terminée pouvait
+// hériter de la classe mobile `show-par` de la séance précédente ; les boutons de la
+// première donne entraient alors dans le crossfade de 325 ms, perçu comme une latence.
+function resetAuctionVisualModeForNewSession() {
+    lastAuctionVisualMode = null;
+    const stack = document.getElementById('auctionViewStack');
+    const resultEl = document.getElementById('contractResult');
+    const biddingViewEl = document.getElementById('auctionBiddingView');
+    if (stack) stack.classList.remove('is-mobile-stacked', 'show-par', 'show-bidding');
+    if (resultEl) {
+        resultEl.style.display = 'none';
+        resultEl.innerHTML = '';
+        resultEl.removeAttribute('aria-hidden');
+        if ('inert' in resultEl) resultEl.inert = false;
+    }
+    if (biddingViewEl) {
+        biddingViewEl.style.display = '';
+        biddingViewEl.removeAttribute('aria-hidden');
+        if ('inert' in biddingViewEl) biddingViewEl.inert = false;
+    }
+    // Force le navigateur à enregistrer cet état neutre avant que renderBoard() ne
+    // réapplique la pile mobile. Ainsi, la vue boutons part déjà d'une opacité de 1 et
+    // n'entre pas dans le crossfade de 325 ms au premier affichage de la séance.
+    if (stack) void stack.offsetWidth;
+}
 
 function replayQuickFade(el) {
     if (!el) return;
