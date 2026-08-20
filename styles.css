@@ -697,7 +697,7 @@ a.btn {
 
 /* Libellé court/long (voir requestUndoBtn, resetAuctionBtn, hand-option-btn dans
    index.html) : le bouton complet par défaut, la version abrégée prend le relais sous
-   768px (voir le bloc mobile plus bas) — la place manque pour "Notation FR (R D V X)"
+   760px (voir le bloc mobile plus bas) — la place manque pour "Notation FR (R D V X)"
    à côté de 3 autres boutons similaires sur un écran de téléphone. */
 .btn-label-short { display: none; }
 
@@ -1937,7 +1937,7 @@ button.kibitz-chip {
    ligne... 2ème ligne... tu fais ça pour l'affichage desktop, pour le mobile je sais
    pas, ça risque de foutre le bordel") : les 2 groupes s'empilent en colonne (2 lignes
    distinctes) — flex-direction:column sur le conteneur, chaque groupe restant lui-même
-   en ligne horizontale. En mobile (media query 768px plus bas), ces 2 groupes
+   en ligne horizontale. En mobile (media query 760px plus bas), ces 2 groupes
    redeviennent display:contents, désactivant cette mise en page pour retrouver
    exactement le flex-wrap plat d'origine, déjà éprouvé sur petit écran.
    Voir échange avec Guillaume ("sur la page du non hôte, le exporter la session est
@@ -3260,7 +3260,7 @@ table.dd-table td.dd-secondary-contract {
    sont uniquement des ajustements indépendants de ce choix — libellés de boutons
    raccourcis, en-tête resserré, cibles tactiles conformes — qui restent utiles quelle que
    soit la façon dont le contenu est agencé verticalement. */
-@media (max-width: 768px) {
+@media (max-width: 760px) {
     /* Sous ce seuil, la place manque pour les libellés complets des boutons d'en-tête et
        d'options des mains (voir .btn-label-full/.btn-label-short dans index.html) : on
        bascule sur leur version abrégée. */

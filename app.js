@@ -1260,11 +1260,11 @@ function showScreen(id) {
     document.querySelectorAll('.screen').forEach(el => el.style.display = 'none');
     // '' (et non 'block' en dur) : un style inline a une priorité absolue sur n'importe
     // quelle règle de styles.css, y compris #screen-game { display: flex; ... } posé par
-    // le layout plein écran mobile (voir @media max-width:768px) — le forcer à 'block'
+    // le layout plein écran mobile (voir @media max-width:760px) — le forcer à 'block'
     // ici l'écrasait silencieusement et faisait s'effondrer tout le système de répartition
     // des hauteurs (mains/enchères/boîte fixée en bas), avec un retour au scroll de page
     // classique. Laisser vide restaure le display défini par la feuille de style (block
-    // par défaut pour un <section>, flex pour #screen-game sous 768px).
+    // par défaut pour un <section>, flex pour #screen-game sous 760px).
     document.getElementById(id).style.display = '';
 
     // Voir échange avec Guillaume : seul l'écran de jeu élargit .app-container (pour que
