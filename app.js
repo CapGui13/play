@@ -1632,19 +1632,16 @@ function hideConnectingOverlay() {
     if (overlay) overlay.style.display = 'none';
 }
 
-// Le code 4 chiffres reste affiché seul dans l'interface, mais le lien de partage contient
-// en plus la clé de capacité cloud. Cette clé n'est jamais conservée dans la barre
-// d'adresse locale : elle est seulement copiée dans le lien d'invitation et mémorisée sur
-// les appareils légitimes (voir session-storage.js).
+// Le lien partagé reste volontairement court : le code 4 chiffres suffit pour rejoindre
+// le salon P2P. La capacité cloud privée n'est JAMAIS ajoutée au lien copié ; elle est
+// transmise séparément par l'hôte lorsqu'un participant est effectivement autorisé. On
+// continue néanmoins d'accepter à la lecture les anciens liens #access=... (voir
+// rememberRoomAccessFromUrl) pour ne pas casser un lien déjà envoyé avant ce correctif.
 function buildRoomShareUrl(roomCode) {
     const url = new URL(window.location.href);
     url.searchParams.set('room', roomCode);
-    url.searchParams.delete('access'); // compat d'un éventuel ancien lien de test
-    url.hash = '';
-    const accessKey = (typeof getSessionAccessKey === 'function') ? getSessionAccessKey(roomCode) : null;
-    // La capacité vit dans le FRAGMENT (#), jamais dans la query : un fragment n'est pas
-    // envoyé au serveur HTTP/GitHub Pages et n'apparaît donc pas dans ses logs de requête.
-    if (accessKey) url.hash = new URLSearchParams({ access: accessKey }).toString();
+    url.searchParams.delete('access'); // retire un éventuel ancien format de test
+    url.hash = '';                     // ne jamais republier une capacité héritée de l'URL
     return url;
 }
 
@@ -9652,8 +9649,10 @@ window.addEventListener('DOMContentLoaded', () => {
     setInterval(renderReconnectButton, 1000);
 
     const params = new URLSearchParams(window.location.search);
-    // Un lien d'invitation sécurisé porte ?room=XXXX#access=<capacité>. On mémorise la
-    // capacité AVANT toute tentative P2P/cloud, puis on l'efface aussitôt de l'URL locale.
+    // Compatibilité avec les liens sécurisés des builds précédents : si un ancien
+    // ?room=XXXX#access=<capacité> est ouvert, on mémorise encore la capacité avant toute
+    // tentative P2P/cloud puis on l'efface de l'URL. Les NOUVEAUX liens copiés sont courts
+    // et ne contiennent plus cette capacité (voir buildRoomShareUrl).
     rememberRoomAccessFromUrl(params);
     const room = params.get('room');
     // Voir échange avec Guillaume (session du 23 juillet — reprise via localStorage) :
