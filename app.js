@@ -4566,6 +4566,12 @@ function handlePeerData(msg, guestIndex) {
             hostPendingUndo = null;
             clearUndoUiState();
             renderBoard();
+            // Quand l'hôte change de donne, le navigateur mobile de l'invité conservait
+            // parfois l'ancien scroll et le clampait au nouveau bas de page — typiquement
+            // directement dans le chat. Le même recalage que le bouton "Donne suivante"
+            // de l'hôte est donc appliqué au destinataire après le rendu de la nouvelle
+            // donne. Sans effet sur desktop.
+            positionNextBoardAfterParNavigation();
             relayIfHost(msg, guestIndex);
             break;
         }
@@ -7275,9 +7281,17 @@ function renderUndoControls() {
     const isDeferredNonCreator = deals && (peerConn instanceof NullPeerConnection) && !isTrueOriginalHost();
     const isDisconnectedGuest = deals && myRole === 'guest' && (!peerConn || !peerConn.isConnected());
     const appliesImmediately = myRole === 'host' || isDeferredNonCreator || isDisconnectedGuest;
+    const myUndoTargetIndex = findUndoTargetIndex(myParticipantId, auctionHistory);
     const blockedByPartnerSince = (isDeferredNonCreator || isDisconnectedGuest)
-        && findUndoTargetIndex(myParticipantId, auctionHistory) <= findPartnerLastCallIndex(myParticipantId, auctionHistory);
-    btn.disabled = !visible || !deals || auctionHistory.length === 0 || undoRequestPending || !!pendingUndoAsk || blockedByPartnerSince;
+        && myUndoTargetIndex <= findPartnerLastCallIndex(myParticipantId, auctionHistory);
+    // Un invité ne peut demander l'annulation que s'il a réellement produit au moins
+    // une annonce sur CETTE donne. Auparavant, la simple présence d'une annonce dans
+    // l'historique (hôte/robot/autre joueur) suffisait à activer le bouton, puis la
+    // demande était rejetée plus tard avec "rien à annuler". L'hôte conserve son droit
+    // historique d'annuler la dernière annonce humaine de la table.
+    const guestHasOwnUndoTarget = myRole !== 'guest' || myUndoTargetIndex >= 0;
+    btn.disabled = !visible || !deals || auctionHistory.length === 0 || !guestHasOwnUndoTarget
+        || undoRequestPending || !!pendingUndoAsk || blockedByPartnerSince;
     // Deux <span> (voir index.html) plutôt qu'un textContent direct : .btn-label-full/
     // .btn-label-short sont affichés en alternance en CSS selon la largeur d'écran
     // (bouton complet sur desktop, abrégé sur mobile où la place manque).
@@ -7294,8 +7308,10 @@ function renderUndoControls() {
         if (fullEl) fullEl.textContent = '↩️ Faire un undo';
         if (shortEl) shortEl.textContent = '↩️ Undo';
     } else {
-        if (fullEl) fullEl.textContent = undoRequestPending ? '⏳ Demande envoyée...' : '↩️ Demander un undo';
-        if (shortEl) shortEl.textContent = undoRequestPending ? '⏳ Envoyée...' : '↩️ Undo';
+        if (fullEl) fullEl.textContent = undoRequestPending ? '⏳ Demande envoyée...' : "↩️ Demande d'undo";
+        // Sur mobile, ne pas réduire le libellé à "Undo" : pour un invité il s'agit
+        // bien d'une DEMANDE soumise à l'hôte, pas d'un undo immédiat.
+        if (shortEl) shortEl.textContent = undoRequestPending ? '⏳ Envoyée...' : "↩️ Demande d'undo";
     }
 }
 
@@ -9503,12 +9519,14 @@ function uiResumeFromCloud() {
     // Restaure tout l'état en mémoire — même forme de payload que uiResumeHostSession(),
     // juste une source différente (le cloud plutôt que le localStorage de CET appareil).
     deals = st.deals;
-    // Voir échange avec Guillaume : toujours la donne 1, jamais st.boardIndex — celui-ci
-    // reflète juste la DERNIÈRE donne où le joueur précédent s'est arrêté (souvent en
-    // pleine avancée, voir les flèches ◀▶ utilisables même en pleine enchère), pas un point
-    // de départ pertinent pour quelqu'un qui arrive et doit parcourir toutes les donnes
-    // depuis le début pour y jouer ses propres tours.
-    boardIndex = 0;
+    // Une reprise de session doit rouvrir la donne réellement active au moment de la
+    // dernière sauvegarde partagée. Revenir systématiquement à la donne 1 faisait perdre
+    // le contexte dès que les deux joueurs fermaient puis rouvraient PLAY. Le validateur
+    // cloud garantit déjà que boardIndex est un entier dans les bornes ; garde défensive
+    // supplémentaire pour les anciennes sauvegardes.
+    boardIndex = Number.isInteger(st.boardIndex) && st.boardIndex >= 0 && st.boardIndex < deals.length
+        ? st.boardIndex
+        : 0;
     if (!deals[boardIndex].auctionHistory) deals[boardIndex].auctionHistory = [];
     auctionHistory = deals[boardIndex].auctionHistory;
     seatAssignment = st.seatAssignment;
