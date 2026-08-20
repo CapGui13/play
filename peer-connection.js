@@ -207,6 +207,9 @@ class BridgePeerConnection {
         this._everOpened = false;
         this._connectRetries = 0;
         this._postOpenReconnectAttempts = 0;
+        // Invalide une réservation de code encore en vol si la création est relancée ou
+        // détruite avant que le serveur ait répondu.
+        this._roomCreateGeneration = 0;
     }
 
     get conn() {
@@ -361,7 +364,8 @@ class BridgePeerConnection {
         this._everOpened = false;
         this._connectRetries = 0;
         this._forcedRoomCode = forcedRoomCode || null;
-        this._attemptCreateRoom(cap);
+        const generation = ++this._roomCreateGeneration;
+        this._attemptCreateRoom(cap, generation);
     }
 
     // Une tentative de création, isolée pour pouvoir être rejouée telle quelle en cas
@@ -373,8 +377,32 @@ class BridgePeerConnection {
     // signifie alors que quelqu'un d'autre détient déjà ce code précis (collision de
     // reprise, voir échange avec Guillaume), pas une simple malchance à contourner en
     // changeant de code.
-    _attemptCreateRoom(cap) {
-        this.roomCode = this._forcedRoomCode || makeRoomCode();
+    async _attemptCreateRoom(cap, generation = this._roomCreateGeneration) {
+        let nextRoomCode = this._forcedRoomCode;
+        if (!nextRoomCode) {
+            try {
+                // Une création NEUVE demande désormais son code au backend, qui réserve
+                // atomiquement un numéro absent de Redis. Cela garde les 4 chiffres tout
+                // en empêchant la collision avec une session cloud vieille de plusieurs
+                // jours. La reprise forcée, elle, conserve exactement son ancien code.
+                nextRoomCode = (typeof reserveFreshRoomCode === 'function')
+                    ? await reserveFreshRoomCode()
+                    : makeRoomCode(); // compat si session-storage.js n'est pas chargé
+            } catch (err) {
+                if (generation !== this._roomCreateGeneration) return;
+                this._log('Réservation du code de salle impossible :', err);
+                if (this.handlers.onError) {
+                    this.handlers.onError({
+                        type: 'room-code-reservation-failed',
+                        message: 'Impossible de réserver un code de salle libre. Réessayez dans un instant.',
+                        cause: err
+                    });
+                }
+                return;
+            }
+        }
+        if (generation !== this._roomCreateGeneration) return;
+        this.roomCode = nextRoomCode;
         const id = PEER_ID_PREFIX + this.roomCode;
         this._log('Création de la partie, id =', id, this._connectRetries ? `(tentative ${this._connectRetries + 1})` : '');
         this.peer = new Peer(id, { config: ICE_CONFIG, debug: 1 });
@@ -462,7 +490,7 @@ class BridgePeerConnection {
                 this._connectRetries++;
                 this._log(`Nouvelle tentative de création (${this._connectRetries}/${MAX_INITIAL_CONNECT_RETRIES}) dans ${INITIAL_CONNECT_RETRY_DELAY_MS}ms...`);
                 if (this.peer && !this.peer.destroyed) this.peer.destroy();
-                setTimeout(() => this._attemptCreateRoom(cap), INITIAL_CONNECT_RETRY_DELAY_MS);
+                setTimeout(() => this._attemptCreateRoom(cap, generation), INITIAL_CONNECT_RETRY_DELAY_MS);
                 return;
             }
             if (this.handlers.onError) this.handlers.onError(err);
@@ -604,6 +632,7 @@ class BridgePeerConnection {
     }
 
     destroy() {
+        this._roomCreateGeneration++;
         this._clearTimers();
         this.conns.forEach(c => c && c.close());
         this.conns = [];

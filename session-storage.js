@@ -1,81 +1,182 @@
-// session-storage.js — Persistance cloud de l'état de partie (sessions asynchrones).
+// session-storage.js — Persistance cloud authentifiée de l'état de partie.
 //
-// Complète saveHostGameStateToStorage()/localStorage (app.js) : celui-ci ne survit que sur
-// le MÊME appareil/navigateur. Ici, on pousse le même genre d'instantané vers un petit
-// backend (voir api/session.js) accessible depuis n'importe quel appareil via le code de
-// salon — c'est ce qui permet à un partenaire de revenir jouer ses propres enchères des
-// heures plus tard, depuis son propre téléphone, sans que l'autre soit resté connecté.
-//
-// Ce fichier ne connaît RIEN de la structure du payload (deals, seatAssignment, etc.) —
-// il se contente de le sérialiser/désérialiser et de gérer la version optimiste. C'est à
-// app.js de décider QUOI envoyer (même forme que saveHostGameStateToStorage) et QUAND
-// (mêmes points d'accroche : applyCall, gotoBoard, changement de sièges...).
+// Le code 4 chiffres reste un identifiant humain. L'accès cloud utilise en plus une clé
+// de capacité aléatoire propre à la salle, stockée localement sur chaque appareil ayant
+// réellement participé. Cette clé est reçue lors de la réservation, via le lien de partage
+// ou via le P2P ('welcome'). Elle n'est jamais incluse dans le snapshot de partie.
 
-// À renseigner une fois l'endpoint déployé (voir api/session.js) — ex.
-// 'https://api-gen-beta.vercel.app' si tu l'ajoutes au même projet Vercel que le
-// générateur de donnes, ou l'URL d'un nouveau projet dédié.
 const SESSION_API_BASE = 'https://api-gen-beta.vercel.app';
-
-// Nombre de tentatives en cas d'échec réseau transitoire (même esprit que
-// MAX_INITIAL_CONNECT_RETRIES dans peer-connection.js) — un push cloud manqué n'est pas
-// grave en soi (la sauvegarde localStorage reste, elle, immédiate), mais autant réessayer
-// avant d'abandonner silencieusement.
 const SESSION_PUSH_RETRIES = 2;
 const SESSION_PUSH_RETRY_DELAY_MS = 1000;
+const SESSION_ACCESS_KEYS_STORAGE = 'bridgeSessionAccessKeysV1';
+const SESSION_ACCESS_KEY_MAX_AGE_MS = 70 * 24 * 60 * 60 * 1000;
+let fallbackSessionAccessKeys = {};
 
-function sessionApiUrl(roomCode) {
-    // Voir échange avec Guillaume ("A a récupéré une version périmée") : le paramètre
-    // `_` (horodatage, jamais le même deux fois) rend chaque appel visuellement unique
-    // pour n'importe quel cache qui ignorerait les en-têtes ci-dessous (certains proxys/
-    // extensions le font) — en plus de `cache: 'no-store'` sur le fetch lui-même et de
-    // l'en-tête Cache-Control renvoyé par l'API (voir api/session.js). Trois filets
-    // redondants pour un seul bug, mais celui-ci a fait perdre des enchères entières.
-    return `${SESSION_API_BASE}/api/session?code=${encodeURIComponent(roomCode)}&_=${Date.now()}`;
+function normalizeSessionRoomCode(roomCode) {
+    return String(roomCode || '').toUpperCase().trim();
 }
 
-// Récupère le dernier état connu pour ce code de salon.
-// Renvoie { version, updatedAt, state } si trouvé, ou null si rien n'est encore sauvegardé
-// pour ce code (404 — cas normal pour une toute nouvelle salle qui n'a encore rien poussé).
+function readSessionAccessKeyMap() {
+    let map = {};
+    try { map = JSON.parse(localStorage.getItem(SESSION_ACCESS_KEYS_STORAGE) || '{}'); }
+    catch (e) { map = fallbackSessionAccessKeys || {}; }
+    if (!map || typeof map !== 'object' || Array.isArray(map)) map = {};
+    const now = Date.now();
+    let changed = false;
+    for (const code of Object.keys(map)) {
+        const item = map[code];
+        if (!item || typeof item.key !== 'string' || !item.key || !Number.isFinite(item.savedAt)
+            || now - item.savedAt > SESSION_ACCESS_KEY_MAX_AGE_MS) {
+            delete map[code]; changed = true;
+        }
+    }
+    if (changed) {
+        try { localStorage.setItem(SESSION_ACCESS_KEYS_STORAGE, JSON.stringify(map)); }
+        catch (e) { fallbackSessionAccessKeys = map; }
+    }
+    return map;
+}
+
+function rememberSessionAccessKey(roomCode, accessKey) {
+    const code = normalizeSessionRoomCode(roomCode);
+    const key = typeof accessKey === 'string' ? accessKey.trim() : '';
+    if (!code || !key || key.length < 24 || key.length > 256) return false;
+    const map = readSessionAccessKeyMap();
+    map[code] = { key, savedAt: Date.now() };
+    fallbackSessionAccessKeys = map;
+    try { localStorage.setItem(SESSION_ACCESS_KEYS_STORAGE, JSON.stringify(map)); } catch (e) { /* mémoire seulement */ }
+    return true;
+}
+
+function getSessionAccessKey(roomCode) {
+    const code = normalizeSessionRoomCode(roomCode);
+    const item = readSessionAccessKeyMap()[code];
+    return item && typeof item.key === 'string' ? item.key : null;
+}
+
+function forgetSessionAccessKey(roomCode) {
+    const code = normalizeSessionRoomCode(roomCode);
+    const map = readSessionAccessKeyMap();
+    delete map[code];
+    fallbackSessionAccessKeys = map;
+    try { localStorage.setItem(SESSION_ACCESS_KEYS_STORAGE, JSON.stringify(map)); } catch (e) { /* mémoire seulement */ }
+}
+
+function sessionApiUrl(roomCode) {
+    return `${SESSION_API_BASE}/api/session?code=${encodeURIComponent(roomCode)}&_=${Date.now()}`;
+}
+function sessionLogApiUrl(roomCode) {
+    return `${SESSION_API_BASE}/api/session-log?code=${encodeURIComponent(roomCode)}&_=${Date.now()}`;
+}
+function sessionAuthHeaders(roomCode, withJson = false) {
+    const headers = {};
+    if (withJson) headers['Content-Type'] = 'application/json';
+    const accessKey = getSessionAccessKey(roomCode);
+    if (accessKey) headers['X-Bridge-Session-Key'] = accessKey;
+    return headers;
+}
+function localReconnectTokenForLegacyClaim() {
+    try { return localStorage.getItem('bridgeBidReconnectToken') || ''; }
+    catch (e) { return ''; }
+}
+
+// Migration transparente des salles créées avant les clés de capacité. Le backend ne
+// renvoie une clé que si ce reconnectToken figure déjà dans l'état de la salle.
+async function claimLegacySessionAccess(roomCode, reconnectToken = localReconnectTokenForLegacyClaim()) {
+    const code = normalizeSessionRoomCode(roomCode);
+    if (!code || !reconnectToken) return null;
+    try {
+        const resp = await fetch(`${SESSION_API_BASE}/api/session`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'claim-legacy', code, reconnectToken }),
+            cache: 'no-store'
+        });
+        if (!resp.ok) return null; // ancien backend ou preuve refusée : comportement non bloquant
+        const body = await resp.json().catch(() => null);
+        const key = body && typeof body.accessKey === 'string' ? body.accessKey : null;
+        if (!key || !rememberSessionAccessKey(code, key)) return null;
+        return key;
+    } catch (e) {
+        return null;
+    }
+}
+
+async function fetchWithSessionCapability(roomCode, url, options = {}, { allowLegacyClaim = true } = {}) {
+    const code = normalizeSessionRoomCode(roomCode);
+    const opts = { ...options, headers: { ...(options.headers || {}), ...sessionAuthHeaders(code, false) } };
+    let resp = await fetch(url, opts);
+    if ((resp.status === 401 || resp.status === 403) && allowLegacyClaim) {
+        const claimed = await claimLegacySessionAccess(code);
+        if (claimed) {
+            const retryOpts = { ...options, headers: { ...(options.headers || {}), ...sessionAuthHeaders(code, false) } };
+            resp = await fetch(url, retryOpts);
+        }
+    }
+    return resp;
+}
+
+// Réserve un code 4 chiffres. Avec le backend sécurisé, la réponse contient aussi la clé
+// de capacité ; les anciens backends ne renvoient que le code, ce qui garde un déploiement
+// client-first possible (le polling continue alors en mode legacy jusqu'au déploiement API).
+async function reserveFreshRoomCode() {
+    const resp = await fetch(`${SESSION_API_BASE}/api/session`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'reserve-code' }),
+        cache: 'no-store'
+    });
+    if (!resp.ok) throw new Error(`reserveFreshRoomCode: HTTP ${resp.status}`);
+    const body = await resp.json();
+    const code = body && String(body.code || '').trim();
+    if (!/^\d{4}$/.test(code)) throw new Error('reserveFreshRoomCode: réponse serveur invalide');
+    if (body && typeof body.accessKey === 'string') rememberSessionAccessKey(code, body.accessKey);
+    return code;
+}
+
+// Promeut la réservation courte après ouverture PeerJS. Sans cette étape, un hôte qui
+// reste plus de deux minutes au salon avant de lancer la partie perdrait sa réservation
+// avant le premier snapshot. Un ancien backend peut répondre 400 : c'est volontairement
+// non bloquant pendant un déploiement client-first.
+async function activateRoomAccess(roomCode) {
+    const code = normalizeSessionRoomCode(roomCode);
+    const accessKey = getSessionAccessKey(code);
+    if (!code || !accessKey) return false;
+    try {
+        const resp = await fetch(`${SESSION_API_BASE}/api/session`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Bridge-Session-Key': accessKey },
+            body: JSON.stringify({ action: 'activate-room', code }),
+            cache: 'no-store'
+        });
+        return resp.ok;
+    } catch (e) {
+        return false;
+    }
+}
+
 async function pullSessionState(roomCode) {
-    const resp = await fetch(sessionApiUrl(roomCode), { method: 'GET', cache: 'no-store' });
+    const resp = await fetchWithSessionCapability(roomCode, sessionApiUrl(roomCode), { method: 'GET', cache: 'no-store' });
     if (resp.status === 404) return null;
     if (!resp.ok) throw new Error(`pullSessionState: HTTP ${resp.status}`);
     return resp.json();
 }
 
-// Pousse un nouvel état. `expectedVersion` (le dernier numéro de version connu localement,
-// ou 0/undefined pour une toute première écriture) protège contre une écriture concurrente
-// accidentelle : si quelqu'un d'autre a écrit depuis, le serveur répond 409 avec l'état
-// courant plutôt que d'accepter un écrasement à l'aveugle — voir le paramètre `onConflict`.
-//
-// Conçu pour être appelé "en tâche de fond" (fire-and-forget) depuis app.js : ne bloque
-// jamais l'interface, réessaie tout seul en cas d'aléa réseau, et journalise sans lever
-// d'exception non gérée au-delà des tentatives prévues (un push cloud manqué ne doit
-// jamais empêcher de continuer à jouer localement).
 async function pushSessionState(roomCode, state, expectedVersion, { onConflict, retriesLeft = SESSION_PUSH_RETRIES } = {}) {
     try {
-        const resp = await fetch(sessionApiUrl(roomCode), {
+        const resp = await fetchWithSessionCapability(roomCode, sessionApiUrl(roomCode), {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ state, expectedVersion }),
-            // Voir échange avec Guillaume (session asynchrone à deux — "aucune des
-            // enchères de B n'a été enregistrée") : sans ça, fermer l'onglet juste après
-            // une enchère peut couper cette requête en plein vol avant qu'elle n'atteigne
-            // le serveur — un push "tire et oublie" normalement invisible pour l'interface,
-            // mais qui ne survit alors tout simplement pas à la fermeture. `keepalive`
-            // demande explicitement au navigateur de laisser la requête se terminer même
-            // si la page se ferme entre-temps (limite ~64 Ko côté navigateur — largement
-            // suffisant pour une session de plusieurs dizaines de donnes).
             keepalive: true
         });
-
         if (resp.status === 409) {
             const body = await resp.json().catch(() => null);
             if (onConflict) onConflict(body && body.current);
             return null;
         }
         if (!resp.ok) throw new Error(`pushSessionState: HTTP ${resp.status}`);
-        return resp.json(); // { version, updatedAt }
+        return resp.json();
     } catch (err) {
         if (retriesLeft > 0) {
             await new Promise(r => setTimeout(r, SESSION_PUSH_RETRY_DELAY_MS));
@@ -86,49 +187,33 @@ async function pushSessionState(roomCode, state, expectedVersion, { onConflict, 
     }
 }
 
-if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { pullSessionState, pushSessionState };
-}
-
-// ===== Journal de diagnostic partagé entre tous les participants (voir échange avec
-// Guillaume — "je voudrais pouvoir tout te transmettre en un clic, sans avoir besoin du
-// journal d'un joueur spécifique") =====
-//
-// Même esprit que pullSessionState/pushSessionState ci-dessus, mais vers api/session-log.js
-// plutôt que api/session.js — un journal de diagnostic combiné, pas l'état de la partie.
-
-function sessionLogApiUrl(roomCode) {
-    return `${SESSION_API_BASE}/api/session-log?code=${encodeURIComponent(roomCode)}&_=${Date.now()}`;
-}
-
-// Pousse un lot de nouvelles lignes de journal. `entries` : [{ from, text, ts }, ...].
-// Volontairement silencieux en cas d'échec (voir pushDebugLogQueue dans app.js, qui
-// réessaiera au prochain lot plutôt que de bloquer sur celui-ci) — un journal de
-// diagnostic manqué ne doit jamais gêner la partie elle-même.
 async function pushSessionLogEntries(roomCode, entries) {
     if (!entries || entries.length === 0) return;
     try {
-        await fetch(sessionLogApiUrl(roomCode), {
+        const resp = await fetchWithSessionCapability(roomCode, sessionLogApiUrl(roomCode), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ entries }),
             keepalive: true
         });
+        if (!resp.ok) throw new Error(`pushSessionLogEntries: HTTP ${resp.status}`);
     } catch (e) {
         console.warn('[session-storage] push journal partagé échoué (sans conséquence pour la partie) :', e);
     }
 }
 
-// Récupère le journal combiné de toute la salle, trié par heure d'arrivée. Renvoie un
-// tableau d'entrées (jamais null — un journal vide donne un tableau vide, pas une erreur).
 async function pullSessionLog(roomCode) {
-    const resp = await fetch(sessionLogApiUrl(roomCode), { method: 'GET', cache: 'no-store' });
+    const resp = await fetchWithSessionCapability(roomCode, sessionLogApiUrl(roomCode), { method: 'GET', cache: 'no-store' });
     if (!resp.ok) throw new Error(`pullSessionLog: HTTP ${resp.status}`);
     const body = await resp.json();
     return (body && body.entries) || [];
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports.pushSessionLogEntries = pushSessionLogEntries;
-    module.exports.pullSessionLog = pullSessionLog;
+    module.exports = {
+        pullSessionState, pushSessionState, reserveFreshRoomCode,
+        pushSessionLogEntries, pullSessionLog,
+        getSessionAccessKey, rememberSessionAccessKey, forgetSessionAccessKey,
+        claimLegacySessionAccess, activateRoomAccess
+    };
 }

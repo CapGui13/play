@@ -1632,10 +1632,53 @@ function hideConnectingOverlay() {
     if (overlay) overlay.style.display = 'none';
 }
 
+// Le code 4 chiffres reste affiché seul dans l'interface, mais le lien de partage contient
+// en plus la clé de capacité cloud. Cette clé n'est jamais conservée dans la barre
+// d'adresse locale : elle est seulement copiée dans le lien d'invitation et mémorisée sur
+// les appareils légitimes (voir session-storage.js).
+function buildRoomShareUrl(roomCode) {
+    const url = new URL(window.location.href);
+    url.searchParams.set('room', roomCode);
+    url.searchParams.delete('access'); // compat d'un éventuel ancien lien de test
+    url.hash = '';
+    const accessKey = (typeof getSessionAccessKey === 'function') ? getSessionAccessKey(roomCode) : null;
+    // La capacité vit dans le FRAGMENT (#), jamais dans la query : un fragment n'est pas
+    // envoyé au serveur HTTP/GitHub Pages et n'apparaît donc pas dans ses logs de requête.
+    if (accessKey) url.hash = new URLSearchParams({ access: accessKey }).toString();
+    return url;
+}
+
+function updateShareLinkForRoom(roomCode) {
+    if (!roomCode) return;
+    const input = document.getElementById('shareLinkInput');
+    if (input) input.value = buildRoomShareUrl(roomCode).toString();
+}
+
+function rememberRoomAccessFromUrl(params) {
+    if (!params || typeof rememberSessionAccessKey !== 'function') return;
+    const room = params.get('room');
+    const hashParams = new URLSearchParams(String(window.location.hash || '').replace(/^#/, ''));
+    // Fragment = format normal. Query = compat avec les tout premiers prototypes locaux.
+    const accessKey = hashParams.get('access') || params.get('access');
+    if (!room || !accessKey) return;
+    rememberSessionAccessKey(room, accessKey);
+    // Après capture, la capacité disparaît aussi de l'historique/adresse locale.
+    const cleanUrl = new URL(window.location.href);
+    cleanUrl.searchParams.delete('access');
+    const cleanHash = new URLSearchParams(String(cleanUrl.hash || '').replace(/^#/, ''));
+    cleanHash.delete('access');
+    cleanUrl.hash = cleanHash.toString();
+    window.history.replaceState(null, '', cleanUrl.toString());
+}
+
 function uiCreateRoom() {
     document.getElementById('landingError').style.display = 'none';
     showConnectingOverlay('Création de la partie…');
     if (peerConn) peerConn.destroy();
+    // Une nouvelle salle est un nouvel espace de versions cloud. Sans ce reset, une
+    // version apprise dans la salle précédente pouvait être réutilisée comme
+    // expectedVersion du premier PUT de la nouvelle salle et provoquer des 409 en boucle.
+    resetCloudSyncContext(null);
     // Voir échange avec Guillaume (session du 8 août — "multi room") : on ne touche plus
     // aux sauvegardes existantes ici — créer une nouvelle partie n'a plus de raison
     // d'effacer les AUTRES salles encore reprenables (ancien comportement mono-salle).
@@ -1683,9 +1726,18 @@ function buildHostHandlers(onOpenExtra) {
         onOpen: (role, roomCode) => {
             hideConnectingOverlay();
             currentRoomCode = roomCode;
+            ensureCloudSyncContext(roomCode);
+            // La réservation cloud courte est promue seulement APRÈS ouverture réelle de
+            // PeerJS : une collision d'identifiant ne verrouille donc pas inutilement un
+            // code, tandis qu'un salon qui reste ouvert longtemps garde sa capacité valide.
+            if (typeof activateRoomAccess === 'function') {
+                activateRoomAccess(roomCode).then(ok => {
+                    if (!ok) pushDebugLog('Activation de la capacité cloud non confirmée (le premier snapshot réessaiera via la réservation si elle est encore valide).');
+                });
+            }
             const url = new URL(window.location.href);
             url.searchParams.set('room', roomCode);
-            document.getElementById('shareLinkInput').value = url.toString();
+            updateShareLinkForRoom(roomCode);
             document.getElementById('lobbyRoomCodeInline').textContent = `(code ${roomCode})`;
             // Voir échange avec Guillaume (session du 23 juillet) : reflète le code dans
             // la barre d'adresse elle-même, pas seulement dans le champ "lien de
@@ -1749,6 +1801,7 @@ function buildHostHandlers(onOpenExtra) {
             let p = participants.find(x => x.id === token);
             const isReturning = !!p;
             const wasDisconnected = isReturning && p.disconnected;
+            const wasAlreadySeatedBeforeConnect = SEATS.some(seat => seatAssignment[seat] === token);
             if (!p) {
                 // Un pseudo sauvegardé côté invité (voir savedNickname) prime sur le nom
                 // générique "Guest #N" — transmis via les métadonnées de connexion, comme
@@ -1785,7 +1838,17 @@ function buildHostHandlers(onOpenExtra) {
             // le wizz (voir styles.css), texte simplifié avec le siège si assis.
             if (wasDisconnected) flashPresenceToast(`✅ ${presenceLabelFor(p)} s'est reconnecté`, true);
 
-            peerConn.send({ type: 'welcome', yourId: token }, guestIndex);
+            peerConn.send({
+                type: 'welcome',
+                yourId: token
+            }, guestIndex);
+
+            // Ne jamais donner la capacité cloud à un simple nouveau pair qui connaît
+            // seulement le code 4 chiffres. Une reconnexion déjà assise, elle, prouve son
+            // identité par son reconnectToken stable et peut récupérer la capacité.
+            if (isReturning && wasAlreadySeatedBeforeConnect) {
+                sendSessionAccessToParticipant(token);
+            }
 
             if (deals) {
                 // La partie est déjà lancée : on renvoie l'état complet (donnes, enchère en
@@ -1921,7 +1984,7 @@ function buildGuestHandlers() {
             // hôte (buildHostHandlers) — le bouton copier-lien était donc désormais
             // visible pour tous, mais copiait une chaîne vide côté invité. Même URL déjà
             // construite juste au-dessus, réutilisée ici.
-            document.getElementById('shareLinkInput').value = url.toString();
+            updateShareLinkForRoom(roomCode);
         },
         onGuestConnected: () => {
             hideConnectingOverlay();
@@ -1962,6 +2025,11 @@ function buildGuestHandlers() {
             if (chatPanelOpen) { renderRoomBoard(); renderChat(); }
         },
         onPeerDisconnected: () => {
+            // Un ancien BridgePeerConnection invité peut encore émettre son événement
+            // de fermeture quelques millisecondes après un transfert d'hôte réussi.
+            // À ce moment-là les globals ont déjà basculé vers le rôle hôte : ce handler
+            // devenu obsolète ne doit surtout pas marquer l'entrée `host` comme déconnectée.
+            if (myRole !== 'guest') return;
             setConnectionStatus(false);
             // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 4) : scheduleSubHostTakeoverIfNeeded
             // a disparu d'ici (plus d'élection de sous-hôte) — seule reste la reconnexion
@@ -2001,6 +2069,10 @@ function buildGuestHandlers() {
         // ne provoque pas de fermeture propre de la DataConnection passait complètement
         // inaperçue — ni le statut ni le bouton ne se mettaient à jour.
         onSignalingDisconnected: () => {
+            // Même garde que pour onPeerDisconnected : après une promotion en hôte,
+            // l'ancienne connexion invitée est volontairement détruite et ses callbacks
+            // tardifs n'appartiennent plus au rôle courant.
+            if (myRole !== 'guest') return;
             setConnectionStatus(false);
             scheduleGuestAutoReconnect();
             renderReconnectButton();
@@ -2219,6 +2291,7 @@ function connectAsGuest(code, token, nickname) {
     participants = [];
     seatAssignment = { N: null, E: null, S: null, W: null };
     currentRoomCode = code;
+    ensureCloudSyncContext(code);
     everConnectedAsGuest = false;
     prevSeatAssignmentSnapshot = null;
     prevParticipantsDisconnectedSnapshot = null;
@@ -2857,6 +2930,7 @@ function uiAssignSeat(seat, participantId) {
     // main ensuite. Recalculé ici avant la diffusion, sinon un siège tout juste rendu à
     // "Robot" restait un simple trou muet, personne (ni humain ni robot) pour y jouer.
     if (deals) autoPassSeats = SEATS.filter(s => !seatAssignment[s]);
+    grantSessionAccessToSeatedParticipants();
     broadcastLobbyState();
     renderLobby();
     // Voir échange avec Guillaume ("ce qui n'est pas encore couvert" — changement de
@@ -2964,6 +3038,7 @@ function uiDropOnSeat(event, targetSeat) {
     // Voir échange avec Guillaume (session du 23 juillet — voir uiAssignSeat) : même
     // recalcul, pour le glisser-déposer.
     if (deals) autoPassSeats = SEATS.filter(s => !seatAssignment[s]);
+    grantSessionAccessToSeatedParticipants();
     broadcastLobbyState();
     renderLobby();
     // Voir échange avec Guillaume ("changement de sièges via le relais serveur") : même
@@ -3143,6 +3218,26 @@ function flashSeatsRotatedToast() {
     toast.classList.add('visible');
     clearTimeout(toast._hideTimer);
     toast._hideTimer = setTimeout(() => toast.classList.remove('visible'), 3000);
+}
+
+function sendSessionAccessToParticipant(participantId) {
+    if (myRole !== 'host' || !participantId || participantId === 'host') return false;
+    if (typeof getSessionAccessKey !== 'function') return false;
+    const accessKey = getSessionAccessKey(currentRoomCode);
+    if (!accessKey) return false;
+    const guestIndex = guestIndexForParticipant(participantId);
+    if (guestIndex == null) return false;
+    peerConn.send({ type: 'session-access', accessKey }, guestIndex);
+    return true;
+}
+
+// Une capacité cloud est un droit durable, pas un simple attribut de connexion. L'hôte
+// l'accorde aux participants qu'il a effectivement autorisés à jouer (siège attribué ou
+// démarrage), jamais à tous les pairs qui parviennent à deviner/rejoindre le code court.
+function grantSessionAccessToSeatedParticipants() {
+    if (myRole !== 'host') return;
+    const ids = new Set(SEATS.map(seat => seatAssignment[seat]).filter(id => id && id !== SEAT_PENDING && id !== 'host'));
+    ids.forEach(id => sendSessionAccessToParticipant(id));
 }
 
 function broadcastLobbyState() {
@@ -3347,6 +3442,9 @@ function uiTransferHost(targetId) {
         else newSeatAssignment[seat] = occupant;
     });
 
+    // Le transfert est une autorisation explicite de l'hôte : le futur hôte doit
+    // pouvoir reprendre le cloud de la salle courante jusqu'à ce que son nouveau code soit prêt.
+    sendSessionAccessToParticipant(targetId);
     peerConn.send({ type: 'prepare-become-host', participants: newParticipants, seatAssignment: newSeatAssignment }, guestIndex);
 
     // Filet de sécurité : au cas où ni 'become-host-ready' ni 'become-host-failed' ni même
@@ -3736,6 +3834,7 @@ function uiValidateSeatReorg() {
     // Voir échange avec Guillaume (session du 23 juillet — voir uiAssignSeat) : même
     // recalcul du statut robot des sièges.
     if (deals) autoPassSeats = SEATS.filter(s => !seatAssignment[s]);
+    grantSessionAccessToSeatedParticipants();
     broadcastLobbyState();
     renderLobby();
     // Voir échange avec Guillaume ("changement de sièges via le relais serveur") : même
@@ -3894,6 +3993,7 @@ function uiStartGameAsHost() {
             // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 2) : plus de branche "mode différé"
             // séparée ici — la salle garde TOUJOURS une vraie connexion P2P hôte, même
             // avec un siège encore SEAT_PENDING.
+            grantSessionAccessToSeatedParticipants();
             participants.filter(p => p.id !== 'host' && !p.disconnected).forEach(p => {
                 const guestIndex = guestIndexForParticipant(p.id);
                 if (guestIndex == null) return;
@@ -3969,12 +4069,90 @@ function uiStartGameAsHost() {
 
 // ===== Réception des messages des autres joueurs =====
 
+// Frontière de confiance du protocole P2P. Côté hôte, toute donnée entrante vient d'un
+// invité et seuls les messages qu'un invité est réellement autorisé à produire sont
+// acceptés. Côté invité, l'unique pair distant est l'hôte : on limite symétriquement les
+// types reçus aux messages que l'hôte peut émettre/relayer.
+//
+// Important : ce filtre ne remplace PAS les validations métier propres à chaque message
+// (tour/légalité d'une annonce, état d'un Undo, transfert d'hôte en cours, etc.). Il ferme
+// seulement la classe de bugs où un client modifié pouvait envoyer directement un message
+// d'autorité comme `lobby-state`, `start-game`, `goto-board` ou `undo-apply`.
+const PEER_TYPES_FROM_GUEST = new Set([
+    'set-name',
+    'call',
+    'chat',
+    'wizz',
+    'undo-request',
+    'become-host-ready',
+    'become-host-failed'
+]);
+
+const PEER_TYPES_FROM_HOST = new Set([
+    'welcome',
+    'session-access',
+    'prepare-become-host',
+    'host-transferred',
+    'lobby-state',
+    'seats-rotated',
+    'start-game',
+    'resync',
+    'call',
+    'chat',
+    'wizz',
+    'precalc-board',
+    'dd-result',
+    'reset-auction',
+    'goto-board',
+    'undo-ask',
+    'undo-apply',
+    'undo-rejected'
+]);
+
+function rejectPeerProtocolMessage(msg, guestIndex, reason) {
+    const type = msg && msg.type ? String(msg.type) : '?';
+    const source = myRole === 'host' ? (tokenForGuestIndex(guestIndex) || `connexion #${guestIndex}`) : 'hôte';
+    console.warn(`Message réseau rejeté (${reason}) : ${type} depuis ${source}`);
+    if (typeof pushDebugLog === 'function') {
+        pushDebugLog(`Protocole : message ${type} rejeté depuis ${source} (${reason}).`);
+    }
+}
+
+function isPeerTypeAllowedFromCurrentRemote(type) {
+    if (myRole === 'host') return PEER_TYPES_FROM_GUEST.has(type);
+    if (myRole === 'guest') return PEER_TYPES_FROM_HOST.has(type);
+    return false;
+}
+
+function authenticatedGuestId(guestIndex) {
+    if (myRole !== 'host') return null;
+    return tokenForGuestIndex(guestIndex);
+}
+
 function handlePeerData(msg, guestIndex) {
-    if (!msg || !msg.type) return;
+    if (!msg || typeof msg.type !== 'string' || !msg.type) return;
+    if (!isPeerTypeAllowedFromCurrentRemote(msg.type)) {
+        rejectPeerProtocolMessage(msg, guestIndex, 'type interdit pour ce rôle');
+        return;
+    }
 
     switch (msg.type) {
         case 'welcome': {
             myParticipantId = msg.yourId;
+            break;
+        }
+
+        case 'session-access': {
+            if (msg.accessKey && typeof rememberSessionAccessKey === 'function' && currentRoomCode) {
+                rememberSessionAccessKey(currentRoomCode, msg.accessKey);
+                updateShareLinkForRoom(currentRoomCode);
+                // Une souscription Pusher avait pu être ignorée faute de clé au premier
+                // démarrage du polling. La relancer ici est idempotent et remplace proprement
+                // l'abonnement précédent si nécessaire.
+                if (typeof subscribeToSessionUpdates === 'function') {
+                    subscribeToSessionUpdates(currentRoomCode, onCloudPusherEvent);
+                }
+            }
             break;
         }
 
@@ -4039,8 +4217,16 @@ function handlePeerData(msg, guestIndex) {
         // rejoint nous-mêmes cette nouvelle salle comme simple participant.
         case 'become-host-ready': {
             if (myRole !== 'host' || !hostTransferInProgress) break;
-            const newRoomCode = msg.newRoomCode;
             const targetIndex = guestIndexByToken[pendingHostTransferTarget];
+            if (targetIndex === undefined || guestIndex !== targetIndex) {
+                rejectPeerProtocolMessage(msg, guestIndex, 'réponse de transfert provenant d’un autre participant');
+                break;
+            }
+            const newRoomCode = typeof msg.newRoomCode === 'string' ? msg.newRoomCode.trim() : '';
+            if (!/^\d{4}$/.test(newRoomCode)) {
+                rejectPeerProtocolMessage(msg, guestIndex, 'code de nouvelle salle invalide');
+                break;
+            }
             peerConn.sendExcept({ type: 'host-transferred', newRoomCode }, targetIndex);
 
             const myOldToken = pendingHostTransferOldToken;
@@ -4065,6 +4251,11 @@ function handlePeerData(msg, guestIndex) {
         // 'prepare-become-host' ci-dessus) — on reste hôte, rien d'autre à faire.
         case 'become-host-failed': {
             if (myRole !== 'host' || !hostTransferInProgress) break;
+            const targetIndex = guestIndexByToken[pendingHostTransferTarget];
+            if (targetIndex === undefined || guestIndex !== targetIndex) {
+                rejectPeerProtocolMessage(msg, guestIndex, 'échec de transfert provenant d’un autre participant');
+                break;
+            }
             hostTransferInProgress = false;
             pendingHostTransferTarget = null;
             pendingHostTransferOldToken = null;
@@ -4084,9 +4275,18 @@ function handlePeerData(msg, guestIndex) {
 
         case 'set-name': {
             if (myRole !== 'host') return;
-            const pid = tokenForGuestIndex(guestIndex);
+            const pid = authenticatedGuestId(guestIndex);
+            if (!pid) {
+                rejectPeerProtocolMessage(msg, guestIndex, 'connexion invitée non authentifiée');
+                return;
+            }
             const p = participants.find(x => x.id === pid);
-            if (p) p.name = msg.name || p.name;
+            const requestedName = typeof msg.name === 'string' ? msg.name.trim().slice(0, 20) : '';
+            if (!p || !requestedName) {
+                rejectPeerProtocolMessage(msg, guestIndex, 'pseudo invalide');
+                return;
+            }
+            p.name = requestedName;
             broadcastLobbyState();
             renderLobby();
             break;
@@ -4218,6 +4418,13 @@ function handlePeerData(msg, guestIndex) {
 
         case 'call': {
             if (!deals || msg.boardIndex !== boardIndex) return;
+            if (myRole === 'host') {
+                const senderId = authenticatedGuestId(guestIndex);
+                if (!senderId || seatAssignment[msg.seat] !== senderId) {
+                    rejectPeerProtocolMessage(msg, guestIndex, 'annonce au nom d’un siège non contrôlé');
+                    return;
+                }
+            }
             const deal = currentDeal();
             const expectedSeat = currentTurnSeat(deal.dealer, auctionHistory);
             if (msg.seat !== expectedSeat || !isCallLegal(auctionHistory, msg.call, msg.seat)) {
@@ -4230,8 +4437,21 @@ function handlePeerData(msg, guestIndex) {
         }
 
         case 'chat': {
-            addChatMessage(msg);
-            relayIfHost(msg, guestIndex);
+            let chatMsg = msg;
+            if (myRole === 'host') {
+                const senderId = authenticatedGuestId(guestIndex);
+                const sender = participants.find(p => p.id === senderId);
+                const text = typeof msg.text === 'string' ? msg.text.trim().slice(0, 500) : '';
+                if (!senderId || !sender || !text) {
+                    rejectPeerProtocolMessage(msg, guestIndex, 'message de chat invalide ou identité inconnue');
+                    return;
+                }
+                // L'identité réseau prime toujours sur les champs fournis par le client :
+                // impossible de se présenter comme l'hôte ou comme un autre invité.
+                chatMsg = { ...msg, senderId, senderName: sender.name, text };
+            }
+            addChatMessage(chatMsg);
+            relayIfHost(chatMsg, guestIndex);
             break;
         }
 
@@ -4243,22 +4463,32 @@ function handlePeerData(msg, guestIndex) {
         // invités) ; un invité, lui, ne reçoit jamais un wizz qui ne lui est pas destiné
         // (l'hôte a déjà fait ce tri avant de relayer), donc l'applique directement.
         case 'wizz': {
-            if (myRole === 'host' && msg.targetId !== 'host') {
-                const targetGuestIndex = guestIndexByToken[msg.targetId];
+            let wizzMsg = msg;
+            if (myRole === 'host') {
+                const senderId = authenticatedGuestId(guestIndex);
+                const sender = participants.find(p => p.id === senderId);
+                if (!senderId || !sender) {
+                    rejectPeerProtocolMessage(msg, guestIndex, 'wizz provenant d’une identité inconnue');
+                    break;
+                }
+                wizzMsg = { ...msg, senderName: sender.name };
+            }
+            if (myRole === 'host' && wizzMsg.targetId !== 'host') {
+                const targetGuestIndex = guestIndexByToken[wizzMsg.targetId];
                 // Voir échange avec Guillaume ("le wizz ne marche pas, aucune trace même
                 // juste après") : trace ajoutée ici aussi — si le relais échoue
                 // silencieusement (cible plus dans guestIndexByToken, ou send() qui
                 // échoue contre une connexion pas tout à fait ouverte), rien ne le disait
                 // jusqu'ici.
                 if (targetGuestIndex !== undefined) {
-                    peerConn.send(msg, targetGuestIndex);
-                    pushDebugLog(`Wizz reçu de ${msg.senderName || '?'}, relayé vers ${msg.targetId.slice(0, 10)}… (index ${targetGuestIndex}).`);
+                    peerConn.send(wizzMsg, targetGuestIndex);
+                    pushDebugLog(`Wizz reçu de ${wizzMsg.senderName || '?'}, relayé vers ${wizzMsg.targetId.slice(0, 10)}… (index ${targetGuestIndex}).`);
                 } else {
-                    pushDebugLog(`Wizz reçu de ${msg.senderName || '?'} pour ${msg.targetId.slice(0, 10)}… : relais abandonné, cible plus dans guestIndexByToken.`);
+                    pushDebugLog(`Wizz reçu de ${wizzMsg.senderName || '?'} pour ${wizzMsg.targetId.slice(0, 10)}… : relais abandonné, cible plus dans guestIndexByToken.`);
                 }
                 break;
             }
-            pushDebugLog(`Wizz reçu de ${msg.senderName || '?'} — déclenchement de l'effet.`);
+            pushDebugLog(`Wizz reçu de ${wizzMsg.senderName || '?'} — déclenchement de l'effet.`);
             triggerWizzEffect();
             break;
         }
@@ -4349,6 +4579,11 @@ function handlePeerData(msg, guestIndex) {
         // que par lui ; 'undo-ask', 'undo-apply' et 'undo-rejected' sont ce qu'il diffuse.
         case 'undo-request': {
             if (myRole !== 'host') return;
+            const senderId = authenticatedGuestId(guestIndex);
+            if (!senderId || msg.requesterId !== senderId) {
+                rejectPeerProtocolMessage(msg, guestIndex, 'requesterId d’Undo ne correspond pas à la connexion');
+                return;
+            }
             hostHandleUndoRequest(msg);
             break;
         }
@@ -4669,12 +4904,7 @@ function enterGameScreen() {
     // chemins live (buildHostHandlers/buildGuestHandlers) le remplissaient déjà chacun
     // de leur côté, mais la reprise cloud et le mode différé (NullPeerConnection) ne
     // passent par AUCUN des deux, et n'auraient donc jamais rempli ce champ sans ça.
-    if (currentRoomCode) {
-        const url = new URL(window.location.href);
-        url.searchParams.set('room', currentRoomCode);
-        const input = document.getElementById('shareLinkInput');
-        if (input) input.value = url.toString();
-    }
+    if (currentRoomCode) updateShareLinkForRoom(currentRoomCode);
     renderBoard();
 }
 
@@ -4861,9 +5091,13 @@ function renderGameHeader() {
         const hostParticipant = participants.find(p => p.id === 'host');
         const displayedHostName = roomCreatorName || (hostParticipant ? hostParticipant.name : null);
         if (currentRoomCode) {
-            const roomLine = `<span class="game-room-code-main">Salle : ${escapeHtml(String(currentRoomCode))}</span>`;
+            // Salle/Hôte sont volontairement toujours sur deux lignes, desktop comme
+            // mobile. Les libellés utilisent la même colonne de 5 caractères : « Hôte »
+            // gagne ainsi exactement un espace avant « : », ce qui aligne les deux
+            // deux-points sans bricoler la position selon la largeur de l'écran.
+            const roomLine = `<span class="game-room-code-main"><span class="game-room-code-key">Salle</span><span class="game-room-code-sep">&nbsp;:&nbsp;</span><span class="game-room-code-value">${escapeHtml(String(currentRoomCode))}</span></span>`;
             const hostLine = displayedHostName
-                ? `<span class="game-room-code-host">Hôte : ${escapeHtml(String(displayedHostName))}</span>`
+                ? `<span class="game-room-code-host"><span class="game-room-code-key">Hôte</span><span class="game-room-code-sep">&nbsp;:&nbsp;</span><span class="game-room-code-value">${escapeHtml(String(displayedHostName))}</span></span>`
                 : '';
             roomCodeEl.innerHTML = roomLine + hostLine;
         } else {
@@ -5164,10 +5398,13 @@ function uiSendChatMessage() {
 // simplement à la suite.
 async function pushChatViaServerFallback(msg) {
     if (!currentRoomCode || typeof pullSessionState !== 'function' || typeof pushSessionState !== 'function') return;
+    const cloudCtx = captureCloudSyncContext(currentRoomCode);
 
     let pulled;
     try {
-        pulled = await pullSessionState(currentRoomCode);
+        pulled = await pullSessionState(cloudCtx.roomCode);
+        if (!isCloudSyncContextActive(cloudCtx)) return;
+        if (pulled) pulled = validateCloudSnapshot(pulled, cloudCtx.roomCode);
     } catch (e) {
         pushDebugLog('Remontée serveur du message de chat impossible (lecture) : ' + ((e && e.message) || e));
         return;
@@ -5179,16 +5416,21 @@ async function pushChatViaServerFallback(msg) {
     baseState.chatMessages.push(msg);
 
     try {
-        const result = await pushSessionState(currentRoomCode, { ...baseState, savedAt: Date.now() }, expectedVersion, {
+        const stateToPush = { ...baseState, savedAt: Date.now() };
+        const result = await pushSessionState(cloudCtx.roomCode, stateToPush, expectedVersion, {
             onConflict: (current) => {
                 // Même raisonnement que pushCallViaServerFallback : pas de retentative
                 // en boucle ici, le prochain sondage/abonnement rattrapera le coup.
-                if (current) lastKnownCloudVersion = current.version;
+                if (!isCloudSyncContextActive(cloudCtx)) return;
+                const validCurrent = current && validateCloudSnapshot(current, cloudCtx.roomCode);
+                if (validCurrent) { lastKnownCloudVersion = validCurrent.version; cloudLastSyncedState = cloneCloudData(validCurrent.state); }
                 pushDebugLog('Message de chat : conflit de version au moment de pousser, abandon (une resynchronisation suivra).');
             }
         });
+        if (!isCloudSyncContextActive(cloudCtx)) return;
         if (result) {
             lastKnownCloudVersion = result.version;
+            cloudLastSyncedState = cloneCloudData(stateToPush);
             pushDebugLog(`Message de chat remonté au serveur avec succès (version ${result.version}).`);
         }
     } catch (e) {
@@ -7256,11 +7498,14 @@ async function pushUndoViaServerFallback() {
         return;
     }
     pushDebugLog('Undo : tentative de remontée au serveur (déconnecté de l\'hôte).');
+    const cloudCtx = captureCloudSyncContext(currentRoomCode);
 
     try {
         let pulled;
         try {
-            pulled = await pullSessionState(currentRoomCode);
+            pulled = await pullSessionState(cloudCtx.roomCode);
+            if (!isCloudSyncContextActive(cloudCtx)) { done(); return; }
+            if (pulled) pulled = validateCloudSnapshot(pulled, cloudCtx.roomCode);
         } catch (e) {
             pushDebugLog('Undo : lecture serveur impossible (' + ((e && e.message) || e) + ').');
             done();
@@ -7290,17 +7535,22 @@ async function pushUndoViaServerFallback() {
         }
 
         hist.length = targetIndex;
+        const stateToPush = { ...baseState, savedAt: Date.now() };
 
-        const result = await pushSessionState(currentRoomCode, { ...baseState, savedAt: Date.now() }, expectedVersion, {
+        const result = await pushSessionState(cloudCtx.roomCode, stateToPush, expectedVersion, {
             onConflict: (current) => {
                 // Même raisonnement que pushCallViaServerFallback : pas de retentative
                 // en boucle ici, le prochain sondage/reconnexion rattrapera le coup.
-                if (current) lastKnownCloudVersion = current.version;
+                if (!isCloudSyncContextActive(cloudCtx)) return;
+                const validCurrent = current && validateCloudSnapshot(current, cloudCtx.roomCode);
+                if (validCurrent) { lastKnownCloudVersion = validCurrent.version; cloudLastSyncedState = cloneCloudData(validCurrent.state); }
                 pushDebugLog('Undo : conflit de version au moment de pousser, abandon (une resynchronisation suivra).');
             }
         });
+        if (!isCloudSyncContextActive(cloudCtx)) { done(); return; }
         if (result) {
             lastKnownCloudVersion = result.version;
+            cloudLastSyncedState = cloneCloudData(stateToPush);
             pushDebugLog(`Undo remonté au serveur avec succès (version ${result.version}).`);
             // Applique aussi tout de suite en local (retour visuel immédiat), seulement
             // si c'est bien la donne actuellement affichée — sinon, la prochaine
@@ -8292,11 +8542,14 @@ async function uiResumeHostSession(roomCode) {
     // dessous) restait local uniquement, invisible pour quiconque irait relire le
     // journal combiné depuis un autre appareil.
     currentRoomCode = saved.roomCode;
+    ensureCloudSyncContext(saved.roomCode);
 
     if (typeof pullSessionState === 'function') {
         try {
-            const cloudResult = await pullSessionState(saved.roomCode);
+            let cloudResult = await pullSessionState(saved.roomCode);
             if (cloudResult) {
+                cloudResult = prepareCloudResumeCandidate(cloudResult, saved.roomCode);
+                if (!cloudResult) throw new Error('snapshot cloud invalide');
                 // Voir échange avec Guillaume ("l'enchère de l'invité n'est pas visible
                 // à la réouverture de l'hôte") : trace précise de ce qui a été relu ici
                 // — la longueur de l'historique d'enchères de la première donne donne
@@ -8445,19 +8698,280 @@ async function uiResumeHostSession(roomCode) {
 // revendiquant le premier siège encore SEAT_PENDING.
 
 let lastKnownCloudVersion = 0; // dernier numéro de version cloud connu, pour le verrou optimiste (voir session-storage.js)
-let cloudResumeCandidate = null; // { version, updatedAt, state }, en attente de confirmation (voir offerCloudResume/uiResumeFromCloud)
+let cloudResumeCandidate = null; // { version, updatedAt, state, _serverState? }, en attente de reprise
+
+// Tout état de synchronisation cloud est désormais lié à UNE salle et à UNE génération.
+// Les promesses fetch d'une ancienne salle peuvent continuer à se résoudre après qu'on a
+// créé/rejoint une autre salle dans le même onglet ; leur résultat doit alors devenir
+// strictement inerte au lieu de polluer lastKnownCloudVersion de la nouvelle salle.
+let cloudSyncRoomCode = null;
+let cloudSyncGeneration = 0;
+let cloudLastSyncedState = null; // clone exact de l'état serveur correspondant à lastKnownCloudVersion
 
 // Voir échange avec Guillaume (test du 27 juillet — "409 (Conflict)" en rafale) : plusieurs
-// enchères rapprochées déclenchaient plusieurs pushCloudGameState() EN PARALLÈLE, chacun
-// parti avec le même lastKnownCloudVersion lu avant que le précédent n'ait eu le temps de
-// se terminer et de le mettre à jour — d'où des conflits de version en cascade, y compris
-// après le tout premier envoi réussi. Un seul envoi à la fois : les appels reçus pendant
-// qu'un envoi est déjà en cours ne repartent pas immédiatement (ça ne ferait que déplacer
-// le même problème), ils marquent juste "il faudra renvoyer une fois celui-ci terminé" —
-// et un seul renvoi suffit, avec l'état ACTUEL relu à ce moment-là (pas la peine d'empiler
-// un envoi par clic intermédiaire, seul le dernier état compte).
+// sauvegardes rapprochées restent sérialisées. Les appels reçus pendant un PUT en cours
+// marquent seulement qu'un nouvel état devra repartir ensuite.
 let cloudPushInFlight = false;
 let cloudPushQueued = false;
+
+const CLOUD_EXIT_RECOVERY_KEY = 'bridgeCloudExitRecoveryV1';
+const CLOUD_EXIT_RECOVERY_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+function cloneCloudData(value) {
+    if (value == null) return value;
+    if (typeof structuredClone === 'function') {
+        try { return structuredClone(value); } catch (e) { /* repli JSON ci-dessous */ }
+    }
+    return JSON.parse(JSON.stringify(value));
+}
+
+function sameCloudData(a, b) {
+    if (a === b) return true;
+    try { return JSON.stringify(a) === JSON.stringify(b); }
+    catch (e) { return false; }
+}
+
+function resetCloudSyncContext(roomCode, version = 0, serverState = null) {
+    cloudSyncGeneration++;
+    cloudSyncRoomCode = roomCode || null;
+    lastKnownCloudVersion = Number.isInteger(version) && version >= 0 ? version : 0;
+    cloudLastSyncedState = serverState ? cloneCloudData(serverState) : null;
+    cloudPushInFlight = false;
+    cloudPushQueued = false;
+    cloudResumeCandidate = null;
+    // Une salle quittée ne doit pas continuer à recevoir ses événements/polls dans la
+    // nouvelle. stopDeferredPolling() désabonne aussi Pusher.
+    if (typeof stopDeferredPolling === 'function') stopDeferredPolling();
+}
+
+function ensureCloudSyncContext(roomCode) {
+    const normalized = roomCode == null ? null : String(roomCode);
+    if (cloudSyncRoomCode !== normalized) resetCloudSyncContext(normalized);
+    return { roomCode: normalized, generation: cloudSyncGeneration };
+}
+
+function captureCloudSyncContext(roomCode) {
+    const ctx = ensureCloudSyncContext(roomCode);
+    return { roomCode: ctx.roomCode, generation: ctx.generation };
+}
+
+function isCloudSyncContextActive(ctx) {
+    return !!ctx && ctx.generation === cloudSyncGeneration
+        && ctx.roomCode === cloudSyncRoomCode
+        && ctx.roomCode === (currentRoomCode == null ? null : String(currentRoomCode));
+}
+
+function validateCloudSnapshot(result, expectedRoomCode) {
+    try {
+        if (!result || !Number.isInteger(result.version) || result.version < 0 || !result.state || typeof result.state !== 'object') {
+            throw new Error('enveloppe/version invalide');
+        }
+        const st = cloneCloudData(result.state);
+        const expected = expectedRoomCode == null ? null : String(expectedRoomCode);
+        if (st.roomCode != null && expected != null && String(st.roomCode) !== expected) {
+            throw new Error(`code de salle ${st.roomCode} différent de ${expected}`);
+        }
+        if (!Array.isArray(st.deals) || st.deals.length === 0) throw new Error('liste de donnes absente ou vide');
+        for (let i = 0; i < st.deals.length; i++) {
+            const deal = st.deals[i];
+            if (!deal || typeof deal !== 'object') throw new Error(`donne ${i + 1} absente`);
+            if (typeof validateDealSemantics === 'function') validateDealSemantics(deal, `Snapshot cloud, donne ${i + 1}`);
+            if (deal.auctionHistory != null && !Array.isArray(deal.auctionHistory)) throw new Error(`historique donne ${i + 1} invalide`);
+            for (const entry of (deal.auctionHistory || [])) {
+                if (!entry || !SEATS.includes(entry.seat) || typeof entry.call !== 'string') {
+                    throw new Error(`entrée d'enchère invalide sur la donne ${i + 1}`);
+                }
+            }
+        }
+        if (!Number.isInteger(st.boardIndex) || st.boardIndex < 0 || st.boardIndex >= st.deals.length) {
+            throw new Error(`boardIndex invalide (${st.boardIndex})`);
+        }
+        if (!st.seatAssignment || typeof st.seatAssignment !== 'object') throw new Error('seatAssignment absent');
+        for (const seat of SEATS) {
+            const v = st.seatAssignment[seat];
+            if (!(v == null || typeof v === 'string')) throw new Error(`seatAssignment.${seat} invalide`);
+        }
+        if (st.participants != null && !Array.isArray(st.participants)) throw new Error('participants invalide');
+        if (st.chatMessages != null && !Array.isArray(st.chatMessages)) throw new Error('chatMessages invalide');
+        if (expected != null) st.roomCode = expected;
+        return { version: result.version, updatedAt: result.updatedAt, state: st };
+    } catch (e) {
+        if (typeof pushDebugLog === 'function') pushDebugLog('Snapshot cloud refusé : ' + ((e && e.message) || e));
+        return null;
+    }
+}
+
+function arrayIsPrefix(prefix, full) {
+    if (!Array.isArray(prefix) || !Array.isArray(full) || prefix.length > full.length) return false;
+    for (let i = 0; i < prefix.length; i++) if (!sameCloudData(prefix[i], full[i])) return false;
+    return true;
+}
+
+function mergeAuctionHistoryThreeWay(base, local, remote, dealer) {
+    base = Array.isArray(base) ? base : [];
+    local = Array.isArray(local) ? local : [];
+    remote = Array.isArray(remote) ? remote : [];
+    if (sameCloudData(local, base)) return cloneCloudData(remote);
+    if (sameCloudData(remote, base)) return cloneCloudData(local);
+    if (sameCloudData(local, remote)) return cloneCloudData(local);
+    if (arrayIsPrefix(local, remote)) return cloneCloudData(remote);
+    if (arrayIsPrefix(remote, local)) return cloneCloudData(local);
+
+    // Deux annulations concurrentes sur le même historique : conserver la plus courte
+    // (elle satisfait les deux intentions sans ressusciter une annonce annulée).
+    if (arrayIsPrefix(local, base) && arrayIsPrefix(remote, base)) {
+        return cloneCloudData(local.length <= remote.length ? local : remote);
+    }
+
+    // Deux extensions concurrentes du même préfixe : l'état serveur a déjà gagné. On ne
+    // rejoue l'extension locale APRÈS lui que si elle reste légalement applicable ; sinon
+    // on garde le serveur, ce qui évite d'écraser une annonce valide déjà acceptée.
+    if (arrayIsPrefix(base, local) && arrayIsPrefix(base, remote)) {
+        const merged = cloneCloudData(remote);
+        for (const entry of local.slice(base.length)) {
+            const expectedSeat = currentTurnSeat(dealer, merged);
+            if (entry.seat !== expectedSeat || !isCallLegal(merged, entry.call, entry.seat)) {
+                if (typeof pushDebugLog === 'function') pushDebugLog(`Conflit cloud : annonce locale ${entry.call} (${entry.seat}) non rejouable après l'état serveur — serveur conservé.`);
+                continue;
+            }
+            merged.push(cloneCloudData(entry));
+        }
+        return merged;
+    }
+
+    // Cas ambigu (ex. undo d'un côté, nouvelle annonce de l'autre) : serveur gagnant.
+    return cloneCloudData(remote);
+}
+
+function mergeSimpleThreeWay(base, local, remote) {
+    if (sameCloudData(local, base)) return cloneCloudData(remote);
+    if (sameCloudData(remote, base)) return cloneCloudData(local);
+    if (sameCloudData(local, remote)) return cloneCloudData(local);
+    return cloneCloudData(remote); // conflit réel sur le même champ : serveur gagnant
+}
+
+function mergeChatThreeWay(base, local, remote) {
+    base = Array.isArray(base) ? base : [];
+    local = Array.isArray(local) ? local : [];
+    remote = Array.isArray(remote) ? remote : [];
+    if (sameCloudData(local, base)) return cloneCloudData(remote);
+    if (sameCloudData(remote, base)) return cloneCloudData(local);
+    if (sameCloudData(local, remote)) return cloneCloudData(local);
+    if (arrayIsPrefix(base, local) && arrayIsPrefix(base, remote)) {
+        const out = cloneCloudData(remote);
+        for (const msg of local.slice(base.length)) {
+            if (!out.some(existing => sameCloudData(existing, msg))) out.push(cloneCloudData(msg));
+        }
+        return out;
+    }
+    return cloneCloudData(remote);
+}
+
+function mergeDealThreeWay(base, local, remote) {
+    if (sameCloudData(local, base)) return cloneCloudData(remote);
+    if (sameCloudData(remote, base)) return cloneCloudData(local);
+    if (sameCloudData(local, remote)) return cloneCloudData(local);
+    if (!local || !remote || typeof local !== 'object' || typeof remote !== 'object') return cloneCloudData(remote);
+    const out = {};
+    const keys = new Set([...Object.keys(base || {}), ...Object.keys(local || {}), ...Object.keys(remote || {})]);
+    for (const key of keys) {
+        if (key === 'auctionHistory') {
+            out[key] = mergeAuctionHistoryThreeWay(base && base[key], local[key], remote[key], remote.dealer || local.dealer);
+        } else {
+            out[key] = mergeSimpleThreeWay(base && base[key], local[key], remote[key]);
+        }
+    }
+    return out;
+}
+
+function mergeDealsThreeWay(base, local, remote) {
+    base = Array.isArray(base) ? base : [];
+    local = Array.isArray(local) ? local : [];
+    remote = Array.isArray(remote) ? remote : [];
+    const count = Math.max(base.length, local.length, remote.length);
+    const out = [];
+    for (let i = 0; i < count; i++) {
+        const b = base[i], l = local[i], r = remote[i];
+        if (l == null) { if (r != null) out[i] = cloneCloudData(r); continue; }
+        if (r == null) { out[i] = cloneCloudData(l); continue; }
+        out[i] = mergeDealThreeWay(b, l, r);
+    }
+    return out;
+}
+
+function mergeCloudStatesThreeWay(baseState, localState, remoteState) {
+    const base = baseState || {};
+    const local = localState || {};
+    const remote = remoteState || {};
+    const out = {};
+    const keys = new Set([...Object.keys(base), ...Object.keys(local), ...Object.keys(remote)]);
+    for (const key of keys) {
+        if (key === 'deals') out.deals = mergeDealsThreeWay(base.deals, local.deals, remote.deals);
+        else if (key === 'chatMessages') out.chatMessages = mergeChatThreeWay(base.chatMessages, local.chatMessages, remote.chatMessages);
+        else if (key === 'savedAt') out.savedAt = Date.now();
+        else out[key] = mergeSimpleThreeWay(base[key], local[key], remote[key]);
+    }
+    out.roomCode = currentRoomCode || local.roomCode || remote.roomCode;
+    if (out.seatAssignment) out.autoPassSeats = SEATS.filter(seat => !out.seatAssignment[seat]);
+    return out;
+}
+
+function readCloudExitRecoveryMap() {
+    try {
+        const parsed = JSON.parse(localStorage.getItem(CLOUD_EXIT_RECOVERY_KEY) || '{}');
+        return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch (e) { return {}; }
+}
+
+function writeCloudExitRecoveryMap(map) {
+    try { localStorage.setItem(CLOUD_EXIT_RECOVERY_KEY, JSON.stringify(map)); }
+    catch (e) { /* la sauvegarde locale normale reste le filet principal */ }
+}
+
+function rememberCloudExitRecovery(roomCode, localState) {
+    if (!roomCode || !localState) return;
+    const map = readCloudExitRecoveryMap();
+    map[roomCode] = {
+        savedAt: Date.now(),
+        version: lastKnownCloudVersion,
+        baseState: cloneCloudData(cloudLastSyncedState),
+        localState: cloneCloudData(localState)
+    };
+    // Un seul onglet peut raisonnablement avoir quelques fermetures non réconciliées ;
+    // limite stricte pour ne pas doubler indéfiniment le poids des snapshots localStorage.
+    const codes = Object.keys(map).sort((a, b) => (map[b].savedAt || 0) - (map[a].savedAt || 0));
+    for (const code of codes.slice(2)) delete map[code];
+    writeCloudExitRecoveryMap(map);
+}
+
+function clearCloudExitRecovery(roomCode) {
+    if (!roomCode) return;
+    const map = readCloudExitRecoveryMap();
+    if (map[roomCode]) { delete map[roomCode]; writeCloudExitRecoveryMap(map); }
+}
+
+function prepareCloudResumeCandidate(result, roomCode) {
+    const validated = validateCloudSnapshot(result, roomCode);
+    if (!validated) return null;
+    const map = readCloudExitRecoveryMap();
+    const pending = map[roomCode];
+    if (!pending || !pending.localState || Date.now() - (pending.savedAt || 0) > CLOUD_EXIT_RECOVERY_MAX_AGE_MS) {
+        if (pending) clearCloudExitRecovery(roomCode);
+        return { ...validated, _serverState: cloneCloudData(validated.state) };
+    }
+    const localValidated = validateCloudSnapshot({ version: pending.version || 0, state: pending.localState }, roomCode);
+    if (!localValidated) {
+        clearCloudExitRecovery(roomCode);
+        return { ...validated, _serverState: cloneCloudData(validated.state) };
+    }
+    const merged = mergeCloudStatesThreeWay(pending.baseState, localValidated.state, validated.state);
+    if (sameCloudData(merged, validated.state)) {
+        clearCloudExitRecovery(roomCode);
+        return { ...validated, _serverState: cloneCloudData(validated.state) };
+    }
+    if (typeof pushDebugLog === 'function') pushDebugLog('Reprise cloud : modifications locales de fermeture réconciliées avec la version serveur avant reprise.');
+    return { ...validated, state: merged, _serverState: cloneCloudData(validated.state), _needsPush: true };
+}
 
 // Pousse l'état courant vers le cloud — voir l'unique point d'accroche dans
 // saveHostGameStateToStorage(), qui appelle ceci à chaque sauvegarde locale. En tâche de
@@ -8491,31 +9005,64 @@ function buildCloudStatePayload() {
 // (expectedVersion/409) que pour tout le monde, aucun traitement de faveur ici.
 function pushCloudGameState() {
     if (!deals || !currentRoomCode) return;
-    if (typeof pushSessionState !== 'function') return; // session-storage.js pas chargé (ex. pas encore branché dans index.html) : no-op silencieux
+    if (typeof pushSessionState !== 'function') return;
 
+    const ctx = captureCloudSyncContext(currentRoomCode);
     if (cloudPushInFlight) {
         cloudPushQueued = true;
         return;
     }
+
+    const payload = buildCloudStatePayload();
+    const expectedVersion = lastKnownCloudVersion;
+    const baseStateAtStart = cloneCloudData(cloudLastSyncedState);
     cloudPushInFlight = true;
 
-    pushSessionState(currentRoomCode, buildCloudStatePayload(), lastKnownCloudVersion, {
+    pushSessionState(ctx.roomCode, payload, expectedVersion, {
         onConflict: (current) => {
-            // Voir échange avec Guillaume ("aucune diff" entre avant/après B — écriture
-            // perdue) : adopter le nouveau numéro de version ne sert à rien tout seul —
-            // sans renvoyer nos propres changements AVEC ce numéro corrigé, ils étaient
-            // purement perdus. cloudPushQueued force ce renvoi via le .finally() juste
-            // en dessous, dès que ce cycle-ci se termine.
-            if (current) lastKnownCloudVersion = current.version;
-            cloudPushQueued = true;
+            if (!isCloudSyncContextActive(ctx)) return;
+            const validatedCurrent = validateCloudSnapshot(current, ctx.roomCode);
+            if (!validatedCurrent) {
+                pushDebugLog('Conflit cloud : état serveur invalide, aucune réécriture automatique effectuée.');
+                return;
+            }
+
+            // Trois voies : base connue au départ / état local ACTUEL / gagnant serveur.
+            // Les champs indépendants sont combinés ; si les deux côtés modifient le même
+            // champ de façon incompatible, le serveur gagne. Une annonce locale n'est
+            // rejouée après le serveur que si elle reste légalement jouable.
+            const localNow = buildCloudStatePayload();
+            const merged = mergeCloudStatesThreeWay(baseStateAtStart, localNow, validatedCurrent.state);
+            lastKnownCloudVersion = validatedCurrent.version;
+            cloudLastSyncedState = cloneCloudData(validatedCurrent.state);
+
+            if (!sameCloudData(merged, validatedCurrent.state)) {
+                applyCloudUpdate(
+                    { version: validatedCurrent.version, updatedAt: validatedCurrent.updatedAt, state: merged },
+                    { serverState: validatedCurrent.state, expectedRoomCode: ctx.roomCode }
+                );
+                cloudPushQueued = true;
+                pushDebugLog(`Conflit cloud v${validatedCurrent.version} : état serveur fusionné, réécriture sûre planifiée.`);
+            } else {
+                applyCloudUpdate(validatedCurrent, { expectedRoomCode: ctx.roomCode });
+                pushDebugLog(`Conflit cloud v${validatedCurrent.version} : aucune modification locale rejouable, serveur conservé.`);
+            }
         }
     }).then(result => {
-        if (result) lastKnownCloudVersion = result.version;
+        if (!isCloudSyncContextActive(ctx)) return;
+        if (result && Number.isInteger(result.version)) {
+            lastKnownCloudVersion = result.version;
+            cloudLastSyncedState = cloneCloudData(payload);
+            clearCloudExitRecovery(ctx.roomCode);
+        }
+    }).catch(err => {
+        if (isCloudSyncContextActive(ctx)) pushDebugLog('Push cloud échoué : ' + ((err && err.message) || err));
     }).finally(() => {
+        if (!isCloudSyncContextActive(ctx)) return;
         cloudPushInFlight = false;
         if (cloudPushQueued) {
             cloudPushQueued = false;
-            pushCloudGameState(); // renvoie avec l'état le plus frais et/ou le numéro corrigé
+            pushCloudGameState();
         }
     });
 }
@@ -8543,10 +9090,13 @@ async function pushCallViaServerFallback(seat, call, explanation) {
     // qu'elle n'était jamais partie du tout. Log de départ ajouté aussi, pour confirmer
     // sans ambiguïté que ce chemin a bien été emprunté.
     pushDebugLog(`Annonce ${call} (${seat}) : tentative de remontée au serveur (déconnecté de l'hôte).`);
+    const cloudCtx = captureCloudSyncContext(currentRoomCode);
     try {
         let pulled;
         try {
-            pulled = await pullSessionState(currentRoomCode);
+            pulled = await pullSessionState(cloudCtx.roomCode);
+            if (!isCloudSyncContextActive(cloudCtx)) return;
+            if (pulled) pulled = validateCloudSnapshot(pulled, cloudCtx.roomCode);
         } catch (e) {
             pushDebugLog('Remontée serveur de l\'annonce impossible (lecture) : ' + ((e && e.message) || e));
             return;
@@ -8571,20 +9121,28 @@ async function pushCallViaServerFallback(seat, call, explanation) {
         }
 
         hist.push(explanation ? { seat, call, explanation } : { seat, call });
+        const stateToPush = { ...baseState, savedAt: Date.now() };
 
-        const result = await pushSessionState(currentRoomCode, { ...baseState, savedAt: Date.now() }, expectedVersion, {
+        const result = await pushSessionState(cloudCtx.roomCode, stateToPush, expectedVersion, {
             onConflict: (current) => {
                 // Quelqu'un d'autre a écrit entre ma lecture et ma tentative d'écrite —
                 // pas la peine de retenter en boucle ici (contrairement à
                 // pushCloudGameState) : la prochaine chose que je ferai (mon propre
                 // sondage/abonnement, voir startDeferredPolling) relira et
                 // resynchronisera de toute façon.
-                if (current) lastKnownCloudVersion = current.version;
+                if (!isCloudSyncContextActive(cloudCtx)) return;
+                const validCurrent = current && validateCloudSnapshot(current, cloudCtx.roomCode);
+                if (validCurrent) {
+                    lastKnownCloudVersion = validCurrent.version;
+                    cloudLastSyncedState = cloneCloudData(validCurrent.state);
+                }
                 pushDebugLog(`Annonce ${call} (${seat}) : conflit de version au moment de pousser, abandon (une resynchronisation suivra).`);
             }
         });
+        if (!isCloudSyncContextActive(cloudCtx)) return;
         if (result) {
             lastKnownCloudVersion = result.version;
+            cloudLastSyncedState = cloneCloudData(stateToPush);
             pushDebugLog(`Annonce ${call} (${seat}) remontée au serveur avec succès (version ${result.version}).`);
         } else {
             pushDebugLog(`Annonce ${call} (${seat}) : pushSessionState n'a renvoyé aucun résultat (ni succès, ni conflit signalé) — à surveiller.`);
@@ -8654,7 +9212,7 @@ function onCloudPusherEvent(data) {
     if (cloudPushInFlight || cloudPushQueued) return; // pas la peine de relire ce qu'on vient tout juste d'envoyer
 
     if (data.state) {
-        applyCloudUpdate(data);
+        applyCloudUpdate(data, { expectedRoomCode: currentRoomCode });
     } else {
         pollCloudForUpdates(); // état pas embarqué (payload trop gros) : repli sur l'ancien chemin
     }
@@ -8705,10 +9263,14 @@ async function pollCloudForUpdates() {
     if (cloudPushInFlight || cloudPushQueued) return;
     if (typeof pullSessionState !== 'function') return;
 
+    const cloudCtx = captureCloudSyncContext(currentRoomCode);
     try {
-        const result = await pullSessionState(currentRoomCode);
+        let result = await pullSessionState(cloudCtx.roomCode);
+        if (!isCloudSyncContextActive(cloudCtx)) return;
         if (!result || result.version <= lastKnownCloudVersion) return; // rien de neuf
-        applyCloudUpdate(result);
+        result = validateCloudSnapshot(result, cloudCtx.roomCode);
+        if (!result) return;
+        applyCloudUpdate(result, { expectedRoomCode: cloudCtx.roomCode });
     } catch (e) {
         // Panne réseau passagère : tant pis, on retentera au prochain sondage.
     }
@@ -8717,8 +9279,12 @@ async function pollCloudForUpdates() {
 // Applique un état plus récent trouvé par le sondage, SANS repartir de zéro comme le fait
 // uiResumeFromCloud (on est déjà en jeu, pas besoin de revendiquer un siège ni de
 // recalculer l'identité — seulement d'absorber ce qui a changé ailleurs).
-function applyCloudUpdate(result) {
-    const st = result.state;
+function applyCloudUpdate(result, options = {}) {
+    const expectedRoomCode = options.expectedRoomCode || currentRoomCode;
+    const validated = validateCloudSnapshot(result, expectedRoomCode);
+    if (!validated) return false;
+    const st = validated.state;
+    const exactServerState = options.serverState ? cloneCloudData(options.serverState) : cloneCloudData(st);
     // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 3) : capturé AVANT tout remplacement, pour
     // pouvoir relayer en P2P (plus bas) uniquement ce qui est réellement NOUVEAU apporté
     // par cette mise à jour cloud — jamais question de rejouer tout depuis le début à
@@ -8745,7 +9311,8 @@ function applyCloudUpdate(result) {
     const myEntry = participants.find(p => p.id === myParticipantId);
     if (myEntry) myEntry.disconnected = false;
     mySeats = SEATS.filter(seat => seatAssignment[seat] === myParticipantId);
-    lastKnownCloudVersion = result.version;
+    lastKnownCloudVersion = validated.version;
+    cloudLastSyncedState = exactServerState;
 
     // Ne touche jamais boardIndex ici : on ne fait pas sauter A d'une donne à l'autre
     // sous ses pieds pendant qu'il regarde — seul un geste explicite de sa part (flèches,
@@ -8808,6 +9375,7 @@ function applyCloudUpdate(result) {
         renderRoomBoard();
         renderChat();
     }
+    return true;
 }
 
 // Voir échange avec Guillaume ("les enchères de B n'apparaissent toujours pas") : le
@@ -8819,11 +9387,35 @@ function applyCloudUpdate(result) {
 // cette file : déclenché explicitement à la fermeture/mise en arrière-plan de l'onglet
 // (voir 'pagehide' plus bas), il relit l'état à cet instant précis et l'envoie une
 // dernière fois, sans jamais attendre son tour derrière un envoi en cours.
-window.addEventListener('pagehide', () => {
+function preserveLatestCloudStateBeforeSuspend(allowDirectKeepalive = true) {
     if (myRole !== 'host' || !deals || !currentRoomCode) return;
+    const ctx = captureCloudSyncContext(currentRoomCode);
+    const payload = buildCloudStatePayload();
+    // Toujours conserver localement le dernier snapshot + sa base serveur. Si la page est
+    // détruite pendant qu'un PUT plus ancien est encore en vol, on ne peut pas connaître
+    // sa future version sans aide serveur ; ce marqueur permet une vraie réconciliation
+    // trois voies à la prochaine reprise au lieu de perdre silencieusement la dernière action.
+    rememberCloudExitRecovery(ctx.roomCode, payload);
     if (typeof pushSessionState !== 'function') return;
-    pushSessionState(currentRoomCode, buildCloudStatePayload(), lastKnownCloudVersion);
+
+    // S'il n'y a AUCUN PUT en cours, le keepalive existant reste le meilleur chemin : la
+    // requête est déjà émise avant destruction de la page. S'il y en a un, surtout ne pas
+    // envoyer un second snapshot avec le même expectedVersion (409 garanti) ni deviner
+    // expectedVersion+1 (qui pourrait écraser une écriture concurrente distante).
+    if (allowDirectKeepalive && !cloudPushInFlight) {
+        pushSessionState(ctx.roomCode, payload, lastKnownCloudVersion);
+    }
+}
+
+// visibilitychange arrive généralement avant pagehide : déclencher la file normale ici
+// donne au PUT sérialisé une chance de finir pendant que le document existe encore.
+document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'hidden') return;
+    preserveLatestCloudStateBeforeSuspend(false);
+    if (!cloudPushInFlight) pushCloudGameState();
+    else cloudPushQueued = true;
 });
+window.addEventListener('pagehide', () => preserveLatestCloudStateBeforeSuspend(true));
 
 // Interroge le cloud pour ce code de salon et, si un état y est trouvé, reprend
 // directement la partie (voir échange avec Guillaume : "reprendre automatiquement, sans
@@ -8837,14 +9429,18 @@ async function offerCloudResume(code) {
     // lignes journalisées ici (dont l'erreur juste en dessous) remontent bien vers le
     // journal partagé de la salle, pas seulement en local.
     currentRoomCode = code;
+    const cloudCtx = captureCloudSyncContext(code);
     let result;
     try {
         result = await pullSessionState(code);
+        if (!isCloudSyncContextActive(cloudCtx)) return false;
     } catch (e) {
         pushDebugLog('Reprise cloud : le serveur de session n\'a pas répondu (' + ((e && e.message) || e) + ').');
         return false;
     }
     if (!result) return false; // rien en cloud pour ce code : comportement inchangé, laisse l'appelant afficher son erreur habituelle
+    result = prepareCloudResumeCandidate(result, code);
+    if (!result) return false;
 
     cloudResumeCandidate = result;
     showConnectingOverlay('Reprise de la partie…');
@@ -9017,7 +9613,13 @@ function uiResumeFromCloud() {
     hostTransferInProgress = false;
     prevSeatAssignmentSnapshot = null;
     prevParticipantsDisconnectedSnapshot = null;
+    // La version correspond à l'état SERVEUR exact, pas forcément au snapshot local déjà
+    // réconcilié (cas d'un marqueur de fermeture). Cette distinction est la base du
+    // prochain three-way merge et empêche une reprise locale de se faire passer pour un
+    // état déjà accepté par le serveur.
     lastKnownCloudVersion = cloudResumeCandidate.version;
+    cloudLastSyncedState = cloneCloudData(cloudResumeCandidate._serverState || cloudResumeCandidate.state);
+    cloudSyncRoomCode = String(codeToReclaim);
     cloudResumeCandidate = null;
 
     hideConnectingOverlay();
@@ -9050,6 +9652,9 @@ window.addEventListener('DOMContentLoaded', () => {
     setInterval(renderReconnectButton, 1000);
 
     const params = new URLSearchParams(window.location.search);
+    // Un lien d'invitation sécurisé porte ?room=XXXX#access=<capacité>. On mémorise la
+    // capacité AVANT toute tentative P2P/cloud, puis on l'efface aussitôt de l'URL locale.
+    rememberRoomAccessFromUrl(params);
     const room = params.get('room');
     // Voir échange avec Guillaume (session du 23 juillet — reprise via localStorage) :
     // vérifiée AVANT le traitement du paramètre ?room= ci-dessous — si ce paramètre

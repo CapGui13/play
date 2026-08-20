@@ -245,6 +245,18 @@ body.on-landing-screen {
     background: rgba(201, 162, 39, 0.2);
 }
 
+/* Sur écran tactile, :hover peut rester accroché après un tap (notamment Safari/iOS et
+   Chrome mobile) : le raccourci Chat semblait alors "sélectionné" en changeant de fond,
+   alors qu'il ne représente aucun état activé/désactivé. On neutralise uniquement ce
+   retour de survol persistant pour le bouton Chat ; le focus clavier reste géré par les
+   règles d'accessibilité communes. */
+@media (hover: none), (pointer: coarse) {
+    #chatToggleBtn:hover,
+    #chatToggleBtn:active {
+        background: transparent;
+    }
+}
+
 .debug-panel {
     position: fixed;
     top: calc(40px + var(--safe-top));
@@ -1611,12 +1623,26 @@ button.kibitz-chip {
     position: relative;
     display: flex;
     justify-content: center;
+    min-width: 0;
 }
 
 .seat-occupant-chip {
     font-family: var(--font-body);
     gap: 8px;
     cursor: pointer;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    justify-content: center;
+}
+
+/* Les noms de 20 caractères sont autorisés. Dans une case étroite, on conserve avatar et
+   chevron et on tronque uniquement le nom au lieu de laisser le chip agrandir la grille. */
+.seat-occupant-chip .kibitz-chip-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 /* Voir échange avec Guillaume : curseur "attraper" sur TOUTE la case (via l'attribut
@@ -1642,6 +1668,7 @@ button.kibitz-chip {
 }
 
 .seat-dropdown-chevron {
+    flex-shrink: 0;
     font-size: 0.7rem;
     color: var(--text-muted);
 }
@@ -1689,7 +1716,9 @@ button.kibitz-chip {
 .seat-assignment-grid {
     position: relative;
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    /* minmax(0, 1fr) empêche un nom long de donner à une piste de grille une largeur
+       minimale basée sur son contenu et donc de faire sortir Ouest/Est de leur croix. */
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 10px 8px;
     align-items: stretch;
     /* Voir échange avec Guillaume (session du 23 juillet) : sans ça, les 3 rangées (N /
@@ -1748,6 +1777,7 @@ button.kibitz-chip {
 .seat-box {
     display: flex;
     flex-direction: column;
+    min-width: 0;
     align-items: stretch;
     gap: 6px;
     background: var(--surface-2);
@@ -1878,10 +1908,15 @@ button.kibitz-chip {
     display: flex;
     align-items: center;
     gap: 8px;
+    min-width: 0;
 }
 
 .seat-box-name-row .seat-box-name {
     flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     text-align: left;
 }
 
@@ -2072,25 +2107,48 @@ button.kibitz-chip {
 .game-room-code-row {
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
     gap: 6px;
     margin-top: 2px;
 }
 
 .game-room-code-label {
+    /* Le bloc Salle/Hôte occupe l'espace restant avant les 3 icônes ; son contenu est
+       centré dans CET espace, tandis que les deux lignes gardent le même départ afin que
+       les ':' puissent être parfaitement alignés. */
+    flex: 1 1 auto;
+    display: grid;
+    justify-content: center;
+    min-width: 0;
+    max-width: 100%;
     font-size: 0.78rem;
     color: var(--text-muted);
     font-family: var(--font-mono);
     letter-spacing: 0.03em;
 }
 
-.game-room-code-label .game-room-code-main,
-.game-room-code-label .game-room-code-host {
-    display: inline;
+/* Toujours deux lignes, desktop compris : Hôte sous Salle. Chaque ligne partage une
+   colonne libellé de 5ch : « Salle » la remplit, « Hôte » laisse donc exactement un espace
+   avant le séparateur. */
+.game-room-code-label {
+    grid-template-columns: 5ch max-content max-content;
 }
 
-.game-room-code-label .game-room-code-host::before {
-    content: ' · ';
+.game-room-code-label .game-room-code-main,
+.game-room-code-label .game-room-code-host {
+    /* Les 3 sous-cellules de chaque ligne participent à LA MÊME grille parent : les
+       colonnes sont donc réellement communes entre Salle et Hôte. */
+    display: contents;
 }
+
+.game-room-code-key,
+.game-room-code-sep,
+.game-room-code-value {
+    white-space: nowrap;
+}
+
+.game-room-code-key { text-align: left; }
+.game-room-code-value { min-width: 0; }
 
 /* Voir échange avec Guillaume : la refonte "plein espace + colonne latérale" n'a pas
    convaincu, revert à la disposition d'origine (voir game-body plus bas). Seul changement
@@ -3279,6 +3337,15 @@ table.dd-table td.dd-secondary-contract {
     .special-calls-row { gap: 6px; }
 }
 
+/* À 320 px environ, Salle/Hôte + les trois icônes ne tiennent physiquement plus sur
+   une seule rangée avec un nom d'hôte maximal. Le bloc texte prend alors sa propre ligne
+   et les icônes restent centrées juste dessous. Au-delà, le layout compact d'origine est
+   conservé. */
+@media (max-width: 340px) {
+    .game-room-code-row { justify-content: center; }
+    .game-room-code-label { flex: 1 0 100%; }
+}
+
 /* ===== Écran de jeu — ajustements mobile =====
    Après plusieurs essais infructueux d'un layout "zéro scroll" à zones de hauteur figées
    (mains/relevé/boîte d'enchères en pourcentages fixes de la hauteur d'écran, boîte
@@ -3372,14 +3439,6 @@ table.dd-table td.dd-secondary-contract {
         white-space: nowrap;
     }
 
-    .game-room-code-label .game-room-code-main,
-    .game-room-code-label .game-room-code-host {
-        display: block;
-    }
-
-    .game-room-code-label .game-room-code-host::before {
-        content: '';
-    }
 
     /* Indicateur de tour resserré (padding/police réduits). */
     #turnIndicator {

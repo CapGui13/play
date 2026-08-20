@@ -4,6 +4,67 @@
 // où chaque hands[pos][suit] est une chaîne de rangs triée haut->bas (ex: "AKQ432").
 
 const SUIT_ORDER = ['S', 'H', 'D', 'C'];
+const SEAT_ORDER = ['N', 'E', 'S', 'W'];
+const VALID_RANKS_RE = /^[AKQJT98765432]*$/;
+
+// Validation sémantique commune PBN/LIN. Le parseur ne doit pas seulement réussir à
+// découper le texte : une donne jouable doit aussi décrire un vrai paquet de bridge.
+// On valide ici uniquement les invariants de cartes nécessaires au runtime : donneur,
+// 4 mains de 13 cartes, rangs connus et 52 cartes uniques.
+function normalizeAndValidateRanks(raw, context) {
+    let ranks = String(raw == null ? '' : raw).trim().toUpperCase();
+    // Certains PBN utilisent '-' pour une chicane ; le runtime représente une couleur
+    // vide par une chaîne vide, donc on normalise ce cas standard avant validation.
+    if (ranks === '-') ranks = '';
+    if (!VALID_RANKS_RE.test(ranks)) {
+        throw new Error(`${context} : rang de carte invalide dans "${raw}".`);
+    }
+    return ranks;
+}
+
+function validateDealSemantics(deal, label) {
+    const where = label || `donne ${deal && deal.board != null ? deal.board : '?'}`;
+    const dealer = String(deal && deal.dealer || '').trim().toUpperCase();
+    if (!SEAT_ORDER.includes(dealer)) {
+        throw new Error(`${where} : donneur invalide "${deal && deal.dealer != null ? deal.dealer : ''}" (attendu N, E, S ou W).`);
+    }
+    deal.dealer = dealer;
+
+    if (!deal.hands || typeof deal.hands !== 'object') {
+        throw new Error(`${where} : les quatre mains sont absentes.`);
+    }
+
+    const seenCards = new Set();
+    for (const seat of SEAT_ORDER) {
+        const hand = deal.hands[seat];
+        if (!hand || typeof hand !== 'object') {
+            throw new Error(`${where} : main ${seat} absente.`);
+        }
+
+        let cardCount = 0;
+        for (const suit of SUIT_ORDER) {
+            const ranks = normalizeAndValidateRanks(hand[suit], `${where}, main ${seat}, couleur ${suit}`);
+            hand[suit] = ranks;
+            cardCount += ranks.length;
+            for (const rank of ranks) {
+                const card = suit + rank;
+                if (seenCards.has(card)) {
+                    throw new Error(`${where} : carte dupliquée ${card}.`);
+                }
+                seenCards.add(card);
+            }
+        }
+
+        if (cardCount !== 13) {
+            throw new Error(`${where} : main ${seat} contient ${cardCount} cartes au lieu de 13.`);
+        }
+    }
+
+    if (seenCards.size !== 52) {
+        throw new Error(`${where} : la donne contient ${seenCards.size} cartes uniques au lieu de 52.`);
+    }
+    return deal;
+}
 
 function emptyHands() {
     return {
@@ -72,10 +133,10 @@ function parsePBN(text) {
                 throw new Error(`Main PBN illisible (board ${boardCounter}, ${seatLabel}) : "${handsStr[i]}"`);
             }
             hands[seatLabel] = {
-                S: suitGroups[0] || '',
-                H: suitGroups[1] || '',
-                D: suitGroups[2] || '',
-                C: suitGroups[3] || ''
+                S: normalizeAndValidateRanks(suitGroups[0] || '', `Donne PBN ${boardCounter}, main ${seatLabel}, couleur S`),
+                H: normalizeAndValidateRanks(suitGroups[1] || '', `Donne PBN ${boardCounter}, main ${seatLabel}, couleur H`),
+                D: normalizeAndValidateRanks(suitGroups[2] || '', `Donne PBN ${boardCounter}, main ${seatLabel}, couleur D`),
+                C: normalizeAndValidateRanks(suitGroups[3] || '', `Donne PBN ${boardCounter}, main ${seatLabel}, couleur C`)
             };
         });
 
@@ -110,14 +171,16 @@ function parsePBN(text) {
             }
         }
 
-        deals.push({
+        const parsedDeal = {
             board: boardMatch ? parseInt(boardMatch[1], 10) || boardCounter : boardCounter,
             dealer: dealerMatch ? dealerMatch[1].trim().toUpperCase() : 'N',
             vulnerable: normalizeVulnerable(vulnMatch ? vulnMatch[1] : 'None'),
             hands,
             par,
             ddTable
-        });
+        };
+        validateDealSemantics(parsedDeal, `Donne PBN ${parsedDeal.board}`);
+        deals.push(parsedDeal);
     }
 
     if (deals.length === 0) {
@@ -140,14 +203,25 @@ const LIN_VULN_CODE = { '-': 'None', n: 'NS', e: 'EW', b: 'Both' };
 
 function parseLinHandString(str) {
     const hand = { S: '', H: '', D: '', C: '' };
+    const source = String(str || '').trim().toUpperCase();
     const re = /([SHDC])([2-9TJQKA]*)/g;
+    const seenSuits = new Set();
     let m;
+    let cursor = 0;
     let found = false;
-    while ((m = re.exec(str)) !== null) {
-        hand[m[1]] = m[2];
+    while ((m = re.exec(source)) !== null) {
+        // Le vieux parseur ignorait silencieusement les caractères qu'il ne connaissait
+        // pas (par ex. Z). Exiger une couverture intégrale évite de fabriquer une main
+        // différente du fichier fourni.
+        if (m.index !== cursor || seenSuits.has(m[1])) {
+            throw new Error(`Main LIN illisible : "${str}"`);
+        }
+        hand[m[1]] = normalizeAndValidateRanks(m[2], `Main LIN, couleur ${m[1]}`);
+        seenSuits.add(m[1]);
+        cursor = re.lastIndex;
         found = true;
     }
-    if (!found) throw new Error(`Main LIN illisible : "${str}"`);
+    if (!found || cursor !== source.length) throw new Error(`Main LIN illisible : "${str}"`);
     return hand;
 }
 
@@ -162,7 +236,12 @@ function deduceFourthHand(hands, knownSeats) {
     for (const suit of ['S', 'H', 'D', 'C']) {
         const used = new Set();
         knownSeats.forEach(seat => {
-            for (const card of hands[seat][suit]) used.add(card);
+            for (const card of hands[seat][suit]) {
+                if (used.has(card)) {
+                    throw new Error(`Donne LIN invalide : carte dupliquée ${suit}${card}.`);
+                }
+                used.add(card);
+            }
         });
         deduced[suit] = allCardsOfSuit().filter(c => !used.has(c)).join('');
     }
@@ -205,14 +284,16 @@ function parseLIN(text) {
         });
         deduceFourthHand(hands, knownSeats);
 
-        deals.push({
+        const parsedDeal = {
             board: boardNumMatch ? parseInt(boardNumMatch[1], 10) : boardCounter,
             dealer,
             vulnerable: LIN_VULN_CODE[(svMatch ? svMatch[1] : '-').trim()] || 'None',
             hands,
             par: null, // le format LIN ne transporte pas d'information de par
             ddTable: null
-        });
+        };
+        validateDealSemantics(parsedDeal, `Donne LIN ${parsedDeal.board}`);
+        deals.push(parsedDeal);
     }
 
     if (deals.length === 0) {
@@ -250,5 +331,5 @@ function parseDealFile(text, filename) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { parsePBN, parseLIN, parseDealFile, normalizeVulnerable };
+    module.exports = { parsePBN, parseLIN, parseDealFile, normalizeVulnerable, validateDealSemantics };
 }

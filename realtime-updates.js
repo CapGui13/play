@@ -1,58 +1,74 @@
-// realtime-updates.js — Diffusion en temps réel pour le mode différé (session asynchrone
-// à deux) ET pour le relais serveur par siège en mode live (voir
-// ARCHITECTURE-P2P-SERVEUR.md), via Pusher Channels.
+// realtime-updates.js — Notifications temps réel du relais cloud via Pusher Channels.
 //
-// Complète session-storage.js : celui-ci ne fait que lire/écrire l'état sur demande ; ici,
-// on s'abonne au canal de la salle pour être prévenu DÈS qu'une écriture a eu lieu
-// ailleurs, sans attendre le prochain sondage périodique (voir pollCloudForUpdates dans
-// app.js, qui reste un filet de secours au cas où un événement Pusher se perdrait — la clé
-// publique ci-dessous n'a jamais accès au contenu de la partie elle-même, seulement à
-// "quelque chose a changé, code de salle tel, va relire" — ou, désormais, directement à
-// l'état lui-même quand il tient dans la limite de taille Pusher, voir api/session.js
-// côté repo api-gen).
-//
-// À renseigner une fois le compte Pusher créé (voir échange avec Guillaume) :
+// Les salles utilisent désormais des CANAUX PRIVÉS (`private-session-XXXX`). Pusher
+// appelle /api/pusher-auth avant chaque abonnement ; cet endpoint exige la même clé de
+// capacité que /api/session. L'événement `update` ne contient plus le snapshot de partie :
+// seulement version/updatedAt. L'état complet est relu via GET authentifié.
+
 const PUSHER_KEY = '5bf66b70168c228ad966';
 const PUSHER_CLUSTER = 'eu';
+const PUSHER_AUTH_ENDPOINT = `${SESSION_API_BASE}/api/pusher-auth`;
 
 let pusherInstance = null;
 let currentSubscribedChannel = null;
+let currentAuthorizationRoomCode = null;
 
 function channelNameFor(roomCode) {
-    return `session-${String(roomCode || '').toUpperCase().trim()}`;
+    return `private-session-${String(roomCode || '').toUpperCase().trim()}`;
 }
 
-// S'abonne au canal de cette salle — `onUpdate(data)` est appelé avec le contenu de
-// l'événement Pusher dès qu'il arrive : `{version, updatedAt}` (repli, l'appelant doit
-// relire via GET) ou `{version, updatedAt, state}` (état embarqué directement, voir
-// api/session.js côté repo api-gen — assez petit pour tenir dans la limite Pusher). Sans
-// effet si la bibliothèque Pusher n'a pas pu charger (ex. hors-ligne, CDN bloqué) : le
-// sondage périodique prend alors seul le relais, silencieusement.
-function subscribeToSessionUpdates(roomCode, onUpdate) {
-    if (typeof Pusher === 'undefined') return; // script Pusher pas chargé : no-op, le sondage prend le relais
-    if (PUSHER_KEY === 'TA-CLE-PUSHER') return; // pas encore configuré : idem
-
-    unsubscribeFromSessionUpdates(); // au cas où un abonnement précédent traînerait encore
-
-    try {
-        if (!pusherInstance) {
-            pusherInstance = new Pusher(PUSHER_KEY, { cluster: PUSHER_CLUSTER });
+function ensurePusherInstance() {
+    if (pusherInstance || typeof Pusher === 'undefined' || PUSHER_KEY === 'TA-CLE-PUSHER') return pusherInstance;
+    pusherInstance = new Pusher(PUSHER_KEY, {
+        cluster: PUSHER_CLUSTER,
+        forceTLS: true,
+        channelAuthorization: {
+            endpoint: PUSHER_AUTH_ENDPOINT,
+            transport: 'ajax',
+            headersProvider: () => {
+                const accessKey = (typeof getSessionAccessKey === 'function' && currentAuthorizationRoomCode)
+                    ? getSessionAccessKey(currentAuthorizationRoomCode)
+                    : null;
+                return accessKey ? { 'X-Bridge-Session-Key': accessKey } : {};
+            }
         }
-        const channel = pusherInstance.subscribe(channelNameFor(roomCode));
+    });
+    return pusherInstance;
+}
+
+function subscribeToSessionUpdates(roomCode, onUpdate) {
+    if (typeof Pusher === 'undefined' || PUSHER_KEY === 'TA-CLE-PUSHER') return false;
+    const normalized = String(roomCode || '').toUpperCase().trim();
+    const accessKey = typeof getSessionAccessKey === 'function' ? getSessionAccessKey(normalized) : null;
+    if (!accessKey) return false; // polling de secours ; on réessaiera au prochain start
+
+    unsubscribeFromSessionUpdates();
+    currentAuthorizationRoomCode = normalized;
+    try {
+        const pusher = ensurePusherInstance();
+        if (!pusher) return false;
+        const channelName = channelNameFor(normalized);
+        const channel = pusher.subscribe(channelName);
         channel.bind('update', (data) => onUpdate(data));
-        currentSubscribedChannel = channelNameFor(roomCode);
+        channel.bind('pusher:subscription_error', (status) => {
+            console.warn('[realtime-updates] autorisation/abonnement privé impossible, polling de secours :', status);
+        });
+        currentSubscribedChannel = channelName;
+        return true;
     } catch (e) {
         console.warn('[realtime-updates] abonnement impossible, le sondage périodique prend le relais :', e);
+        return false;
     }
 }
 
 function unsubscribeFromSessionUpdates() {
     if (pusherInstance && currentSubscribedChannel) {
         pusherInstance.unsubscribe(currentSubscribedChannel);
-        currentSubscribedChannel = null;
     }
+    currentSubscribedChannel = null;
+    currentAuthorizationRoomCode = null;
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { subscribeToSessionUpdates, unsubscribeFromSessionUpdates };
+    module.exports = { subscribeToSessionUpdates, unsubscribeFromSessionUpdates, channelNameFor };
 }
