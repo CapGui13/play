@@ -3171,15 +3171,56 @@ function broadcastLobbyState() {
     saveHostGameStateToStorage();
 }
 
+// Dans le salon mobile, un message de transfert peut ajouter ~60-76px au bloc Kibbitz.
+// Plutôt que réserver cette hauteur en permanence, on conserve la position du premier bloc
+// visible situé après le message (table puis configuration hôte). Si tout est hors écran,
+// aucun scroll automatique n'est appliqué.
+function captureHostTransferViewportAnchor() {
+    if (window.innerWidth > 760) return null;
+    const candidates = [
+        document.querySelector('.lobby-table'),
+        document.getElementById('ponsBuildBadge'),
+        document.getElementById('hostSetupPanel')
+    ];
+    const viewportHeight = (window.visualViewport && window.visualViewport.height) || window.innerHeight;
+    for (const element of candidates) {
+        if (!element) continue;
+        const style = getComputedStyle(element);
+        if (style.display === 'none' || style.visibility === 'hidden') continue;
+        const rect = element.getBoundingClientRect();
+        if (rect.bottom > 0 && rect.top < viewportHeight) return { element, top: rect.top };
+    }
+    return null;
+}
+
+function restoreHostTransferViewportAnchor(anchor) {
+    if (!anchor || !anchor.element) return;
+    requestAnimationFrame(() => {
+        if (!anchor.element.isConnected || window.innerWidth > 760) return;
+        const delta = anchor.element.getBoundingClientRect().top - anchor.top;
+        if (Math.abs(delta) > 0.5) window.scrollBy(0, delta);
+    });
+}
+
 // Affiche/masque le petit bandeau de statut du transfert d'hôte, dans le salon (distinct
 // de #hostSetupError, réservé aux erreurs de chargement de fichier de donnes).
 function showHostTransferStatus(message, isError) {
     const el = document.getElementById('hostTransferStatus');
     if (!el) return;
-    if (!message) { el.style.display = 'none'; return; }
-    el.textContent = message;
+    const nextMessage = message || '';
+    const isShown = getComputedStyle(el).display !== 'none';
+    const stateChanges = (!!nextMessage) !== isShown || (nextMessage && el.textContent !== nextMessage);
+    const mobileViewportAnchor = stateChanges ? captureHostTransferViewportAnchor() : null;
+    if (!nextMessage) {
+        el.style.display = 'none';
+        el.textContent = '';
+        restoreHostTransferViewportAnchor(mobileViewportAnchor);
+        return;
+    }
+    el.textContent = nextMessage;
     el.className = 'error-banner' + (isError ? '' : ' is-warning');
     el.style.display = 'block';
+    restoreHostTransferViewportAnchor(mobileViewportAnchor);
 }
 
 // Bouton unique à côté du pseudo (voir échange avec Guillaume : un seul bouton, pas un par
@@ -3203,12 +3244,27 @@ function renderHostTransferWidget() {
         ? participants.filter(p => p.id !== myParticipantId && !p.disconnected)
         : [];
 
-    if (!isHost || deals || hasPendingSeat) {
+    if (!isHost || deals) {
         widget.style.display = 'none';
+        widget.style.visibility = '';
+        widget.style.pointerEvents = '';
         uiCloseTransferMenu();
         return;
     }
+
+    // Un siège PENDING désactive temporairement le transfert, mais ne retire plus le bouton
+    // du flux : visibility:hidden conserve exactement son empreinte et évite le saut de
+    // ~41px mesuré dans le salon mobile. Dès que PENDING disparaît, le même slot redevient
+    // interactif sans modifier la géométrie.
     widget.style.display = '';
+    if (hasPendingSeat) {
+        widget.style.visibility = 'hidden';
+        widget.style.pointerEvents = 'none';
+        uiCloseTransferMenu();
+        return;
+    }
+    widget.style.visibility = '';
+    widget.style.pointerEvents = '';
 
     const menu = document.getElementById('transferMenu');
     if (!menu) return;
@@ -6928,21 +6984,35 @@ function clearUndoUiState() {
     renderUndoAskBanner();
 }
 
+// Le statut Undo vit dans l'en-tête, donc il peut déplacer tout ce qui suit avant même
+// que la boîte d'enchères soit visible (cas fréquent en haut de page mobile). On ancre le
+// premier bloc réellement visible SOUS l'en-tête ; si l'utilisateur regarde plus bas,
+// aucun élément invisible ne prend le contrôle de son scroll.
+function captureUndoStatusViewportAnchor() {
+    if (window.innerWidth > 760 || !deals) return null;
+    const candidates = [
+        document.querySelector('.hand-display-options'),
+        document.querySelector('.hands-panel'),
+        document.querySelector('.auction-panel')
+    ];
+    for (const candidate of candidates) {
+        const anchor = captureVisibleMobileViewportAnchor(candidate);
+        if (anchor) return anchor;
+    }
+    return null;
+}
+
 function setUndoStatus(text) {
     const el = document.getElementById('undoStatusText');
     if (!el) return;
     const nextText = text || '';
     if (el.textContent === nextText) return;
-    // Test Chromium 320-760 px : un message d'Undo peut ajouter 21 à 36 px à la barre
-    // d'actions. Même stratégie que la bannière d'Undo : conserver la vue Enchères/PAR
-    // réellement regardée plutôt que réserver en permanence une ligne vide.
-    const parViewActive = isAuctionParViewActive();
-    const mobileViewportAnchor = parViewActive
-        ? captureVisibleMobileViewportAnchor(document.getElementById('auctionViewStack'))
-        : captureMobileLedgerViewportAnchor();
+    // Contrairement à l'ancien ancrage limité au biddingBox/PAR, celui-ci fonctionne aussi
+    // tout en haut de la donne : c'est précisément là que l'apparition du statut ajoutait
+    // encore 21 à 36 px visibles sur 320-760 px.
+    const mobileViewportAnchor = captureUndoStatusViewportAnchor();
     el.textContent = nextText;
-    if (parViewActive) restoreVisibleMobileViewportAnchor(mobileViewportAnchor);
-    else scheduleMobileLedgerViewportRestore(mobileViewportAnchor);
+    restoreVisibleMobileViewportAnchor(mobileViewportAnchor);
 }
 
 function renderUndoControls() {
