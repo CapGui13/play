@@ -231,16 +231,6 @@ body.on-landing-screen {
    qu'il existe. Un seul display:none à retirer ici pour tout réactiver. */
 #connectionStatus { display: none; }
 
-@media (min-width: 600px) {
-    /* Voir échange avec Guillaume (session du 24 juillet — "l'icône du chat est inutile
-       sur desktop") : le chat étant désormais permanent (non fermable) à partir de
-       cette largeur, ce bouton flottant qui servait à l'ouvrir/fermer n'a plus lieu
-       d'être. */
-    #chatToggleBtn {
-        display: none !important;
-    }
-}
-
 .debug-toggle-btn {
     background: transparent;
     border: 1px solid var(--border);
@@ -368,13 +358,6 @@ body.on-landing-screen {
         border-radius: 12px;
         border: 1px solid var(--border);
         border-top: 2px solid var(--brass);
-    }
-    /* Voir échange avec Guillaume (session du 24 juillet) : le chat ne doit plus pouvoir
-       être fermé sur desktop (voir aussi le garde-fou correspondant dans uiToggleChat,
-       app.js) — masque le bouton "Fermer" en conséquence, pour ne pas laisser un bouton
-       visible qui ne ferait rien. Reste fermable sur mobile, où l'espace écran compte. */
-    .chat-panel-close-btn {
-        display: none;
     }
     /* Voir échange avec Guillaume (session du 24 juillet — "la bande supérieure ne sert
        à rien") : le bandeau "💬 Chat" lui-même n'apporte plus rien une fois "Fermer"
@@ -2087,6 +2070,15 @@ button.kibitz-chip {
     letter-spacing: 0.03em;
 }
 
+.game-room-code-label .game-room-code-main,
+.game-room-code-label .game-room-code-host {
+    display: inline;
+}
+
+.game-room-code-label .game-room-code-host::before {
+    content: ' · ';
+}
+
 /* Voir échange avec Guillaume : la refonte "plein espace + colonne latérale" n'a pas
    convaincu, revert à la disposition d'origine (voir game-body plus bas). Seul changement
    conservé : quand le chat est ancré (voir dockChatIntoScreen dans app.js), il rejoint une
@@ -3249,7 +3241,7 @@ table.dd-table td.dd-secondary-contract {
 
     /* Correction optique : le glyphe ▶ paraît naturellement plus à droite dans sa boîte
        que ◀. On décale seulement son dessin de 2 px, sans déplacer le bouton ni le layout. */
-    #skipNextBoardBtn { text-indent: -2px; }
+    #skipNextBoardBtn { text-indent: -4px; }
 
     .debug-toggle-btn { padding: 6px 10px; }
 }
@@ -3337,20 +3329,37 @@ table.dd-table td.dd-secondary-contract {
         white-space: nowrap;
     }
 
-    /* Barre d'options (FR/HCP/K&R/4 mains) : le groupe de gauche passe déjà à 100% de
-       largeur sur mobile (voir .hand-display-options-left ci-dessous), donc "Noms des
-       joueurs" (à part, à droite en desktop) n'a de toute façon plus de place à côté —
-       voir échange avec Guillaume (session du 23 juillet) : flex-wrap (pas nowrap) pour
-       qu'il file proprement à la ligne suivante plutôt que déborder hors écran. */
+    /* Sur mobile, Guillaume préfère avoir FR / HCP / K&R / 4 mains / Noms sur une
+       seule ligne horizontale. On aplatit donc le groupe de gauche, on garde tout sur une
+       seule rangée et on autorise un très léger scroll horizontal plutôt qu'une 2e ligne. */
     .hand-display-options {
-        flex-wrap: wrap;
-        gap: 5px;
+        flex-wrap: nowrap;
+        gap: 4px;
         margin-bottom: 6px;
+        overflow-x: auto;
+        overflow-y: hidden;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: none;
+    }
+
+    .hand-display-options::-webkit-scrollbar { display: none; }
+
+    .hand-display-options-left {
+        width: auto;
+        flex-shrink: 0;
+        display: contents;
     }
 
     .hand-display-options .btn {
-        padding: 4px 7px;
-        font-size: 0.7rem;
+        padding: 4px 6px;
+        font-size: 0.68rem;
+        flex: 0 0 auto;
+        white-space: nowrap;
+    }
+
+    .game-room-code-label .game-room-code-main,
+    .game-room-code-label .game-room-code-host {
+        display: block;
     }
 
     /* Indicateur de tour resserré (padding/police réduits). */
@@ -3723,4 +3732,15 @@ table.dd-table td.dd-secondary-contract {
 #screen-lobby #ponsBuildBadge,
 #screen-lobby #ponsEngineStatus {
     display: none !important;
+}
+
+
+/* Pointage plus fin des fondus d'options : ces sous-éléments sont animés seuls,
+   pas tout le rectangle de main. inline-block évite les artefacts sur les nœuds purs
+   inline quand replayQuickFadeGroup ajoute temporairement sa classe d'animation. */
+.hand-cards .cards,
+.hand-hcp-badge,
+.hand-card-title-name,
+.ledger-seat-label {
+    display: inline-block;
 }

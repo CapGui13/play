@@ -28,7 +28,7 @@
     <!-- Masqué par défaut : inutile (et non fonctionnel, personne à qui parler) tant qu'on
          est sur l'écran d'accueil, pas encore dans un salon/une partie. Affiché/masqué
          ensuite depuis showScreen() dans app.js selon l'écran courant. -->
-    <button type="button" id="chatToggleBtn" class="debug-toggle-btn" style="display:none;" onclick="uiToggleChat()" aria-label="Ouvrir le chat" aria-controls="chatPanel" aria-expanded="false">💬<span id="chatUnreadBadge" class="chat-unread-badge" style="display:none;" aria-hidden="true"></span></button>
+    <button type="button" id="chatToggleBtn" class="debug-toggle-btn" style="display:none;" onclick="uiScrollToChat()" aria-label="Aller au chat" aria-controls="chatPanel" aria-expanded="true">💬<span id="chatUnreadBadge" class="chat-unread-badge" style="display:none;" aria-hidden="true"></span></button>
     <!-- Masqué pour l'instant (voir échange avec Guillaume) : le panneau et toute sa
          logique (pushDebugLog, uiToggleDebugPanel, testTurnConnectivity...) restent
          intacts, il suffit de retirer ce commentaire et le style pour le réactiver. -->
@@ -43,7 +43,6 @@
 <div id="chatPanel" class="chat-panel" style="display:none;" role="region" aria-label="Chat">
     <div class="chat-panel-header">
         <span>💬 Chat</span>
-        <button type="button" class="btn btn-secondary btn-small chat-panel-close-btn" onclick="uiToggleChat()">Fermer ✕</button>
     </div>
     <div id="roomBoard" class="room-board"></div>
     <div id="chatMessages" class="chat-messages"></div>

@@ -438,29 +438,47 @@ function restoreHandDisplayOptionViewportAnchor(anchor) {
     scheduleMobileLedgerViewportRestore(anchor);
 }
 
-// Même fondu 325 ms que les autres transitions de vue : utilisé pour les bascules
-// manuelles HCP / K&R / notation FR / Noms. On ne touche qu'aux panneaux réellement
-// visibles, pour éviter les animations inutiles hors écran.
-function fadeVisibleHandDisplayTargets() {
+
+// Même fondu 325 ms que les autres transitions de vue, mais appliqué seulement aux sous-
+// éléments textuels qui changent réellement : rangs de cartes, badges HCP/K&R, et noms.
+// On évite ainsi de faire clignoter tout le rectangle de main quand seul un petit texte
+// apparaît/disparaît.
+function visibleHandOptionContainers() {
     const myHandsEl = document.getElementById('myHandsContainer');
     const allHandsEl = document.getElementById('allHandsDiagram');
-    const targets = [];
+    const containers = [];
 
-    if (myHandsEl && getComputedStyle(myHandsEl).display !== 'none') targets.push(myHandsEl);
-    if (allHandsEl && getComputedStyle(allHandsEl).display !== 'none') targets.push(allHandsEl);
+    if (myHandsEl && getComputedStyle(myHandsEl).display !== 'none') containers.push(myHandsEl);
+    if (allHandsEl && getComputedStyle(allHandsEl).display !== 'none') containers.push(allHandsEl);
 
-    replayQuickFadeGroup(targets);
+    return containers;
+}
+
+function collectVisibleOptionTargets(selectors, roots = visibleHandOptionContainers()) {
+    const items = [];
+    roots.forEach(root => {
+        if (!root) return;
+        root.querySelectorAll(selectors).forEach(el => items.push(el));
+    });
+    return items;
+}
+
+function fadeVisibleHandRankTargets() {
+    replayQuickFadeGroup(collectVisibleOptionTargets('.cards'));
+}
+
+function fadeVisibleHandBadgeTargets() {
+    replayQuickFadeGroup(collectVisibleOptionTargets('.hand-hcp-badge'));
 }
 
 function fadeVisibleLedgerNameTargets() {
-    const ledgerBody = document.getElementById('auctionLedgerBody');
-    const ledgerTable = ledgerBody ? ledgerBody.closest('table') : null;
-    const allHandsEl = document.getElementById('allHandsDiagram');
     const targets = [];
-
-    if (ledgerTable && getComputedStyle(ledgerTable).display !== 'none') targets.push(ledgerTable);
-    if (allHandsEl && getComputedStyle(allHandsEl).display !== 'none') targets.push(allHandsEl);
-
+    const header = document.getElementById('auctionLedgerHeader');
+    const table = header ? header.closest('table') : null;
+    if (header && table && getComputedStyle(table).display !== 'none') {
+        header.querySelectorAll('.ledger-seat-label').forEach(el => targets.push(el));
+    }
+    collectVisibleOptionTargets('.hand-card-title-name', [document.getElementById('allHandsDiagram')]).forEach(el => targets.push(el));
     replayQuickFadeGroup(targets);
 }
 
@@ -476,7 +494,7 @@ function uiToggleFrenchRanks() {
         // sans ce même critère ici, ces boutons semblaient "sans effet" dans ce cas,
         // puisqu'ils ne rafraîchissaient que myHandsContainer, invisible à ce moment-là.
         renderAllHandsDiagram(); // toujours, même masqué (voir échange avec Guillaume) : garde la hauteur réservée synchronisée quoi qu'il arrive
-        fadeVisibleHandDisplayTargets();
+        fadeVisibleHandRankTargets();
         restoreHandDisplayOptionViewportAnchor(mobileBiddingAnchor);
     }
 }
@@ -489,7 +507,7 @@ function uiToggleShowHcp() {
     if (deals) {
         renderMyHands();
         renderAllHandsDiagram(); // toujours, même masqué (voir échange avec Guillaume) : garde la hauteur réservée synchronisée quoi qu'il arrive
-        fadeVisibleHandDisplayTargets();
+        fadeVisibleHandBadgeTargets();
         restoreHandDisplayOptionViewportAnchor(mobileBiddingAnchor);
     }
 }
@@ -502,7 +520,7 @@ function uiToggleShowKr() {
     if (deals) {
         renderMyHands();
         renderAllHandsDiagram(); // toujours, même masqué (voir échange avec Guillaume) : garde la hauteur réservée synchronisée quoi qu'il arrive
-        fadeVisibleHandDisplayTargets();
+        fadeVisibleHandBadgeTargets();
         restoreHandDisplayOptionViewportAnchor(mobileBiddingAnchor);
     }
 }
@@ -1309,11 +1327,10 @@ function showScreen(id) {
     const chatBtn = document.getElementById('chatToggleBtn');
     if (chatBtn) {
         chatBtn.style.display = (id === 'screen-landing') ? 'none' : '';
-        // Si on retombe sur l'écran d'accueil (ex. erreur de connexion) alors que le
-        // panneau de chat était resté ouvert, on le referme avec : un panneau de chat
-        // ouvert sur l'écran d'accueil serait tout aussi orphelin que le bouton qui
-        // l'ouvre.
-        if (id === 'screen-landing' && chatPanelOpen) uiToggleChat();
+        // Le chat n'a de sens qu'une fois entré dans un salon ou en partie. Sur l'écran
+        // d'accueil, on le masque explicitement ; ailleurs il reste désormais toujours
+        // ouvert, et le bouton sert seulement de raccourci de défilement.
+        if (id === 'screen-landing') hideChatPanelForLanding();
     }
 
     // Voir échange avec Guillaume : sur l'écran d'accueil, rien n'est encore connecté, le
@@ -4749,8 +4766,15 @@ function renderGameHeader() {
         // (session en mémoire créée avant l'ajout de ce champ).
         const hostParticipant = participants.find(p => p.id === 'host');
         const displayedHostName = roomCreatorName || (hostParticipant ? hostParticipant.name : null);
-        const hostSuffix = displayedHostName ? ` · Hôte : ${displayedHostName}` : '';
-        roomCodeEl.textContent = currentRoomCode ? `Salle : ${currentRoomCode}${hostSuffix}` : '';
+        if (currentRoomCode) {
+            const roomLine = `<span class="game-room-code-main">Salle : ${escapeHtml(String(currentRoomCode))}</span>`;
+            const hostLine = displayedHostName
+                ? `<span class="game-room-code-host">Hôte : ${escapeHtml(String(displayedHostName))}</span>`
+                : '';
+            roomCodeEl.innerHTML = roomLine + hostLine;
+        } else {
+            roomCodeEl.textContent = '';
+        }
     }
     // Voir échange avec Guillaume (session du 8 août — "le lien à copier devrait
     // apparaître même pour un non hôte") : visible pour tout le monde désormais — copier
@@ -4811,50 +4835,60 @@ function undockChatFromScreen() {
     }
 }
 
+
 // Voir échange avec Guillaume (session du 23 juillet — "ça m'ouvre la page à mi hauteur") :
-// `focusInput` par défaut à true (clic manuel sur le bouton chat — on veut alors amener le
-// champ à l'écran). Mis à false pour l'ouverture AUTOMATIQUE et silencieuse à l'entrée dans
-// le salon (voir enterLobbyScreen) : focus() y déclenchait un défilement de page vers le
-// bas (le chat étant ancré en bas de page), atterrissant en plein milieu du salon au lieu
-// du haut, sans qu'on ait rien demandé.
-function uiToggleChat(focusInput = true) {
-    // Voir échange avec Guillaume (session du 24 juillet) : le chat ne doit plus pouvoir
-    // être fermé sur desktop (seuil identique à celui du CSS, voir @media min-width:600px
-    // dans styles.css) — s'il est déjà ouvert et qu'on est sur desktop, cet appel n'a
-    // aucun effet (reste ouvert). Reste fermable sur mobile, où l'espace écran compte.
-    if (chatPanelOpen && window.innerWidth >= 600) return;
-    chatPanelOpen = !chatPanelOpen;
+// l'ancien bouton ouvrait/fermait le panneau et pouvait déclencher un scroll non désiré.
+// Désormais, le chat reste ouvert en continu dans le salon et en partie ; le bouton 💬
+// sert seulement de raccourci pour défiler jusqu'au panneau.
+function uiEnsureChatVisible(focusInput = false) {
     const panel = document.getElementById('chatPanel');
-    // Voir échange avec Guillaume : fondu rapide plutôt qu'un affichage/masquage instantané
-    // — display ne peut pas être transitionné directement en CSS, donc on joue sur
-    // l'opacité (voir .chat-panel/.chat-panel-visible dans styles.css) et on ne retire
-    // display:none qu'après la fin du fondu de sortie (sinon le panneau resterait cliquable
-    // et visible-mais-transparent pendant la transition).
+    if (!panel) return;
+
+    chatPanelOpen = true;
+    panel.style.display = 'flex';
+    panel.classList.add('chat-panel-visible');
+
     const chatBtn = document.getElementById('chatToggleBtn');
     if (chatBtn) {
-        chatBtn.setAttribute('aria-expanded', chatPanelOpen ? 'true' : 'false');
-        chatBtn.setAttribute('aria-label', chatPanelOpen ? 'Fermer le chat' : 'Ouvrir le chat');
+        chatBtn.setAttribute('aria-expanded', 'true');
+        chatBtn.setAttribute('aria-label', 'Aller au chat');
     }
-    if (panel) {
-        if (chatPanelOpen) {
-            panel.style.display = 'flex';
-            void panel.offsetWidth; // force le navigateur à appliquer display:flex avant d'ajouter la classe, sinon pas de transition depuis opacity:0
-            panel.classList.add('chat-panel-visible');
-        } else {
-            panel.classList.remove('chat-panel-visible');
-            setTimeout(() => {
-                if (!chatPanelOpen) panel.style.display = 'none';
-            }, 180);
-        }
-    }
-    if (chatPanelOpen) {
-        chatUnreadCount = 0;
-        updateChatUnreadBadge();
-        renderChat();
-        renderRoomBoard(); // "qui est présent" fusionné dans le même panneau, voir échange avec Guillaume
+
+    renderChat();
+    renderRoomBoard();
+
+    if (focusInput) {
         const input = document.getElementById('chatInput');
-        if (input && focusInput) input.focus();
+        if (input && typeof input.focus === 'function') input.focus({ preventScroll: true });
     }
+
+    requestAnimationFrame(markChatReadIfLatestVisible);
+}
+
+function hideChatPanelForLanding() {
+    const panel = document.getElementById('chatPanel');
+    if (panel) {
+        panel.classList.remove('chat-panel-visible');
+        panel.style.display = 'none';
+    }
+    chatPanelOpen = false;
+    const chatBtn = document.getElementById('chatToggleBtn');
+    if (chatBtn) {
+        chatBtn.setAttribute('aria-expanded', 'false');
+        chatBtn.setAttribute('aria-label', 'Aller au chat');
+    }
+}
+
+function uiToggleChat(focusInput = true) {
+    uiEnsureChatVisible(focusInput);
+}
+
+function uiScrollToChat() {
+    uiEnsureChatVisible(false);
+    const panel = document.getElementById('chatPanel');
+    if (!panel) return;
+    panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    setTimeout(markChatReadIfLatestVisible, 380);
 }
 
 function updateChatUnreadBadge() {
@@ -4868,17 +4902,50 @@ function updateChatUnreadBadge() {
     }
 }
 
-// Vrai seulement si le panneau de chat est à la fois OUVERT et réellement visible à
-// l'écran — pas juste "ouvert" en état (voir échange avec Guillaume) : sur mobile, le chat
-// ancré en bas de l'écran de jeu peut être ouvert sans être dans le champ de vision si on
-// a fait défiler la page vers le haut pour voir sa main ou la boîte d'enchères.
-function isChatPanelVisibleOnScreen() {
+function isChatMessageStreamVisibleOnScreen() {
     if (!chatPanelOpen) return false;
-    const panel = document.getElementById('chatPanel');
-    if (!panel) return false;
-    const rect = panel.getBoundingClientRect();
+    const stream = document.getElementById('chatMessages');
+    if (!stream) return false;
+    const rect = stream.getBoundingClientRect();
     const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
     return rect.bottom > 0 && rect.top < viewportHeight;
+}
+
+function isLatestChatMessageVisibleOnScreen() {
+    if (!isChatMessageStreamVisibleOnScreen()) return false;
+    const stream = document.getElementById('chatMessages');
+    const last = stream ? stream.lastElementChild : null;
+    if (!last) return true;
+    const streamRect = stream.getBoundingClientRect();
+    const lastRect = last.getBoundingClientRect();
+    const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
+    return lastRect.bottom > 0
+        && lastRect.top < viewportHeight
+        && lastRect.top >= streamRect.top - 1
+        && lastRect.bottom <= Math.min(streamRect.bottom, viewportHeight) + 1;
+}
+
+function markChatReadIfLatestVisible() {
+    if (chatUnreadCount <= 0) return;
+    if (isLatestChatMessageVisibleOnScreen()) {
+        chatUnreadCount = 0;
+        updateChatUnreadBadge();
+    }
+}
+
+function initChatVisibilityTracking() {
+    window.addEventListener('scroll', markChatReadIfLatestVisible, { passive: true });
+    window.addEventListener('resize', markChatReadIfLatestVisible);
+    const stream = document.getElementById('chatMessages');
+    if (stream) stream.addEventListener('scroll', markChatReadIfLatestVisible, { passive: true });
+}
+
+// Compatibilité : l'ancien nom de fonction est conservé pour les éventuels appels plus
+// loin dans le fichier, mais la notion utile est désormais "le dernier message est-il
+// réellement visible à l'écran ?" plutôt que "le panneau de chat est-il quelque part dans
+// le viewport ?".
+function isChatPanelVisibleOnScreen() {
+    return isLatestChatMessageVisibleOnScreen();
 }
 
 // Bandeau en haut de l'écran pour un message de chat reçu pendant que le panneau n'est
@@ -4914,7 +4981,7 @@ function addChatMessage(msg) {
     // l'intérieur de la fonction elle-même).
     saveHostGameStateToStorage();
     const isMine = msg.senderId === myParticipantId;
-    if (!isMine && !isChatPanelVisibleOnScreen()) {
+    if (!isMine && !isLatestChatMessageVisibleOnScreen()) {
         chatUnreadCount++;
         updateChatUnreadBadge();
         flashChatMessageToast(msg.senderName, msg.text);
@@ -4944,6 +5011,7 @@ function renderChat() {
         return `<div class="chat-message">${senderSpan} : <span class="chat-message-text">${escapeHtml(m.text)}</span></div>`;
     }).join('');
     el.scrollTop = el.scrollHeight; // toujours faire défiler vers le message le plus récent
+    requestAnimationFrame(markChatReadIfLatestVisible);
 }
 
 function uiChatInputKeydown(event) {
@@ -7658,7 +7726,8 @@ function renderBoardSkipControls() {
     const isDeferredRoom = peerConn instanceof NullPeerConnection;
     const showFastForward = isHost && isDeferredRoom;
     if (fastForwardBtn) {
-        fastForwardBtn.style.visibility = showFastForward ? '' : 'hidden';
+        fastForwardBtn.style.display = showFastForward ? '' : 'none';
+        fastForwardBtn.style.visibility = '';
         fastForwardBtn.style.pointerEvents = showFastForward ? '' : 'none';
     }
     if (!isHost || !deals) return;
@@ -8834,6 +8903,7 @@ window.addEventListener('DOMContentLoaded', () => {
     initIosLockScreenWarning();
     initOfflineHandling();
     initDealLibrary();
+    initChatVisibilityTracking();
 
     // Rafraîchit uniquement le texte du décompte ("déconnecté depuis Xs") de la bannière
     // de reconnexion — pas besoin d'un message réseau pour ça, chaque client calcule son
