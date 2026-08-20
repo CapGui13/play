@@ -7069,10 +7069,49 @@ function gotoBoard(newIndex) {
     saveHostGameStateToStorage();
 }
 
+// Navigation depuis le bouton « Donne suivante → » du bloc final/PAR.
+//
+// Ce bouton est utilisé quand l'utilisateur se trouve naturellement très bas dans une
+// donne terminée. La donne suivante est souvent beaucoup plus courte : Safari/Chrome
+// conservent alors l'ancien scroll autant que possible et le clampent au nouveau bas de
+// page — ce qui peut faire atterrir directement sur le chat.
+//
+// Les flèches ◀▶ du haut n'ont pas ce problème et restent volontairement inchangées.
+// Ici seulement, après le rendu COMPLET de la nouvelle donne, on replace la zone utile
+// (options des mains + mains + relevé) juste sous la barre de connexion fixe.
+// Double requestAnimationFrame : le premier laisse renderBoard poser la nouvelle
+// géométrie, le second intervient après le recalage de scroll natif du navigateur.
+function positionNextBoardAfterParNavigation() {
+    if (window.innerWidth > 760) return;
+
+    requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+            if (!deals) return;
+
+            const target = document.querySelector('#screen-game .hand-display-options')
+                || document.querySelector('#screen-game .game-content-row');
+            if (!target || !target.isConnected) return;
+
+            const connectionBar = document.getElementById('connectionBar');
+            let desiredTop = 8;
+            if (connectionBar && getComputedStyle(connectionBar).display !== 'none') {
+                const barRect = connectionBar.getBoundingClientRect();
+                desiredTop = Math.max(desiredTop, barRect.bottom + 8);
+            }
+
+            const delta = target.getBoundingClientRect().top - desiredTop;
+            if (Math.abs(delta) > 0.5) {
+                window.scrollBy({ top: delta, left: 0, behavior: 'auto' });
+            }
+        });
+    });
+}
+
 function uiNextBoard() {
     if (myRole !== 'host') return;
     if (boardIndex >= deals.length - 1) return;
     gotoBoard(boardIndex + 1);
+    positionNextBoardAfterParNavigation();
 }
 
 // Navigation libre entre les donnes (avancer ou reculer, y compris en pleine enchère) :
