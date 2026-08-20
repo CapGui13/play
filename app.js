@@ -438,6 +438,34 @@ function restoreHandDisplayOptionViewportAnchor(anchor) {
     scheduleMobileLedgerViewportRestore(anchor);
 }
 
+// Même fondu 325 ms que les autres transitions de vue : utilisé pour les bascules
+// manuelles HCP / K&R / notation FR / Noms. On ne touche qu'aux panneaux réellement
+// visibles, pour éviter les animations inutiles hors écran.
+function fadeVisibleHandDisplayTargets() {
+    const myHandsEl = document.getElementById('myHandsContainer');
+    const allHandsEl = document.getElementById('allHandsDiagram');
+
+    if (myHandsEl && getComputedStyle(myHandsEl).display !== 'none') {
+        replayQuickFade(myHandsEl);
+    }
+    if (allHandsEl && getComputedStyle(allHandsEl).display !== 'none') {
+        replayQuickFade(allHandsEl);
+    }
+}
+
+function fadeVisibleLedgerNameTargets() {
+    const ledgerBody = document.getElementById('auctionLedgerBody');
+    const ledgerTable = ledgerBody ? ledgerBody.closest('table') : null;
+    const allHandsEl = document.getElementById('allHandsDiagram');
+
+    if (ledgerTable && getComputedStyle(ledgerTable).display !== 'none') {
+        replayQuickFade(ledgerTable);
+    }
+    if (allHandsEl && getComputedStyle(allHandsEl).display !== 'none') {
+        replayQuickFade(allHandsEl);
+    }
+}
+
 function uiToggleFrenchRanks() {
     const mobileBiddingAnchor = captureHandDisplayOptionViewportAnchor();
     useFrenchRanks = !useFrenchRanks;
@@ -450,6 +478,7 @@ function uiToggleFrenchRanks() {
         // sans ce même critère ici, ces boutons semblaient "sans effet" dans ce cas,
         // puisqu'ils ne rafraîchissaient que myHandsContainer, invisible à ce moment-là.
         renderAllHandsDiagram(); // toujours, même masqué (voir échange avec Guillaume) : garde la hauteur réservée synchronisée quoi qu'il arrive
+        fadeVisibleHandDisplayTargets();
         restoreHandDisplayOptionViewportAnchor(mobileBiddingAnchor);
     }
 }
@@ -462,6 +491,7 @@ function uiToggleShowHcp() {
     if (deals) {
         renderMyHands();
         renderAllHandsDiagram(); // toujours, même masqué (voir échange avec Guillaume) : garde la hauteur réservée synchronisée quoi qu'il arrive
+        fadeVisibleHandDisplayTargets();
         restoreHandDisplayOptionViewportAnchor(mobileBiddingAnchor);
     }
 }
@@ -474,11 +504,13 @@ function uiToggleShowKr() {
     if (deals) {
         renderMyHands();
         renderAllHandsDiagram(); // toujours, même masqué (voir échange avec Guillaume) : garde la hauteur réservée synchronisée quoi qu'il arrive
+        fadeVisibleHandDisplayTargets();
         restoreHandDisplayOptionViewportAnchor(mobileBiddingAnchor);
     }
 }
 
 function uiToggleLedgerNames() {
+    const mobileBiddingAnchor = captureHandDisplayOptionViewportAnchor();
     showLedgerNames = !showLedgerNames;
     saveBoolPref('bridgeBidShowLedgerNames', showLedgerNames);
     const btn = document.getElementById('ledgerNamesToggleBtn');
@@ -490,6 +522,8 @@ function uiToggleLedgerNames() {
         // d'enchères — sans ce re-rendu, il fallait attendre un tour d'enchère ou un autre
         // changement d'option pour que la bascule s'y reflète.
         renderAllHandsDiagram();
+        fadeVisibleLedgerNameTargets();
+        restoreHandDisplayOptionViewportAnchor(mobileBiddingAnchor);
     }
 }
 
