@@ -97,10 +97,9 @@ body {
     margin: 0 auto;
 }
 
-/* Voir échange avec Guillaume : élargi spécifiquement pour l'écran de jeu, pour que le
-   panneau central (enchère/boîte d'enchères) garde la même taille que le chat soit ouvert
-   ou fermé — sans ça, le chat ancré à droite grignotait sa largeur (260px main + 24px +
-   ~700px enchère + 24px + 340px chat ≈ 1350px, au-delà des 980px d'origine). */
+/* Élargi spécifiquement pour l'écran de jeu afin que le panneau central conserve sa
+   largeur avec le chat permanent ancré à droite (260px main + 24px + ~700px enchère +
+   24px + 340px chat ≈ 1350px, au-delà des 980px d'origine). */
 .app-container.wide-layout {
     /* Voir échange avec Guillaume : précisément 620px (mains) + 24px + 700px (centre) +
        24px + 340px (chat) = 1708px de contenu, + 32px de marge de chaque côté = 1772px.
@@ -296,7 +295,8 @@ body.on-landing-screen {
 
 /* ===== Chat =====
    Badge de messages non lus sur le bouton 💬 (voir addChatMessage dans app.js), incrémenté
-   uniquement quand le panneau est fermé — remis à zéro dès qu'on l'ouvre. */
+   quand le dernier message n'est pas réellement visible et effacé seulement quand il le
+   devient. */
 .chat-unread-badge {
     display: inline-flex;
     align-items: center;
@@ -313,9 +313,8 @@ body.on-landing-screen {
     line-height: 1;
 }
 
-/* Panneau flottant plutôt qu'un espace permanent dans la mise en page (voir index.html) :
-   plein écran par le bas sur mobile (comme une feuille qui remonte), fenêtre ancrée en
-   bas à droite à partir d'un écran de tablette. */
+/* Style historique du panneau flottant, conservé pour les écrans où le chat n'est pas
+   encore ancré. Dans le salon et la partie, .chat-panel-docked le remet dans le flux. */
 .chat-panel {
     position: fixed;
     bottom: 10px;
@@ -336,9 +335,8 @@ body.on-landing-screen {
     flex-direction: column;
     overflow: hidden;
     box-shadow: 0 -6px 20px rgba(0, 0, 0, 0.35);
-    /* Voir échange avec Guillaume : fondu rapide à l'ouverture/fermeture (voir
-       uiToggleChat) plutôt qu'un affichage/masquage instantané — opacity:0 par défaut,
-       .chat-panel-visible bascule à 1. */
+    /* Transition conservée pour l'apparition initiale du panneau ; dans le salon et la
+       partie, le chat reste ensuite visible en permanence. */
     opacity: 0;
     transition: opacity 0.18s ease;
 }
@@ -359,10 +357,8 @@ body.on-landing-screen {
         border: 1px solid var(--border);
         border-top: 2px solid var(--brass);
     }
-    /* Voir échange avec Guillaume (session du 24 juillet — "la bande supérieure ne sert
-       à rien") : le bandeau "💬 Chat" lui-même n'apporte plus rien une fois "Fermer"
-       masqué juste au-dessus (plus aucun bouton dedans, juste un titre redondant avec le
-       contexte) — masqué en entier pour rendre cette hauteur aux messages. */
+    /* Le bandeau de titre du chat n'apporte plus d'action utile depuis que le chat est
+       permanent ; on le masque pour rendre cette hauteur aux messages. */
     .chat-panel-header {
         display: none;
     }
@@ -378,6 +374,9 @@ body.on-landing-screen {
     width: 100%;
     max-width: 100%;
     margin-top: 16px;
+    /* Le bouton 💬 utilise scrollIntoView(block:start). Réserver ici la hauteur de la
+       barre fixe évite que le haut du chat se retrouve masqué sous celle-ci. */
+    scroll-margin-top: calc(64px + var(--safe-top));
     box-shadow: none;
     /* Voir échange avec Guillaume (session du 24 juillet) : même raisonnement que la
        variante game-content-row plus bas — hauteur fixe pour forcer le défilement interne
@@ -488,6 +487,20 @@ body.on-landing-screen {
     background: color-mix(in srgb, var(--warn-amber) 20%, var(--card));
     border-color: #715925;
     border-color: color-mix(in srgb, var(--warn-amber) 45%, var(--card));
+}
+
+/* Hors-ligne en salon/partie : un test Chromium sur 320-1024 px mesure 46 à 76 px de
+   déplacement du contenu lorsque la bannière reste dans le flux. Hors écran d'accueil,
+   elle devient donc une alerte fixe juste sous la barre de connexion. L'invite iOS reste
+   volontairement en flux : elle est ponctuelle et son déplacement est assumé. */
+body:not(.on-landing-screen) #offlineBanner {
+    position: fixed;
+    top: calc(56px + var(--safe-top));
+    left: 50%;
+    width: min(calc(100% - 24px), 980px);
+    margin: 0;
+    transform: translateX(-50%);
+    z-index: 99;
 }
 
 /* Avertissement iOS/verrouillage écran (voir #iosLockScreenWarning) : posé dans le flux de
@@ -2941,12 +2954,8 @@ table.dd-table td.dd-secondary-contract {
     font-size: 0.88rem;
 }
 
-/* Bannière de reconnexion (voir renderReconnectionBanner dans app.js) : signale tout
-   joueur assis à la table actuellement déconnecté, avec un décompte, pendant toute la
-   partie — pas seulement quand c'est son tour (voir aussi .disconnected-turn, qui ne
-   couvre que ce cas précis). .is-back remplace brièvement ce message par une confirmation
-   de retour. Couleurs mélangées via color-mix (même technique que .error-banner etc.),
-   lisibles quel que soit le thème. */
+/* Style historique de la bannière de reconnexion persistante. L'élément reste masqué
+   dans le DOM ; les déconnexions sont désormais signalées par des toasts ponctuels. */
 .reconnection-banner {
     text-align: center;
     border-radius: 8px;
@@ -3252,6 +3261,8 @@ table.dd-table td.dd-secondary-contract {
        contenu de la page passe dessous. */
     body { padding-top: calc(84px + var(--safe-top)); }
     .debug-panel { top: calc(68px + var(--safe-top)); }
+    body:not(.on-landing-screen) #offlineBanner { top: calc(84px + var(--safe-top)); }
+    .chat-panel.chat-panel-docked { scroll-margin-top: calc(92px + var(--safe-top)); }
 
     .felt-hero { padding: 34px 12px 28px; }
     .felt-hero h1 { font-size: 1.9rem; }
@@ -3360,6 +3371,10 @@ table.dd-table td.dd-secondary-contract {
     .game-room-code-label .game-room-code-main,
     .game-room-code-label .game-room-code-host {
         display: block;
+    }
+
+    .game-room-code-label .game-room-code-host::before {
+        content: '';
     }
 
     /* Indicateur de tour resserré (padding/police réduits). */

@@ -119,11 +119,9 @@ let roomCreatorToken = null;
 // correctement l'hôte dans ses propres échanges avec le serveur (voir
 // buildCloudStatePayload), reçu via 'lobby-state'/'start-game'/'resync' comme avant.
 let currentHostReconnectToken = null;
-// Voir échange avec Guillaume (session du 23 juillet — "un compteur qui défile") :
-// horodatage de NOTRE PROPRE déconnexion détectée — sert à afficher un compteur qui
-// défile dans la bannière de reconnexion (voir renderReconnectionBanner), pour rendre
-// visible ce qui se passe pendant l'attente plutôt que de laisser un message statique
-// sans aucune indication de progression.
+// Horodatage de NOTRE PROPRE déconnexion détectée. La bannière persistante ayant été
+// retirée, ce repère sert encore à distinguer une vraie reconnexion et à afficher le toast
+// de retour une seule fois (voir les gestionnaires de connexion plus bas).
 let selfDisconnectedAt = null;
 
 // Voir échange avec Guillaume ("je rouvre la fenêtre de l'hôte bien avant 20s, mais
@@ -438,6 +436,31 @@ function restoreHandDisplayOptionViewportAnchor(anchor) {
     scheduleMobileLedgerViewportRestore(anchor);
 }
 
+// Pour les rares corrections qui doivent aussi fonctionner lorsque la vue PAR est active,
+// on ne réutilise pas captureMobileLedgerViewportAnchor (qui l'exclut volontairement).
+// Ce helper reste strictement mobile et n'agit que si la cible est réellement visible.
+function captureVisibleMobileViewportAnchor(element) {
+    if (window.innerWidth > 760 || !deals || !element) return null;
+    const rect = element.getBoundingClientRect();
+    const viewportHeight = (window.visualViewport && window.visualViewport.height) || window.innerHeight;
+    if (rect.bottom <= 0 || rect.top >= viewportHeight) return null;
+    return { element, top: rect.top };
+}
+
+function restoreVisibleMobileViewportAnchor(anchor) {
+    if (!anchor || !anchor.element) return;
+    requestAnimationFrame(() => {
+        if (!anchor.element.isConnected || window.innerWidth > 760 || !deals) return;
+        const delta = anchor.element.getBoundingClientRect().top - anchor.top;
+        if (Math.abs(delta) > 0.5) window.scrollBy(0, delta);
+    });
+}
+
+function isAuctionParViewActive() {
+    const stack = document.getElementById('auctionViewStack');
+    return !!(stack && stack.classList.contains('show-par'));
+}
+
 
 // Même fondu 325 ms que les autres transitions de vue, mais appliqué seulement aux sous-
 // éléments textuels qui changent réellement : rangs de cartes, badges HCP/K&R, et noms.
@@ -467,8 +490,8 @@ function fadeVisibleHandRankTargets() {
     replayQuickFadeGroup(collectVisibleOptionTargets('.cards'));
 }
 
-function fadeVisibleHandBadgeTargets() {
-    replayQuickFadeGroup(collectVisibleOptionTargets('.hand-hcp-badge'));
+function fadeVisibleHandBadgeTargets(selector) {
+    replayQuickFadeGroup(collectVisibleOptionTargets(selector));
 }
 
 function fadeVisibleLedgerNameTargets() {
@@ -507,7 +530,7 @@ function uiToggleShowHcp() {
     if (deals) {
         renderMyHands();
         renderAllHandsDiagram(); // toujours, même masqué (voir échange avec Guillaume) : garde la hauteur réservée synchronisée quoi qu'il arrive
-        fadeVisibleHandBadgeTargets();
+        fadeVisibleHandBadgeTargets('.hand-card-badges .hand-hcp-badge:first-child');
         restoreHandDisplayOptionViewportAnchor(mobileBiddingAnchor);
     }
 }
@@ -520,7 +543,7 @@ function uiToggleShowKr() {
     if (deals) {
         renderMyHands();
         renderAllHandsDiagram(); // toujours, même masqué (voir échange avec Guillaume) : garde la hauteur réservée synchronisée quoi qu'il arrive
-        fadeVisibleHandBadgeTargets();
+        fadeVisibleHandBadgeTargets('.hand-card-badges .hand-hcp-badge:nth-child(2)');
         restoreHandDisplayOptionViewportAnchor(mobileBiddingAnchor);
     }
 }
@@ -560,10 +583,16 @@ function uiToggleLedgerNames() {
 // à le laisser tricher sur sa propre main.
 function uiToggleHostSeeAllHands() {
     if (!isTrueOriginalHost()) return;
+    const parViewActive = isAuctionParViewActive();
+    const mobileViewportAnchor = parViewActive
+        ? captureVisibleMobileViewportAnchor(document.querySelector('.auction-panel'))
+        : captureMobileLedgerViewportAnchor();
     hostSeeAllHands = !hostSeeAllHands;
     saveBoolPref('bridgeBidHostSeeAllHands', hostSeeAllHands);
     renderHandDisplayOptionButtons();
     if (deals) checkAuctionEnd();
+    if (parViewActive) restoreVisibleMobileViewportAnchor(mobileViewportAnchor);
+    else scheduleMobileLedgerViewportRestore(mobileViewportAnchor);
 }
 
 function renderHandDisplayOptionButtons() {
@@ -1303,9 +1332,9 @@ function showScreen(id) {
     // par défaut pour un <section>, flex pour #screen-game sous 760px).
     document.getElementById(id).style.display = '';
 
-    // Voir échange avec Guillaume : seul l'écran de jeu élargit .app-container (pour que
-    // le panneau central garde sa taille, chat ouvert ou fermé) — les autres écrans
-    // (accueil, salon) restent centrés et étroits comme avant.
+    // Seul l'écran de jeu élargit .app-container afin de conserver les trois colonnes
+    // mains / panneau central / chat permanent ; les autres écrans restent centrés et
+    // étroits comme avant.
     const appContainer = document.querySelector('.app-container');
     if (appContainer) appContainer.classList.toggle('wide-layout', id === 'screen-game');
 
@@ -1805,8 +1834,8 @@ function buildHostHandlers(onOpenExtra) {
                 delete guestIndexByToken[token];
                 // On NE supprime pas le participant ni son siège : ils restent réservés, en
                 // attente qu'il se reconnecte. Son siège n'est PAS remplacé par un robot —
-                // l'enchère patiente simplement (le tour-indicateur et la bannière de
-                // reconnexion le signalent tous les deux, cf. renderReconnectionBanner).
+                // l'enchère patiente simplement ; le tour-indicateur conserve l'état de
+                // déconnexion et un toast ponctuel signale la coupure.
                 const p = participants.find(x => x.id === token);
                 if (p) {
                     p.disconnected = true;
@@ -3636,6 +3665,17 @@ function uiStageSeatAssignment(seat, participantId) {
 // en un seul coup pour tous les sièges modifiés), diffuse, rafraîchit, puis ferme.
 function uiValidateSeatReorg() {
     if (!isTrueOriginalHost() || !seatReorgDraft) return;
+    // Si le nombre de mains contrôlées change, renderBoard() peut modifier fortement la
+    // hauteur au-dessus de la boîte d'enchères. Mémoriser l'ancre AVANT toute mutation ;
+    // scheduleMobileLedgerViewportRestore conserve volontairement la première ancre du
+    // frame, donc les sous-rendus ne peuvent pas l'écraser avec une position déjà déplacée.
+    const parViewActive = isAuctionParViewActive();
+    const mobileViewportAnchor = parViewActive
+        ? captureVisibleMobileViewportAnchor(document.querySelector('.auction-panel'))
+        : captureMobileLedgerViewportAnchor();
+    // En vue enchères, réserver tout de suite la première ancre du frame afin que le
+    // renderAuctionLedger() déclenché par renderBoard() ne la remplace pas après coup.
+    if (!parViewActive) scheduleMobileLedgerViewportRestore(mobileViewportAnchor);
     seatAssignment = { ...seatReorgDraft };
     // Voir échange avec Guillaume (session du 23 juillet — voir uiAssignSeat) : même
     // recalcul du statut robot des sièges.
@@ -3656,6 +3696,7 @@ function uiValidateSeatReorg() {
         deactivateAccessibleModal(modal);
     }
     uiCloseSeatDropdowns();
+    if (parViewActive) restoreVisibleMobileViewportAnchor(mobileViewportAnchor);
 }
 
 // Ferme SANS appliquer le brouillon (voir échange avec Guillaume) : abandonne les
@@ -4597,19 +4638,16 @@ function presenceLabelFor(p) {
 //
 // Signale, pendant toute la partie (pas seulement quand c'est son tour — voir aussi
 // #turnIndicator/.disconnected-turn dans renderGameHeader pour ce cas précis), tout
-// joueur assis à la table actuellement déconnecté, avec un décompte du temps écoulé. Un
-// joueur déconnecté n'est PAS remplacé par un robot (voir onPeerDisconnected) : son siège
-// attend simplement qu'il revienne, cette bannière rend cette attente visible même quand
-// ce n'est pas encore à lui de parler.
+// joueur assis à la table actuellement déconnecté. Un joueur déconnecté n'est PAS
+// remplacé par un robot (voir onPeerDisconnected) : son siège attend simplement qu'il
+// revienne. L'ancienne bannière persistante a été remplacée par des toasts ponctuels.
 
 // Affiche brièvement "X est de retour" à la place de la bannière d'attente, puis revient
 // automatiquement à l'affichage normal après quelques secondes.
 // Voir échange avec Guillaume (session du 23 juillet — "un bandeau similaire à celui du
 // wizz") : même mécanique d'apparition que flashWizzToast, deux teintes (voir
 // .presence-toast dans styles.css) — remplace l'ancienne bannière persistante pour les
-// annonces ponctuelles de (dé)connexion d'un participant (pas notre propre déconnexion en
-// cours, qui reste gérée par renderReconnectionBanner avec son compteur, toujours utile
-// pour le sous-hôte).
+// annonces ponctuelles de (dé)connexion d'un participant, y compris notre propre coupure.
 function flashPresenceToast(text, isConnect) {
     let toast = document.getElementById('presenceToast');
     if (!toast) {
@@ -4795,19 +4833,16 @@ function renderGameHeader() {
 // prix.
 let chatMessages = [];
 let chatPanelOpen = false;
-// Voir enterLobbyScreen : vrai une fois le chat auto-ouvert pour l'entrée en cours dans le
-// salon, remis à false à chaque nouvelle session (création, jointure, transfert d'hôte) —
-// voir uiCreateRoom, connectAsGuest, et la prise de rôle dans 'prepare-become-host'.
+// Compatibilité d'état historique : indique que l'initialisation du chat du salon a déjà
+// eu lieu pour l'entrée en cours. Le panneau reste désormais affiché en continu une fois
+// dans le salon ou la partie.
 let lobbyChatAutoOpened = false;
 let chatUnreadCount = 0;
 
-// Déplace physiquement #chatPanel dans le flux normal du document, à la toute fin de
-// l'écran donné (après tout son contenu) — voir échange avec Guillaume : sur mobile, le
-// panneau flottant (position:fixed) se superposait à la boîte d'enchères (écran de jeu)
-// et, de la même façon, au reste du salon (écran lobby). Rejoindre le flux normal règle
-// ça : ouvrir le chat pousse le contenu, il ne le recouvre plus jamais. Idempotent (rien
-// ne se passe si déjà à sa place) : peut être appelé à chaque changement d'écran sans
-// souci, y compris en boucle sur le même écran.
+// Déplace physiquement #chatPanel dans le flux normal du document. Sur mobile, l'ancien
+// panneau flottant (position:fixed) pouvait recouvrir la boîte d'enchères ou le salon ;
+// le chat permanent est donc ancré dans le layout. L'opération est idempotente et peut
+// être répétée à chaque changement d'écran.
 // Sur l'écran de jeu spécifiquement (voir échange avec Guillaume) : ancré DANS
 // .game-content-row, comme 3ème colonne à côté de .game-body (voir styles.css), plutôt
 // qu'à la toute fin de l'écran — sinon il s'empilerait sous le reste du contenu de jeu
@@ -4883,12 +4918,18 @@ function uiToggleChat(focusInput = true) {
     uiEnsureChatVisible(focusInput);
 }
 
+function prefersReducedMotion() {
+    return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+}
+
 function uiScrollToChat() {
     uiEnsureChatVisible(false);
     const panel = document.getElementById('chatPanel');
     if (!panel) return;
-    panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    setTimeout(markChatReadIfLatestVisible, 380);
+    const reducedMotion = prefersReducedMotion();
+    panel.scrollIntoView({ behavior: reducedMotion ? 'auto' : 'smooth', block: 'start' });
+    if (reducedMotion) requestAnimationFrame(markChatReadIfLatestVisible);
+    else setTimeout(markChatReadIfLatestVisible, 380);
 }
 
 function updateChatUnreadBadge() {
@@ -4940,10 +4981,9 @@ function initChatVisibilityTracking() {
     if (stream) stream.addEventListener('scroll', markChatReadIfLatestVisible, { passive: true });
 }
 
-// Compatibilité : l'ancien nom de fonction est conservé pour les éventuels appels plus
-// loin dans le fichier, mais la notion utile est désormais "le dernier message est-il
-// réellement visible à l'écran ?" plutôt que "le panneau de chat est-il quelque part dans
-// le viewport ?".
+// Compatibilité interne : cet ancien nom reste utilisé par quelques chemins historiques,
+// mais la notion utile est désormais "le dernier message est-il réellement visible à
+// l'écran ?" plutôt que "le panneau de chat est-il quelque part dans le viewport ?".
 function isChatPanelVisibleOnScreen() {
     return isLatestChatMessageVisibleOnScreen();
 }
@@ -4991,6 +5031,14 @@ function addChatMessage(msg) {
 function renderChat() {
     const el = document.getElementById('chatMessages');
     if (!el) return;
+    // Conserver la lecture d'historique : un nouveau message ne doit coller le flux au bas
+    // que si l'utilisateur y était déjà (petite tolérance tactile), ou au tout premier
+    // rendu. Une insertion en fin de liste ne déplace pas le contenu situé au-dessus, donc
+    // restaurer scrollTop suffit lorsque l'utilisateur est remonté lire d'anciens messages.
+    const hadRenderedMessages = el.childElementCount > 0;
+    const previousScrollTop = el.scrollTop;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    const shouldStickToBottom = !hadRenderedMessages || distanceFromBottom <= 32;
     el.innerHTML = chatMessages.map(m => {
         // Tous les messages partent de la gauche, y compris les siens (pas de bulle
         // alignée à droite façon messagerie) — le nom précède toujours le message, avec
@@ -5010,7 +5058,8 @@ function renderChat() {
         const senderSpan = `<span class="chat-message-sender" style="color:${senderColor}">${escapeHtml(m.senderName)}</span>`;
         return `<div class="chat-message">${senderSpan} : <span class="chat-message-text">${escapeHtml(m.text)}</span></div>`;
     }).join('');
-    el.scrollTop = el.scrollHeight; // toujours faire défiler vers le message le plus récent
+    if (shouldStickToBottom) el.scrollTop = el.scrollHeight;
+    else el.scrollTop = previousScrollTop;
     requestAnimationFrame(markChatReadIfLatestVisible);
 }
 
@@ -5095,12 +5144,10 @@ async function pushChatViaServerFallback(msg) {
 //
 // Le salon d'attente montre déjà qui est là et où (renderSeatAssignmentGrid), mais cet
 // écran disparaît une fois la partie lancée — il n'y avait alors plus aucun moyen de voir
-// qui est présent, seulement (voir renderReconnectionBanner) une alerte quand quelqu'un se
-// déconnecte. Masqué par défaut (comme le panneau de diagnostic) pour ne pas prendre de
-// place en continu ; l'utilisateur l'ouvre s'il en a besoin.
-// Fusionné dans le panneau de chat (voir uiToggleChat) plutôt qu'un panneau séparé à
-// part : un bandeau "qui est présent", toujours visible en haut du chat, complète
-// naturellement les messages plutôt que de demander un clic de plus pour y accéder.
+// qui est présent. Les déconnexions sont signalées ponctuellement par toast, tandis que
+// l'état courant reste lisible ici.
+// Fusionné dans le panneau de chat plutôt qu'un panneau séparé : un bandeau "qui est
+// présent", toujours visible en haut du chat, complète naturellement les messages.
 // ===== Wizz (voir échange avec Guillaume : le "nudge" de MSN Messenger — cliquer sur le
 // nom de quelqu'un fait trembler son écran) =====
 //
@@ -5234,10 +5281,6 @@ function uiSendWizz(targetId) {
     }
 }
 
-// Effet visuel + sonore reçu quand on se fait wizzer : tremblement bref de l'écran (voir
-// @keyframes wizzShake dans styles.css) et un petit bip généré à la volée (pas de fichier
-// audio à charger). Respecte prefers-reduced-motion : le tremblement est alors sauté, seul
-// le bandeau reste pour prévenir sans désagrément visuel.
 // Effet visuel + sonore reçu quand on se fait wizzer : tremblement bref de l'écran et un
 // petit bip généré à la volée (pas de fichier audio à charger). Respecte
 // prefers-reduced-motion : le tremblement est alors sauté, seul le bandeau reste pour
@@ -5250,8 +5293,8 @@ function uiSendWizz(targetId) {
 // d'animation CSS lui-même. .animate() ne dépend pas du cycle de vie des animations CSS
 // (classes, reflow forcé) et a un historique de compatibilité plus fiable sur Safari.
 function triggerWizzEffect() {
-    const prefersReducedMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    if (!prefersReducedMotion && document.body.animate) {
+    const reducedMotion = prefersReducedMotion();
+    if (!reducedMotion && document.body.animate) {
         // Voir échange avec Guillaume : masque temporairement le débordement pendant le
         // tremblement — animer document.body en transform peut faire apparaître des
         // barres de défilement (à droite/en bas) le temps de l'animation, selon le
@@ -6887,7 +6930,19 @@ function clearUndoUiState() {
 
 function setUndoStatus(text) {
     const el = document.getElementById('undoStatusText');
-    if (el) el.textContent = text || '';
+    if (!el) return;
+    const nextText = text || '';
+    if (el.textContent === nextText) return;
+    // Test Chromium 320-760 px : un message d'Undo peut ajouter 21 à 36 px à la barre
+    // d'actions. Même stratégie que la bannière d'Undo : conserver la vue Enchères/PAR
+    // réellement regardée plutôt que réserver en permanence une ligne vide.
+    const parViewActive = isAuctionParViewActive();
+    const mobileViewportAnchor = parViewActive
+        ? captureVisibleMobileViewportAnchor(document.getElementById('auctionViewStack'))
+        : captureMobileLedgerViewportAnchor();
+    el.textContent = nextText;
+    if (parViewActive) restoreVisibleMobileViewportAnchor(mobileViewportAnchor);
+    else scheduleMobileLedgerViewportRestore(mobileViewportAnchor);
 }
 
 function renderUndoControls() {
@@ -6938,9 +6993,20 @@ function renderUndoControls() {
 function renderUndoAskBanner() {
     const banner = document.getElementById('undoAskBanner');
     if (!banner) return;
-    if (!pendingUndoAsk) {
+    const shouldShow = !!pendingUndoAsk;
+    const isShown = getComputedStyle(banner).display !== 'none';
+    const stateChanges = shouldShow !== isShown;
+    const parViewActive = isAuctionParViewActive();
+    // La bannière vit dans le flux juste au-dessus de la pile Enchères/PAR. Ancrer la vue
+    // réellement regardée, uniquement lorsqu'elle change d'état et si elle est à l'écran.
+    const mobileViewportAnchor = !stateChanges ? null : (parViewActive
+        ? captureVisibleMobileViewportAnchor(document.getElementById('auctionViewStack'))
+        : captureMobileLedgerViewportAnchor());
+    if (!shouldShow) {
         banner.style.display = 'none';
         banner.innerHTML = '';
+        if (parViewActive) restoreVisibleMobileViewportAnchor(mobileViewportAnchor);
+        else scheduleMobileLedgerViewportRestore(mobileViewportAnchor);
         return;
     }
     const name = escapeHtml(participantName(pendingUndoAsk.requesterId));
@@ -6950,6 +7016,8 @@ function renderUndoAskBanner() {
         <button class="btn btn-success btn-small" onclick="uiAnswerUndo(true)">Accepter</button>
         <button class="btn btn-secondary btn-small" onclick="uiAnswerUndo(false)">Refuser</button>
     `;
+    if (parViewActive) restoreVisibleMobileViewportAnchor(mobileViewportAnchor);
+    else scheduleMobileLedgerViewportRestore(mobileViewportAnchor);
 }
 
 function participantName(pid) {
@@ -8287,9 +8355,8 @@ async function uiResumeHostSession(roomCode) {
     // relance ici pour toute donne encore sans résultat.
     const missingDD = deals.filter(d => !d.par && !d.ddTable);
     if (missingDD.length > 0) kickOffBackgroundDD(missingDD);
-    // Voir échange avec Guillaume (session du 23 juillet — "le chat qui était ouvert...
-    // est fermé") : rouvert par défaut à la reprise, comme pour un joueur qui rejoint en
-    // cours de partie (voir le handler 'resync').
+    // À la reprise, rétablit simplement l'état permanent du chat si l'ancien indicateur
+    // de compatibilité ne l'a pas encore fait (même chemin que le handler 'resync').
     if (!chatPanelOpen) uiToggleChat(false);
     saveHostGameStateToStorage(); // remet savedAt à jour tout de suite
 }
@@ -8905,17 +8972,11 @@ window.addEventListener('DOMContentLoaded', () => {
     initDealLibrary();
     initChatVisibilityTracking();
 
-    // Rafraîchit uniquement le texte du décompte ("déconnecté depuis Xs") de la bannière
-    // de reconnexion — pas besoin d'un message réseau pour ça, chaque client calcule son
-    // propre écoulé à partir de disconnectedAt. Sans effet (sortie immédiate) hors partie
-    // ou si la bannière n'est pas affichée, voir renderReconnectionBanner.
-    // Voir échange avec Guillaume (session du 23 juillet — "le bouton reste affiché à
-    // tort") : réévalué en continu, comme la bannière — plutôt que de compter sur CHAQUE
-    // scénario de rétablissement pour explicitement appeler renderReconnectButton() au
-    // bon moment (fragile : un cas oublié, ou une reconnexion ICE qui se rétablit sans
-    // passer par nos propres gestionnaires, voir attachPCDiagnostics dans
-    // peer-connection.js, laissait le bouton figé sur son dernier état affiché).
-    setInterval(renderReconnectionBanner, 1000);
+    // Le bouton de reconnexion reste réévalué en continu plutôt que de compter sur CHAQUE
+    // scénario de rétablissement pour appeler explicitement renderReconnectButton() au
+    // bon moment (une reconnexion ICE peut notamment se rétablir sans passer par tous nos
+    // gestionnaires). L'ancienne bannière persistante est désormais un no-op et n'a plus
+    // besoin de son propre timer périodique.
     setInterval(renderReconnectButton, 1000);
 
     const params = new URLSearchParams(window.location.search);

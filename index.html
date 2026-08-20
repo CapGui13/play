@@ -488,12 +488,9 @@
                 <button id="krToggleBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" onclick="uiToggleShowKr()" aria-pressed="false"><span class="btn-label-full">Afficher Kaplan-Rubens</span><span class="btn-label-short">K&amp;R</span></button>
                 <button id="hostSeeAllHandsBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" style="display:none;" onclick="uiToggleHostSeeAllHands()" title="Réservé à vous : ne change rien pour les autres joueurs" aria-pressed="false"><span class="btn-label-full">👁 Voir les 4 mains</span><span class="btn-label-short">👁 4 mains</span></button>
             </div>
-            <!-- Voir échange avec Guillaume (session du 23 juillet) : de retour à part, à
-                 droite, comme en desktop d'origine — le regroupement avec le bloc de gauche
-                 (utile pour éviter le débordement mobile) est retiré pour desktop ; sur
-                 mobile, c'est maintenant .hand-display-options qui repasse en flex-wrap
-                 (voir styles.css) pour laisser ce bouton filer à la ligne plutôt que hors
-                 écran. -->
+            <!-- En desktop, Noms reste séparé à droite. Sur mobile, les cinq options sont
+                 volontairement conservées sur une seule ligne horizontale ; la rangée peut
+                 défiler latéralement sur les écrans étroits (voir styles.css). -->
             <button id="ledgerNamesToggleBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" onclick="uiToggleLedgerNames()" aria-pressed="false"><span class="btn-label-full">Noms des joueurs</span><span class="btn-label-short">Noms</span></button>
         </div>
 
