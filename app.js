@@ -444,26 +444,24 @@ function restoreHandDisplayOptionViewportAnchor(anchor) {
 function fadeVisibleHandDisplayTargets() {
     const myHandsEl = document.getElementById('myHandsContainer');
     const allHandsEl = document.getElementById('allHandsDiagram');
+    const targets = [];
 
-    if (myHandsEl && getComputedStyle(myHandsEl).display !== 'none') {
-        replayQuickFade(myHandsEl);
-    }
-    if (allHandsEl && getComputedStyle(allHandsEl).display !== 'none') {
-        replayQuickFade(allHandsEl);
-    }
+    if (myHandsEl && getComputedStyle(myHandsEl).display !== 'none') targets.push(myHandsEl);
+    if (allHandsEl && getComputedStyle(allHandsEl).display !== 'none') targets.push(allHandsEl);
+
+    replayQuickFadeGroup(targets);
 }
 
 function fadeVisibleLedgerNameTargets() {
     const ledgerBody = document.getElementById('auctionLedgerBody');
     const ledgerTable = ledgerBody ? ledgerBody.closest('table') : null;
     const allHandsEl = document.getElementById('allHandsDiagram');
+    const targets = [];
 
-    if (ledgerTable && getComputedStyle(ledgerTable).display !== 'none') {
-        replayQuickFade(ledgerTable);
-    }
-    if (allHandsEl && getComputedStyle(allHandsEl).display !== 'none') {
-        replayQuickFade(allHandsEl);
-    }
+    if (ledgerTable && getComputedStyle(ledgerTable).display !== 'none') targets.push(ledgerTable);
+    if (allHandsEl && getComputedStyle(allHandsEl).display !== 'none') targets.push(allHandsEl);
+
+    replayQuickFadeGroup(targets);
 }
 
 function uiToggleFrenchRanks() {
@@ -4572,7 +4570,7 @@ function fadeBoardNavigationTargets() {
     if (myHandsEl && getComputedStyle(myHandsEl).display !== 'none') targets.push(myHandsEl);
     if (allHandsEl && getComputedStyle(allHandsEl).display !== 'none') targets.push(allHandsEl);
 
-    targets.filter(Boolean).forEach(replayQuickFade);
+    replayQuickFadeGroup(targets.filter(Boolean));
 }
 
 function renderGameHeader() {
@@ -5684,13 +5682,52 @@ function uiMakeCall(call) {
     peerConn.send({ type: 'call', boardIndex, seat: turnSeat, call });
 }
 
-function applyCall(seat, call, explanation) {
-    auctionHistory.push(explanation ? { seat, call, explanation } : { seat, call });
+// Transaction de rendu ciblée pour UNE annonce normale.
+//
+// Audit point 8 : ces rendus étaient déjà appelés successivement dans le même task JS,
+// donc les décaler globalement dans requestAnimationFrame n'aurait pas garanti moins de
+// paints et aurait introduit une fenêtre de 1 frame où les anciens boutons restent
+// cliquables. On garde donc un rendu SYNCHRONE et le même ordre, mais on retire deux
+// travaux réellement redondants.
+//
+// - 0/1 siège contrôlé : renderMyHands() ne change rien après une annonce (le halo actif/
+//   inactif n'existe que si plusieurs mains sont jouées sur cet appareil).
+// - diagramme 4 mains masqué : une annonce ne change ni les cartes ni sa géométrie.
+//   checkAuctionEnd peut donc éviter de le reconstruire/mesurer tant qu'il reste caché.
+//   S'il doit devenir visible (hôte/kibbitz/fin d'enchère), il est toujours rerendu.
+//
+// Si l'annonce TERMINE l'enchère sur mobile, l'ancre de fin est capturée ici, APRÈS la
+// mise à jour de l'état mais AVANT toute écriture DOM. Cela évite de forcer une mesure de
+// layout après renderAuctionLedger/renderBiddingBox.
+function renderAfterNormalCall() {
+    const auctionEndsNow = isAuctionOver(auctionHistory);
+    const endDiagram = auctionEndsNow ? document.getElementById('allHandsDiagram') : null;
+    const preCapturedMobileAuctionEndAnchor = auctionEndsNow
+        ? captureMobileAuctionEndViewportAnchor(true, endDiagram)
+        : undefined;
+
     renderAuctionLedger();
     renderBiddingBox();
-    renderMyHands();
-    checkAuctionEnd();
+
+    // Une seule main n'a aucun état visuel de tour à mettre à jour. Avec plusieurs mains,
+    // renderMyHands reste obligatoire pour déplacer l'état actif/inactif.
+    if (mySeats && mySeats.length > 1) {
+        renderMyHands();
+    }
+
+    const endOptions = {
+        skipHiddenAllHandsRefresh: true
+    };
+    if (auctionEndsNow) {
+        endOptions.preCapturedMobileAuctionEndAnchor = preCapturedMobileAuctionEndAnchor;
+    }
+    checkAuctionEnd(endOptions);
     renderUndoControls();
+}
+
+function applyCall(seat, call, explanation) {
+    auctionHistory.push(explanation ? { seat, call, explanation } : { seat, call });
+    renderAfterNormalCall();
     maybeRobotBid();
     // Voir échange avec Guillaume (session du 23 juillet — reprise via localStorage) :
     // sans effet si on n'est pas hôte ou si la partie n'est pas lancée (voir la garde à
@@ -6257,11 +6294,24 @@ function resetAuctionVisualModeForNewSession() {
     if (stack) void stack.offsetWidth;
 }
 
+// Rejoue le fondu sur plusieurs éléments avec UN SEUL flush de layout.
+// Ancien comportement : replayQuickFade() lu séparément sur chaque cible => un offsetWidth
+// forcé par élément. Pour une navigation de donne (numéro + méta + cartes), c'était du
+// travail synchrone inutile. On retire toutes les classes, on force UNE mesure, puis on
+// réactive toutes les animations ensemble.
+function replayQuickFadeGroup(elements) {
+    const targets = Array.from(new Set(
+        (elements || []).filter(el => el && el.classList)
+    ));
+    if (!targets.length) return;
+
+    targets.forEach(el => el.classList.remove('ui-quick-fade-in'));
+    void targets[0].offsetWidth;
+    targets.forEach(el => el.classList.add('ui-quick-fade-in'));
+}
+
 function replayQuickFade(el) {
-    if (!el) return;
-    el.classList.remove('ui-quick-fade-in');
-    void el.offsetWidth;
-    el.classList.add('ui-quick-fade-in');
+    replayQuickFadeGroup([el]);
 }
 
 // Centralise Enchères ↔ PAR.
@@ -6372,12 +6422,20 @@ function uiToggleParBiddingView() {
     checkAuctionEnd();
 }
 
-function checkAuctionEnd() {
+function checkAuctionEnd(renderOptions = {}) {
     const resultEl = document.getElementById('contractResult');
     const diagramEl = document.getElementById('allHandsDiagram');
 
     const auctionOver = isAuctionOver(auctionHistory);
-    const mobileAuctionEndAnchor = captureMobileAuctionEndViewportAnchor(auctionOver, diagramEl);
+    // Sur le chemin d'une annonce normale qui vient de terminer l'enchère, l'ancre peut
+    // avoir été capturée AVANT les écritures DOM (renderAfterNormalCall). Tous les autres
+    // appelants gardent exactement le comportement historique.
+    const mobileAuctionEndAnchor = Object.prototype.hasOwnProperty.call(
+        renderOptions,
+        'preCapturedMobileAuctionEndAnchor'
+    )
+        ? renderOptions.preCapturedMobileAuctionEndAnchor
+        : captureMobileAuctionEndViewportAnchor(auctionOver, diagramEl);
     // L'hôte peut choisir de voir les 4 mains à tout moment (voir uiToggleHostSeeAllHands),
     // même pendant l'enchère — un outil réservé à lui seul (vérifier une donne, aider un
     // débutant en direct...), jamais envoyé ni visible pour les autres joueurs. Un
@@ -6419,7 +6477,9 @@ function checkAuctionEnd() {
             // Mobile : cette réservation de hauteur est volontairement désactivée, donc
             // construire les 4 mains invisibles ici ne sert à rien et retarde le premier
             // affichage des boutons au chargement d'une nouvelle séance.
-            if (window.innerWidth > 760) renderAllHandsDiagram();
+            if (window.innerWidth > 760 && !renderOptions.skipHiddenAllHandsRefresh) {
+                renderAllHandsDiagram();
+            }
         }
 
         if (canViewParDuringAuction) {
@@ -6454,12 +6514,19 @@ function checkAuctionEnd() {
     // ICI (avant de construire la ligne d'en-tête), pour savoir dès le départ si le
     // bouton doit y apparaître — auparavant calculé après coup, forçant le bouton dans
     // une rangée séparée sous le tableau entier.
+    // Mémorise ce qui était déjà présent AVANT de reconstruire le résultat. Cela permet
+    // de distinguer une vraie arrivée tardive du DD/PBN d'un simple rerender du même état.
+    const hadDDTable = !!resultEl.querySelector('.dd-table');
+    const hadExportButton = !!resultEl.querySelector('#dealExportBtn');
     const ddTableHtml = renderDDTable(currentDeal().ddTable, currentDeal().vulnerable);
     // Ne joue l'animation de révélation (voir .contract-reveal dans styles.css) qu'au
     // moment précis où le contrat apparaît, pas à chaque re-rendu (renderBoard tourne
     // pour bien d'autres raisons — reconnexion d'un joueur, etc. — tant que la donne
     // reste sur cet écran) : on la déclenche seulement s'il était masqué juste avant.
     const wasHidden = lastAuctionVisualMode !== 'final' || !resultEl.querySelector('.contract-final-header');
+    // Si le contrat était déjà affiché SANS DD, puis que le calcul arrive plus tard,
+    // n'anime que les nouveaux éléments. La ligne "Contrat final" reste parfaitement fixe.
+    const ddArrivedLate = !wasHidden && !!ddTableHtml && !hadDDTable;
     // Voir échange avec Guillaume ("le bouton export PBN doit être disponible également
     // pour les invités") : canControlBoard() plutôt que myRole==='host' — voir le même
     // commentaire détaillé sur uiExportDealPBN plus haut. Affiché seulement une fois le
@@ -6470,6 +6537,7 @@ function checkAuctionEnd() {
             <span id="dealExportStatus" class="dd-export-status"></span>
         </span>
     ` : '';
+    const exportArrivedLate = !wasHidden && !!exportBtnHtml && !hadExportButton;
     if (!contract) {
         resultEl.innerHTML = `<div class="contract-final-header"><span class="contract-final-text">↩️ Donne passée — personne n'a annoncé.</span>${exportBtnHtml}</div>`;
     } else {
@@ -6490,6 +6558,20 @@ function checkAuctionEnd() {
 
     if (ddTableHtml) {
         resultEl.innerHTML += ddTableHtml;
+    }
+
+    if (ddArrivedLate || exportArrivedLate) {
+        const lateTargets = [];
+        if (ddArrivedLate) {
+            lateTargets.push(
+                resultEl.querySelector('.dd-table-title'),
+                resultEl.querySelector('.dd-table')
+            );
+        }
+        if (exportArrivedLate) {
+            lateTargets.push(resultEl.querySelector('.dd-export-row'));
+        }
+        replayQuickFadeGroup(lateTargets);
     }
 
     // Voir échange avec Guillaume ("une fois la donne finie, les 4 mains doivent

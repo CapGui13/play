@@ -12,6 +12,9 @@
     --line: rgba(201, 162, 39, 0.35);
     --warn-amber: #d99a2b;
 
+    /* Durée commune des changements de vue significatifs (PAR, mains, navigation...). */
+    --ui-view-fade-duration: 325ms;
+
     /* Encoche/île dynamique iPhone : ne vaut quelque chose que si le meta viewport a
        viewport-fit=cover (voir index.html) et que la page tourne en plein écran (PWA
        installée, ou Safari en affichage étendu) — sinon toujours 0px, sans risque. Utilisé
@@ -2539,9 +2542,9 @@ button.kibitz-chip {
 /* Petite mise en valeur au moment précis où le contrat final apparaît (pas à chaque
    re-rendu tant qu'il reste affiché — voir le drapeau wasHidden dans checkAuctionEnd) :
    c'est le point d'aboutissement de toute l'enchère, ça mérite un peu plus qu'un
-   affichage sec. transform+opacity uniquement (pas de box-shadow animée), 350ms. */
+   affichage sec. opacity uniquement (pas de box-shadow animée), durée commune 325 ms. */
 .contract-result.contract-reveal {
-    animation: ui-quick-fade-in 325ms ease-out;
+    animation: ui-quick-fade-in var(--ui-view-fade-duration) ease-out;
 }
 
 @keyframes ui-quick-fade-in {
@@ -2550,7 +2553,7 @@ button.kibitz-chip {
 }
 
 .ui-quick-fade-in {
-    animation: ui-quick-fade-in 325ms ease-out;
+    animation: ui-quick-fade-in var(--ui-view-fade-duration) ease-out;
 }
 
 .contract-result .info-text {
@@ -3493,7 +3496,7 @@ table.dd-table td.dd-secondary-contract {
         grid-area: 1 / 1;
         align-self: start;
         min-width: 0;
-        transition: opacity 325ms ease;
+        transition: opacity var(--ui-view-fade-duration) ease;
     }
 
     .auction-view-stack.is-mobile-stacked.show-bidding > .contract-result {
