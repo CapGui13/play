@@ -512,7 +512,10 @@ function uiToggleLedgerNames() {
     showLedgerNames = !showLedgerNames;
     saveBoolPref('bridgeBidShowLedgerNames', showLedgerNames);
     const btn = document.getElementById('ledgerNamesToggleBtn');
-    if (btn) btn.classList.toggle('is-active', showLedgerNames);
+    if (btn) {
+        btn.classList.toggle('is-active', showLedgerNames);
+        btn.setAttribute('aria-pressed', showLedgerNames ? 'true' : 'false');
+    }
     if (deals) {
         renderAuctionLedger();
         // Voir échange avec Guillaume : le diagramme des 4 mains (buildAllHandsHtml)
@@ -547,13 +550,22 @@ function uiToggleHostSeeAllHands() {
 
 function renderHandDisplayOptionButtons() {
     const frBtn = document.getElementById('frenchRanksToggleBtn');
-    if (frBtn) frBtn.classList.toggle('is-active', useFrenchRanks);
+    if (frBtn) {
+        frBtn.classList.toggle('is-active', useFrenchRanks);
+        frBtn.setAttribute('aria-pressed', useFrenchRanks ? 'true' : 'false');
+    }
 
     const hcpBtn = document.getElementById('hcpToggleBtn');
-    if (hcpBtn) hcpBtn.classList.toggle('is-active', showHcp);
+    if (hcpBtn) {
+        hcpBtn.classList.toggle('is-active', showHcp);
+        hcpBtn.setAttribute('aria-pressed', showHcp ? 'true' : 'false');
+    }
 
     const krBtn = document.getElementById('krToggleBtn');
-    if (krBtn) krBtn.classList.toggle('is-active', showKr);
+    if (krBtn) {
+        krBtn.classList.toggle('is-active', showKr);
+        krBtn.setAttribute('aria-pressed', showKr ? 'true' : 'false');
+    }
 
     const hostSeeAllBtn = document.getElementById('hostSeeAllHandsBtn');
     if (hostSeeAllBtn) {
@@ -566,6 +578,7 @@ function renderHandDisplayOptionButtons() {
         // devient 'host' techniquement, sans être le vrai créateur/organisateur.
         hostSeeAllBtn.style.display = isTrueOriginalHost() ? '' : 'none';
         hostSeeAllBtn.classList.toggle('is-active', hostSeeAllHands);
+        hostSeeAllBtn.setAttribute('aria-pressed', hostSeeAllHands ? 'true' : 'false');
     }
 }
 let deals = null;           // tableau de donnes parsées
@@ -806,8 +819,12 @@ function uiToggleRandomDealConstraints() {
     const btn = document.getElementById('randomDealConstraintsToggle');
     if (!panel) return;
     const isOpen = panel.style.display !== 'none';
-    panel.style.display = isOpen ? 'none' : 'block';
-    if (btn) btn.classList.toggle('is-active', !isOpen);
+    const willOpen = !isOpen;
+    panel.style.display = willOpen ? 'block' : 'none';
+    if (btn) {
+        btn.classList.toggle('is-active', willOpen);
+        btn.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+    }
 }
 
 // Lit les champs du panneau de contraintes optionnelles (voir échange avec Guillaume) et
@@ -3161,6 +3178,8 @@ function uiToggleTransferMenu() {
         uiCloseTransferMenu();
     } else {
         menu.style.display = 'block';
+        const btn = document.getElementById('hostTransferToggleBtn');
+        if (btn) btn.setAttribute('aria-expanded', 'true');
         // Ferme au clic ailleurs sur la page — posé au tick suivant, sinon le clic sur le
         // bouton lui-même (qui vient de déclencher cette ouverture) le refermerait aussitôt.
         setTimeout(() => document.addEventListener('click', uiTransferMenuOutsideClick), 0);
@@ -3170,6 +3189,8 @@ function uiToggleTransferMenu() {
 function uiCloseTransferMenu() {
     const menu = document.getElementById('transferMenu');
     if (menu) menu.style.display = 'none';
+    const btn = document.getElementById('hostTransferToggleBtn');
+    if (btn) btn.setAttribute('aria-expanded', 'false');
     document.removeEventListener('click', uiTransferMenuOutsideClick);
 }
 
@@ -3431,14 +3452,135 @@ function uiHandleDealLibraryChosen() {
 
 // ===== Aperçu des donnes chargées (avant de lancer la partie) =====
 
+// Accessibilité clavier des modales.
+// Une seule vraie modale peut être active à la fois dans PLAY.
+let activeAccessibleModalState = null;
+
+function modalFocusableElements(modal) {
+    if (!modal) return [];
+    const selector = [
+        'a[href]',
+        'button:not([disabled])',
+        'input:not([disabled]):not([type="hidden"])',
+        'select:not([disabled])',
+        'textarea:not([disabled])',
+        '[tabindex]:not([tabindex="-1"])'
+    ].join(',');
+
+    return Array.from(modal.querySelectorAll(selector)).filter(el => {
+        if (!el || typeof el.getClientRects !== 'function') return false;
+        const style = getComputedStyle(el);
+        return style.visibility !== 'hidden'
+            && style.display !== 'none'
+            && el.getClientRects().length > 0;
+    });
+}
+
+function handleAccessibleModalKeydown(evt) {
+    const state = activeAccessibleModalState;
+    if (!state || !state.modal || state.modal.style.display === 'none') return;
+
+    if (evt.key === 'Escape') {
+        // Réorganisation des sièges : closeOnEscape reste null. Cette modale ne se ferme
+        // qu'avec Valider / Annuler, conformément au comportement existant.
+        if (typeof state.closeOnEscape === 'function') {
+            evt.preventDefault();
+            state.closeOnEscape();
+        }
+        return;
+    }
+
+    if (evt.key !== 'Tab') return;
+
+    const focusables = modalFocusableElements(state.modal);
+    const panel = state.modal.querySelector('[role="dialog"]');
+    if (!focusables.length) {
+        evt.preventDefault();
+        if (panel && typeof panel.focus === 'function') panel.focus();
+        return;
+    }
+
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    const active = document.activeElement;
+    const focusIsInside = state.modal.contains(active);
+
+    if (evt.shiftKey) {
+        if (!focusIsInside || active === first) {
+            evt.preventDefault();
+            last.focus();
+        }
+    } else if (!focusIsInside || active === last) {
+        evt.preventDefault();
+        first.focus();
+    }
+}
+
+function activateAccessibleModal(modal, { closeOnEscape = null } = {}) {
+    if (!modal) return;
+
+    if (activeAccessibleModalState) {
+        document.removeEventListener('keydown', handleAccessibleModalKeydown);
+    }
+
+    const previousFocus = document.activeElement
+        && typeof document.activeElement.focus === 'function'
+        ? document.activeElement
+        : null;
+
+    activeAccessibleModalState = {
+        modal,
+        previousFocus,
+        closeOnEscape
+    };
+    document.addEventListener('keydown', handleAccessibleModalKeydown);
+
+    requestAnimationFrame(() => {
+        const state = activeAccessibleModalState;
+        if (!state || state.modal !== modal || modal.style.display === 'none') return;
+
+        const preferred = modal.querySelector('[data-modal-initial-focus]');
+        const firstFocusable = modalFocusableElements(modal)[0];
+        const fallbackPanel = modal.querySelector('[role="dialog"]');
+        const target = preferred || firstFocusable || fallbackPanel;
+        if (target && typeof target.focus === 'function') target.focus();
+    });
+}
+
+function deactivateAccessibleModal(modal) {
+    const state = activeAccessibleModalState;
+    if (!state || state.modal !== modal) return;
+
+    const previousFocus = state.previousFocus;
+    activeAccessibleModalState = null;
+    document.removeEventListener('keydown', handleAccessibleModalKeydown);
+
+    requestAnimationFrame(() => {
+        if (
+            previousFocus
+            && previousFocus.isConnected
+            && typeof previousFocus.focus === 'function'
+            && !previousFocus.disabled
+        ) {
+            previousFocus.focus();
+        }
+    });
+}
+
 function uiPreviewDeals() {
     if (!pendingOrderedDeals || pendingOrderedDeals.length === 0) return;
     renderDealPreview(pendingOrderedDeals);
-    document.getElementById('dealPreviewModal').style.display = 'flex';
+    const modal = document.getElementById('dealPreviewModal');
+    if (!modal) return;
+    modal.style.display = 'flex';
+    activateAccessibleModal(modal, { closeOnEscape: uiCloseDealPreview });
 }
 
 function uiCloseDealPreview() {
-    document.getElementById('dealPreviewModal').style.display = 'none';
+    const modal = document.getElementById('dealPreviewModal');
+    if (!modal) return;
+    modal.style.display = 'none';
+    deactivateAccessibleModal(modal);
 }
 
 function uiCloseDealPreviewOnBackdrop(evt) {
@@ -3457,7 +3599,11 @@ function uiOpenSeatReorgModal() {
     if (!isTrueOriginalHost()) return;
     seatReorgDraft = { ...seatAssignment };
     renderSeatReorgModalGrid();
-    document.getElementById('seatReorgModal').style.display = 'flex';
+    const modal = document.getElementById('seatReorgModal');
+    if (!modal) return;
+    modal.style.display = 'flex';
+    // Pas d'Escape ici : Valider / Annuler restent les deux seules sorties voulues.
+    activateAccessibleModal(modal);
 }
 
 // Modifie UNIQUEMENT le brouillon (voir seatReorgDraft), jamais l'assignation réelle —
@@ -3487,7 +3633,11 @@ function uiValidateSeatReorg() {
         renderBoard();
     }
     seatReorgDraft = null;
-    document.getElementById('seatReorgModal').style.display = 'none';
+    const modal = document.getElementById('seatReorgModal');
+    if (modal) {
+        modal.style.display = 'none';
+        deactivateAccessibleModal(modal);
+    }
     uiCloseSeatDropdowns();
 }
 
@@ -3498,7 +3648,11 @@ function uiValidateSeatReorg() {
 // reste un moyen d'abandonner sans valider.
 function uiCancelSeatReorg() {
     seatReorgDraft = null;
-    document.getElementById('seatReorgModal').style.display = 'none';
+    const modal = document.getElementById('seatReorgModal');
+    if (modal) {
+        modal.style.display = 'none';
+        deactivateAccessibleModal(modal);
+    }
     uiCloseSeatDropdowns();
 }
 
@@ -4676,6 +4830,11 @@ function uiToggleChat(focusInput = true) {
     // l'opacité (voir .chat-panel/.chat-panel-visible dans styles.css) et on ne retire
     // display:none qu'après la fin du fondu de sortie (sinon le panneau resterait cliquable
     // et visible-mais-transparent pendant la transition).
+    const chatBtn = document.getElementById('chatToggleBtn');
+    if (chatBtn) {
+        chatBtn.setAttribute('aria-expanded', chatPanelOpen ? 'true' : 'false');
+        chatBtn.setAttribute('aria-label', chatPanelOpen ? 'Fermer le chat' : 'Ouvrir le chat');
+    }
     if (panel) {
         if (chatPanelOpen) {
             panel.style.display = 'flex';
@@ -5416,7 +5575,10 @@ function renderAuctionLedger() {
     const deal = currentDeal();
     const header = document.getElementById('auctionLedgerHeader');
     const toggleBtn = document.getElementById('ledgerNamesToggleBtn');
-    if (toggleBtn) toggleBtn.classList.toggle('is-active', showLedgerNames);
+    if (toggleBtn) {
+        toggleBtn.classList.toggle('is-active', showLedgerNames);
+        toggleBtn.setAttribute('aria-pressed', showLedgerNames ? 'true' : 'false');
+    }
     const turnSeat = isAuctionOver(auctionHistory) ? null : currentTurnSeat(deal.dealer, auctionHistory);
     // Les effets pulsants servent uniquement à attirer l'attention de la personne qui doit
     // réellement enchérir sur CET appareil. Le repère de tour (fond clair via turn-col) reste
@@ -5637,10 +5799,18 @@ function renderBiddingBox() {
         const title = selectedBiddingLevel == null
             ? 'Choisissez d’abord un palier'
             : `${selectedBiddingLevel}${strain === 'NT' ? 'SA' : SUIT_SYMBOLS[strain]}`;
-        return `<button type="button" class="call-btn bid-strain-btn ${suitClass}" ${legal ? '' : 'disabled'} title="${title}" onclick="uiSelectBidStrain('${strain}')">${label}</button>`;
+        const accessibleStrain = {
+            C: 'Trèfle',
+            D: 'Carreau',
+            H: 'Cœur',
+            S: 'Pique',
+            NT: 'Sans-atout'
+        }[strain] || strain;
+        return `<button type="button" class="call-btn bid-strain-btn ${suitClass}" ${legal ? '' : 'disabled'} title="${title}" aria-label="${accessibleStrain}" onclick="uiSelectBidStrain('${strain}')">${label}</button>`;
     }).join('');
 
     const specialLabels = { PASS: 'Passe', X: 'X', XX: 'XX' };
+    const specialAriaLabels = { PASS: 'Passe', X: 'Contre', XX: 'Surcontre' };
     const specialClasses = {
         PASS: 'call-btn-pass',
         X: 'call-btn-double',
@@ -5648,14 +5818,14 @@ function renderBiddingBox() {
     };
     const specialRow = ['PASS', 'X', 'XX'].map(call => {
         const legal = myTurn && isCallLegal(auctionHistory, call, turnSeat);
-        return `<button type="button" class="call-btn call-btn-special ${specialClasses[call]}" ${legal ? '' : 'disabled'} onclick="uiMakeCall('${call}')">${specialLabels[call]}</button>`;
+        return `<button type="button" class="call-btn call-btn-special ${specialClasses[call]}" ${legal ? '' : 'disabled'} aria-label="${specialAriaLabels[call]}" onclick="uiMakeCall('${call}')">${specialLabels[call]}</button>`;
     }).join('');
 
     box.innerHTML = `
         <div class="two-step-bidding-controls">
-            <div class="bid-level-row" aria-label="Choisir le palier">${levelRow}</div>
-            <div class="bid-strain-row" aria-label="Choisir la couleur">${strainRow}</div>
-            <div class="two-step-special-row">${specialRow}</div>
+            <div class="bid-level-row" role="group" aria-label="Choisir le palier">${levelRow}</div>
+            <div class="bid-strain-row" role="group" aria-label="Choisir la couleur">${strainRow}</div>
+            <div class="two-step-special-row" role="group" aria-label="Actions d'enchère">${specialRow}</div>
         </div>
     `;
 }
@@ -7402,12 +7572,16 @@ function uiOpenBoardOverview() {
     if (!deals) return;
     renderBoardOverview();
     const modal = document.getElementById('boardOverviewModal');
-    if (modal) modal.style.display = 'flex';
+    if (!modal) return;
+    modal.style.display = 'flex';
+    activateAccessibleModal(modal, { closeOnEscape: uiCloseBoardOverview });
 }
 
 function uiCloseBoardOverview() {
     const modal = document.getElementById('boardOverviewModal');
-    if (modal) modal.style.display = 'none';
+    if (!modal) return;
+    modal.style.display = 'none';
+    deactivateAccessibleModal(modal);
 }
 
 function uiCloseBoardOverviewOnBackdrop(evt) {

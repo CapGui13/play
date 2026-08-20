@@ -23,12 +23,12 @@
 <body class="on-landing-screen">
 
 <div id="connectionBar" class="connection-bar">
-    <span id="connectionStatus" class="connection-status">⚪ Pas encore connecté</span>
+    <span id="connectionStatus" class="connection-status" role="status" aria-live="polite" aria-atomic="true">⚪ Pas encore connecté</span>
     <button type="button" id="reconnectBtn" class="btn btn-primary btn-small" style="display:none;" onclick="uiReconnect()">🔌 Se reconnecter</button>
     <!-- Masqué par défaut : inutile (et non fonctionnel, personne à qui parler) tant qu'on
          est sur l'écran d'accueil, pas encore dans un salon/une partie. Affiché/masqué
          ensuite depuis showScreen() dans app.js selon l'écran courant. -->
-    <button type="button" id="chatToggleBtn" class="debug-toggle-btn" style="display:none;" onclick="uiToggleChat()">💬<span id="chatUnreadBadge" class="chat-unread-badge" style="display:none;"></span></button>
+    <button type="button" id="chatToggleBtn" class="debug-toggle-btn" style="display:none;" onclick="uiToggleChat()" aria-label="Ouvrir le chat" aria-controls="chatPanel" aria-expanded="false">💬<span id="chatUnreadBadge" class="chat-unread-badge" style="display:none;" aria-hidden="true"></span></button>
     <!-- Masqué pour l'instant (voir échange avec Guillaume) : le panneau et toute sa
          logique (pushDebugLog, uiToggleDebugPanel, testTurnConnectivity...) restent
          intacts, il suffit de retirer ce commentaire et le style pour le réactiver. -->
@@ -40,7 +40,7 @@
      rejoint le flux normal de la page tout en bas (voir dockChatIntoGameScreen dans app.js
      et échange avec Guillaume : sur mobile, le panneau flottant recouvrait la boîte
      d'enchères, pile la zone où il faut pouvoir taper à tout moment). -->
-<div id="chatPanel" class="chat-panel" style="display:none;">
+<div id="chatPanel" class="chat-panel" style="display:none;" role="region" aria-label="Chat">
     <div class="chat-panel-header">
         <span>💬 Chat</span>
         <button type="button" class="btn btn-secondary btn-small chat-panel-close-btn" onclick="uiToggleChat()">Fermer ✕</button>
@@ -88,7 +88,7 @@
          showConnectingOverlay/hideConnectingOverlay dans app.js). -->
     <div id="connectingOverlay" class="connecting-overlay" style="display:none;">
         <div class="connecting-spinner"></div>
-        <p id="connectingOverlayText">Connexion en cours…</p>
+        <p id="connectingOverlayText" role="status" aria-live="polite" aria-atomic="true">Connexion en cours…</p>
     </div>
 
     <!-- Voir échange avec Guillaume : affiché juste avant de rejoindre une salle (bouton
@@ -108,6 +108,7 @@
                  principe déjà en place sur myNameInput dans le salon : la première touche
                  tapée remplace la sélection entière plutôt que de s'insérer au milieu ou à
                  la fin. -->
+            <label for="nicknamePromptInput" class="visually-hidden">Votre pseudo</label>
             <input type="text" id="nicknamePromptInput" class="name-input" maxlength="20" enterkeyhint="go" onkeydown="uiNicknamePromptKeydown(event)" onfocus="this.select()">
             <button type="button" class="btn btn-primary" onclick="uiConfirmNicknamePrompt()">Rejoindre</button>
         </div>
@@ -177,8 +178,8 @@
                  maison au milieu, entre le titre et la coccinelle, au lieu de le coller à
                  elle. -->
             <div class="lobby-header-actions">
-                <a href="index.html" class="btn btn-secondary btn-small app-home-btn" title="Retour à l'accueil">🏠</a>
-                <button type="button" class="btn btn-secondary btn-small" onclick="uiReportBug()" title="Signaler un bug">🐞</button>
+                <a href="index.html" class="btn btn-secondary btn-small app-home-btn" title="Retour à l'accueil" aria-label="Retour à l'accueil">🏠</a>
+                <button type="button" class="btn btn-secondary btn-small" onclick="uiReportBug()" title="Signaler un bug" aria-label="Signaler un bug">🐞</button>
             </div>
         </div>
 
@@ -188,7 +189,7 @@
         </div>
 
         <div class="form-group form-group-name">
-            <label>Votre pseudo</label>
+            <label for="myNameInput">Votre pseudo</label>
             <div class="name-input-row">
                 <input type="text" id="myNameInput" class="name-input" maxlength="20" oninput="uiUpdateMyName()" onblur="uiMyNameBlur()" onfocus="this.select()">
             </div>
@@ -212,7 +213,7 @@
                          renderHostTransferWidget() dans app.js uniquement pour l'hôte, dans le
                          salon, quand au moins un autre participant est connecté. -->
                     <div id="hostTransferWidget" class="host-transfer-widget" style="display:none;">
-                        <button type="button" id="hostTransferToggleBtn" class="btn btn-secondary btn-small" onclick="uiToggleTransferMenu()">👑 Transférer l'hôte ▾</button>
+                        <button type="button" id="hostTransferToggleBtn" class="btn btn-secondary btn-small" onclick="uiToggleTransferMenu()" aria-controls="transferMenu" aria-expanded="false">👑 Transférer l'hôte ▾</button>
                         <div id="transferMenu" class="transfer-menu" style="display:none;"></div>
                     </div>
                     <!-- Configurable uniquement ici, dans le salon, avant de lancer la
@@ -301,7 +302,7 @@
                 <div class="random-deal-controls">
                     <div class="random-deal-count-row">
                         <input type="number" id="randomDealCount" class="random-deal-count-input" min="1" max="40" value="8">
-                        <button type="button" class="btn btn-secondary btn-small random-deal-constraints-toggle" onclick="uiToggleRandomDealConstraints()" id="randomDealConstraintsToggle">
+                        <button type="button" class="btn btn-secondary btn-small random-deal-constraints-toggle" onclick="uiToggleRandomDealConstraints()" id="randomDealConstraintsToggle" aria-controls="randomDealConstraintsPanel" aria-expanded="false">
                             ⚙️ Contraintes avancées
                         </button>
                     </div>
@@ -400,15 +401,15 @@
         <div class="game-header">
             <div class="board-info">
                 <div class="board-nav-row">
-                    <button id="prevBoardBtn" class="btn btn-secondary btn-small board-nav-btn" onclick="uiHostSkipPrevBoard()" title="Donne précédente">◀</button>
+                    <button id="prevBoardBtn" class="btn btn-secondary btn-small board-nav-btn" onclick="uiHostSkipPrevBoard()" title="Donne précédente" aria-label="Donne précédente">◀</button>
                     <span id="boardNumberLabel" class="board-number-label"></span>
-                    <button id="skipNextBoardBtn" class="btn btn-secondary btn-small board-nav-btn" onclick="uiHostSkipNextBoard()" title="Donne suivante">▶</button>
+                    <button id="skipNextBoardBtn" class="btn btn-secondary btn-small board-nav-btn" onclick="uiHostSkipNextBoard()" title="Donne suivante" aria-label="Donne suivante">▶</button>
                     <!-- Voir échange avec Guillaume (session asynchrone à deux) : saute
                          directement à la première donne où c'est mon tour d'enchérir —
                          utile pour reprendre une session jouée en différé sans avoir à
                          repasser une par une par toutes les donnes déjà closes de mon côté.
                          Réservé à l'hôte, même règle que les flèches ◀▶ voisines. -->
-                    <button id="fastForwardBoardBtn" type="button" class="btn btn-secondary btn-small board-nav-btn" onclick="uiFastForwardToMyTurn()" title="Avancer jusqu'à mon prochain tour">▶▶</button>
+                    <button id="fastForwardBoardBtn" type="button" class="btn btn-secondary btn-small board-nav-btn" onclick="uiFastForwardToMyTurn()" title="Avancer jusqu'à mon prochain tour" aria-label="Avancer jusqu'à mon prochain tour">▶▶</button>
                 </div>
                 <span id="dealerVulnLabel" class="dealer-vuln-label"></span>
                 <div class="game-room-code-row">
@@ -418,15 +419,15 @@
                          partie, utile notamment pour un siège encore en attente d'un
                          partenaire (voir SEAT_PENDING). Réutilise le même lien déjà généré
                          pour le salon (shareLinkInput/uiCopyShareLink), pas de duplication. -->
-                    <button type="button" id="gameHeaderCopyLinkBtn" class="btn btn-secondary btn-small room-board-copy-link-btn" style="display:none;" onclick="uiCopyShareLink(this)" title="Copier le lien de connexion à cette salle">🔗</button>
+                    <button type="button" id="gameHeaderCopyLinkBtn" class="btn btn-secondary btn-small room-board-copy-link-btn" style="display:none;" onclick="uiCopyShareLink(this)" title="Copier le lien de connexion à cette salle" aria-label="Copier le lien de connexion à cette salle">🔗</button>
                     <!-- Voir échange avec Guillaume ("à droite du bouton pour copier le
                          lien") : visible pour tout le monde, pas seulement l'hôte,
                          contrairement au bouton de copie de lien juste à gauche. -->
-                    <a href="index.html" class="btn btn-secondary btn-small app-home-btn" title="Retour à l'accueil">🏠</a>
+                    <a href="index.html" class="btn btn-secondary btn-small app-home-btn" title="Retour à l'accueil" aria-label="Retour à l'accueil">🏠</a>
                     <!-- Voir échange avec Guillaume ("Report a bug") : petit, juste à droite
                          du bouton maison — pas dans la barre de connexion persistante (déjà
                          écarté pour le bouton maison lui-même, même raison ici). -->
-                    <button type="button" class="btn btn-secondary btn-small" onclick="uiReportBug()" title="Signaler un bug">🐞</button>
+                    <button type="button" class="btn btn-secondary btn-small" onclick="uiReportBug()" title="Signaler un bug" aria-label="Signaler un bug">🐞</button>
                 </div>
             </div>
             <!-- Voir échange avec Guillaume (session du 8 août — réorganisation des
@@ -465,7 +466,7 @@
                     <!-- Export de session déplacé ici : 3e bouton de la 2e ligne, après Rotation et Réorganiser. -->
                     <button id="exportSessionBtn" type="button" class="btn btn-secondary btn-small" style="display:none;" onclick="uiExportSessionPBN()"><span class="btn-label-full">📦 Exporter la session</span><span class="btn-label-short">📦 Session</span></button>
                 </div>
-                <span id="undoStatusText" class="undo-status-text"></span>
+                <span id="undoStatusText" class="undo-status-text" role="status" aria-live="polite" aria-atomic="true"></span>
             </div>
         </div>
 
@@ -483,10 +484,10 @@
              largeur plutôt que de hauteur. -->
         <div class="hand-display-options">
             <div class="hand-display-options-left">
-                <button id="frenchRanksToggleBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" onclick="uiToggleFrenchRanks()"><span class="btn-label-full">Notation FR (R D V X)</span><span class="btn-label-short">FR</span></button>
-                <button id="hcpToggleBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" onclick="uiToggleShowHcp()"><span class="btn-label-full">Afficher HCP</span><span class="btn-label-short">HCP</span></button>
-                <button id="krToggleBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" onclick="uiToggleShowKr()"><span class="btn-label-full">Afficher Kaplan-Rubens</span><span class="btn-label-short">K&amp;R</span></button>
-                <button id="hostSeeAllHandsBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" style="display:none;" onclick="uiToggleHostSeeAllHands()" title="Réservé à vous : ne change rien pour les autres joueurs"><span class="btn-label-full">👁 Voir les 4 mains</span><span class="btn-label-short">👁 4 mains</span></button>
+                <button id="frenchRanksToggleBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" onclick="uiToggleFrenchRanks()" aria-pressed="false"><span class="btn-label-full">Notation FR (R D V X)</span><span class="btn-label-short">FR</span></button>
+                <button id="hcpToggleBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" onclick="uiToggleShowHcp()" aria-pressed="false"><span class="btn-label-full">Afficher HCP</span><span class="btn-label-short">HCP</span></button>
+                <button id="krToggleBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" onclick="uiToggleShowKr()" aria-pressed="false"><span class="btn-label-full">Afficher Kaplan-Rubens</span><span class="btn-label-short">K&amp;R</span></button>
+                <button id="hostSeeAllHandsBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" style="display:none;" onclick="uiToggleHostSeeAllHands()" title="Réservé à vous : ne change rien pour les autres joueurs" aria-pressed="false"><span class="btn-label-full">👁 Voir les 4 mains</span><span class="btn-label-short">👁 4 mains</span></button>
             </div>
             <!-- Voir échange avec Guillaume (session du 23 juillet) : de retour à part, à
                  droite, comme en desktop d'origine — le regroupement avec le bloc de gauche
@@ -494,7 +495,7 @@
                  mobile, c'est maintenant .hand-display-options qui repasse en flex-wrap
                  (voir styles.css) pour laisser ce bouton filer à la ligne plutôt que hors
                  écran. -->
-            <button id="ledgerNamesToggleBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" onclick="uiToggleLedgerNames()"><span class="btn-label-full">Noms des joueurs</span><span class="btn-label-short">Noms</span></button>
+            <button id="ledgerNamesToggleBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" onclick="uiToggleLedgerNames()" aria-pressed="false"><span class="btn-label-full">Noms des joueurs</span><span class="btn-label-short">Noms</span></button>
         </div>
 
         <div class="game-content-row">
@@ -517,7 +518,7 @@
 
                         </table>
 
-                        <div id="undoAskBanner" class="undo-ask-banner" style="display:none;"></div>
+                        <div id="undoAskBanner" class="undo-ask-banner" style="display:none;" role="alert" aria-atomic="true"></div>
 
                         <div id="parBiddingToggleWrap" class="par-bidding-toggle-wrap" style="display:none;">
                             <button id="parBiddingToggleBtn" type="button" class="btn btn-secondary btn-small" onclick="uiToggleParBiddingView()">📊 Voir le PAR</button>
@@ -527,7 +528,7 @@
                             <div id="contractResult" class="contract-result" style="display:none;"></div>
                             <div id="auctionBiddingView" class="auction-bidding-view">
                                 <div id="biddingBox" class="bidding-box"></div>
-                                <div id="turnIndicator" class="turn-indicator"></div>
+                                <div id="turnIndicator" class="turn-indicator" role="status" aria-live="polite" aria-atomic="true"></div>
                             </div>
                         </div>
                     </div>
@@ -540,10 +541,10 @@
 
 
 <div id="dealPreviewModal" class="modal-overlay" style="display:none;" onclick="uiCloseDealPreviewOnBackdrop(event)">
-    <div class="modal-panel">
+    <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="dealPreviewTitle" tabindex="-1">
         <div class="modal-header">
             <h3 id="dealPreviewTitle">Aperçu des donnes</h3>
-            <button type="button" class="btn btn-secondary btn-small" onclick="uiCloseDealPreview()">Fermer ✕</button>
+            <button type="button" class="btn btn-secondary btn-small" onclick="uiCloseDealPreview()" data-modal-initial-focus>Fermer ✕</button>
         </div>
         <div id="dealPreviewContent" class="deal-preview-content"></div>
     </div>
@@ -558,11 +559,11 @@
      "Annuler" peuvent fermer la modale, pour éviter de la fermer par mégarde en pleine
      réorganisation. -->
 <div id="seatReorgModal" class="modal-overlay" style="display:none;">
-    <div class="modal-panel">
+    <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="seatReorgTitle" tabindex="-1">
         <div class="modal-header">
-            <h3>Réorganiser les sièges</h3>
+            <h3 id="seatReorgTitle">Réorganiser les sièges</h3>
             <div class="modal-header-actions">
-                <button type="button" class="btn btn-primary btn-small" onclick="uiValidateSeatReorg()">Valider</button>
+                <button type="button" class="btn btn-primary btn-small" onclick="uiValidateSeatReorg()" data-modal-initial-focus>Valider</button>
                 <button type="button" class="btn btn-secondary btn-small" onclick="uiCancelSeatReorg()">Annuler</button>
             </div>
         </div>
@@ -576,11 +577,11 @@
      toutes les donnes") : un coup d'œil sur l'état de chaque donne (contrat atteint, passée,
      en attente de qui) sans avoir à les parcourir une par une avec les flèches ◀▶. -->
 <div id="boardOverviewModal" class="modal-overlay" style="display:none;" onclick="uiCloseBoardOverviewOnBackdrop(event)">
-    <div class="modal-panel">
+    <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="boardOverviewTitle" tabindex="-1">
         <div class="modal-header">
-            <h3>Vue d'ensemble des donnes</h3>
+            <h3 id="boardOverviewTitle">Vue d'ensemble des donnes</h3>
             <div class="modal-header-actions">
-                <button type="button" class="btn btn-secondary btn-small" onclick="uiCloseBoardOverview()">Fermer</button>
+                <button type="button" class="btn btn-secondary btn-small" onclick="uiCloseBoardOverview()" data-modal-initial-focus>Fermer</button>
             </div>
         </div>
         <div id="boardOverviewList" class="board-overview-list"></div>

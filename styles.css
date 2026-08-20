@@ -2245,6 +2245,9 @@ button.kibitz-chip {
     .auction-ledger td.is-latest-call { animation: none; }
     .contract-result.contract-reveal { animation: none; }
     .ui-quick-fade-in { animation: none; }
+    .connecting-spinner { animation: none; }
+    .seat-box.just-assigned,
+    .seat-box.just-vacated { animation: none; }
 }
 
 .hand-card-title {
