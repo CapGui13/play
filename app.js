@@ -1252,6 +1252,9 @@ function defaultParticipantName(pid) {
 // ===== Navigation entre écrans =====
 
 function showScreen(id) {
+    document.querySelectorAll('.app-home-btn').forEach(btn => {
+        btn.href = currentAppHomeUrl();
+    });
     // Voir échange avec Guillaume (session du 23 juillet — "ça m'ouvre la page à mi
     // hauteur") : sans ça, le nouvel écran hérite de la position de défilement de
     // l'ancien — s'ils n'ont pas la même hauteur de contenu à cet endroit précis, on
@@ -4539,6 +4542,39 @@ function updateBoardControlVisibility() {
     if (exportBtn) exportBtn.style.display = canControlBoard() ? '' : 'none';
 }
 
+// URL d'accueil de CETTE copie de l'application.
+// On conserve exactement le chemin courant et on retire uniquement query/hash :
+// - https://capgui13.github.io/play/?room=2745 -> https://capgui13.github.io/play/
+// - file:///C:/.../play/index.html?room=5858 -> file:///C:/.../play/index.html
+function currentAppHomeUrl() {
+    try {
+        const url = new URL(window.location.href);
+        url.search = '';
+        url.hash = '';
+        return url.toString();
+    } catch (e) {
+        return 'index.html';
+    }
+}
+
+// Fondu 325 ms réservé aux navigations explicites entre donnes.
+// On anime uniquement ce qui change réellement : numéro, ligne donneur/vulnérabilité/
+// position jouée et rectangle de cartes actuellement visible.
+function fadeBoardNavigationTargets() {
+    const targets = [
+        document.getElementById('boardNumberLabel'),
+        document.getElementById('dealerVulnLabel')
+    ];
+
+    const myHandsEl = document.getElementById('myHandsContainer');
+    const allHandsEl = document.getElementById('allHandsDiagram');
+
+    if (myHandsEl && getComputedStyle(myHandsEl).display !== 'none') targets.push(myHandsEl);
+    if (allHandsEl && getComputedStyle(allHandsEl).display !== 'none') targets.push(allHandsEl);
+
+    targets.filter(Boolean).forEach(replayQuickFade);
+}
+
 function renderGameHeader() {
     const deal = currentDeal();
     document.getElementById('boardNumberLabel').textContent = `Donne #${deal.board} (${boardIndex + 1}/${deals.length})`;
@@ -7111,6 +7147,7 @@ function uiNextBoard() {
     if (myRole !== 'host') return;
     if (boardIndex >= deals.length - 1) return;
     gotoBoard(boardIndex + 1);
+    fadeBoardNavigationTargets();
     positionNextBoardAfterParNavigation();
 }
 
@@ -7121,12 +7158,14 @@ function uiHostSkipNextBoard() {
     if (myRole !== 'host' || !deals) return;
     if (boardIndex >= deals.length - 1) return;
     gotoBoard(boardIndex + 1);
+    fadeBoardNavigationTargets();
 }
 
 function uiHostSkipPrevBoard() {
     if (myRole !== 'host' || !deals) return;
     if (boardIndex <= 0) return;
     gotoBoard(boardIndex - 1);
+    fadeBoardNavigationTargets();
 }
 
 // Voir échange avec Guillaume (session asynchrone à deux — "écran récapitulatif de toutes
@@ -7321,7 +7360,10 @@ function uiFastForwardToMyTurn() {
         if (isAuctionOver(hist)) continue;
         const turnSeat = currentTurnSeat(deals[idx].dealer, hist);
         if (mySeats.includes(turnSeat)) {
-            if (idx !== boardIndex) gotoBoard(idx);
+            if (idx !== boardIndex) {
+                gotoBoard(idx);
+                fadeBoardNavigationTargets();
+            }
             return;
         }
     }

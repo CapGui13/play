@@ -1867,6 +1867,14 @@ button.kibitz-chip {
     line-height: 1;
 }
 
+/* Dans l'en-tête de jeu, le bouton 🔗 doit avoir la même hauteur/forme que 🏠 et 🐞.
+   On garde simplement un peu moins de largeur horizontale pour l'icône seule. */
+#gameHeaderCopyLinkBtn {
+    padding: 8px 10px;
+    font-size: 0.82rem;
+    line-height: normal;
+}
+
 .seat-box-name-row {
     display: flex;
     align-items: center;
@@ -2233,6 +2241,7 @@ button.kibitz-chip {
     .auction-ledger td.turn-column-cell { animation: none; }
     .auction-ledger td.is-latest-call { animation: none; }
     .contract-result.contract-reveal { animation: none; }
+    .ui-quick-fade-in { animation: none; }
 }
 
 .hand-card-title {
@@ -3231,6 +3240,11 @@ table.dd-table td.dd-secondary-contract {
     /* Cibles tactiles un peu agrandies (les flèches de navigation entre donnes et le
        bouton debug étaient pensés pour un clic souris précis, pas un doigt). */
     .board-nav-btn { padding: 7px 13px; }
+
+    /* Correction optique : le glyphe ▶ paraît naturellement plus à droite dans sa boîte
+       que ◀. On décale seulement son dessin de 2 px, sans déplacer le bouton ni le layout. */
+    #skipNextBoardBtn { text-indent: -2px; }
+
     .debug-toggle-btn { padding: 6px 10px; }
 }
 
