@@ -206,17 +206,19 @@ function isKibbitz() {
     return !mySeats || mySeats.length === 0;
 }
 
-// Voir échange avec Guillaume ("je ne peux pas désactiver voir les 4 mains") : le VRAI
-// créateur de la salle (celui qui a lancé la séance), peu importe live ('host', jamais
-// réécrit) ou différé (roomCreatorToken, le jeton figé à la création) — PAS simplement
-// "myRole === 'host'", qui en mode différé peut aussi désigner n'importe quel joueur
-// ayant repris une salle abandonnée (voir uiResumeFromCloud, où myRole='host' sert
-// uniquement à accorder le contrôle local, pas une identité). Même critère déjà utilisé
-// pour l'arbitrage d'undo (voir hostHandleUndoRequest) — factorisé ici pour être
-// réutilisé partout où ce privilège du VRAI hôte (pas d'un simple contrôleur technique)
-// doit être vérifié, comme "voir les 4 mains".
+// Privilèges d'hôte réels : ils appartiennent au détenteur ACTUEL du rôle d'hôte,
+// jamais à un ancien hôte simplement parce que son jeton est encore roomCreatorToken.
+// C'est particulièrement important après un transfert manuel : l'ancien créateur revient
+// comme invité avec son jeton historique ; sans le test myRole==='host', il conservait
+// localement les boutons All pass / Reset / Rotation / Réorganisation / Voir les 4 mains
+// et pouvait faire diverger son écran de celui du nouvel hôte.
+//
+// Le second terme reste nécessaire pour le mode différé : le créateur d'origine peut y
+// être contrôleur technique avec son vrai jeton plutôt qu'avec l'identifiant littéral
+// 'host'. Un autre participant ayant repris la salle en différé ne doit pas recevoir ces
+// privilèges d'organisation.
 function isTrueOriginalHost() {
-    return myParticipantId === 'host' || myParticipantId === roomCreatorToken;
+    return myRole === 'host' && (myParticipantId === 'host' || myParticipantId === roomCreatorToken);
 }
 
 // ===== Préférences d'affichage des mains (locales, persistées, indépendantes du réseau) =====
