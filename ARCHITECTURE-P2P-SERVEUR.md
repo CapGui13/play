@@ -1,7 +1,7 @@
 # Architecture P2P + relais serveur (par siège)
 
 Document de conception — voir échange avec Guillaume (session du 12 août 2026). À lire
-avant de toucher au code : ce fichier remplace la logique d'élection de sous-hôte
+avant de toucher au code : ce fichier remplace l'ancienne logique d'élection automatique d'un hôte de secours
 (`computeSubHostId`, `attemptSubHostTakeover`, `promoteSelfToHostAfterTakeover`,
 `GUEST_TAKEOVER_GRACE_MS`) par un modèle plus simple, qui a émergé progressivement au fil
 de la conversation — voir la section "Pourquoi ce document" en bas pour le raisonnement
@@ -130,7 +130,7 @@ Au moment où un siège repasse de `server` à `p2p`, il faut comparer la versio
 connue par l'hôte (potentiellement périmée, si l'hôte n'a pas suivi le canal Pusher
 pendant que ce siège était en `server`) avec la version réellement la plus récente —
 **jamais un "dernier écrit gagne" naïf** (on a déjà été mordus par exactement ce genre
-de bug cette session, voir la persistance de l'état après une bascule sous-hôte).
+de bug cette session, voir la persistance de l'état après une ancienne bascule automatique).
 L'hôte doit rester abonné au canal Pusher de la salle en continu, même pendant qu'il est
 lui-même pleinement en P2P avec tout le monde, pour ne jamais accumuler de retard sur ce
 qui se passe côté serveur pour un siège momentanément basculé.
@@ -240,7 +240,7 @@ réconciliation de façon reproductible.
    - le PUT restreint participant ne consomme plus aucune valeur `call` provenant du client
      dès que le tour attendu appartient à un siège robot ;
    - la pile PONS v2.61 embarquée dans PLAY (WASM + Critic + Semantic + fallback canonique)
-     est également embarquée dans API-gen et exécutée dans `api/pons-server.js` ;
+     est également embarquée dans API-gen et exécutée dans `lib/pons-server.js` ;
    - `PonsSemanticLedger` est isolé entre requêtes par sérialisation + reconstruction de la
      branche avant chaque calcul, afin d'éviter toute contamination inter-salles ;
    - après une annonce humaine relayée, le serveur enchaîne lui-même les robots consécutifs
@@ -293,30 +293,36 @@ réconciliation de façon reproductible.
    messages réseau (`lobby-state`, `start-game`, `resync`). `currentHostReconnectToken`
    et `selfDisconnectedAt` conservés (toujours utiles ailleurs). La bannière de
    reconnexion affiche maintenant un simple compteur de secondes pour tout le monde
-   (plus de "/20s" réservé à un sous-hôte désigné) ; le bouton "Se reconnecter" reste
+   (plus de "/20s" réservé à un participant de secours) ; le bouton "Se reconnecter" reste
    visible pour tout invité déconnecté (la reconnexion automatique en tâche de fond
    n'empêche plus son affichage — un clic déclenche juste une tentative immédiate).
    `NullPeerConnection` comme classe reste en l'état (toujours utilisée par
    `uiResumeHostSession`/`uiResumeFromCloud`, volontairement hors périmètre — voir
    étape 2).
-5. **[Fait — 12 août 2026]** `api/session.js` (repo `api-gen`) :
-   - `pusherTrigger` désormais `await`é avant de répondre au client, dans son propre
-     try/catch — évite qu'un échec ou une coupure d'exécution en cours de route ne
-     perde silencieusement la notification "temps réel" (petit coût : celui qui écrit
-     attend un peu plus longtemps sa propre réponse).
-   - L'événement Pusher embarque l'état complet quand il tient sous
-     `PUSHER_EVENT_MAX_BYTES` (9 Ko, marge sous la limite Pusher de 10 Ko) — sinon
-     repli sur l'ancien comportement (version seule). Câblé côté client :
-     `realtime-updates.js` transmet maintenant le contenu de l'événement à l'appelant
-     (au lieu de l'ignorer), et `onCloudPusherEvent` (nouveau, dans `app.js`) applique
-     l'état directement via `applyCloudUpdate` quand il est présent — sans repasser
-     par un second aller-retour GET — ou retombe sur l'ancien sondage sinon.
+5. **[État courant — 21 août 2026]** notifications Pusher privées :
+   - `pusherTrigger` est `await`é avant la réponse API afin qu'un échec de notification
+     soit observé plutôt que perdu silencieusement ;
+   - le canal est `private-session-XXXX` et l'abonnement passe par `/api/pusher-auth`,
+     protégé par la même `accessKey` que la lecture cloud ;
+   - l'événement Pusher ne transporte **jamais** le snapshot : seulement la version et
+     l'horodatage. Le client relit ensuite l'état via un GET authentifié. Cette séparation
+     évite d'exposer les mains ou l'état de partie dans le bus temps réel.
 
 ## Pourquoi ce document (contexte de la discussion)
 
 Parti d'un constat simple de Guillaume : "ça ne marche vraiment pas bien" à propos des
-bugs de reconnexion/élection de sous-hôte rencontrés en session. Décision de fond
+bugs de reconnexion liés à l'ancien mécanisme d'élection automatique rencontrés en session. Décision de fond
 retenue en cours de route : pas un basculement 100% serveur (trop de latence perçue à
 chaque annonce, trop gros à réécrire d'un coup), ni un P2P pur amélioré (le problème est
 structurel : PeerJS n'a pas de notion de présence, l'élection d'hôte est la source de
 tous les bugs vus). D'où ce compromis par siège plutôt qu'une bascule globale.
+
+## Durcissements complémentaires — 21 août 2026
+
+- Les snapshots cloud sont maintenant rejetés si une enchère sort du vocabulaire bridge, si le siège ne correspond pas au tour, si l'annonce est illégale, ou si participants/chat ne respectent pas leur schéma public.
+- Un invité ne diffuse jamais `lobby-state` pour changer sa couleur : il envoie `set-avatar-color`; l'hôte lie l'identité à la connexion, valide la palette puis rediffuse. En coupure/différé, la même mutation passe par l'API participant restreinte.
+- `reserve-code` est protégé par un budget Redis à fenêtre fixe : 20 réservations/minute par couple client/origine et 300/minute globales. Un dépassement répond HTTP 429 avec `Retry-After`.
+- **Rotation/révocation des capacités** : le vrai hôte peut remplacer atomiquement `accessKey` + `hostWriteKey`. Les anciennes valeurs cessent immédiatement d'autoriser GET/PUT/Pusher ; seuls les participants encore connectés et assis reçoivent la nouvelle `accessKey`. Le client propose les nouvelles clés avant le commit Redis et peut les sonder si la réponse HTTP se perd, pour éviter un verrouillage de salle après une rotation réussie mais non accusée.
+- **CSP** : `index.html` interdit les handlers JavaScript inline (`script-src-attr 'none'`) et limite les scripts aux fichiers de PLAY + aux deux CDN explicitement autorisés. Le WASM PONS utilise uniquement la permission étroite `wasm-unsafe-eval`. Toute l'UI passe par `ui-events.js`, sans `eval`/`Function`.
+- Les bibliothèques externes restent épinglées à des versions précises. L'ajout d'un SRI externe n'est autorisé que si le hash du fichier réellement servi est vérifié au moment du build ; aucun hash non vérifié n'est inscrit dans le HTML.
+- Le viewport n'interdit plus le zoom utilisateur (`maximum-scale`/`user-scalable=no` supprimés).

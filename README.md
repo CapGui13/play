@@ -680,8 +680,9 @@ couvert en fait par le réveil ci-dessus, qui répond à la même question).
 - **Notifications de présence** : un toast temporaire (même animation que le "wizz"), vert
   à la connexion, rouge à la déconnexion, pour chaque joueur assis — remplace l'ancienne
   bannière permanente et verbeuse. Compteur en direct pour sa PROPRE déconnexion en cours
-  ("connexion perdue — reconnexion en cours... Xs", avec le décompte du sous-hôte
-  spécifiquement affiché "X/20s" puisque lui seul est concerné par ce délai).
+  ("connexion perdue — reconnexion en cours... Xs"). La reconnexion P2P se fait en
+  arrière-plan ; pendant une coupure, les actions autorisées peuvent passer par le relais
+  cloud sans changer l'identité de l'hôte.
 - **Chat permanent sur desktop** (≥600px) : ne peut plus être fermé, bouton et bandeau de
   fermeture masqués (redondants une fois le chat toujours visible). Reste fermable sur
   mobile. Hauteur fixe avec défilement interne (ne grandit plus avec la conversation).
@@ -719,39 +720,27 @@ laissait auparavant dans les limbes sans que l'appli s'en aperçoive.
 
 ### Si c'est l'hôte qui part
 
-Deux mécanismes complémentaires, selon la situation :
+Il n'existe plus d'élection automatique d'un nouvel hôte. L'identité d'autorité reste
+stable, ce qui évite les doubles-hôtes et les inversions de rôle observées avec l'ancien
+prototype.
 
-**1. Coupure réseau, onglet resté ouvert** — l'hôte dispose du même bouton **"🔌 Se
-reconnecter"** que les invités (tentative légère de reprendre la même connexion ; si ça
-n'aboutit pas sous 4s, réinitialisation complète sous le même code de salle). Comme tout
-l'état (donnes, enchère, sièges) est resté intact en mémoire (l'onglet n'a jamais fermé),
-rien à reconstruire.
+- **Coupure réseau, onglet resté ouvert** : l'hôte tente de recréer sa connexion PeerJS
+  sous le même code. L'état de jeu reste en mémoire et continue aussi d'être persisté côté
+  cloud.
+- **Hôte réellement absent** : les participants authentifiés peuvent continuer les actions
+  qui leur appartiennent via le relais serveur. Les tours de robots en relais sont décidés
+  par PONS côté serveur, pas par le navigateur du participant.
+- **Retour du créateur** : la reprise à froid recharge d'abord l'état autoritaire du cloud,
+  puis le créateur recrée le Peer hôte. Les autres participants se resynchronisent et
+  conservent leurs sièges.
+- **Reprise différée par un autre participant** : elle reste possible pour jouer son propre
+  siège sans devenir l'autorité persistante de la salle ; cette reprise utilise le relais
+  cloud jusqu'au retour du créateur.
 
-**2. Fermeture complète de l'onglet/du navigateur** — deux filets se combinent :
-- **Bascule automatique du sous-hôte** : le partenaire de l'hôte (ou, à défaut, le
-  premier joueur assis, ou le premier participant connecté) est désigné en continu comme
-  "sous-hôte". Si l'hôte disparaît plus de 20 secondes sans revenir, le sous-hôte reprend
-  automatiquement la main sous le **même code de salle**, avec l'état de la partie tel
-  qu'il l'a lui-même vécu (donnes, enchère, sièges) — tout le monde s'y reconnecte de
-  façon transparente. Si l'hôte revient entre-temps (avant les 20s), il retrouve
-  normalement son rôle.
-- **Reprise via `localStorage`** : l'état complet de la partie (donnes, enchère, sièges,
-  participants, messages du chat) est sauvegardé en continu dans le `localStorage` de
-  l'hôte pendant qu'il joue. À la réouverture du site (même appareil, même navigateur —
-  jusqu'à 6h après la dernière sauvegarde), une bannière **"Reprendre la partie"**
-  propose de relancer exactement là où c'était resté, en réclamant le même code de salle.
-  Si le sous-hôte a entre-temps déjà pris le relais, l'hôte d'origine rejoint
-  automatiquement comme simple invité plutôt que de rester bloqué.
-
-Limites connues :
-- Ces deux mécanismes ne couvrent que le **même appareil/navigateur** que celui qui
-  hébergeait — passer à un autre appareil ou nettoyer les données du site entre-temps
-  empêche la reprise via `localStorage` (la bascule du sous-hôte, elle, fonctionne
-  indépendamment de ça, puisqu'elle se produit sur l'appareil d'un AUTRE participant).
-- Deux onglets ouverts sur la même partie, dans le même navigateur, partagent le même
-  jeton (invité) ou la même sauvegarde (hôte) — sans conséquence pour un usage normal (un
-  onglet par joueur), mais à éviter si vous testez seul avec plusieurs onglets pour
-  simuler plusieurs joueurs.
+La sauvegarde locale reste un filet de confort sur le même appareil/navigateur, mais le
+cloud est la source à privilégier dès qu'une session serveur existe. Deux onglets du même
+navigateur partagent toujours les mêmes données locales : pour les tests multi-joueurs,
+utiliser des profils/navigateurs distincts.
 
 ## Transfert d'hôte
 
@@ -814,3 +803,18 @@ en cache dès leur premier chargement bien que non listés dans `CORE_ASSETS` (v
 Prérequis pour que ce workflow s'exécute : **Settings → Pages → Source** doit être réglé
 sur *"GitHub Actions"* (pas *"Deploy from a branch"*). Après un `git push`, l'onglet
 **Actions** du dépôt montre le déploiement en cours puis son statut.
+
+
+## Sécurité : capacités, CSP et rotation
+
+- Le code court de salle est un identifiant humain, **pas** un secret cloud. La lecture et
+  le relais utilisent une `accessKey`; l'écriture complète utilise une `hostWriteKey`
+  distincte, conservée par l'hôte.
+- Le bouton **🔐 Renouveler les accès** de l'hôte remplace atomiquement ces deux capacités.
+  Les anciennes deviennent immédiatement inutilisables ; seuls les joueurs encore
+  connectés et assis reçoivent la nouvelle `accessKey`.
+- `index.html` applique une Content Security Policy : aucun handler JavaScript inline,
+  scripts limités aux fichiers de l'application et aux CDN explicitement autorisés,
+  objets/frames interdits. Les événements UI passent par `ui-events.js`.
+- Le zoom navigateur n'est plus désactivé : le viewport laisse l'utilisateur agrandir
+  l'interface selon ses besoins.

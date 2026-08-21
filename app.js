@@ -107,7 +107,7 @@ let roomCreatorName = null;
 let roomCreatorToken = null;
 
 // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 4 — nettoyage) : la reprise automatique
-// d'hôte par un sous-hôte (élection d'un nouvel hôte P2P en cas de coupure prolongée,
+// d'hôte automatique (ancien mécanisme d'élection P2P en cas de coupure prolongée,
 // session du 23 juillet) a été retirée — superflue maintenant que chaque siège route
 // individuellement vers le relais serveur en cas de coupure (voir étape 3), sans jamais
 // changer qui est l'hôte. C'était aussi la source de la quasi-totalité des bugs de
@@ -1469,6 +1469,54 @@ function normalizePublicSeatAssignment(value, participantList) {
     return out;
 }
 
+
+function normalizeCloudAuctionHistory(deal, dealIndex) {
+    if (!deal || !SEATS.includes(deal.dealer)) return null;
+    const rawHistory = deal.auctionHistory == null ? [] : deal.auctionHistory;
+    if (!Array.isArray(rawHistory) || rawHistory.length > 128) return null;
+    const out = [];
+    for (let i = 0; i < rawHistory.length; i++) {
+        const raw = rawHistory[i];
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+        const seat = raw.seat;
+        const call = typeof raw.call === 'string' ? raw.call.toUpperCase() : '';
+        const callInVocabulary = call === 'PASS' || call === 'X' || call === 'XX' || /^([1-7])(NT|C|D|H|S)$/.test(call);
+        if (!SEATS.includes(seat) || !callInVocabulary) return null;
+        const expectedSeat = currentTurnSeat(deal.dealer, out);
+        if (seat !== expectedSeat || !isCallLegal(out, call, seat)) return null;
+        const clean = { seat, call };
+        if (raw.explanation != null) {
+            if (typeof raw.explanation !== 'string' || raw.explanation.length > 2000) return null;
+            clean.explanation = raw.explanation;
+        }
+        out.push(clean);
+    }
+    return out;
+}
+
+function normalizeCloudChatMessages(list, participantList) {
+    if (list == null) return [];
+    if (!Array.isArray(list) || list.length > 5000) return null;
+    const out = [];
+    for (const raw of list) {
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+        const senderId = raw.senderId;
+        const senderName = typeof raw.senderName === 'string' ? raw.senderName.trim().slice(0, 40) : '';
+        const text = typeof raw.text === 'string' ? raw.text.trim() : '';
+        // Un ancien expéditeur peut ne plus être dans participants (p. ex. après un
+        // transfert d'hôte). On exige donc un ID public sûr, pas son appartenance à la
+        // liste courante, afin de préserver l'historique sans rouvrir l'injection HTML.
+        if (!isSafeParticipantId(senderId)) return null;
+        if (!senderName || !text || text.length > 500) return null;
+        if (raw.type != null && raw.type !== 'chat') return null;
+        // Les premières versions du relais cloud stockaient le chat sans champ `type`.
+        // Normaliser ce legacy sûr vers le format P2P courant permet aussi à l'hôte de
+        // le relayer aux pairs encore connectés sans qu'il soit ignoré par handlePeerData.
+        out.push({ type: 'chat', senderId, senderName, text });
+    }
+    return out;
+}
+
 function avatarColorForId(id) {
     // Surcharge manuelle (voir échange avec Guillaume, uiRandomizeAvatarColor) : si ce
     // participant a choisi une couleur (au clic, ou reprise automatiquement depuis
@@ -2107,8 +2155,8 @@ function buildHostHandlers(onOpenExtra) {
                     // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 4) : jeton de l'hôte
                     // actuel, toujours utile pour qu'un invité identifie correctement
                     // l'hôte dans ses propres échanges avec le serveur (voir
-                    // buildCloudStatePayload) — subHostId, lui, a disparu (plus
-                    // d'élection de sous-hôte).
+                    // buildCloudStatePayload) — l’ancien identifiant de relais a disparu (plus
+                    // d'élection automatique d'un autre hôte).
                     hostReconnectToken: getReconnectToken(),
                     roomCreatorName,
                     // Voir échange avec Guillaume (session du 23 juillet) : permet au client
@@ -2197,7 +2245,7 @@ function buildHostHandlers(onOpenExtra) {
             // Voir échange avec Guillaume (session du 23 juillet — "ça m'a fait
             // redevenir invité à tort") : PAS de bascule automatique en invité ici.
             // 'unavailable-id' peut arriver sur un simple peer.reconnect() automatique
-            // (voir peer-connection.js) SANS qu'aucun sous-hôte n'ait réellement pris le
+            // (voir peer-connection.js) SANS qu'un autre hôte ait réellement pris le
             // relais — ambiguïté entre "quelqu'un d'autre a vraiment ce code" et "notre
             // propre ancienne session traîne encore, non nettoyée côté serveur PeerJS".
             // Cette bascule ne se déclenche maintenant QUE dans le filet de sécurité de
@@ -2284,10 +2332,10 @@ function buildGuestHandlers() {
             // devenu obsolète ne doit surtout pas marquer l'entrée `host` comme déconnectée.
             if (myRole !== 'guest') return;
             setConnectionStatus(false);
-            // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 4) : scheduleSubHostTakeoverIfNeeded
-            // a disparu d'ici (plus d'élection de sous-hôte) — seule reste la reconnexion
+            // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 4) : l'ancien planificateur de reprise automatique
+            // a disparu d'ici (plus d'élection automatique d'un autre hôte) — seule reste la reconnexion
             // automatique en arrière-plan (voir scheduleGuestAutoReconnect), qui
-            // concernait déjà TOUT invité déconnecté, pas seulement un sous-hôte désigné.
+            // concernait déjà TOUT invité déconnecté, pas seulement un participant désigné.
             scheduleGuestAutoReconnect();
             renderReconnectButton();
             // Voir échange avec Guillaume ("l'hôte devrait être affiché comme déconnecté
@@ -2489,7 +2537,7 @@ function uiJoinRoom() {
 // formulaire pourrait apparaître avec le précédent pseudo pré-rempli") : affiché à CHAQUE
 // fois désormais, plutôt que sauté entièrement quand un pseudo est déjà enregistré sur cet
 // appareil (voir savedNickname) — pré-rempli avec ce pseudo le cas échéant (voir
-// onfocus="this.select()" sur le champ, dans index.html : le premier caractère tapé
+// La sélection automatique du champ au focus est gérée par ui-events.js : le premier caractère tapé
 // remplace tout plutôt que de s'ajouter à la suite). `action` reste toujours différée
 // jusqu'à validation de la modale (voir uiConfirmNicknamePrompt).
 let pendingJoinAfterNickname = null;
@@ -2633,7 +2681,7 @@ function uiReconnect() {
 // — si le réseau reste indisponible plus longtemps que ça (ex. écran de téléphone
 // verrouillé un moment), l'hôte restait bloqué sans AUCUN moyen de relancer une tentative,
 // même une fois le réseau revenu, contrairement à l'invité qui a toujours eu ce bouton.
-// Contrairement à une reprise par le sous-hôte, ici l'onglet n'a jamais fermé : tout l'état
+// Contrairement à une reprise à froid, ici l'onglet n'a jamais fermé : tout l'état
 // (donnes, enchère, sièges) est déjà intact en mémoire, rien à reconstruire — on retente
 // juste de récupérer le même identifiant réseau sous le même code.
 // Voir échange avec Guillaume (session du 23 juillet — "ça affichait connexion perdue
@@ -2688,8 +2736,8 @@ function hardResetHostConnection(codeToReclaim) {
         // Voir échange avec Guillaume : ICI seulement (après une réinitialisation
         // complète, pas sur une simple reconnexion automatique — voir le onError partagé
         // de buildHostHandlers, qui ne bascule plus jamais en invité tout seul) un
-        // 'unavailable-id' signifie sans ambiguïté que quelqu'un d'autre (le sous-hôte) a
-        // vraiment ce code — pas notre propre session zombie, qu'on vient de détruire
+        // 'unavailable-id' signifie que le code PeerJS est encore détenu par un autre peer live,
+        // pas notre propre session zombie, qu'on vient de détruire
         // proprement juste avant.
         newPeerConn.handlers.onError = (err) => {
             if (err && err.type === 'unavailable-id' && deals) {
@@ -2832,7 +2880,18 @@ function uiRandomizeAvatarColor(event, participantId) {
     // AUTRE participant (voir canChange ci-dessus), ça ne doit alors rien sauvegarder
     // dans son propre localStorage.
     if (participantId === myParticipantId) saveStringPref('bridgeBidAvatarColor', p.avatarColor);
-    broadcastLobbyState();
+    if (myRole === 'host') {
+        broadcastLobbyState();
+    } else if (participantId === myParticipantId && peerConn && peerConn.isConnected()) {
+        // Un invité n'a jamais le droit d'émettre un lobby-state complet. Il demande
+        // uniquement la mutation de SA couleur ; l'hôte lie l'identité à la connexion,
+        // valide la palette puis rediffuse son état public autoritaire.
+        peerConn.send({ type: 'set-avatar-color', avatarColor: p.avatarColor });
+    } else if (participantId === myParticipantId) {
+        // Même mutation en mode différé / coupure P2P : l'API restreinte sait déjà
+        // autoriser le profil propre d'un participant authentifié.
+        pushAvatarColorViaServerFallback(p.avatarColor);
+    }
     renderLobby();
     // Voir échange avec Guillaume (session du 23 juillet) : le changement de couleur est
     // maintenant possible EN COURS DE PARTIE aussi (voir interactiveAvatarHtml dans
@@ -2854,7 +2913,7 @@ function interactiveAvatarHtml(participantId) {
     const canChangeColor = myRole === 'host' || participantId === myParticipantId;
     const html = avatarHtml(participantId);
     return canChangeColor
-        ? `<span class="avatar-color-trigger" onclick="uiRandomizeAvatarColor(event, '${participantId}')" title="Changer de couleur">${html}</span>`
+        ? `<span class="avatar-color-trigger" data-ui-click="randomize-avatar" data-participant-id="${escapeHtml(participantId)}" title="Changer de couleur">${html}</span>`
         : html;
 }
 
@@ -2882,17 +2941,17 @@ function renderParticipantsList() {
         // appui-maintenu qui visait en fait à démarrer un glisser-déposer — ce qui
         // basculait à tort en mode "renommer" au lieu de laisser le glisser s'amorcer.
         const nameHtml = canRename
-            ? `<span class="participant-name participant-name-editable" onclick="uiStartRenamingParticipant(event, '${p.id}')">${escapeHtml(p.name)}</span>`
+            ? `<span class="participant-name participant-name-editable" data-ui-click="rename-participant" data-participant-id="${escapeHtml(p.id)}">${escapeHtml(p.name)}</span>`
             : `<span class="participant-name">${escapeHtml(p.name)}</span>`;
         // Glissable vers une case de siège (voir uiDropOnSeat) — seulement pour l'hôte,
         // seul à pouvoir réorganiser qui est où (voir uiDragStartParticipant).
-        const dragAttrs = isHost ? ` draggable="true" ondragstart="uiDragStartParticipant(event, '${p.id}')"` : '';
+        const dragAttrs = isHost ? ` draggable="true" data-ui-dragstart="participant" data-participant-id="${escapeHtml(p.id)}"` : '';
         // Clic sur l'avatar pour changer de couleur au hasard (voir échange avec
         // Guillaume, uiRandomizeAvatarColor) : l'hôte peut le faire pour n'importe qui,
         // les autres seulement pour eux-mêmes.
         const canChangeColor = isHost || p.id === myParticipantId;
         const avatarHtmlBlock = canChangeColor
-            ? `<span class="avatar-color-trigger" onclick="uiRandomizeAvatarColor(event, '${p.id}')" title="Changer de couleur">${avatarHtml(p.id)}</span>`
+            ? `<span class="avatar-color-trigger" data-ui-click="randomize-avatar" data-participant-id="${escapeHtml(p.id)}" title="Changer de couleur">${avatarHtml(p.id)}</span>`
             : avatarHtml(p.id);
         return `
         <li class="participant-item ${p.id === myParticipantId ? 'is-me' : ''}"${dragAttrs}>
@@ -3031,8 +3090,8 @@ function buildSeatBoxesHtml(assignmentObj, onSelect, { enableDrag = false, withF
             // la modale de réorganisation n'a pas de glisser-déposer, seulement les menus.
             const isPending = assignedId === SEAT_PENDING;
             const occupantP = (assignedId && !isPending) ? participants.find(x => x.id === assignedId) : null;
-            const boxDragAttrs = (enableDrag && occupantP) ? ` draggable="true" ondragstart="uiDragStartParticipant(event, '${assignedId}', '${seat}')"` : '';
-            const dropAttrs = enableDrag ? ` ondragover="uiAllowDrop(event)" ondragenter="uiDragEnterTarget(event)" ondragleave="uiDragLeaveTarget(event)" ondrop="uiDropOnSeat(event, '${seat}')"` : '';
+            const boxDragAttrs = (enableDrag && occupantP) ? ` draggable="true" data-ui-dragstart="participant" data-participant-id="${escapeHtml(assignedId)}" data-from-seat="${seat}"` : '';
+            const dropAttrs = enableDrag ? ` data-ui-dragover="allow-drop" data-ui-dragenter="drop-target" data-ui-dragleave="drop-target" data-ui-drop="seat" data-seat="${seat}"` : '';
             const triggerContent = occupantP
                 ? `${avatarHtml(assignedId)}<span class="kibitz-chip-name">${escapeHtml(occupantP.name)}</span>`
                 : isPending
@@ -3042,16 +3101,16 @@ function buildSeatBoxesHtml(assignmentObj, onSelect, { enableDrag = false, withF
             const robotOptionClass = assignedId ? '' : ' is-current';
             const pendingOptionClass = isPending ? ' is-current' : '';
             const optionsHtml = [`
-                <div class="seat-dropdown-option${robotOptionClass}" onclick="${onSelect}('${seat}', ''); uiCloseSeatDropdowns();">
+                <div class="seat-dropdown-option${robotOptionClass}" data-ui-click="seat-select" data-ui-seat-handler="${onSelect === 'uiStageSeatAssignment' ? 'stage' : 'assign'}" data-seat="${seat}" data-participant-id="">
                     <span class="mini-avatar mini-avatar-robot">🤖</span><span>Robot</span>
                 </div>
-                <div class="seat-dropdown-option${pendingOptionClass}" onclick="${onSelect}('${seat}', '${SEAT_PENDING}'); uiCloseSeatDropdowns();">
+                <div class="seat-dropdown-option${pendingOptionClass}" data-ui-click="seat-select" data-ui-seat-handler="${onSelect === 'uiStageSeatAssignment' ? 'stage' : 'assign'}" data-seat="${seat}" data-participant-id="${SEAT_PENDING}">
                     <span class="mini-avatar mini-avatar-pending">⏳</span><span>En attente d'un partenaire</span>
                 </div>
             `].concat(participants.map(p => {
                 const currentClass = p.id === assignedId ? ' is-current' : '';
                 return `
-                    <div class="seat-dropdown-option${currentClass}" onclick="${onSelect}('${seat}', '${p.id}'); uiCloseSeatDropdowns();">
+                    <div class="seat-dropdown-option${currentClass}" data-ui-click="seat-select" data-ui-seat-handler="${onSelect === 'uiStageSeatAssignment' ? 'stage' : 'assign'}" data-seat="${seat}" data-participant-id="${escapeHtml(p.id)}">
                         ${avatarHtml(p.id)}<span>${escapeHtml(p.name)}</span>
                     </div>
                 `;
@@ -3061,7 +3120,7 @@ function buildSeatBoxesHtml(assignmentObj, onSelect, { enableDrag = false, withF
                 <div class="seat-box seat-pos-${seat}${flashClass}"${boxDragAttrs}${dropAttrs}>
                     <span class="seat-box-label">${SEAT_FULL_NAME[seat]}</span>
                     <div class="seat-occupant-dropdown">
-                        <button type="button" class="kibitz-chip seat-occupant-chip${occupantP ? '' : ' seat-occupant-chip-robot'}" onclick="uiToggleSeatDropdown(event, '${seat}')">
+                        <button type="button" class="kibitz-chip seat-occupant-chip${occupantP ? '' : ' seat-occupant-chip-robot'}" data-ui-click="toggle-seat-dropdown" data-seat="${seat}">
                             ${triggerContent}
                             <span class="seat-dropdown-chevron">▾</span>
                         </button>
@@ -3358,7 +3417,7 @@ const SEAT_CLOCKWISE_NEXT = { N: 'E', E: 'S', S: 'W', W: 'N' };
 
 // Voir échange avec Guillaume ("l'invité ne se reconnecte jamais tout seul") : posé chez
 // TOUT invité déconnecté (voir ARCHITECTURE-P2P-SERVEUR.md, étape 4 — l'ancienne
-// distinction "sous-hôte désigné seulement" a disparu) — retente une reconnexion complète
+// toute distinction de participant de secours a disparu) — retente une reconnexion complète
 // toutes les GUEST_AUTO_RECONNECT_INTERVAL_MS, en tâche de fond, sans qu'aucun clic ne
 // soit nécessaire. Se reprogramme lui-même à chaque tentative tant que la déconnexion
 // dure — onGuestConnected (voir buildGuestHandlers) l'annule dès qu'une reconnexion
@@ -3427,8 +3486,7 @@ function attemptGuestAutoReconnect() {
     scheduleGuestAutoReconnect();
 }
 
-// Voir ARCHITECTURE-P2P-SERVEUR.md (étape 4) : attemptSubHostTakeover,
-// promoteSelfToHostAfterTakeover et flashSubHostTookOverToast ont été retirés d'ici —
+// Voir ARCHITECTURE-P2P-SERVEUR.md (étape 4) : les anciennes fonctions de prise automatique du rôle hôte ont été retirées d'ici —
 // plus d'élection d'un nouvel hôte P2P en cas de coupure prolongée, superflue depuis le
 // routage par siège (étape 3). L'hôte ne change plus jamais en cours de partie.
 
@@ -3538,14 +3596,80 @@ async function sendSessionAccessToParticipant(participantId) {
 // l'accorde aux participants qu'il a effectivement autorisés à jouer (siège attribué ou
 // démarrage), jamais à tous les pairs qui parviennent à deviner/rejoindre le code court.
 function grantSessionAccessToSeatedParticipants() {
-    if (myRole !== 'host') return;
+    if (myRole !== 'host') return Promise.resolve([]);
     const ids = new Set(SEATS.map(seat => seatAssignment[seat]).filter(id => id && id !== SEAT_PENDING && id !== 'host'));
-    ids.forEach(id => sendSessionAccessToParticipant(id));
+    return Promise.allSettled([...ids].map(id => sendSessionAccessToParticipant(id)));
+}
+
+let capabilityRotationInFlight = false;
+
+function canRotateRoomCapabilities() {
+    return myRole === 'host' && !!currentRoomCode
+        && typeof getSessionAccessKey === 'function' && !!getSessionAccessKey(currentRoomCode)
+        && typeof getSessionHostWriteKey === 'function' && !!getSessionHostWriteKey(currentRoomCode)
+        && typeof rotateSessionCapabilities === 'function';
+}
+
+function updateCapabilityRotationControls() {
+    const enabled = canRotateRoomCapabilities() && !capabilityRotationInFlight;
+    ['rotateCapabilitiesBtn', 'gameRotateCapabilitiesBtn'].forEach(id => {
+        const btn = document.getElementById(id);
+        if (!btn) return;
+        const shouldShow = canRotateRoomCapabilities();
+        if (id === 'rotateCapabilitiesBtn') btn.style.display = shouldShow ? '' : 'none';
+        else {
+            btn.style.visibility = shouldShow ? '' : 'hidden';
+            btn.style.pointerEvents = shouldShow ? '' : 'none';
+        }
+        btn.disabled = !enabled;
+        btn.setAttribute('aria-busy', capabilityRotationInFlight ? 'true' : 'false');
+    });
+}
+
+async function uiRotateRoomCapabilities() {
+    if (!canRotateRoomCapabilities() || capabilityRotationInFlight) return;
+    const ok = window.confirm(
+        'Renouveler les accès de cette salle ?\n\nLes anciens liens/capacités cloud seront révoqués. Les joueurs actuellement connectés et assis recevront automatiquement le nouvel accès.'
+    );
+    if (!ok) return;
+
+    capabilityRotationInFlight = true;
+    updateCapabilityRotationControls();
+    pushDebugLog('Rotation des capacités de salle : démarrage.');
+    try {
+        const rotated = await rotateSessionCapabilities(currentRoomCode);
+        if (!rotated) {
+            flashPresenceToast('⚠️ Renouvellement des accès impossible', false);
+            pushDebugLog('Rotation des capacités de salle refusée/échouée ; anciennes capacités conservées localement.');
+            return;
+        }
+
+        // L'abonnement Pusher privé est authentifié par accessKey : le recréer tout de
+        // suite évite d'attendre une reconnexion/polling après la rotation.
+        if (typeof subscribeToSessionUpdates === 'function') {
+            subscribeToSessionUpdates(currentRoomCode, onCloudPusherEvent);
+        }
+
+        // Seuls les participants encore connectés ET assis reçoivent la nouvelle capacité.
+        // Un ancien participant absent reste donc effectivement révoqué.
+        const results = await grantSessionAccessToSeatedParticipants();
+        const delivered = Array.isArray(results)
+            ? results.filter(r => r.status === 'fulfilled' && r.value === true).length
+            : 0;
+        flashPresenceToast('🔐 Accès de la salle renouvelés', true);
+        pushDebugLog(`Rotation des capacités terminée ; nouvel accès remis à ${delivered} participant(s) connecté(s).`);
+    } catch (e) {
+        flashPresenceToast('⚠️ Renouvellement des accès impossible', false);
+        pushDebugLog(`Rotation des capacités : erreur ${String((e && e.message) || e)}`);
+    } finally {
+        capabilityRotationInFlight = false;
+        updateCapabilityRotationControls();
+    }
 }
 
 function broadcastLobbyState() {
-    // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 4) : subHostId a disparu d'ici (plus
-    // d'élection de sous-hôte) — hostReconnectToken reste, toujours utile pour qu'un
+    // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 4) : l'ancien identifiant de relais a disparu d'ici (plus
+    // d'élection automatique d'un autre hôte) — hostReconnectToken reste, toujours utile pour qu'un
     // invité identifie correctement l'hôte dans ses propres échanges avec le serveur.
     //
     // autoPassSeats inclus aussi (voir échange avec Guillaume — "le bot n'enchérit pas") :
@@ -3626,6 +3750,7 @@ function showHostTransferStatus(message, isError) {
 // rôle d'hôte. Visible seulement pour l'hôte, dans le salon, tant qu'au moins un autre
 // participant connecté existe — sinon rien à proposer.
 function renderHostTransferWidget() {
+    updateCapabilityRotationControls();
     const widget = document.getElementById('hostTransferWidget');
     if (!widget) return;
 
@@ -3667,7 +3792,7 @@ function renderHostTransferWidget() {
     const menu = document.getElementById('transferMenu');
     if (!menu) return;
     menu.innerHTML = eligible.length > 0
-        ? eligible.map(p => `<button type="button" class="transfer-menu-item" onclick="uiTransferHost('${p.id}')">${avatarHtml(p.id)}${escapeHtml(p.name)}</button>`).join('')
+        ? eligible.map(p => `<button type="button" class="transfer-menu-item" data-ui-click="transfer-host" data-participant-id="${escapeHtml(p.id)}">${avatarHtml(p.id)}${escapeHtml(p.name)}</button>`).join('')
         : `<div class="transfer-menu-empty">Personne d'autre pour l'instant.</div>`;
 }
 
@@ -4393,6 +4518,7 @@ function uiStartGameAsHost() {
 // d'autorité comme `lobby-state`, `start-game`, `goto-board` ou `undo-apply`.
 const PEER_TYPES_FROM_GUEST = new Set([
     'set-name',
+    'set-avatar-color',
     'call',
     'chat',
     'wizz',
@@ -4668,6 +4794,25 @@ function handlePeerData(msg, guestIndex) {
             break;
         }
 
+        case 'set-avatar-color': {
+            if (myRole !== 'host') return;
+            const pid = authenticatedGuestId(guestIndex);
+            const color = normalizeAvatarColor(msg.avatarColor);
+            const p = pid ? participants.find(x => x.id === pid) : null;
+            if (!pid || !p || !color) {
+                rejectPeerProtocolMessage(msg, guestIndex, 'couleur avatar invalide');
+                return;
+            }
+            p.avatarColor = color;
+            broadcastLobbyState();
+            renderLobby();
+            if (deals) {
+                renderRoomBoard();
+                renderChat();
+            }
+            break;
+        }
+
         case 'lobby-state': {
             const newParticipants = normalizePublicParticipantList(msg.participants);
             const newSeatAssignment = normalizePublicSeatAssignment(msg.seatAssignment, newParticipants || []);
@@ -4701,8 +4846,8 @@ function handlePeerData(msg, guestIndex) {
             newParticipants.forEach(p => { prevParticipantsDisconnectedSnapshot[p.id] = !!p.disconnected; });
 
             participants = newParticipants;
-            // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 4) : currentSubHostId a disparu
-            // (plus d'élection de sous-hôte) — hostReconnectToken reste, reçu à chaque
+            // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 4) : l'ancien identifiant de relais a disparu
+            // (plus d'élection automatique d'un autre hôte) — hostReconnectToken reste, reçu à chaque
             // diffusion (voir broadcastLobbyState), toujours utile pour identifier
             // correctement l'hôte dans mes propres échanges avec le serveur.
             currentHostReconnectToken = msg.hostReconnectToken || null;
@@ -4756,8 +4901,8 @@ function handlePeerData(msg, guestIndex) {
             boardIndex = 0;
             if (!deals[0].auctionHistory) deals[0].auctionHistory = [];
             auctionHistory = deals[0].auctionHistory;
-            // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 4) : currentSubHostId a disparu
-            // d'ici (plus d'élection de sous-hôte) — hostReconnectToken reste, connu dès
+            // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 4) : l'ancien identifiant de relais a disparu
+            // d'ici (plus d'élection automatique d'un autre hôte) — hostReconnectToken reste, connu dès
             // le lancement (voir uiStartGameAsHost, qui l'inclut dans ce message).
             currentHostReconnectToken = msg.hostReconnectToken || null;
             if (msg.roomCreatorName) roomCreatorName = msg.roomCreatorName;
@@ -4779,7 +4924,7 @@ function handlePeerData(msg, guestIndex) {
             auctionHistory = msg.auctionHistory || [];
             deals[boardIndex].auctionHistory = auctionHistory; // voir gotoBoard : reste la référence partagée à partir de maintenant
             // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 4) : voir le commentaire
-            // équivalent dans 'start-game' — currentSubHostId a disparu.
+            // équivalent dans 'start-game' — l'ancien identifiant de relais a disparu.
             currentHostReconnectToken = msg.hostReconnectToken || null;
             if (msg.roomCreatorName) roomCreatorName = msg.roomCreatorName;
             hostPendingUndo = null;
@@ -5388,6 +5533,7 @@ function renderBoard() {
 }
 
 function updateBoardControlVisibility() {
+    updateCapabilityRotationControls();
     const resetBtn = document.getElementById('resetAuctionBtn');
     // Voir échange avec Guillaume (session du 8 août — "recommencer l'enchère ne devrait
     // pas apparaître pour un non hôte") : réservé à l'hôte seul, pas canControlBoard()
@@ -5485,7 +5631,7 @@ function renderGameHeader() {
         // Voir échange avec Guillaume ("je ne veux pas de bascule d'hôte") : roomCreatorName
         // est figé une fois pour toutes à la création (voir uiCreateRoom) et ne bouge plus
         // jamais, contrairement au participant technique 'host', qui lui peut changer de
-        // main (reprise cloud, sous-hôte) sans que ça doive se voir ici. Repli sur le
+        // main (reprise cloud ou reconnexion) sans que ça doive se voir ici. Repli sur le
         // participant 'host' actuel uniquement si roomCreatorName n'est pas encore défini
         // (session en mémoire créée avant l'ajout de ce champ).
         const hostParticipant = participants.find(p => p.id === 'host');
@@ -5791,6 +5937,51 @@ function uiSendChatMessage() {
     peerConn.send(msg);
 }
 
+// Synchronisation de la couleur propre quand l'invité n'a plus de P2P. Le snapshot
+// proposé reste complet pour le contrat d'API existant, mais le serveur reconstruit lui-même
+// l'état autorisé et n'accepte que la mutation du profil de cet acteur authentifié.
+async function pushAvatarColorViaServerFallback(avatarColor) {
+    const color = normalizeAvatarColor(avatarColor);
+    if (!color || !currentRoomCode || typeof pullSessionState !== 'function' || typeof pushSessionState !== 'function') return;
+    const cloudCtx = captureCloudSyncContext(currentRoomCode);
+
+    let pulled;
+    try {
+        pulled = await pullSessionState(cloudCtx.roomCode);
+        if (!isCloudSyncContextActive(cloudCtx)) return;
+        if (pulled) pulled = validateCloudSnapshot(pulled, cloudCtx.roomCode);
+    } catch (e) {
+        pushDebugLog('Couleur avatar : lecture serveur impossible : ' + ((e && e.message) || e));
+        return;
+    }
+    if (!pulled) return;
+    const proposed = cloneCloudData(pulled.state);
+    const me = (proposed.participants || []).find(p => p.id === myParticipantId);
+    if (!me) return;
+    me.avatarColor = color;
+
+    try {
+        const result = await pushSessionState(cloudCtx.roomCode, { ...proposed, savedAt: Date.now() }, pulled.version, {
+            participantCredential: participantCredentialForCloudWrite(),
+            onConflict: (current) => {
+                if (!isCloudSyncContextActive(cloudCtx)) return;
+                const validCurrent = current && validateCloudSnapshot(current, cloudCtx.roomCode);
+                if (validCurrent) {
+                    lastKnownCloudVersion = validCurrent.version;
+                    cloudLastSyncedState = cloneCloudData(validCurrent.state);
+                    applyCloudUpdate(validCurrent);
+                }
+                pushDebugLog('Couleur avatar : conflit de version, état serveur conservé.');
+            }
+        });
+        if (!isCloudSyncContextActive(cloudCtx) || !result) return;
+        const restricted = validateCloudSnapshot({ version: result.version, updatedAt: result.updatedAt, state: result.state }, cloudCtx.roomCode);
+        if (restricted) applyCloudUpdate(restricted);
+    } catch (e) {
+        pushDebugLog('Couleur avatar : écriture serveur impossible : ' + ((e && e.message) || e));
+    }
+}
+
 // Voir échange avec Guillaume ("chat via le relais serveur") : même principe que
 // pushCallViaServerFallback — relit l'état serveur, ajoute CE message à sa liste de chat,
 // puis repousse avec le verrou de version. Pas de "légalité" à revalider ici
@@ -5878,13 +6069,13 @@ function wizzableNameHtml(p) {
     // bout à l'autre du même panneau.
     const colorStyle = p.disconnected ? ' style="color:var(--suit-red)"' : '';
     const nameAttrs = canRename
-        ? ` class="room-board-name room-board-name-editable" ondblclick="uiStartRenamingParticipant(event, '${p.id}')" title="Double-cliquer pour renommer"${colorStyle}`
+        ? ` class="room-board-name room-board-name-editable" data-ui-dblclick="rename-participant" data-participant-id="${escapeHtml(p.id)}" title="Double-cliquer pour renommer"${colorStyle}`
         : ` class="room-board-name"${colorStyle}`;
     const nameSpan = `<span${nameAttrs}>${escapeHtml(p.name)}</span>`;
 
     if (p.disconnected) return nameSpan;
     if (p.id === myParticipantId) {
-        return `${nameSpan}<span class="room-board-wizz-btn" onclick="uiSelfWizz()" title="Tester l'effet wizz sur soi-même">🔔</span>`;
+        return `${nameSpan}<span class="room-board-wizz-btn" data-ui-click="self-wizz" title="Tester l'effet wizz sur soi-même">🔔</span>`;
     }
     // Voir échange avec Guillaume ("j'essaye de wizz l'autre mais ça ne marche pas, en
     // mode différé") : pas de canal live en mode différé (NullPeerConnection, voir
@@ -5892,7 +6083,7 @@ function wizzableNameHtml(p) {
     // rien indiquer d'autre qu'une ligne dans un journal masqué. Masquée ici plutôt que de
     // laisser un geste qui ne peut structurellement jamais aboutir dans ce mode.
     if (peerConn instanceof NullPeerConnection) return nameSpan;
-    return `${nameSpan}<span class="room-board-wizz-btn" onclick="uiSendWizz('${p.id}')" title="Faire trembler l'écran de ${escapeHtml(p.name)}">🔔</span>`;
+    return `${nameSpan}<span class="room-board-wizz-btn" data-ui-click="send-wizz" data-participant-id="${escapeHtml(p.id)}" title="Faire trembler l'écran de ${escapeHtml(p.name)}">🔔</span>`;
 }
 
 // Voir échange avec Guillaume : déclenche l'effet wizz directement en local, sans passer
@@ -6168,7 +6359,7 @@ function renderRoomBoard() {
         ? `<div class="room-board-kibbitz">
                <span class="room-board-section-label">👁 Kibbitz :</span>
                ${kibbitzNames.map(p => {
-                   const dragAttrs = isHost ? ` draggable="true" ondragstart="uiDragStartParticipant(event, '${p.id}')"` : '';
+                   const dragAttrs = isHost ? ` draggable="true" data-ui-dragstart="participant" data-participant-id="${escapeHtml(p.id)}"` : '';
                    return `<div class="room-board-kibitz-person"${dragAttrs}>${interactiveAvatarHtml(p.id)}${wizzableNameHtml(p)}</div>`;
                }).join('')}
            </div>`
@@ -6276,7 +6467,7 @@ function formatCallCellHtml(entry) {
     // Outil de diagnostic (désactivé, voir commentaire plus haut) :
     // const explanation = (typeof entry === 'string') ? null : entry.explanation;
     // if (!explanation) return inner;
-    // return `<span class="call-with-explanation" tabindex="0" data-explanation="${escapeHtml(explanation)}" onclick="uiShowCallExplanation(this)">${inner}<span class="call-explain-dot" aria-hidden="true"></span></span>`;
+    // Ancienne variante cliquable retirée : la délégation d’événements vit désormais dans ui-events.js.
 }
 
 // Libellé affiché pour un siège donné : soit le nom du joueur qui l'occupe (préférence
@@ -6402,7 +6593,7 @@ function renderAuctionLedger() {
     // (chacune de ces fonctions se protège déjà individuellement).
     const isHost = myRole === 'host';
     const dropAttrs = isHost
-        ? (s) => ` ondragover="uiAllowDrop(event)" ondragenter="uiDragEnterTarget(event)" ondragleave="uiDragLeaveTarget(event)" ondrop="uiDropOnSeat(event, '${s}')"`
+        ? (s) => ` data-ui-dragover="allow-drop" data-ui-dragenter="drop-target" data-ui-dragleave="drop-target" data-ui-drop="seat" data-seat="${s}"`
         : () => '';
     header.innerHTML = SEATS.map(s => {
         const pair = partnershipOf(s);
@@ -6598,7 +6789,7 @@ function renderBiddingBox() {
     const levelRow = Array.from({ length: 7 }, (_, i) => i + 1).map(level => {
         const legal = legalLevels.has(level);
         const selected = selectedBiddingLevel === level;
-        return `<button type="button" class="call-btn bid-level-btn${selected ? ' selected' : ''}" ${legal ? '' : 'disabled'} aria-pressed="${selected ? 'true' : 'false'}" onclick="uiSelectBidLevel(${level})">${level}</button>`;
+        return `<button type="button" class="call-btn bid-level-btn${selected ? ' selected' : ''}" ${legal ? '' : 'disabled'} aria-pressed="${selected ? 'true' : 'false'}" data-ui-click="select-bid-level" data-level="${level}">${level}</button>`;
     }).join('');
 
     const strainRow = TWO_STEP_BID_STRAINS.map(strain => {
@@ -6616,7 +6807,7 @@ function renderBiddingBox() {
             S: 'Pique',
             NT: 'Sans-atout'
         }[strain] || strain;
-        return `<button type="button" class="call-btn bid-strain-btn ${suitClass}" ${legal ? '' : 'disabled'} title="${title}" aria-label="${accessibleStrain}" onclick="uiSelectBidStrain('${strain}')">${label}</button>`;
+        return `<button type="button" class="call-btn bid-strain-btn ${suitClass}" ${legal ? '' : 'disabled'} title="${title}" aria-label="${accessibleStrain}" data-ui-click="select-bid-strain" data-strain="${strain}">${label}</button>`;
     }).join('');
 
     const specialLabels = { PASS: 'Passe', X: 'X', XX: 'XX' };
@@ -6628,7 +6819,7 @@ function renderBiddingBox() {
     };
     const specialRow = ['PASS', 'X', 'XX'].map(call => {
         const legal = myTurn && isCallLegal(auctionHistory, call, turnSeat);
-        return `<button type="button" class="call-btn call-btn-special ${specialClasses[call]}" ${legal ? '' : 'disabled'} aria-label="${specialAriaLabels[call]}" onclick="uiMakeCall('${call}')">${specialLabels[call]}</button>`;
+        return `<button type="button" class="call-btn call-btn-special ${specialClasses[call]}" ${legal ? '' : 'disabled'} aria-label="${specialAriaLabels[call]}" data-ui-click="make-call" data-call="${call}">${specialLabels[call]}</button>`;
     }).join('');
 
     box.innerHTML = `
@@ -7513,7 +7704,7 @@ function checkAuctionEnd(renderOptions = {}) {
     // double mort disponible.
     const exportBtnHtml = (canControlBoard() && ddTableHtml) ? `
         <span class="dd-export-row">
-            <button type="button" class="btn btn-secondary btn-small" id="dealExportBtn" onclick="uiExportDealPBN()">📤 Export PBN</button>
+            <button type="button" class="btn btn-secondary btn-small" id="dealExportBtn" data-ui-click="export-deal-pbn">📤 Export PBN</button>
             <span id="dealExportStatus" class="dd-export-status"></span>
         </span>
     ` : '';
@@ -7588,7 +7779,7 @@ function checkAuctionEnd(renderOptions = {}) {
         // git blame). Une simple chaîne HTML ajoutée ici survit sans problème à la
         // reconstruction complète de resultEl.innerHTML à chaque rendu, puisqu'elle en
         // fait justement partie.
-        resultEl.innerHTML += '<div class="next-board-panel"><button type="button" class="btn btn-secondary btn-small" onclick="uiNextBoard()">Donne suivante →</button></div>';
+        resultEl.innerHTML += '<div class="next-board-panel"><button type="button" class="btn btn-secondary btn-small" data-ui-click="next-board">Donne suivante →</button></div>';
     }
 
     setAuctionVisualMode('final', { parCapable: true, ddTableHtml });
@@ -7736,8 +7927,8 @@ function renderUndoAskBanner() {
     banner.style.display = 'flex';
     banner.innerHTML = `
         <span>${name} demande à annuler la dernière annonce.</span>
-        <button class="btn btn-success btn-small" onclick="uiAnswerUndo(true)">Accepter</button>
-        <button class="btn btn-secondary btn-small" onclick="uiAnswerUndo(false)">Refuser</button>
+        <button class="btn btn-success btn-small" data-ui-click="answer-undo" data-approved="true">Accepter</button>
+        <button class="btn btn-secondary btn-small" data-ui-click="answer-undo" data-approved="false">Refuser</button>
     `;
     if (parViewActive) restoreVisibleMobileViewportAnchor(mobileViewportAnchor);
     else scheduleMobileLedgerViewportRestore(mobileViewportAnchor);
@@ -8426,7 +8617,7 @@ function renderBoardOverview() {
 
         const activeClass = idx === boardIndex ? ' is-current' : '';
         return `
-            <button type="button" class="board-overview-row${activeClass}" onclick="uiJumpToBoardFromOverview(${idx})"${titleAttr ? ` title="${escapeHtml(titleAttr)}"` : ''}>
+            <button type="button" class="board-overview-row${activeClass}" data-ui-click="jump-board" data-board-index="${idx}"${titleAttr ? ` title="${escapeHtml(titleAttr)}"` : ''}>
                 <span class="board-overview-number">${deal.board != null ? deal.board : idx + 1}</span>
                 <span class="board-overview-hand">${handHtml}</span>
                 <span class="board-overview-contract">${reachedHtml}</span>
@@ -8893,8 +9084,8 @@ function checkForResumableHostSession() {
             return `<div class="resume-session-row">
                 <div class="resume-session-text">🔄 Salle ${code} <span class="resume-session-details">(${saved.deals.length} donnes, ${timeLabel})</span></div>
                 <div class="resume-session-actions">
-                    <button type="button" class="btn btn-primary btn-small" onclick="uiResumeHostSession('${code}')">Reprendre</button>
-                    <button type="button" class="btn btn-secondary btn-small" onclick="uiDismissResumeSession('${code}')">Non merci</button>
+                    <button type="button" class="btn btn-primary btn-small" data-ui-click="resume-host-session" data-room-code="${escapeHtml(code)}">Reprendre</button>
+                    <button type="button" class="btn btn-secondary btn-small" data-ui-click="dismiss-resume-session" data-room-code="${escapeHtml(code)}">Non merci</button>
                 </div>
             </div>`;
         }).join('');
@@ -8915,7 +9106,7 @@ function uiDismissResumeSession(roomCode) {
 
 // Reprend une partie sauvegardée : restaure tout l'état en mémoire à l'identique, puis
 // réclame le même code de salle (voir createRoom(cap, forcedRoomCode), déjà construit
-// pour la reprise automatique par le sous-hôte — même mécanisme, ici déclenché
+// pour la reprise volontaire sous un code forcé — même mécanisme, ici déclenché
 // volontairement par l'hôte lui-même plutôt qu'automatiquement par quelqu'un d'autre).
 //
 // Voir échange avec Guillaume ("les enchères de B n'apparaissent toujours pas") : cette
@@ -9051,14 +9242,14 @@ async function uiResumeHostSession(roomCode) {
 
     // Voir ARCHITECTURE-P2P-SERVEUR.md : recrée maintenant une vraie salle P2P (voir
     // juste en dessous) plutôt que d'éviter le réseau — la raison d'origine de cet évitement
-    // (risque d'"unavailable-id" si un sous-hôte avait pris le même code entre-temps) a
-    // disparu avec l'élection de sous-hôte elle-même.
+    // (ancien risque d'"unavailable-id" lié à une prise automatique du même code) a
+    // disparu avec l'élection automatique elle-même.
     // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 2, révisée après le test de Guillaume —
     // "quand l'hôte revient, l'invité reste marqué déconnecté, et la donne suivante ne le
     // fait pas bouger") : recrée maintenant une vraie salle P2P, comme au tout premier
     // lancement — au lieu de NullPeerConnection. L'ancien choix (voir git blame) était
-    // motivé par le risque d'"unavailable-id" si un sous-hôte avait entre-temps pris ce
-    // même code ; ce risque n'existe plus (plus d'élection de sous-hôte, voir étape 4).
+    // motivé par l'ancien risque d'"unavailable-id" si un autre peer avait pris ce
+    // même code ; ce risque n'existe plus (plus d'élection automatique, voir étape 4).
     // Sans un vrai P2P ici, un invité qui tentait de se reconnecter (voir
     // attemptGuestAutoReconnect) ne trouvait plus jamais personne à qui parler — coincé
     // sur le seul relais serveur pour toujours, y compris pour ce qui n'y passe
@@ -9199,12 +9390,9 @@ function validateCloudSnapshot(result, expectedRoomCode) {
             const deal = st.deals[i];
             if (!deal || typeof deal !== 'object') throw new Error(`donne ${i + 1} absente`);
             if (typeof validateDealSemantics === 'function') validateDealSemantics(deal, `Snapshot cloud, donne ${i + 1}`);
-            if (deal.auctionHistory != null && !Array.isArray(deal.auctionHistory)) throw new Error(`historique donne ${i + 1} invalide`);
-            for (const entry of (deal.auctionHistory || [])) {
-                if (!entry || !SEATS.includes(entry.seat) || typeof entry.call !== 'string') {
-                    throw new Error(`entrée d'enchère invalide sur la donne ${i + 1}`);
-                }
-            }
+            const cleanHistory = normalizeCloudAuctionHistory(deal, i);
+            if (!cleanHistory) throw new Error(`historique donne ${i + 1} illégal ou hors vocabulaire`);
+            deal.auctionHistory = cleanHistory;
         }
         if (!Number.isInteger(st.boardIndex) || st.boardIndex < 0 || st.boardIndex >= st.deals.length) {
             throw new Error(`boardIndex invalide (${st.boardIndex})`);
@@ -9215,7 +9403,9 @@ function validateCloudSnapshot(result, expectedRoomCode) {
         if (!cleanSeatAssignment) throw new Error('seatAssignment invalide');
         st.participants = cleanParticipants;
         st.seatAssignment = cleanSeatAssignment;
-        if (st.chatMessages != null && !Array.isArray(st.chatMessages)) throw new Error('chatMessages invalide');
+        const cleanChat = normalizeCloudChatMessages(st.chatMessages, cleanParticipants);
+        if (!cleanChat) throw new Error('chatMessages invalides');
+        st.chatMessages = cleanChat;
         if (expected != null) st.roomCode = expected;
         return { version: result.version, updatedAt: result.updatedAt, state: st };
     } catch (e) {
@@ -10052,7 +10242,7 @@ function uiResumeFromCloud() {
         peerConn = new BridgePeerConnection(buildHostHandlers(resumeOnOpenExtra));
         peerConn.handlers.onError = (err) => {
             // Filet de sécurité seulement — très improbable (plus d'élection de
-            // sous-hôte, donc plus personne d'autre ne peut légitimement détenir ce
+            // autre hôte automatique, donc plus personne d'autre ne peut légitimement détenir ce
             // code), mais un délai de libération côté serveur de signalisation reste
             // théoriquement possible juste après la fermeture de l'ancien Peer.
             if (err && err.type === 'unavailable-id') {

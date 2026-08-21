@@ -17,6 +17,7 @@ const CORE_ASSETS = [
     './index.html',
     './styles.css',
     './app.js',
+    './ui-events.js',
     './bidding-rules.js',
     './bidding-engine.js',
     './pons/canonical-rules-v1.js',
@@ -47,7 +48,7 @@ const CORE_ASSETS = [
 // tant que ce premier chargement n'a pas eu lieu au moins une fois).
 const EXTERNAL_ASSETS = [
     'https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js',
-    'https://js.pusher.com/8.4/pusher.min.js',
+    'https://js.pusher.com/8.4.0/pusher.min.js',
     'https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Work+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap'
 ];
 

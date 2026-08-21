@@ -184,6 +184,84 @@ async function activateRoomAccess(roomCode) {
     }
 }
 
+
+// Génère une capacité 256 bits sans fallback pseudo-aléatoire. La rotation est une action
+// de sécurité : si Web Crypto n'est pas disponible, on refuse plutôt que d'affaiblir le
+// secret avec Math.random().
+function generateSessionCapabilityKey() {
+    if (!globalThis.crypto || typeof globalThis.crypto.getRandomValues !== 'function') return null;
+    const bytes = new Uint8Array(32);
+    globalThis.crypto.getRandomValues(bytes);
+    let binary = '';
+    for (const b of bytes) binary += String.fromCharCode(b);
+    return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+async function probeSessionCapabilities(roomCode, accessKey, hostWriteKey) {
+    try {
+        const resp = await fetch(`${SESSION_API_BASE}/api/session`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Bridge-Session-Key': accessKey,
+                'X-Bridge-Host-Write-Key': hostWriteKey
+            },
+            body: JSON.stringify({ action: 'activate-room', code: normalizeSessionRoomCode(roomCode) }),
+            cache: 'no-store'
+        });
+        return resp.ok;
+    } catch (e) {
+        return false;
+    }
+}
+
+// Révoque le couple de capacités courant et le remplace atomiquement. Les nouvelles clés
+// sont choisies AVANT la requête : si la réponse se perd après le commit Redis, le client
+// peut vérifier le couple proposé et éviter de perdre l'autorité de la salle.
+async function rotateSessionCapabilities(roomCode) {
+    const code = normalizeSessionRoomCode(roomCode);
+    const oldAccessKey = getSessionAccessKey(code);
+    const oldHostWriteKey = getSessionHostWriteKey(code);
+    if (!code || !oldAccessKey || !oldHostWriteKey) return false;
+
+    const newAccessKey = generateSessionCapabilityKey();
+    let newHostWriteKey = generateSessionCapabilityKey();
+    if (!newAccessKey || !newHostWriteKey) return false;
+    while (newHostWriteKey === newAccessKey) newHostWriteKey = generateSessionCapabilityKey();
+
+    let confirmed = false;
+    let ambiguous = false;
+    try {
+        const resp = await fetch(`${SESSION_API_BASE}/api/session`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Bridge-Session-Key': oldAccessKey,
+                'X-Bridge-Host-Write-Key': oldHostWriteKey
+            },
+            body: JSON.stringify({
+                action: 'rotate-room-capabilities', code,
+                newAccessKey, newHostWriteKey
+            }),
+            cache: 'no-store'
+        });
+        if (resp.ok) confirmed = true;
+        else if (resp.status >= 500) ambiguous = true;
+        else return false;
+    } catch (e) {
+        ambiguous = true;
+    }
+
+    if (!confirmed && ambiguous) {
+        confirmed = await probeSessionCapabilities(code, newAccessKey, newHostWriteKey);
+    }
+    if (!confirmed) return false;
+
+    rememberSessionAccessKey(code, newAccessKey);
+    rememberSessionHostWriteKey(code, newHostWriteKey);
+    return true;
+}
+
 async function registerSessionParticipantCredential(roomCode, participantId, reconnectSecret) {
     const code = normalizeSessionRoomCode(roomCode);
     const accessKey = getSessionAccessKey(code);
@@ -276,6 +354,6 @@ if (typeof module !== 'undefined' && module.exports) {
         getSessionAccessKey, rememberSessionAccessKey, forgetSessionAccessKey,
         getSessionHostWriteKey, rememberSessionHostWriteKey, forgetSessionHostWriteKey,
         registerSessionParticipantCredential,
-        claimLegacySessionAccess, activateRoomAccess
+        claimLegacySessionAccess, activateRoomAccess, rotateSessionCapabilities
     };
 }

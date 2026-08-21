@@ -33,15 +33,10 @@
 //   (botSeats reste celui décidé au lancement de la partie — un joueur déconnecté n'est
 //   PAS remplacé par un robot, son siège attend simplement sa reconnexion)
 //
-//   Reprise automatique d'hôte (voir échange avec Guillaume, session du 23 juillet) : si
-//   l'hôte disparaît en cours de partie sans revenir, un "sous-hôte" pré-désigné (voir
-//   computeSubHostId dans app.js — le partenaire de l'hôte de préférence) recrée
-//   automatiquement la salle sous EXACTEMENT le même code (voir createRoom(cap,
-//   forcedRoomCode) ci-dessous) après un délai de grâce de 20s (GUEST_TAKEOVER_GRACE_MS
-//   dans app.js) sans reconnexion. Les autres participants ne remarquent rien : leur
-//   reconnexion habituelle (auto ou bouton manuel) vise déjà ce même code. Si l'ancien
-//   hôte revient après coup, il détecte la collision d'identifiant (erreur
-//   'unavailable-id') et rejoint lui-même la partie comme simple invité.
+//   Reprise d'hôte : il n'existe plus d'élection automatique d'un autre participant. Le
+//   vrai hôte peut recréer la salle sous le même code via `forcedRoomCode`. Pendant une
+//   absence, les participants authentifiés utilisent le relais cloud pour leurs propres
+//   actions ; ils ne deviennent pas hôte P2P par simple expiration d'un délai.
 //
 // Diagnostic : tout ce qui touche à l'établissement de la connexion est aussi loggué en
 // console (F12) et dans le panneau de diagnostic à l'écran (préfixe "[peer]").
@@ -69,8 +64,7 @@ const MAX_POST_OPEN_RECONNECT_ATTEMPTS = 5;
 // 'disconnected'") : délai de tolérance avant de fermer nous-mêmes une connexion dont
 // l'état ICE reste bloqué en 'disconnected'/'failed' sans jamais se rétablir tout seul
 // (voir attachPCDiagnostics ci-dessous) — assez court pour ne pas retarder inutilement la
-// détection (qui doit elle-même précéder le délai de grâce de reprise du sous-hôte, voir
-// GUEST_TAKEOVER_GRACE_MS dans app.js), assez long pour laisser ICE récupérer seul d'un
+// détection, tout en restant assez long pour laisser ICE récupérer seul d'un
 // blip vraiment bref sans qu'on lui coupe l'herbe sous le pied.
 const ICE_STUCK_TIMEOUT_MS = 6000;
 // Types d'erreur PeerJS considérés comme transitoires (réseau/serveur), donc valant la
@@ -353,11 +347,8 @@ class BridgePeerConnection {
     // (jusqu'à `cap`, une limite de sécurité — la composition réelle de la table est décidée
     // librement par l'hôte dans le salon, pas à la création de la partie).
     //
-    // Voir échange avec Guillaume (session du 23 juillet — reprise automatique d'hôte par
-    // le sous-hôte) : `forcedRoomCode`, optionnel, impose un code précis au lieu d'en tirer
-    // un nouveau au hasard — nécessaire pour que le sous-hôte puisse reprendre EXACTEMENT
-    // le même code que celui de l'hôte disparu (sans quoi les autres participants, dont la
-    // reconnexion vise toujours l'ancien code, ne retrouveraient jamais la salle).
+    // `forcedRoomCode`, optionnel, impose un code précis au lieu d'en tirer un nouveau :
+    // il sert à la reconnexion/reprise volontaire du vrai hôte sous le même code de salle.
     createRoom(cap = 6, forcedRoomCode) {
         this.role = 'host';
         this.maxGuests = cap;
@@ -482,8 +473,8 @@ class BridgePeerConnection {
             // 'unavailable-id' change habituellement de code pour contourner la collision —
             // mais avec un code IMPOSÉ (`_forcedRoomCode`, voir createRoom), ce serait
             // retenter exactement le même code déjà pris, donc futile. Dans ce cas précis,
-            // l'erreur remonte tout de suite à l'appelant (voir uiOnSubHostTakeover) plutôt
-            // que de gaspiller les tentatives bornées pour rien.
+            // l'erreur remonte tout de suite à l'appelant plutôt que de gaspiller les
+            // tentatives bornées pour rien.
             const canRetry = !this._everOpened && this._connectRetries < MAX_INITIAL_CONNECT_RETRIES
                 && (RETRIABLE_ERROR_TYPES.includes(err.type) || (err.type === 'unavailable-id' && !this._forcedRoomCode));
             if (canRetry) {

@@ -2,7 +2,8 @@
 <html lang="fr">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://unpkg.com https://js.pusher.com; script-src-attr 'none'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob:; connect-src 'self' https://api-gen-beta.vercel.app https://*.peerjs.com wss://*.peerjs.com https://*.pusher.com wss://*.pusher.com; worker-src 'self' blob:; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-src 'none'; upgrade-insecure-requests">
 <title>Table d'enchères — Bridge à distance</title>
 
 <!-- PWA : voir manifest.json + sw.js. theme_color/background_color y reprennent le vert
@@ -24,15 +25,15 @@
 
 <div id="connectionBar" class="connection-bar">
     <span id="connectionStatus" class="connection-status" role="status" aria-live="polite" aria-atomic="true">⚪ Pas encore connecté</span>
-    <button type="button" id="reconnectBtn" class="btn btn-primary btn-small" style="display:none;" onclick="uiReconnect()">🔌 Se reconnecter</button>
+    <button type="button" id="reconnectBtn" class="btn btn-primary btn-small" style="display:none;" data-ui-click="reconnect">🔌 Se reconnecter</button>
     <!-- Masqué par défaut : inutile (et non fonctionnel, personne à qui parler) tant qu'on
          est sur l'écran d'accueil, pas encore dans un salon/une partie. Affiché/masqué
          ensuite depuis showScreen() dans app.js selon l'écran courant. -->
-    <button type="button" id="chatToggleBtn" class="debug-toggle-btn" style="display:none;" onclick="uiScrollToChat()" aria-label="Aller au chat" aria-controls="chatPanel" aria-expanded="true">💬<span id="chatUnreadBadge" class="chat-unread-badge" style="display:none;" aria-hidden="true"></span></button>
+    <button type="button" id="chatToggleBtn" class="debug-toggle-btn" style="display:none;" data-ui-click="scroll-chat" aria-label="Aller au chat" aria-controls="chatPanel" aria-expanded="true">💬<span id="chatUnreadBadge" class="chat-unread-badge" style="display:none;" aria-hidden="true"></span></button>
     <!-- Masqué pour l'instant (voir échange avec Guillaume) : le panneau et toute sa
          logique (pushDebugLog, uiToggleDebugPanel, testTurnConnectivity...) restent
          intacts, il suffit de retirer ce commentaire et le style pour le réactiver. -->
-    <!-- <button type="button" class="debug-toggle-btn" onclick="uiToggleDebugPanel()">🐞</button> -->
+    <!-- <button type="button" class="debug-toggle-btn" data-ui-click="toggle-debug">🐞</button> -->
 </div>
 
 <!-- Chat écrit entre tous les participants (voir uiSendChatMessage/handlePeerData dans
@@ -47,8 +48,8 @@
     <div id="roomBoard" class="room-board"></div>
     <div id="chatMessages" class="chat-messages"></div>
     <div class="chat-input-row">
-        <input type="text" id="chatInput" class="chat-input" maxlength="500" placeholder="Écrire un message…" onkeydown="uiChatInputKeydown(event)">
-        <button type="button" class="btn btn-primary btn-small" onclick="uiSendChatMessage()">Envoyer</button>
+        <input type="text" id="chatInput" class="chat-input" maxlength="500" placeholder="Écrire un message…" data-ui-keydown="chat">
+        <button type="button" class="btn btn-primary btn-small" data-ui-click="send-chat">Envoyer</button>
     </div>
 </div>
 
@@ -61,7 +62,7 @@
      initOfflineHandling). -->
 <div id="iosInstallBanner" class="pwa-banner" style="display:none;">
     <span>📲 Sur iPhone : appuyez sur <strong>Partager</strong> puis <strong>Sur l'écran d'accueil</strong> pour installer l'appli.</span>
-    <button type="button" class="btn btn-secondary btn-small" onclick="uiDismissIosInstallHint()">Fermer</button>
+    <button type="button" class="btn btn-secondary btn-small" data-ui-click="dismiss-ios-install">Fermer</button>
 </div>
 
 <div id="offlineBanner" class="pwa-banner pwa-banner-warning" style="display:none;">
@@ -72,9 +73,9 @@
     <div class="debug-panel-header">
         <span>Journal de diagnostic</span>
         <div>
-            <button type="button" class="btn btn-secondary btn-small" onclick="testTurnConnectivity()">Tester TURN</button>
-            <button type="button" class="btn btn-secondary btn-small" onclick="uiCopyDebugLog()">Copier</button>
-            <button type="button" class="btn btn-secondary btn-small" onclick="uiToggleDebugPanel()">Fermer</button>
+            <button type="button" class="btn btn-secondary btn-small" data-ui-click="test-turn">Tester TURN</button>
+            <button type="button" class="btn btn-secondary btn-small" data-ui-click="copy-debug">Copier</button>
+            <button type="button" class="btn btn-secondary btn-small" data-ui-click="toggle-debug">Fermer</button>
         </div>
     </div>
     <pre id="debugLogContent" class="debug-log-content"></pre>
@@ -101,15 +102,15 @@
             <p>Il sera visible par les autres joueurs de la partie.</p>
             <!-- Voir échange avec Guillaume ("si la personne commence à taper, ça
                  l'efface direct, pas ajouté à la suite") : pré-rempli avec le pseudo
-                 précédent (voir ensureNicknameThenProceed dans app.js) — onfocus="this.select()"
+                 précédent (voir ensureNicknameThenProceed dans app.js) — data-ui-select-on-focus="true"
                  sélectionne tout le texte dès l'arrivée sur le champ (y compris le focus
                  automatique posé par JS à l'ouverture, pas seulement un clic), même
                  principe déjà en place sur myNameInput dans le salon : la première touche
                  tapée remplace la sélection entière plutôt que de s'insérer au milieu ou à
                  la fin. -->
             <label for="nicknamePromptInput" class="visually-hidden">Votre pseudo</label>
-            <input type="text" id="nicknamePromptInput" class="name-input" maxlength="20" enterkeyhint="go" onkeydown="uiNicknamePromptKeydown(event)" onfocus="this.select()">
-            <button type="button" class="btn btn-primary" onclick="uiConfirmNicknamePrompt()">Rejoindre</button>
+            <input type="text" id="nicknamePromptInput" class="name-input" maxlength="20" enterkeyhint="go" data-ui-keydown="nickname" data-ui-select-on-focus="true">
+            <button type="button" class="btn btn-primary" data-ui-click="confirm-nickname">Rejoindre</button>
         </div>
     </div>
 
@@ -135,19 +136,19 @@
             <div class="landing-card">
                 <h2>Créer une partie</h2>
                 <p>Vous choisirez qui joue où une fois dans le salon, puis vous chargerez le fichier de donnes (.pbn ou .lin).</p>
-                <button id="createRoomBtn" class="btn btn-primary" onclick="uiCreateRoom()">Créer une partie</button>
+                <button id="createRoomBtn" class="btn btn-primary" data-ui-click="create-room">Créer une partie</button>
             </div>
             <div class="landing-card">
                 <h2>Rejoindre une partie</h2>
                 <p>Entrez le code à 4 chiffres partagé par l'autre joueur.</p>
-                <input type="text" id="joinCodeInput" class="code-input" placeholder="EX: 4728" maxlength="4" inputmode="numeric" pattern="[0-9]*" autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="go" onkeydown="uiJoinCodeInputKeydown(event)">
+                <input type="text" id="joinCodeInput" class="code-input" placeholder="EX: 4728" maxlength="4" inputmode="numeric" pattern="[0-9]*" autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="go" data-ui-keydown="join-code">
                 <!-- ontouchstart : ferme le clavier virtuel DÈS le début du tap sur ce bouton plutôt
                      qu'au clic — sur mobile, avec le clavier encore ouvert, le premier tap sert
                      souvent juste à le fermer (le navigateur avale le clic), d'où le "il faut
                      appuyer 2 fois" remonté par Guillaume. Fermer le clavier plus tôt, dès le
                      contact, laisse le second temps du même geste (touchend/click) s'exécuter
                      normalement. Sans effet indésirable au clavier/souris (pas d'événement touch). -->
-                <button id="joinRoomBtn" class="btn btn-secondary" ontouchstart="document.activeElement && document.activeElement.blur()" onclick="uiJoinRoom()">Rejoindre</button>
+                <button id="joinRoomBtn" class="btn btn-secondary" data-ui-touchstart="blur-active" data-ui-click="join-room">Rejoindre</button>
             </div>
         </div>
         <div id="landingError" class="error-banner" style="display:none;"></div>
@@ -158,7 +159,7 @@
         <div id="iosLockScreenWarning" class="pwa-inline-note" style="display:none;">
             ⚠️ Sur iPhone/iPad, gardez l'écran allumé et l'appli au premier plan pendant la
             partie : iOS coupe la connexion si vous verrouillez l'écran ou changez d'appli.
-            <button type="button" class="btn btn-secondary btn-small" onclick="uiDismissIosLockScreenWarning()">Compris</button>
+            <button type="button" class="btn btn-secondary btn-small" data-ui-click="dismiss-ios-lock">Compris</button>
         </div>
     </section>
 
@@ -178,19 +179,19 @@
                  elle. -->
             <div class="lobby-header-actions">
                 <a href="index.html" class="btn btn-secondary btn-small app-home-btn" title="Retour à l'accueil" aria-label="Retour à l'accueil">🏠</a>
-                <button type="button" class="btn btn-secondary btn-small" onclick="uiReportBug()" title="Signaler un bug" aria-label="Signaler un bug">🐞</button>
+                <button type="button" class="btn btn-secondary btn-small" data-ui-click="report-bug" title="Signaler un bug" aria-label="Signaler un bug">🐞</button>
             </div>
         </div>
 
         <div id="lobbyRoomCodeBlock" style="display:none;">
             <input type="text" id="shareLinkInput" class="visually-hidden" readonly tabindex="-1" aria-hidden="true">
-            <button id="copyShareLinkBtn" class="btn btn-primary" onclick="uiCopyShareLink(this)">🔗 Copier lien de connexion</button>
+            <button id="copyShareLinkBtn" class="btn btn-primary" data-ui-click="copy-share-link">🔗 Copier lien de connexion</button>
         </div>
 
         <div class="form-group form-group-name">
             <label for="myNameInput">Votre pseudo</label>
             <div class="name-input-row">
-                <input type="text" id="myNameInput" class="name-input" maxlength="20" oninput="uiUpdateMyName()" onblur="uiMyNameBlur()" onfocus="this.select()">
+                <input type="text" id="myNameInput" class="name-input" maxlength="20" data-ui-input="update-my-name" data-ui-blur="my-name" data-ui-select-on-focus="true">
             </div>
             <!-- Voir échange avec Guillaume ("Votre pseudo devrait être centré au-dessus
                  du formulaire, c'est le cas pour l'invité mais pas pour l'hôte") : sortis
@@ -212,7 +213,7 @@
                          renderHostTransferWidget() dans app.js uniquement pour l'hôte, dans le
                          salon, quand au moins un autre participant est connecté. -->
                     <div id="hostTransferWidget" class="host-transfer-widget" style="display:none;">
-                        <button type="button" id="hostTransferToggleBtn" class="btn btn-secondary btn-small" onclick="uiToggleTransferMenu()" aria-controls="transferMenu" aria-expanded="false">👑 Transférer l'hôte ▾</button>
+                        <button type="button" id="hostTransferToggleBtn" class="btn btn-secondary btn-small" data-ui-click="toggle-transfer-menu" aria-controls="transferMenu" aria-expanded="false">👑 Transférer l'hôte ▾</button>
                         <div id="transferMenu" class="transfer-menu" style="display:none;"></div>
                     </div>
                     <!-- Configurable uniquement ici, dans le salon, avant de lancer la
@@ -224,10 +225,13 @@
                         <label class="ios-switch-label">
                             <span>🤖 Robots inactifs</span>
                             <span class="ios-switch">
-                                <input type="checkbox" id="robotBiddingModeCheckbox" onchange="uiSetRobotBiddingMode(this.checked)">
+                                <input type="checkbox" id="robotBiddingModeCheckbox" data-ui-change="robot-mode">
                                 <span class="ios-switch-track"><span class="ios-switch-thumb"></span></span>
                             </span>
                         </label>
+                    </div>
+                    <div id="hostCapabilityRotationGroup" class="form-group-checkbox form-group-checkbox-left">
+                        <button type="button" id="rotateCapabilitiesBtn" class="btn btn-secondary btn-small" style="display:none;" data-ui-click="rotate-capabilities" title="Révoquer les anciennes capacités cloud et en générer de nouvelles">🔐 Renouveler les accès</button>
                     </div>
                 </div>
             </div>
@@ -244,7 +248,7 @@
                      dépôt réciproque pour en faire redescendre quelqu'un de la table
                      (voir uiDropOnKibitz) — même mécanique que le glisser-déposer déjà en
                      place sur la grille des sièges. -->
-                <ul id="participantsList" class="participants-list" ondragover="uiAllowDrop(event)" ondragenter="uiDragEnterTarget(event)" ondragleave="uiDragLeaveTarget(event)" ondrop="uiDropOnKibitz(event)"></ul>
+                <ul id="participantsList" class="participants-list" data-ui-dragover="allow-drop" data-ui-dragenter="drop-target" data-ui-dragleave="drop-target" data-ui-drop="kibitz"></ul>
                 <!-- Statut du transfert d'hôte (voir uiTransferHost/showHostTransferStatus dans
                      app.js) : masqué par défaut, affiché seulement pendant/après une tentative. -->
                 <div id="hostTransferStatus" class="error-banner" style="display:none;"></div>
@@ -273,7 +277,7 @@
                      à la génération aléatoire plus bas qui n'a pas d'ordre "d'origine". -->
                 <div class="form-group-checkbox form-group-checkbox-left">
                     <label class="checkbox-label">
-                        <input type="checkbox" id="randomizeDealsToggle" onchange="uiToggleRandomizeDeals()">
+                        <input type="checkbox" id="randomizeDealsToggle" data-ui-change="randomize-deals">
                         🔀 Ordre aléatoire des donnes
                     </label>
                 </div>
@@ -281,7 +285,7 @@
             <div id="dealLibraryGroup" class="form-group" style="display:none;">
                 <div class="form-group-divider">ou</div>
                 <label for="dealLibrarySelect">Utiliser la bibliothèque de donnes</label>
-                <select id="dealLibrarySelect" class="deal-library-select" onchange="uiHandleDealLibraryChosen()">
+                <select id="dealLibrarySelect" class="deal-library-select" data-ui-change="deal-library">
                     <option value="">— Choisir une donne —</option>
                 </select>
             </div>
@@ -301,11 +305,11 @@
                 <div class="random-deal-controls">
                     <div class="random-deal-count-row">
                         <input type="number" id="randomDealCount" class="random-deal-count-input" min="1" max="40" value="8">
-                        <button type="button" class="btn btn-secondary btn-small random-deal-constraints-toggle" onclick="uiToggleRandomDealConstraints()" id="randomDealConstraintsToggle" aria-controls="randomDealConstraintsPanel" aria-expanded="false">
+                        <button type="button" class="btn btn-secondary btn-small random-deal-constraints-toggle" data-ui-click="toggle-random-constraints" id="randomDealConstraintsToggle" aria-controls="randomDealConstraintsPanel" aria-expanded="false">
                             ⚙️ Contraintes avancées
                         </button>
                     </div>
-                    <button type="button" class="btn btn-secondary btn-small" onclick="uiGenerateRandomDeals()">🎲 Générer</button>
+                    <button type="button" class="btn btn-secondary btn-small" data-ui-click="generate-random-deals">🎲 Générer</button>
                 </div>
                 <!-- Contraintes optionnelles (voir échange avec Guillaume) : fourchette de
                      points H par siège, fourchette de points combinés par ligne (NS/EO), et
@@ -314,7 +318,7 @@
                      uiToggleRandomDealConstraints. Toujours cumulée avec la contrainte fixe
                      existante (12H+ dans toute ligne à 2 humains, voir
                      dealSatisfiesHumanLineConstraint dans app.js). -->
-                <div id="randomDealConstraintsPanel" class="random-deal-constraints" style="display:none;" oninput="uiCheckConstraintsStale()" onchange="uiCheckConstraintsStale()">
+                <div id="randomDealConstraintsPanel" class="random-deal-constraints" style="display:none;" data-ui-input="constraints-stale" data-ui-change="constraints-stale">
                     <table class="constraints-table">
                         <thead>
                             <tr><th></th><th>H min</th><th>H max</th><th>Couleur</th><th>Long. min</th></tr>
@@ -365,13 +369,13 @@
                         <tbody>
                             <tr>
                                 <td>Nord-Sud</td>
-                                <td><input type="number" id="rdc-NS-hcpMin" min="0" max="40" placeholder="—" oninput="uiMirrorLineHcpConstraint('rdc-NS-hcpMin')"></td>
-                                <td><input type="number" id="rdc-NS-hcpMax" min="0" max="40" placeholder="—" oninput="uiMirrorLineHcpConstraint('rdc-NS-hcpMax')"></td>
+                                <td><input type="number" id="rdc-NS-hcpMin" min="0" max="40" placeholder="—" data-ui-input="mirror-hcp" data-ui-mirror-id="rdc-NS-hcpMin"></td>
+                                <td><input type="number" id="rdc-NS-hcpMax" min="0" max="40" placeholder="—" data-ui-input="mirror-hcp" data-ui-mirror-id="rdc-NS-hcpMax"></td>
                             </tr>
                             <tr>
                                 <td>Est-Ouest</td>
-                                <td><input type="number" id="rdc-EW-hcpMin" min="0" max="40" placeholder="—" oninput="uiMirrorLineHcpConstraint('rdc-EW-hcpMin')"></td>
-                                <td><input type="number" id="rdc-EW-hcpMax" min="0" max="40" placeholder="—" oninput="uiMirrorLineHcpConstraint('rdc-EW-hcpMax')"></td>
+                                <td><input type="number" id="rdc-EW-hcpMin" min="0" max="40" placeholder="—" data-ui-input="mirror-hcp" data-ui-mirror-id="rdc-EW-hcpMin"></td>
+                                <td><input type="number" id="rdc-EW-hcpMax" min="0" max="40" placeholder="—" data-ui-input="mirror-hcp" data-ui-mirror-id="rdc-EW-hcpMax"></td>
                             </tr>
                         </tbody>
                     </table>
@@ -385,10 +389,10 @@
                  dans le second cas, masqué par défaut. -->
             <div id="dealFileInfo" class="deal-file-info is-empty">
                 <span id="dealFileInfoText">Veuillez charger ou générer des donnes</span>
-                <button type="button" id="dealPreviewBtn" class="btn btn-secondary btn-small" style="display:none;" onclick="uiPreviewDeals()">👁 Prévisualiser</button>
+                <button type="button" id="dealPreviewBtn" class="btn btn-secondary btn-small" style="display:none;" data-ui-click="preview-deals">👁 Prévisualiser</button>
             </div>
             <div class="start-game-row">
-                <button id="startGameBtn" class="btn btn-success" onclick="uiStartGameAsHost()" disabled>Commencer la partie</button>
+                <button id="startGameBtn" class="btn btn-success" data-ui-click="start-game" disabled>Commencer la partie</button>
             </div>
         </div>
 
@@ -400,15 +404,15 @@
         <div class="game-header">
             <div class="board-info">
                 <div class="board-nav-row">
-                    <button id="prevBoardBtn" class="btn btn-secondary btn-small board-nav-btn" onclick="uiHostSkipPrevBoard()" title="Donne précédente" aria-label="Donne précédente">◀</button>
+                    <button id="prevBoardBtn" class="btn btn-secondary btn-small board-nav-btn" data-ui-click="prev-board" title="Donne précédente" aria-label="Donne précédente">◀</button>
                     <span id="boardNumberLabel" class="board-number-label"></span>
-                    <button id="skipNextBoardBtn" class="btn btn-secondary btn-small board-nav-btn" onclick="uiHostSkipNextBoard()" title="Donne suivante" aria-label="Donne suivante">▶</button>
+                    <button id="skipNextBoardBtn" class="btn btn-secondary btn-small board-nav-btn" data-ui-click="skip-next-board" title="Donne suivante" aria-label="Donne suivante">▶</button>
                     <!-- Voir échange avec Guillaume (session asynchrone à deux) : saute
                          directement à la première donne où c'est mon tour d'enchérir —
                          utile pour reprendre une session jouée en différé sans avoir à
                          repasser une par une par toutes les donnes déjà closes de mon côté.
                          Réservé à l'hôte, même règle que les flèches ◀▶ voisines. -->
-                    <button id="fastForwardBoardBtn" type="button" class="btn btn-secondary btn-small board-nav-btn" onclick="uiFastForwardToMyTurn()" title="Avancer jusqu'à mon prochain tour" aria-label="Avancer jusqu'à mon prochain tour">▶▶</button>
+                    <button id="fastForwardBoardBtn" type="button" class="btn btn-secondary btn-small board-nav-btn" data-ui-click="fast-forward" title="Avancer jusqu'à mon prochain tour" aria-label="Avancer jusqu'à mon prochain tour">▶▶</button>
                 </div>
                 <span id="dealerVulnLabel" class="dealer-vuln-label"></span>
                 <div class="game-room-code-row">
@@ -418,7 +422,7 @@
                          partie, utile notamment pour un siège encore en attente d'un
                          partenaire (voir SEAT_PENDING). Réutilise le même lien déjà généré
                          pour le salon (shareLinkInput/uiCopyShareLink), pas de duplication. -->
-                    <button type="button" id="gameHeaderCopyLinkBtn" class="btn btn-secondary btn-small room-board-copy-link-btn" style="display:none;" onclick="uiCopyShareLink(this)" title="Copier le lien de connexion à cette salle" aria-label="Copier le lien de connexion à cette salle">🔗</button>
+                    <button type="button" id="gameHeaderCopyLinkBtn" class="btn btn-secondary btn-small room-board-copy-link-btn" style="display:none;" data-ui-click="copy-share-link" title="Copier le lien de connexion à cette salle" aria-label="Copier le lien de connexion à cette salle">🔗</button>
                     <!-- Voir échange avec Guillaume ("à droite du bouton pour copier le
                          lien") : visible pour tout le monde, pas seulement l'hôte,
                          contrairement au bouton de copie de lien juste à gauche. -->
@@ -426,7 +430,7 @@
                     <!-- Voir échange avec Guillaume ("Report a bug") : petit, juste à droite
                          du bouton maison — pas dans la barre de connexion persistante (déjà
                          écarté pour le bouton maison lui-même, même raison ici). -->
-                    <button type="button" class="btn btn-secondary btn-small" onclick="uiReportBug()" title="Signaler un bug" aria-label="Signaler un bug">🐞</button>
+                    <button type="button" class="btn btn-secondary btn-small" data-ui-click="report-bug" title="Signaler un bug" aria-label="Signaler un bug">🐞</button>
                 </div>
             </div>
             <!-- Voir échange avec Guillaume (session du 8 août — réorganisation des
@@ -444,10 +448,10 @@
                          suivants) — utile pour se repérer d'un coup d'œil dans une session
                          jouée à son rythme sur plusieurs jours, sans avoir à naviguer donne
                          par donne pour savoir où en est chacune. -->
-                    <button id="boardOverviewBtn" type="button" class="btn btn-secondary btn-small" onclick="uiOpenBoardOverview()"><span class="btn-label-full">📋 Vue d'ensemble</span><span class="btn-label-short">📋 Donnes</span></button>
-                    <button id="requestUndoBtn" class="btn btn-secondary btn-small" onclick="uiRequestUndo()"><span class="btn-label-full">↩️ Demander un undo</span><span class="btn-label-short">↩️ Undo</span></button>
-                    <button id="resetAuctionBtn" class="btn btn-secondary btn-small" onclick="uiResetAuction()"><span class="btn-label-full">↺ Recommencer l'enchère</span><span class="btn-label-short">↺ Recommencer</span></button>
-                    <button id="allPassBtn" type="button" class="btn btn-secondary btn-small" style="visibility:hidden; pointer-events:none;" onclick="uiAllPass()"><span class="btn-label-full">⏩ All Pass</span><span class="btn-label-short">⏩ All Pass</span></button>
+                    <button id="boardOverviewBtn" type="button" class="btn btn-secondary btn-small" data-ui-click="open-board-overview"><span class="btn-label-full">📋 Vue d'ensemble</span><span class="btn-label-short">📋 Donnes</span></button>
+                    <button id="requestUndoBtn" class="btn btn-secondary btn-small" data-ui-click="request-undo"><span class="btn-label-full">↩️ Demander un undo</span><span class="btn-label-short">↩️ Undo</span></button>
+                    <button id="resetAuctionBtn" class="btn btn-secondary btn-small" data-ui-click="reset-auction"><span class="btn-label-full">↺ Recommencer l'enchère</span><span class="btn-label-short">↺ Recommencer</span></button>
+                    <button id="allPassBtn" type="button" class="btn btn-secondary btn-small" style="visibility:hidden; pointer-events:none;" data-ui-click="all-pass"><span class="btn-label-full">⏩ All Pass</span><span class="btn-label-short">⏩ All Pass</span></button>
                 </div>
                 <div class="game-actions-row2">
                     <!-- Réservé à l'hôte (voir updateBoardControlVisibility) : voir échange avec
@@ -455,15 +459,16 @@
                          utilisable à tout moment y compris en pleine enchère. Les mains restent
                          fixées par position (N/E/S/O), donc ça change qui joue quelle main à cet
                          instant précis, pas les cartes elles-mêmes ni l'historique déjà enchéri. -->
-                    <button id="rotateSeatsBtn" type="button" class="btn btn-secondary btn-small" style="visibility:hidden; pointer-events:none;" onclick="uiRotateSeatsClockwise()"><span class="btn-label-full">🔄 Rotation 90°</span><span class="btn-label-short">🔄 Rotation</span></button>
+                    <button id="rotateSeatsBtn" type="button" class="btn btn-secondary btn-small" style="visibility:hidden; pointer-events:none;" data-ui-click="rotate-seats"><span class="btn-label-full">🔄 Rotation 90°</span><span class="btn-label-short">🔄 Rotation</span></button>
                     <!-- Voir échange avec Guillaume (session du 24 juillet) : déplacé ici depuis
                          hand-display-options — regroupé avec les autres actions réservées à
                          l'hôte plutôt qu'isolé près des options d'affichage. Réservé à l'hôte —
                          visibilité pilotée dans updateBoardControlVisibility, même traitement
                          que "Rotation" juste au-dessus. -->
-                    <button id="seatReorgBtn" type="button" class="btn btn-secondary btn-small" style="visibility:hidden; pointer-events:none;" onclick="uiOpenSeatReorgModal()"><span class="btn-label-full">🪑 Réorganiser les sièges</span><span class="btn-label-short">🪑 Sièges</span></button>
+                    <button id="seatReorgBtn" type="button" class="btn btn-secondary btn-small" style="visibility:hidden; pointer-events:none;" data-ui-click="open-seat-reorg"><span class="btn-label-full">🪑 Réorganiser les sièges</span><span class="btn-label-short">🪑 Sièges</span></button>
                     <!-- Export de session déplacé ici : 3e bouton de la 2e ligne, après Rotation et Réorganiser. -->
-                    <button id="exportSessionBtn" type="button" class="btn btn-secondary btn-small" style="display:none;" onclick="uiExportSessionPBN()"><span class="btn-label-full">📦 Exporter la session</span><span class="btn-label-short">📦 Session</span></button>
+                    <button id="exportSessionBtn" type="button" class="btn btn-secondary btn-small" style="display:none;" data-ui-click="export-session-pbn"><span class="btn-label-full">📦 Exporter la session</span><span class="btn-label-short">📦 Session</span></button>
+                    <button id="gameRotateCapabilitiesBtn" type="button" class="btn btn-secondary btn-small" style="visibility:hidden; pointer-events:none;" data-ui-click="rotate-capabilities" title="Révoquer les anciennes capacités cloud et en générer de nouvelles"><span class="btn-label-full">🔐 Renouveler les accès</span><span class="btn-label-short">🔐 Accès</span></button>
                 </div>
                 <span id="undoStatusText" class="undo-status-text" role="status" aria-live="polite" aria-atomic="true"></span>
             </div>
@@ -483,15 +488,15 @@
              largeur plutôt que de hauteur. -->
         <div class="hand-display-options">
             <div class="hand-display-options-left">
-                <button id="frenchRanksToggleBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" onclick="uiToggleFrenchRanks()" aria-pressed="false"><span class="btn-label-full">Notation FR (R D V X)</span><span class="btn-label-short">FR</span></button>
-                <button id="hcpToggleBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" onclick="uiToggleShowHcp()" aria-pressed="false"><span class="btn-label-full">Afficher HCP</span><span class="btn-label-short">HCP</span></button>
-                <button id="krToggleBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" onclick="uiToggleShowKr()" aria-pressed="false"><span class="btn-label-full">Afficher Kaplan-Rubens</span><span class="btn-label-short">K&amp;R</span></button>
-                <button id="hostSeeAllHandsBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" style="display:none;" onclick="uiToggleHostSeeAllHands()" title="Réservé à vous : ne change rien pour les autres joueurs" aria-pressed="false"><span class="btn-label-full">👁 Voir les 4 mains</span><span class="btn-label-short">👁 4 mains</span></button>
+                <button id="frenchRanksToggleBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" data-ui-click="toggle-french-ranks" aria-pressed="false"><span class="btn-label-full">Notation FR (R D V X)</span><span class="btn-label-short">FR</span></button>
+                <button id="hcpToggleBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" data-ui-click="toggle-hcp" aria-pressed="false"><span class="btn-label-full">Afficher HCP</span><span class="btn-label-short">HCP</span></button>
+                <button id="krToggleBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" data-ui-click="toggle-kr" aria-pressed="false"><span class="btn-label-full">Afficher Kaplan-Rubens</span><span class="btn-label-short">K&amp;R</span></button>
+                <button id="hostSeeAllHandsBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" style="display:none;" data-ui-click="toggle-all-hands" title="Réservé à vous : ne change rien pour les autres joueurs" aria-pressed="false"><span class="btn-label-full">👁 Voir les 4 mains</span><span class="btn-label-short">👁 4 mains</span></button>
             </div>
             <!-- En desktop, Noms reste séparé à droite. Sur mobile, les cinq options sont
                  volontairement conservées sur une seule ligne horizontale ; la rangée peut
                  défiler latéralement sur les écrans étroits (voir styles.css). -->
-            <button id="ledgerNamesToggleBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" onclick="uiToggleLedgerNames()" aria-pressed="false"><span class="btn-label-full">Noms des joueurs</span><span class="btn-label-short">Noms</span></button>
+            <button id="ledgerNamesToggleBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" data-ui-click="toggle-ledger-names" aria-pressed="false"><span class="btn-label-full">Noms des joueurs</span><span class="btn-label-short">Noms</span></button>
         </div>
 
         <div class="game-content-row">
@@ -517,7 +522,7 @@
                         <div id="undoAskBanner" class="undo-ask-banner" style="display:none;" role="alert" aria-atomic="true"></div>
 
                         <div id="parBiddingToggleWrap" class="par-bidding-toggle-wrap" style="display:none;">
-                            <button id="parBiddingToggleBtn" type="button" class="btn btn-secondary btn-small" onclick="uiToggleParBiddingView()">📊 Voir le PAR</button>
+                            <button id="parBiddingToggleBtn" type="button" class="btn btn-secondary btn-small" data-ui-click="toggle-par">📊 Voir le PAR</button>
                         </div>
 
                         <div id="auctionViewStack" class="auction-view-stack">
@@ -536,11 +541,11 @@
 </div>
 
 
-<div id="dealPreviewModal" class="modal-overlay" style="display:none;" onclick="uiCloseDealPreviewOnBackdrop(event)">
+<div id="dealPreviewModal" class="modal-overlay" style="display:none;" data-ui-click="close-deal-preview-backdrop">
     <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="dealPreviewTitle" tabindex="-1">
         <div class="modal-header">
             <h3 id="dealPreviewTitle">Aperçu des donnes</h3>
-            <button type="button" class="btn btn-secondary btn-small" onclick="uiCloseDealPreview()" data-modal-initial-focus>Fermer ✕</button>
+            <button type="button" class="btn btn-secondary btn-small" data-ui-click="close-deal-preview" data-modal-initial-focus>Fermer ✕</button>
         </div>
         <div id="dealPreviewContent" class="deal-preview-content"></div>
     </div>
@@ -559,8 +564,8 @@
         <div class="modal-header">
             <h3 id="seatReorgTitle">Réorganiser les sièges</h3>
             <div class="modal-header-actions">
-                <button type="button" class="btn btn-primary btn-small" onclick="uiValidateSeatReorg()" data-modal-initial-focus>Valider</button>
-                <button type="button" class="btn btn-secondary btn-small" onclick="uiCancelSeatReorg()">Annuler</button>
+                <button type="button" class="btn btn-primary btn-small" data-ui-click="validate-seat-reorg" data-modal-initial-focus>Valider</button>
+                <button type="button" class="btn btn-secondary btn-small" data-ui-click="cancel-seat-reorg">Annuler</button>
             </div>
         </div>
         <div class="seat-reorg-content">
@@ -572,12 +577,12 @@
 <!-- Voir échange avec Guillaume (session asynchrone à deux — "écran récapitulatif de
      toutes les donnes") : un coup d'œil sur l'état de chaque donne (contrat atteint, passée,
      en attente de qui) sans avoir à les parcourir une par une avec les flèches ◀▶. -->
-<div id="boardOverviewModal" class="modal-overlay" style="display:none;" onclick="uiCloseBoardOverviewOnBackdrop(event)">
+<div id="boardOverviewModal" class="modal-overlay" style="display:none;" data-ui-click="close-board-overview-backdrop">
     <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="boardOverviewTitle" tabindex="-1">
         <div class="modal-header">
             <h3 id="boardOverviewTitle">Vue d'ensemble des donnes</h3>
             <div class="modal-header-actions">
-                <button type="button" class="btn btn-secondary btn-small" onclick="uiCloseBoardOverview()" data-modal-initial-focus>Fermer</button>
+                <button type="button" class="btn btn-secondary btn-small" data-ui-click="close-board-overview" data-modal-initial-focus>Fermer</button>
             </div>
         </div>
         <div id="boardOverviewList" class="board-overview-list"></div>
@@ -589,7 +594,7 @@
      moteur, pas l'optimisation de chargement par defer. -->
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <!-- Pusher Channels pour la diffusion temps réel. -->
-<script src="https://js.pusher.com/8.4/pusher.min.js"></script>
+<script src="https://js.pusher.com/8.4.0/pusher.min.js"></script>
 <script src="bidding-rules.js"></script>
 <!-- L'ancien moteur PLAY reste chargé uniquement pour les utilitaires/fallback canonique,
      exactement comme bidding-engine-legacy.js dans PONS v2.61(9). -->
@@ -607,5 +612,6 @@
 <script src="session-storage.js"></script>
 <script src="realtime-updates.js"></script>
 <script src="app.js"></script>
+<script src="ui-events.js"></script>
 </body>
 </html>
