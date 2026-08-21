@@ -806,6 +806,8 @@ sur *"GitHub Actions"* (pas *"Deploy from a branch"*). Après un `git push`, l'o
 
 
 ## Sécurité : capacités, CSP et rotation
+> Compatibilité iOS 15.x : la CSP autorise aussi `unsafe-eval` en plus de `wasm-unsafe-eval`, car les anciens WebKit refusent sinon l’instanciation WebAssembly de PONS. Le code PLAY reste sans `eval`/`Function` et les handlers inline restent interdits.
+
 
 - Le code court de salle est un identifiant humain, **pas** un secret cloud. La lecture et
   le relais utilisent une `accessKey`; l'écriture complète utilise une `hostWriteKey`
