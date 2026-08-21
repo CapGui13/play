@@ -3,7 +3,7 @@
 // Le code 4 chiffres reste un identifiant humain. L'accès cloud utilise en plus une clé
 // de capacité aléatoire propre à la salle, stockée localement sur chaque appareil ayant
 // réellement participé. Cette clé est reçue lors de la réservation, via le lien de partage
-// ou via le P2P ('welcome'). Elle n'est jamais incluse dans le snapshot de partie.
+// ou via le P2P ('session-access'). Elle n'est jamais incluse dans le snapshot de partie.
 
 const SESSION_API_BASE = 'https://api-gen-beta.vercel.app';
 const SESSION_PUSH_RETRIES = 2;
@@ -75,45 +75,18 @@ function sessionAuthHeaders(roomCode, withJson = false) {
     if (accessKey) headers['X-Bridge-Session-Key'] = accessKey;
     return headers;
 }
-function localReconnectTokenForLegacyClaim() {
-    try { return localStorage.getItem('bridgeBidReconnectToken') || ''; }
-    catch (e) { return ''; }
+// La migration `claim-legacy` a été volontairement désactivée : un identifiant/ticket
+// présent dans un ancien snapshot n'est pas une preuve secrète et ne doit jamais permettre
+// de récupérer la capacité durable d'une salle sécurisée. Les anciennes salles sans clé
+// doivent être recréées plutôt que converties automatiquement.
+async function claimLegacySessionAccess() {
+    return null;
 }
 
-// Migration transparente des salles créées avant les clés de capacité. Le backend ne
-// renvoie une clé que si ce reconnectToken figure déjà dans l'état de la salle.
-async function claimLegacySessionAccess(roomCode, reconnectToken = localReconnectTokenForLegacyClaim()) {
-    const code = normalizeSessionRoomCode(roomCode);
-    if (!code || !reconnectToken) return null;
-    try {
-        const resp = await fetch(`${SESSION_API_BASE}/api/session`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action: 'claim-legacy', code, reconnectToken }),
-            cache: 'no-store'
-        });
-        if (!resp.ok) return null; // ancien backend ou preuve refusée : comportement non bloquant
-        const body = await resp.json().catch(() => null);
-        const key = body && typeof body.accessKey === 'string' ? body.accessKey : null;
-        if (!key || !rememberSessionAccessKey(code, key)) return null;
-        return key;
-    } catch (e) {
-        return null;
-    }
-}
-
-async function fetchWithSessionCapability(roomCode, url, options = {}, { allowLegacyClaim = true } = {}) {
+async function fetchWithSessionCapability(roomCode, url, options = {}) {
     const code = normalizeSessionRoomCode(roomCode);
     const opts = { ...options, headers: { ...(options.headers || {}), ...sessionAuthHeaders(code, false) } };
-    let resp = await fetch(url, opts);
-    if ((resp.status === 401 || resp.status === 403) && allowLegacyClaim) {
-        const claimed = await claimLegacySessionAccess(code);
-        if (claimed) {
-            const retryOpts = { ...options, headers: { ...(options.headers || {}), ...sessionAuthHeaders(code, false) } };
-            resp = await fetch(url, retryOpts);
-        }
-    }
-    return resp;
+    return fetch(url, opts);
 }
 
 // Réserve un code 4 chiffres. Avec le backend sécurisé, la réponse contient aussi la clé

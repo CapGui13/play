@@ -96,14 +96,14 @@ let guestJoinAttemptToken = 0;
 // une connexion live normale, y compris avec relais TURN, tout en restant nettement plus
 // rapide que 45s pour le cas légitime visé à l'origine (salle vraiment vide/expirée).
 const EARLY_CLOUD_CHECK_DELAY_MS = 12000;
-// Voir uiCreateRoom : nom du créateur d'origine, figé une fois pour toutes (jamais
-// réécrit par une reprise ou un transfert d'hôte) — voir renderGameHeader pour l'affichage.
+// Identité de l'autorité persistante de la SALLE COURANTE. À la création normale,
+// elle désigne le créateur. Un transfert manuel crée volontairement une NOUVELLE salle :
+// le participant promu devient donc le creator de cette nouvelle salle (voir
+// 'prepare-become-host'), afin qu'une reprise à froid lui rende aussi l'autorité P2P.
 let roomCreatorName = null;
-// Idem pour son jeton de reconnexion — sert UNIQUEMENT à reconnaître le créateur d'origine
-// quand il revient via uiResumeFromCloud (voir échange avec Guillaume — "on n'est plus
-// obligé de passer par le P2P") : ses sièges peuvent encore être étiquetés littéralement
-// 'host' (reliquat de sa session live d'origine), et c'est ce jeton qui permet de les
-// migrer vers son vrai jeton dès son premier retour asynchrone.
+// Jeton privé local du creator de la salle courante, utilisé par uiResumeFromCloud pour
+// distinguer celui qui peut recréer le vrai Peer hôte d'un participant qui ne fait qu'une
+// reprise différée locale. Il n'est jamais conservé lorsqu'on repasse en rôle invité.
 let roomCreatorToken = null;
 
 // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 4 — nettoyage) : la reprise automatique
@@ -159,6 +159,7 @@ let pendingHostTransferTarget = null;
 // hôte dans 'prepare-become-host' pour qu'il puisse déjà lui réserver sa place/son siège
 // sous ce jeton, avant même qu'il ne se reconnecte.
 let pendingHostTransferOldToken = null;
+let pendingHostTransferOldCredential = null;
 
 // Jeton de reconnexion propre à ce navigateur, généré une fois puis conservé dans
 // localStorage — survit à un rechargement ET à la fermeture/réouverture de l'onglet
@@ -183,6 +184,175 @@ function getReconnectToken() {
         }
         return window._fallbackReconnectToken;
     }
+}
+
+// ===== Identité P2P invitée durcie =====
+//
+// Le participantId est PUBLIC et peut être diffusé dans lobby-state. Le reconnectSecret
+// est PRIVÉ : il n'est envoyé qu'en métadonnée de la connexion directe au host et n'est
+// jamais inclus dans participants/lobby-state/start-game/resync ni dans le snapshot cloud.
+// Le host conserve uniquement, sur son propre appareil, la table participantId -> secret
+// nécessaire pour reconnaître une vraie reconnexion. Un id public observé par un autre
+// peer ne constitue donc plus une preuve d'identité.
+const GUEST_ROOM_IDENTITY_STORAGE_KEY = 'bridgeBidGuestRoomIdentityV2';
+const HOST_GUEST_RECONNECT_STORAGE_KEY = 'bridgeBidHostGuestReconnectSecretsV2';
+const GUEST_IDENTITY_MAX_AGE_MS = 70 * 24 * 60 * 60 * 1000;
+const MODERN_GUEST_ID_RE = /^p_[A-Za-z0-9_-]{24,96}$/;
+const SAFE_GUEST_ID_RE = /^(?:p_[A-Za-z0-9_-]{24,96}|p[A-Za-z0-9]{8,96}|guest\d{1,3})$/;
+const RECONNECT_SECRET_RE = /^s_[A-Za-z0-9_-]{32,160}$/;
+const identityRecoveryAttemptedRooms = new Set();
+
+function secureRandomBase64Url(byteLength) {
+    const bytes = new Uint8Array(byteLength);
+    if (!window.crypto || typeof window.crypto.getRandomValues !== 'function') {
+        throw new Error('Générateur cryptographique indisponible.');
+    }
+    window.crypto.getRandomValues(bytes);
+    let raw = '';
+    for (let i = 0; i < bytes.length; i++) raw += String.fromCharCode(bytes[i]);
+    return btoa(raw).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+function createGuestReconnectCredential() {
+    return {
+        participantId: 'p_' + secureRandomBase64Url(18),
+        reconnectSecret: 's_' + secureRandomBase64Url(32)
+    };
+}
+
+function isModernGuestParticipantId(id) {
+    return typeof id === 'string' && MODERN_GUEST_ID_RE.test(id);
+}
+
+function isSafeParticipantId(id) {
+    return id === 'host' || (typeof id === 'string' && SAFE_GUEST_ID_RE.test(id));
+}
+
+function isValidReconnectSecret(secret) {
+    return typeof secret === 'string' && RECONNECT_SECRET_RE.test(secret);
+}
+
+function readGuestRoomIdentityMap() {
+    let map = {};
+    try { map = JSON.parse(localStorage.getItem(GUEST_ROOM_IDENTITY_STORAGE_KEY) || '{}'); }
+    catch (e) { map = {}; }
+    if (!map || typeof map !== 'object' || Array.isArray(map)) map = {};
+    const now = Date.now();
+    let changed = false;
+    for (const code of Object.keys(map)) {
+        const item = map[code];
+        if (!item || !isModernGuestParticipantId(item.participantId)
+                || !isValidReconnectSecret(item.reconnectSecret)
+                || !Number.isFinite(item.savedAt)
+                || now - item.savedAt > GUEST_IDENTITY_MAX_AGE_MS) {
+            delete map[code];
+            changed = true;
+        }
+    }
+    if (changed) {
+        try { localStorage.setItem(GUEST_ROOM_IDENTITY_STORAGE_KEY, JSON.stringify(map)); } catch (e) {}
+    }
+    return map;
+}
+
+function rememberGuestRoomCredential(roomCode, credential) {
+    const code = String(roomCode || '').trim();
+    if (!/^\d{4}$/.test(code) || !credential
+            || !isModernGuestParticipantId(credential.participantId)
+            || !isValidReconnectSecret(credential.reconnectSecret)) return false;
+    const map = readGuestRoomIdentityMap();
+    map[code] = {
+        participantId: credential.participantId,
+        reconnectSecret: credential.reconnectSecret,
+        savedAt: Date.now()
+    };
+    try { localStorage.setItem(GUEST_ROOM_IDENTITY_STORAGE_KEY, JSON.stringify(map)); }
+    catch (e) { return false; }
+    return true;
+}
+
+function getGuestRoomCredential(roomCode, createIfMissing = true) {
+    const code = String(roomCode || '').trim();
+    if (!/^\d{4}$/.test(code)) return null;
+    const map = readGuestRoomIdentityMap();
+    const existing = map[code];
+    if (existing && isModernGuestParticipantId(existing.participantId)
+            && isValidReconnectSecret(existing.reconnectSecret)) {
+        return { participantId: existing.participantId, reconnectSecret: existing.reconnectSecret };
+    }
+    if (!createIfMissing) return null;
+    const credential = createGuestReconnectCredential();
+    rememberGuestRoomCredential(code, credential);
+    return credential;
+}
+
+function forgetGuestRoomCredential(roomCode) {
+    const code = String(roomCode || '').trim();
+    const map = readGuestRoomIdentityMap();
+    if (map[code]) {
+        delete map[code];
+        try { localStorage.setItem(GUEST_ROOM_IDENTITY_STORAGE_KEY, JSON.stringify(map)); } catch (e) {}
+    }
+}
+
+// Table privée du host courant. Elle n'est jamais placée dans les messages P2P généraux
+// ni dans buildCloudStatePayload(). Elle survit à un reload du même host via localStorage.
+let guestReconnectSecretsByParticipantId = {};
+
+function readHostGuestReconnectSecrets(roomCode) {
+    const code = String(roomCode || '').trim();
+    let all = {};
+    try { all = JSON.parse(localStorage.getItem(HOST_GUEST_RECONNECT_STORAGE_KEY) || '{}'); }
+    catch (e) { all = {}; }
+    if (!all || typeof all !== 'object' || Array.isArray(all)) all = {};
+    const item = all[code];
+    const src = item && item.secrets && typeof item.secrets === 'object' && !Array.isArray(item.secrets)
+        ? item.secrets : {};
+    const clean = {};
+    for (const [id, secret] of Object.entries(src)) {
+        if (isModernGuestParticipantId(id) && isValidReconnectSecret(secret)) clean[id] = secret;
+    }
+    return clean;
+}
+
+function persistHostGuestReconnectSecrets(roomCode = currentRoomCode) {
+    const code = String(roomCode || '').trim();
+    if (!/^\d{4}$/.test(code)) return;
+    let all = {};
+    try { all = JSON.parse(localStorage.getItem(HOST_GUEST_RECONNECT_STORAGE_KEY) || '{}'); }
+    catch (e) { all = {}; }
+    if (!all || typeof all !== 'object' || Array.isArray(all)) all = {};
+    all[code] = { secrets: { ...guestReconnectSecretsByParticipantId }, savedAt: Date.now() };
+    const entries = Object.entries(all)
+        .filter(([, value]) => value && Number.isFinite(value.savedAt)
+            && Date.now() - value.savedAt <= GUEST_IDENTITY_MAX_AGE_MS)
+        .sort((a, b) => (b[1].savedAt || 0) - (a[1].savedAt || 0))
+        .slice(0, 16);
+    all = Object.fromEntries(entries);
+    try { localStorage.setItem(HOST_GUEST_RECONNECT_STORAGE_KEY, JSON.stringify(all)); } catch (e) {}
+}
+
+function loadHostGuestReconnectSecrets(roomCode) {
+    guestReconnectSecretsByParticipantId = readHostGuestReconnectSecrets(roomCode);
+}
+
+function registerHostGuestReconnectSecret(participantId, reconnectSecret) {
+    if (!isModernGuestParticipantId(participantId) || !isValidReconnectSecret(reconnectSecret)) return false;
+    guestReconnectSecretsByParticipantId[participantId] = reconnectSecret;
+    persistHostGuestReconnectSecrets();
+    return true;
+}
+
+function guestConnectionMetadata(roomCode, nickname, credentialOverride = null) {
+    const credential = credentialOverride || getGuestRoomCredential(roomCode, true);
+    if (!credential) throw new Error('Identité invitée indisponible.');
+    if (credentialOverride) rememberGuestRoomCredential(roomCode, credentialOverride);
+    return {
+        participantId: credential.participantId,
+        reconnectSecret: credential.reconnectSecret,
+        nickname: nickname,
+        avatarColor: isAllowedAvatarColor(savedAvatarColor) ? savedAvatarColor : null
+    };
 }
 
 let mySeats = null;         // sièges contrôlés par ce joueur pendant la partie
@@ -213,10 +383,10 @@ function isKibbitz() {
 // localement les boutons All pass / Reset / Rotation / Réorganisation / Voir les 4 mains
 // et pouvait faire diverger son écran de celui du nouvel hôte.
 //
-// Le second terme reste nécessaire pour le mode différé : le créateur d'origine peut y
-// être contrôleur technique avec son vrai jeton plutôt qu'avec l'identifiant littéral
-// 'host'. Un autre participant ayant repris la salle en différé ne doit pas recevoir ces
-// privilèges d'organisation.
+// Le second terme reste nécessaire pour le mode différé : le creator de la salle courante
+// peut y être contrôleur technique avec son vrai jeton plutôt qu'avec l'identifiant
+// littéral 'host'. Un autre participant ayant repris la salle en différé ne doit pas
+// recevoir ces privilèges d'organisation.
 function isTrueOriginalHost() {
     return myRole === 'host' && (myParticipantId === 'host' || myParticipantId === roomCreatorToken);
 }
@@ -1252,6 +1422,53 @@ const AVATAR_COLOR_PALETTE = [
     '#9ACD32', // YellowGreen
 ];
 
+function isAllowedAvatarColor(value) {
+    return typeof value === 'string' && AVATAR_COLOR_PALETTE.includes(value.toUpperCase());
+}
+
+function normalizeAvatarColor(value) {
+    if (!isAllowedAvatarColor(value)) return null;
+    return value.toUpperCase();
+}
+
+function normalizePublicParticipantList(list) {
+    if (!Array.isArray(list)) return null;
+    const out = [];
+    const seen = new Set();
+    for (const raw of list) {
+        if (!raw || typeof raw !== 'object' || !isSafeParticipantId(raw.id) || seen.has(raw.id)) return null;
+        const name = typeof raw.name === 'string' ? raw.name.trim().slice(0, 40) : '';
+        if (!name) return null;
+        if (Object.prototype.hasOwnProperty.call(raw, 'reconnectSecret')) return null;
+        const avatarColor = raw.avatarColor == null ? null : normalizeAvatarColor(raw.avatarColor);
+        if (raw.avatarColor != null && !avatarColor) return null;
+        const p = {
+            id: raw.id,
+            name,
+            disconnected: !!raw.disconnected,
+            disconnectedAt: Number.isFinite(raw.disconnectedAt) ? raw.disconnectedAt : null
+        };
+        if (avatarColor) p.avatarColor = avatarColor;
+        seen.add(p.id);
+        out.push(p);
+    }
+    return out;
+}
+
+function normalizePublicSeatAssignment(value, participantList) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const ids = new Set((participantList || []).map(p => p.id));
+    const out = {};
+    for (const seat of SEATS) {
+        const occupant = value[seat];
+        if (occupant == null || occupant === '') out[seat] = null;
+        else if (occupant === SEAT_PENDING) out[seat] = SEAT_PENDING;
+        else if (isSafeParticipantId(occupant) && (ids.size === 0 || ids.has(occupant))) out[seat] = occupant;
+        else return null;
+    }
+    return out;
+}
+
 function avatarColorForId(id) {
     // Surcharge manuelle (voir échange avec Guillaume, uiRandomizeAvatarColor) : si ce
     // participant a choisi une couleur (au clic, ou reprise automatiquement depuis
@@ -1687,7 +1904,7 @@ function uiCreateRoom() {
 
     myRole = 'host';
     myParticipantId = 'host';
-    participants = [{ id: 'host', name: savedNickname || 'Hôte', ...(savedAvatarColor ? { avatarColor: savedAvatarColor } : {}) }];
+    participants = [{ id: 'host', name: savedNickname || 'Hôte', ...(normalizeAvatarColor(savedAvatarColor) ? { avatarColor: normalizeAvatarColor(savedAvatarColor) } : {}) }];
     // Voir échange avec Guillaume (session asynchrone à deux — "je ne veux pas de bascule
     // d'hôte") : figé une seule fois, ici, à la création — jamais réécrit ensuite, y
     // compris par une reprise cloud ou un transfert d'hôte manuel (voir uiResumeFromCloud). L'affichage "Hôte : X" (voir renderGameHeader) utilise TOUJOURS
@@ -1698,6 +1915,7 @@ function uiCreateRoom() {
     roomCreatorToken = getReconnectToken();
     seatAssignment = { N: null, E: null, S: null, W: null };
     guestIndexByToken = {};
+    guestReconnectSecretsByParticipantId = {};
     prevSeatAssignmentSnapshot = null;
     prevParticipantsDisconnectedSnapshot = null;
     chatMessages = [];
@@ -1779,52 +1997,69 @@ function buildHostHandlers(onOpenExtra) {
             // modifier l'interface comme hôte.
             if (myRole !== 'host') return;
             setConnectionStatus(true);
-            // Jeton fourni par l'invité (persistant côté lui, via localStorage) : s'il est
-            // déjà connu, c'est un retour (reconnexion), pas un nouvel arrivant. Repli sur un
-            // id à l'ancienne pour un client qui n'enverrait pas de jeton (compat).
-            const token = (metadata && metadata.reconnectToken) || ('guest' + guestIndex);
+            // Identité invitée V2 : l'id est public, le secret de reconnexion ne l'est
+            // jamais. Un participant existant n'est reconnu comme revenant QUE si le secret
+            // présenté sur cette connexion correspond à celui enregistré localement par le
+            // host. Connaître/copier un participantId vu dans lobby-state ne suffit donc plus.
+            const token = metadata && typeof metadata.participantId === 'string'
+                ? metadata.participantId.trim() : '';
+            const reconnectSecret = metadata && typeof metadata.reconnectSecret === 'string'
+                ? metadata.reconnectSecret.trim() : '';
+            if (!isModernGuestParticipantId(token) || !isValidReconnectSecret(reconnectSecret)) {
+                rejectPeerProtocolMessage({ type: 'identity' }, guestIndex, 'identité invitée invalide ou client obsolète');
+                peerConn.send({ type: 'identity-rejected', reason: 'invalid-credential' }, guestIndex);
+                const badConn = peerConn.conns && peerConn.conns[guestIndex];
+                setTimeout(() => { try { if (badConn) badConn.close(); } catch (e) {} }, 80);
+                return;
+            }
 
-            // Voir échange avec Guillaume : si ce jeton avait déjà une connexion active à un
-            // AUTRE index (retour après une coupure que le WebRTC n'a pas encore détectée
-            // côté hôte — fréquent sur mobile, en arrière-plan ou en changeant de réseau),
-            // on la ferme explicitement plutôt que de la laisser traîner en double à côté de
-            // la nouvelle. Sans ça, l'ancienne connexion "fantôme" continuait d'exister
-            // silencieusement, avec un risque de messages envoyés au mauvais endroit.
+            let p = participants.find(x => x.id === token);
+            const isReturning = !!p;
+            if (isReturning) {
+                const expectedSecret = guestReconnectSecretsByParticipantId[token];
+                if (!expectedSecret || expectedSecret !== reconnectSecret) {
+                    // IMPORTANT : ne ferme surtout pas l'ancienne connexion légitime ici.
+                    // Cette nouvelle connexion n'est pas encore liée à `token`, donc une
+                    // tentative d'usurpation ne peut ni voler le siège ni éjecter son vrai
+                    // propriétaire déjà connecté.
+                    rejectPeerProtocolMessage({ type: 'identity' }, guestIndex, 'preuve de reconnexion invalide');
+                    peerConn.send({ type: 'identity-rejected', reason: 'reconnect-proof-invalid' }, guestIndex);
+                    const badConn = peerConn.conns && peerConn.conns[guestIndex];
+                    setTimeout(() => { try { if (badConn) badConn.close(); } catch (e) {} }, 80);
+                    return;
+                }
+            } else if (!registerHostGuestReconnectSecret(token, reconnectSecret)) {
+                rejectPeerProtocolMessage({ type: 'identity' }, guestIndex, 'credential invitée non enregistrable');
+                const badConn = peerConn.conns && peerConn.conns[guestIndex];
+                setTimeout(() => { try { if (badConn) badConn.close(); } catch (e) {} }, 20);
+                return;
+            }
+
+            // Seulement APRÈS authentification : une reconnexion valide peut remplacer une
+            // ancienne DataConnection fantôme portant la même identité publique.
             const previousGuestIndex = guestIndexByToken[token];
             if (previousGuestIndex !== undefined && previousGuestIndex !== guestIndex) {
                 const staleConn = peerConn.conns[previousGuestIndex];
                 if (staleConn) {
-                    pushDebugLog(`Jeton ${token.slice(0, 10)}… déjà connecté à l'ancien index #${previousGuestIndex} — fermeture de cette connexion fantôme.`);
+                    pushDebugLog(`Participant ${token.slice(0, 10)}… déjà connecté à l'ancien index #${previousGuestIndex} — fermeture de cette connexion fantôme.`);
                     try { staleConn.close(); } catch (e) { /* déjà fermée, sans importance */ }
                     peerConn.conns[previousGuestIndex] = null;
                 }
             }
             guestIndexByToken[token] = guestIndex;
 
-            let p = participants.find(x => x.id === token);
-            const isReturning = !!p;
             const wasDisconnected = isReturning && p.disconnected;
             const wasAlreadySeatedBeforeConnect = SEATS.some(seat => seatAssignment[seat] === token);
             if (!p) {
-                // Un pseudo sauvegardé côté invité (voir savedNickname) prime sur le nom
-                // générique "Guest #N" — transmis via les métadonnées de connexion, comme
-                // le jeton de reconnexion. Même principe pour la couleur d'avatar (voir
-                // échange avec Guillaume, session du 8 août — "qu'il récupère
-                // automatiquement la dernière couleur utilisée").
-                const nickname = metadata && metadata.nickname;
-                const avatarColorFromMeta = metadata && metadata.avatarColor;
+                const nickname = metadata && typeof metadata.nickname === 'string'
+                    ? metadata.nickname.trim().slice(0, 20) : '';
+                const avatarColorFromMeta = normalizeAvatarColor(metadata && metadata.avatarColor);
                 p = { id: token, name: nickname || defaultParticipantName(token), disconnected: false, disconnectedAt: null };
                 if (avatarColorFromMeta) p.avatarColor = avatarColorFromMeta;
                 participants.push(p);
-                // Voir échange avec Guillaume (session asynchrone à deux — "il faut lui
-                // attribuer un siège") : un nouvel arrivant qui trouve un siège encore
-                // SEAT_PENDING le revendique automatiquement, ici même, à la connexion —
-                // sans ça, il fallait que l'hôte soit PRÉSENT au moment précis où son
-                // partenaire se connecte pour l'y placer à la main, ce qui annulait tout
-                // l'intérêt de pouvoir jouer en différé. Couvre à la fois le cas où l'hôte
-                // est encore en ligne à ce moment-là ET la reprise cloud (uiResumeFromCloud
-                // fait la même chose pour SA propre connexion, mais un autre participant qui
-                // arriverait ensuite passe forcément par ici).
+                // Un nouvel arrivant peut toujours revendiquer un siège explicitement
+                // SEAT_PENDING. Son identité est déjà au format fermé et son secret a été
+                // enregistré avant toute attribution.
                 const pendingSeat = SEATS.find(seat => seatAssignment[seat] === SEAT_PENDING);
                 if (pendingSeat) {
                     seatAssignment[pendingSeat] = token;
@@ -1835,7 +2070,7 @@ function buildHostHandlers(onOpenExtra) {
                 p.disconnected = false;
                 p.disconnectedAt = null;
             }
-            pushDebugLog(`Connexion #${guestIndex} : jeton ${token.slice(0, 10)}… → ${isReturning ? 'reconnexion reconnue (' + p.name + ')' : 'nouveau participant'}`);
+            pushDebugLog(`Connexion #${guestIndex} : identité ${token.slice(0, 10)}… → ${isReturning ? 'reconnexion prouvée (' + p.name + ')' : 'nouveau participant'}`);
             // Voir échange avec Guillaume (session du 23 juillet — "un bandeau similaire
             // à celui du wizz") : remplace flashWelcomeBack, même mécanique de toast que
             // le wizz (voir styles.css), texte simplifié avec le siège si assis.
@@ -1848,7 +2083,7 @@ function buildHostHandlers(onOpenExtra) {
 
             // Ne jamais donner la capacité cloud à un simple nouveau pair qui connaît
             // seulement le code 4 chiffres. Une reconnexion déjà assise, elle, prouve son
-            // identité par son reconnectToken stable et peut récupérer la capacité.
+            // identité par sa preuve de reconnexion privée et peut récupérer la capacité.
             if (isReturning && wasAlreadySeatedBeforeConnect) {
                 sendSessionAccessToParticipant(token);
             }
@@ -1928,6 +2163,7 @@ function buildHostHandlers(onOpenExtra) {
                 hostTransferInProgress = false;
                 pendingHostTransferTarget = null;
                 pendingHostTransferOldToken = null;
+                pendingHostTransferOldCredential = null;
                 showHostTransferStatus('Le participant visé par le transfert vient de se déconnecter. Transfert annulé, vous restez hôte.', true);
             }
             broadcastLobbyState();
@@ -2291,7 +2527,7 @@ function uiNicknamePromptKeydown(event) {
 // / 'become-host-ready' dans handlePeerData) : dans les deux cas, on repart d'un état de
 // salon vierge, qui sera reconstitué dès réception du premier 'lobby-state' du nouvel hôte —
 // exactement comme un rejoin normal.
-function connectAsGuest(code, token, nickname) {
+function connectAsGuest(code, token, nickname, credentialOverride = null) {
     if (peerConn) peerConn.destroy();
     // Statut honnête tout de suite : sans ça, la barre garde l'affichage précédent
     // ("Connecté") pendant tout le temps de la nouvelle connexion, ce qui pouvait laisser
@@ -2301,6 +2537,13 @@ function connectAsGuest(code, token, nickname) {
 
     myRole = 'guest';
     myParticipantId = null; // fixé à réception du message 'welcome'
+    // Une bascule host -> guest (transfert volontaire) ne doit jamais conserver les
+    // marqueurs d'autorité persistante de l'ancienne salle. Sans ce nettoyage, l'ancien
+    // hôte gardait son roomCreatorToken en mémoire et pouvait le republier dans le cloud
+    // de la NOUVELLE salle via buildCloudStatePayload(), malgré le transfert réussi.
+    roomCreatorToken = null;
+    currentHostReconnectToken = null;
+    roomCreatorName = null;
     participants = [];
     seatAssignment = { N: null, E: null, S: null, W: null };
     currentRoomCode = code;
@@ -2326,8 +2569,16 @@ function connectAsGuest(code, token, nickname) {
     // entre-temps.
     const attemptToken = ++guestJoinAttemptToken;
     peerConn = new BridgePeerConnection(buildGuestHandlers());
-    pushDebugLog(`Connexion au salon ${code} avec le jeton ${token.slice(0, 10)}…`);
-    peerConn.joinRoom(code, { reconnectToken: token, nickname: nickname, avatarColor: savedAvatarColor });
+    let metadata;
+    try {
+        metadata = guestConnectionMetadata(code, nickname, credentialOverride);
+    } catch (e) {
+        hideConnectingOverlay();
+        showLandingError('Impossible de créer une identité de reconnexion sécurisée sur cet appareil.');
+        return;
+    }
+    pushDebugLog(`Connexion au salon ${code} avec l'identité ${metadata.participantId.slice(0, 10)}…`);
+    peerConn.joinRoom(code, metadata);
 
     // Voir échange avec Guillaume ("connexion en cours en boucle" quand A vient tout juste
     // de lancer en mode différé) : dans ce mode, il n'y a jamais personne à trouver en
@@ -2346,8 +2597,8 @@ function connectAsGuest(code, token, nickname) {
     }, EARLY_CLOUD_CHECK_DELAY_MS);
 }
 
-// Reconnexion après coupure : même code de salon, même jeton (localStorage) — l'hôte
-// reconnaît le jeton et renvoie automatiquement les sièges et l'état de partie en cours.
+// Reconnexion après coupure : même code de salon, même credential privée (localStorage) —
+// l'hôte vérifie le secret et renvoie automatiquement les sièges et l'état de partie en cours.
 function uiReconnect() {
     // Voir échange avec Guillaume (session du 23 juillet — "l'hôte n'a aucun bouton
     // Se reconnecter") : ce bouton (voir reconnectBtn dans index.html) sert maintenant
@@ -2367,9 +2618,10 @@ function uiReconnect() {
     if (peerConn) peerConn.destroy();
     setConnectionStatus(false);
     peerConn = new BridgePeerConnection(buildGuestHandlers());
-    const token = getReconnectToken();
-    pushDebugLog(`Reconnexion au salon ${currentRoomCode} avec le jeton ${token.slice(0, 10)}…`);
-    peerConn.joinRoom(currentRoomCode, { reconnectToken: token, nickname: savedNickname, avatarColor: savedAvatarColor });
+    const credential = getGuestRoomCredential(currentRoomCode, true);
+    if (!credential) return;
+    pushDebugLog(`Reconnexion au salon ${currentRoomCode} avec l'identité ${credential.participantId.slice(0, 10)}…`);
+    peerConn.joinRoom(currentRoomCode, guestConnectionMetadata(currentRoomCode, savedNickname, credential));
 }
 
 // Voir échange avec Guillaume (session du 23 juillet) : la reconnexion AUTOMATIQUE de
@@ -3164,9 +3416,10 @@ function attemptGuestAutoReconnect() {
     }
     if (peerConn) peerConn.destroy();
     peerConn = new BridgePeerConnection(buildGuestHandlers());
-    const token = getReconnectToken();
-    pushDebugLog(`Reconnexion automatique en arrière-plan au salon ${currentRoomCode} avec le jeton ${token.slice(0, 10)}…`);
-    peerConn.joinRoom(currentRoomCode, { reconnectToken: token, nickname: savedNickname, avatarColor: savedAvatarColor });
+    const credential = getGuestRoomCredential(currentRoomCode, true);
+    if (!credential) return;
+    pushDebugLog(`Reconnexion automatique en arrière-plan au salon ${currentRoomCode} avec l'identité ${credential.participantId.slice(0, 10)}…`);
+    peerConn.joinRoom(currentRoomCode, guestConnectionMetadata(currentRoomCode, savedNickname, credential));
     scheduleGuestAutoReconnect();
 }
 
@@ -3441,10 +3694,11 @@ function uiTransferHost(targetId) {
 
     hostTransferInProgress = true;
     pendingHostTransferTarget = targetId;
-    // Généré maintenant (pas seulement au moment de rejoindre la nouvelle salle) : il faut
-    // que le nouvel hôte connaisse déjà ce jeton pour préparer la liste des participants et
-    // les sièges AVANT même que je ne m'y reconnecte.
-    pendingHostTransferOldToken = getReconnectToken();
+    // Prépare dès maintenant ma future identité INVITÉE dans la nouvelle salle. Le
+    // participantId public est placé dans les sièges hérités ; le reconnectSecret privé
+    // n'est transmis qu'au futur host dans le message ciblé prepare-become-host.
+    pendingHostTransferOldCredential = createGuestReconnectCredential();
+    pendingHostTransferOldToken = pendingHostTransferOldCredential.participantId;
     showHostTransferStatus(`Transfert de l'hôte à ${target.name} en cours...`, false);
 
     // On recalcule dès maintenant participants/seatAssignment tels qu'ils doivent apparaître
@@ -3468,7 +3722,15 @@ function uiTransferHost(targetId) {
     // Le transfert est une autorisation explicite de l'hôte : le futur hôte doit
     // pouvoir reprendre le cloud de la salle courante jusqu'à ce que son nouveau code soit prêt.
     sendSessionAccessToParticipant(targetId);
-    peerConn.send({ type: 'prepare-become-host', participants: newParticipants, seatAssignment: newSeatAssignment }, guestIndex);
+    const inheritedReconnectSecrets = { ...guestReconnectSecretsByParticipantId };
+    delete inheritedReconnectSecrets[targetId]; // le futur host n'est plus un guest
+    inheritedReconnectSecrets[pendingHostTransferOldCredential.participantId] = pendingHostTransferOldCredential.reconnectSecret;
+    peerConn.send({
+        type: 'prepare-become-host',
+        participants: newParticipants,
+        seatAssignment: newSeatAssignment,
+        reconnectSecrets: inheritedReconnectSecrets
+    }, guestIndex);
 
     // Filet de sécurité : au cas où ni 'become-host-ready' ni 'become-host-failed' ni même
     // onPeerDisconnected ne se déclenchent (silence radio complet — improbable mais pas
@@ -3478,6 +3740,7 @@ function uiTransferHost(targetId) {
             hostTransferInProgress = false;
             pendingHostTransferTarget = null;
             pendingHostTransferOldToken = null;
+            pendingHostTransferOldCredential = null;
             showHostTransferStatus('Le transfert a expiré sans réponse. Vous restez hôte, réessayez si besoin.', true);
         }
     }, 20000);
@@ -4113,6 +4376,7 @@ const PEER_TYPES_FROM_GUEST = new Set([
 
 const PEER_TYPES_FROM_HOST = new Set([
     'welcome',
+    'identity-rejected',
     'session-access',
     'prepare-become-host',
     'host-transferred',
@@ -4161,7 +4425,31 @@ function handlePeerData(msg, guestIndex) {
 
     switch (msg.type) {
         case 'welcome': {
+            if (!isSafeParticipantId(msg.yourId)) {
+                rejectPeerProtocolMessage(msg, guestIndex, 'identifiant welcome invalide');
+                break;
+            }
             myParticipantId = msg.yourId;
+            // Une récupération automatique qui a réussi ne doit pas condamner une future
+            // reconnexion de cette même salle dans le même onglet : le garde anti-boucle
+            // ne vaut que pour la tentative en cours.
+            if (currentRoomCode) identityRecoveryAttemptedRooms.delete(currentRoomCode);
+            break;
+        }
+
+        case 'identity-rejected': {
+            if (myRole !== 'guest' || !currentRoomCode) break;
+            const code = currentRoomCode;
+            pushDebugLog("Identité de reconnexion refusée par l'hôte — nouvelle identité locale pour rejoindre sans voler une ancienne place.");
+            forgetGuestRoomCredential(code);
+            if (identityRecoveryAttemptedRooms.has(code)) {
+                hideConnectingOverlay();
+                showLandingError('Impossible de valider votre identité de reconnexion. Rechargez PLAY puis rejoignez à nouveau la salle.');
+                break;
+            }
+            identityRecoveryAttemptedRooms.add(code);
+            if (peerConn) peerConn.destroy();
+            setTimeout(() => connectAsGuest(code, null, savedNickname), 120);
             break;
         }
 
@@ -4188,8 +4476,20 @@ function handlePeerData(msg, guestIndex) {
             if (myRole !== 'guest') break;
             pushDebugLog('Transfert d\'hôte reçu, création de la nouvelle salle...');
 
-            const inheritedParticipants = msg.participants;
-            const inheritedSeatAssignment = msg.seatAssignment;
+            const inheritedParticipants = normalizePublicParticipantList(msg.participants);
+            const inheritedSeatAssignment = normalizePublicSeatAssignment(msg.seatAssignment, inheritedParticipants || []);
+            if (!inheritedParticipants || !inheritedSeatAssignment) {
+                rejectPeerProtocolMessage(msg, guestIndex, 'état de transfert invalide');
+                break;
+            }
+            const inheritedReconnectSecrets = {};
+            if (msg.reconnectSecrets && typeof msg.reconnectSecrets === 'object' && !Array.isArray(msg.reconnectSecrets)) {
+                for (const [id, secret] of Object.entries(msg.reconnectSecrets)) {
+                    if (isModernGuestParticipantId(id) && isValidReconnectSecret(secret)) {
+                        inheritedReconnectSecrets[id] = secret;
+                    }
+                }
+            }
             // Gardée dans une variable locale plutôt que relue depuis la globale `peerConn`
             // plus bas : voir le commentaire juste après sur la bascule immédiate de l'état.
             const oldPeerConn = peerConn;
@@ -4209,7 +4509,23 @@ function handlePeerData(msg, guestIndex) {
                 myParticipantId = 'host';
                 participants = inheritedParticipants;
                 seatAssignment = inheritedSeatAssignment;
+
+                // Le transfert crée une NOUVELLE salle : l'autorité persistante doit donc
+                // appartenir au nouvel hôte, pas au créateur de l'ancienne salle. Ces trois
+                // valeurs doivent être posées AVANT toute sauvegarde locale/cloud du nouveau
+                // salon, faute de quoi roomCreatorToken pouvait retomber sur le token de
+                // l'ancien hôte via currentHostReconnectToken et inverser l'autorité lors
+                // d'une reprise à froid.
+                const promotedHostToken = getReconnectToken();
+                roomCreatorToken = promotedHostToken;
+                currentHostReconnectToken = promotedHostToken;
+                const promotedHostParticipant = participants.find(p => p.id === 'host');
+                roomCreatorName = (promotedHostParticipant && promotedHostParticipant.name)
+                    || savedNickname || 'Hôte';
+
                 guestIndexByToken = {};
+                guestReconnectSecretsByParticipantId = inheritedReconnectSecrets;
+                persistHostGuestReconnectSecrets(newRoomCode);
                 prevSeatAssignmentSnapshot = null;
                 prevParticipantsDisconnectedSnapshot = null;
                 lobbyChatAutoOpened = false;
@@ -4253,10 +4569,12 @@ function handlePeerData(msg, guestIndex) {
             peerConn.sendExcept({ type: 'host-transferred', newRoomCode }, targetIndex);
 
             const myOldToken = pendingHostTransferOldToken;
+            const myOldCredential = pendingHostTransferOldCredential;
             const myName = savedNickname;
             hostTransferInProgress = false;
             pendingHostTransferTarget = null;
             pendingHostTransferOldToken = null;
+            pendingHostTransferOldCredential = null;
             showHostTransferStatus(null);
             // Voir échange avec Guillaume (session du 23 juillet — reprise via
             // localStorage) : on vient de transférer l'hôte volontairement à quelqu'un
@@ -4266,7 +4584,7 @@ function handlePeerData(msg, guestIndex) {
             // affectées.
             clearHostGameStateStorage(currentRoomCode);
 
-            connectAsGuest(newRoomCode, myOldToken, myName);
+            connectAsGuest(newRoomCode, myOldToken, myName, myOldCredential);
             break;
         }
 
@@ -4282,6 +4600,7 @@ function handlePeerData(msg, guestIndex) {
             hostTransferInProgress = false;
             pendingHostTransferTarget = null;
             pendingHostTransferOldToken = null;
+            pendingHostTransferOldCredential = null;
             showHostTransferStatus("Le transfert a échoué (" + (msg.reason || 'raison inconnue') + "). Vous restez hôte.", true);
             break;
         }
@@ -4291,8 +4610,15 @@ function handlePeerData(msg, guestIndex) {
         // on rejoint simplement la nouvelle salle avec son propre jeton, comme un join normal.
         case 'host-transferred': {
             if (myRole !== 'guest') break;
-            pushDebugLog('Hôte transféré, on rejoint la nouvelle salle ' + msg.newRoomCode);
-            connectAsGuest(msg.newRoomCode, getReconnectToken(), savedNickname);
+            const newRoomCode = typeof msg.newRoomCode === 'string' ? msg.newRoomCode.trim() : '';
+            if (!/^\d{4}$/.test(newRoomCode)) break;
+            pushDebugLog('Hôte transféré, on rejoint la nouvelle salle ' + newRoomCode);
+            // Le nouvel host a reçu, de façon ciblée, la preuve de reconnexion associée à
+            // mon participantId actuel. Je réutilise donc cette même credential dans la
+            // nouvelle salle afin de conserver mes sièges sans jamais diffuser le secret.
+            const inheritedCredential = getGuestRoomCredential(currentRoomCode, false);
+            if (inheritedCredential) rememberGuestRoomCredential(newRoomCode, inheritedCredential);
+            connectAsGuest(newRoomCode, null, savedNickname, inheritedCredential);
             break;
         }
 
@@ -4316,8 +4642,12 @@ function handlePeerData(msg, guestIndex) {
         }
 
         case 'lobby-state': {
-            const newParticipants = msg.participants;
-            const newSeatAssignment = msg.seatAssignment;
+            const newParticipants = normalizePublicParticipantList(msg.participants);
+            const newSeatAssignment = normalizePublicSeatAssignment(msg.seatAssignment, newParticipants || []);
+            if (!newParticipants || !newSeatAssignment) {
+                rejectPeerProtocolMessage(msg, guestIndex, 'état public du salon invalide');
+                break;
+            }
             // Voir échange avec Guillaume (session du 23 juillet — "un bandeau similaire
             // à celui du wizz") : détecte maintenant les DEUX transitions (pas seulement
             // le retour) pour les AUTRES participants — la déconnexion utilise le même
@@ -8444,6 +8774,7 @@ function writeAllHostGameStates(map) {
 // via le cloud), plutôt que de dupliquer l'appel à chacun des call sites existants.
 function saveHostGameStateToStorage() {
     if (myRole !== 'host' || !deals || !currentRoomCode) return;
+    persistHostGuestReconnectSecrets(currentRoomCode);
     const payload = {
         roomCode: currentRoomCode,
         deals, boardIndex, seatAssignment, participants, autoPassSeats,
@@ -8582,6 +8913,7 @@ async function uiResumeHostSession(roomCode) {
     // journal combiné depuis un autre appareil.
     currentRoomCode = saved.roomCode;
     ensureCloudSyncContext(saved.roomCode);
+    loadHostGuestReconnectSecrets(saved.roomCode);
 
     if (typeof pullSessionState === 'function') {
         try {
@@ -8613,8 +8945,17 @@ async function uiResumeHostSession(roomCode) {
     boardIndex = saved.boardIndex || 0;
     if (!deals[boardIndex].auctionHistory) deals[boardIndex].auctionHistory = [];
     auctionHistory = deals[boardIndex].auctionHistory;
-    seatAssignment = saved.seatAssignment || { N: null, E: null, S: null, W: null };
-    participants = saved.participants || [{ id: 'host', name: savedNickname || 'Hôte' }];
+    const resumedParticipants = normalizePublicParticipantList(saved.participants || [{ id: 'host', name: savedNickname || 'Hôte' }]);
+    const resumedSeatAssignment = normalizePublicSeatAssignment(saved.seatAssignment || { N: null, E: null, S: null, W: null }, resumedParticipants || []);
+    if (!resumedParticipants || !resumedSeatAssignment) {
+        pushDebugLog('Reprise locale refusée : identité participant/sièges invalides.');
+        clearHostGameStateStorage(saved.roomCode);
+        showScreen('screen-landing');
+        showLandingError('Cette sauvegarde locale contient des identifiants invalides et a été refusée par sécurité.');
+        return;
+    }
+    seatAssignment = resumedSeatAssignment;
+    participants = resumedParticipants;
     // Repli sur le participant 'host' actuel pour une sauvegarde antérieure à l'ajout de
     // ce champ (voir échange avec Guillaume) — sans quoi une session déjà en cours au
     // moment de la mise à jour du code perdrait ce nom au premier rechargement.
@@ -8825,12 +9166,12 @@ function validateCloudSnapshot(result, expectedRoomCode) {
         if (!Number.isInteger(st.boardIndex) || st.boardIndex < 0 || st.boardIndex >= st.deals.length) {
             throw new Error(`boardIndex invalide (${st.boardIndex})`);
         }
-        if (!st.seatAssignment || typeof st.seatAssignment !== 'object') throw new Error('seatAssignment absent');
-        for (const seat of SEATS) {
-            const v = st.seatAssignment[seat];
-            if (!(v == null || typeof v === 'string')) throw new Error(`seatAssignment.${seat} invalide`);
-        }
-        if (st.participants != null && !Array.isArray(st.participants)) throw new Error('participants invalide');
+        const cleanParticipants = normalizePublicParticipantList(st.participants || []);
+        if (!cleanParticipants) throw new Error('participants invalides');
+        const cleanSeatAssignment = normalizePublicSeatAssignment(st.seatAssignment, cleanParticipants);
+        if (!cleanSeatAssignment) throw new Error('seatAssignment invalide');
+        st.participants = cleanParticipants;
+        st.seatAssignment = cleanSeatAssignment;
         if (st.chatMessages != null && !Array.isArray(st.chatMessages)) throw new Error('chatMessages invalide');
         if (expected != null) st.roomCode = expected;
         return { version: result.version, updatedAt: result.updatedAt, state: st };
@@ -9493,15 +9834,23 @@ function uiResumeFromCloud() {
     if (!cloudResumeCandidate) return;
     const st = cloudResumeCandidate.state;
     const codeToReclaim = st.roomCode || currentRoomCode;
-    const myToken = getReconnectToken();
+    const hostToken = getReconnectToken();
+    const creatorToken = st.roomCreatorToken || st.hostReconnectToken || null;
+    const isCreatorResume = !!creatorToken && hostToken === creatorToken;
+    const guestCredential = isCreatorResume ? null : getGuestRoomCredential(codeToReclaim, true);
+    const myToken = isCreatorResume ? hostToken : (guestCredential ? guestCredential.participantId : null);
+    if (!myToken || !isSafeParticipantId(myToken)) {
+        hideConnectingOverlay();
+        showLandingError('Impossible de restaurer une identité locale sécurisée pour cette salle.');
+        return;
+    }
 
     // Cas 0 : je suis le créateur d'origine de la salle qui revient — ses sièges peuvent
     // encore être étiquetés littéralement 'host', reliquat de sa session live d'origine
     // (voir uiCreateRoom). Migration une fois pour toutes vers mon vrai jeton : après ça,
     // plus jamais besoin de cette étiquette spéciale pour retrouver ma place. Repli sur
     // hostReconnectToken pour une salle créée avant l'ajout de roomCreatorToken.
-    const creatorToken = st.roomCreatorToken || st.hostReconnectToken || null;
-    if (creatorToken && myToken === creatorToken) {
+    if (isCreatorResume) {
         SEATS.filter(seat => st.seatAssignment[seat] === 'host')
             .forEach(seat => { st.seatAssignment[seat] = myToken; });
         const legacyHostParticipant = st.participants.find(p => p.id === 'host');
@@ -9519,7 +9868,7 @@ function uiResumeFromCloud() {
         if (claimedSeat) {
             st.seatAssignment[claimedSeat] = myToken;
             if (!st.participants.some(p => p.id === myToken)) {
-                st.participants.push({ id: myToken, name: savedNickname || 'Joueur', ...(savedAvatarColor ? { avatarColor: savedAvatarColor } : {}) });
+                st.participants.push({ id: myToken, name: savedNickname || 'Joueur', ...(normalizeAvatarColor(savedAvatarColor) ? { avatarColor: normalizeAvatarColor(savedAvatarColor) } : {}) });
             }
         }
     }
@@ -9534,7 +9883,7 @@ function uiResumeFromCloud() {
     // même, simplement sans siège (comme n'importe quel kibbitz) — seul un participant
     // pas encore connu de cette salle a besoin d'être ajouté à `participants`.
     if (!claimedSeat && !st.participants.some(p => p.id === myToken)) {
-        st.participants.push({ id: myToken, name: savedNickname || 'Joueur', ...(savedAvatarColor ? { avatarColor: savedAvatarColor } : {}) });
+        st.participants.push({ id: myToken, name: savedNickname || 'Joueur', ...(normalizeAvatarColor(savedAvatarColor) ? { avatarColor: normalizeAvatarColor(savedAvatarColor) } : {}) });
     }
 
     // Voir plus bas (après restauration complète de l'état) : la connexion — réelle ou
@@ -9563,7 +9912,7 @@ function uiResumeFromCloud() {
     advanceRobotBidsOnAllBoards(boardIndex); // voir échange avec Guillaume — prérequis d'"avance rapide"/"vue d'ensemble"
     chatMessages = st.chatMessages || [];
     roomCreatorName = st.roomCreatorName || (participants.find(p => p.id === 'host') || {}).name || 'Hôte';
-    roomCreatorToken = creatorToken || myToken;
+    roomCreatorToken = creatorToken || hostToken;
 
     const disconnectedAt = Date.now();
     participants.forEach(p => {
@@ -9580,6 +9929,8 @@ function uiResumeFromCloud() {
     myParticipantId = myToken;
     mySeats = SEATS.filter(seat => seatAssignment[seat] === myParticipantId);
     currentRoomCode = codeToReclaim;
+    if (isCreatorResume) loadHostGuestReconnectSecrets(codeToReclaim);
+    else guestReconnectSecretsByParticipantId = {};
 
     // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 2, révisée après le test de Guillaume —
     // "quand l'hôte revient, l'invité reste marqué déconnecté, et la donne suivante ne le
@@ -9596,7 +9947,7 @@ function uiResumeFromCloud() {
     // toujours, y compris pour ce qui n'y passe volontairement jamais (changement de
     // donne, voir "Ne touche jamais boardIndex ici" dans applyCloudUpdate).
     if (peerConn) peerConn.destroy();
-    if (creatorToken && myToken === creatorToken) {
+    if (isCreatorResume) {
         // Voir échange avec Guillaume ("le wizz vise l'hôte mais rate — sa cible n'est
         // pas 'host' littéralement") : remappage INVERSE de celui du "Cas 0" tout en
         // haut de cette fonction — celui-ci migre volontairement 'host' vers myToken,
