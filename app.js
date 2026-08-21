@@ -9166,7 +9166,56 @@ function renderBoardOverview() {
             </button>
         `;
     }).join('');
+
+    // Si la modale est déjà ouverte (mise à jour réseau/enchère pendant qu'on la
+    // consulte), recalculer le léger ajustement typographique mobile après le rendu.
+    const overviewModal = document.getElementById('boardOverviewModal');
+    if (overviewModal && overviewModal.style.display !== 'none') {
+        requestAnimationFrame(fitBoardOverviewMobileRows);
+    }
 }
+
+// Vue d'ensemble mobile : les quatre couleurs, le contrat atteint et le PAR doivent
+// rester sur UNE seule ligne. Le CSS récupère d'abord un maximum de largeur (marges et
+// gaps réduits) ; cette passe ne réduit la police de la main que si une main donnée est
+// encore réellement trop large. On ne touche jamais au desktop ni aux colonnes contrat/PAR.
+function fitBoardOverviewMobileRows() {
+    if (!window.matchMedia || !window.matchMedia('(max-width: 760px)').matches) return;
+    const modal = document.getElementById('boardOverviewModal');
+    if (!modal || modal.style.display === 'none') return;
+
+    const hands = Array.from(modal.querySelectorAll('.board-overview-hand'));
+    if (!hands.length) return;
+
+    // Repartir de la taille CSS normale avant chaque mesure (rotation du téléphone,
+    // changement de largeur, nouveau rendu de la liste, etc.).
+    hands.forEach(hand => { hand.style.fontSize = ''; });
+
+    // La mesure doit se faire après le reset ci-dessus pour ne pas conserver une petite
+    // taille calculée pour une orientation précédente.
+    hands.forEach(hand => {
+        const available = hand.clientWidth;
+        const required = hand.scrollWidth;
+        if (!available || required <= available + 1) return;
+
+        const basePx = parseFloat(getComputedStyle(hand).fontSize) || 12;
+        // Petite marge (0,97) contre les arrondis sub-pixel WebKit. 9px reste lisible et
+        // suffit largement pour une main de bridge de 13 cartes sur les iPhone étroits.
+        const fittedPx = Math.max(9, basePx * (available / required) * 0.97);
+        hand.style.fontSize = `${fittedPx.toFixed(2)}px`;
+    });
+}
+
+let boardOverviewFitResizeRaf = null;
+window.addEventListener('resize', () => {
+    const modal = document.getElementById('boardOverviewModal');
+    if (!modal || modal.style.display === 'none') return;
+    if (boardOverviewFitResizeRaf) cancelAnimationFrame(boardOverviewFitResizeRaf);
+    boardOverviewFitResizeRaf = requestAnimationFrame(() => {
+        boardOverviewFitResizeRaf = null;
+        fitBoardOverviewMobileRows();
+    });
+});
 
 function uiOpenBoardOverview() {
     if (!deals) return;
@@ -9174,6 +9223,7 @@ function uiOpenBoardOverview() {
     const modal = document.getElementById('boardOverviewModal');
     if (!modal) return;
     modal.style.display = 'flex';
+    requestAnimationFrame(fitBoardOverviewMobileRows);
     activateAccessibleModal(modal, { closeOnEscape: uiCloseBoardOverview });
 }
 

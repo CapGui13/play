@@ -3970,3 +3970,135 @@ table.dd-table td.dd-secondary-contract {
     gap: 8px;
     margin-top: 8px;
 }
+
+/* MINI UPDATE 2026-08-21 — Vue d'ensemble mobile compacte
+   Objectif demandé : une donne = une ligne sur téléphone, tout en conservant le contrat
+   atteint et le PAR. Les HCP sont masqués uniquement dans cette modale sur mobile ; le
+   desktop et les autres affichages HCP restent inchangés. On récupère aussi la largeur
+   actuellement perdue dans les marges/paddings du modal et on resserre l'espace entre
+   les quatre couleurs. */
+@media (max-width: 760px) {
+    #boardOverviewModal {
+        padding: 6px;
+    }
+
+    #boardOverviewModal .modal-panel {
+        width: 100%;
+        max-height: calc(100dvh - 12px);
+        border-radius: 10px;
+    }
+
+    #boardOverviewModal .modal-header {
+        padding: 10px 10px;
+        gap: 8px;
+    }
+
+    #boardOverviewModal .modal-header h3 {
+        font-size: 1rem;
+        line-height: 1.08;
+        margin: 0;
+    }
+
+    #boardOverviewModal .modal-header .btn {
+        padding: 7px 10px;
+        flex-shrink: 0;
+    }
+
+    #boardOverviewModal .board-overview-list {
+        padding: 8px 4px 10px;
+        gap: 5px;
+    }
+
+    #boardOverviewModal .board-overview-row {
+        grid-template-columns: 20px minmax(0, 1fr) minmax(36px, max-content) minmax(42px, max-content);
+        column-gap: 4px;
+        row-gap: 0;
+        padding: 7px 5px;
+        min-height: 44px;
+        border-radius: 7px;
+        font-size: 0.78rem;
+    }
+
+    #boardOverviewModal .board-overview-number {
+        font-size: 0.86rem;
+    }
+
+    #boardOverviewModal .board-overview-hand {
+        display: flex;
+        flex-wrap: nowrap;
+        align-items: center;
+        gap: 0 4px;
+        min-width: 0;
+        overflow: hidden;
+        white-space: nowrap;
+        font-size: clamp(0.69rem, 3.05vw, 0.79rem);
+        line-height: 1.05;
+    }
+
+    #boardOverviewModal .board-overview-hand-suit {
+        flex: 0 0 auto;
+        margin: 0;
+    }
+
+    #boardOverviewModal .board-overview-hand-hcp {
+        display: none;
+    }
+
+    #boardOverviewModal .board-overview-contract,
+    #boardOverviewModal .board-overview-par {
+        min-width: 0;
+        gap: 2px;
+        justify-content: center;
+        white-space: nowrap;
+        font-size: 0.74rem;
+        line-height: 1;
+    }
+
+    #boardOverviewModal .board-overview-status {
+        font-size: inherit;
+        white-space: nowrap;
+    }
+
+    #boardOverviewModal .board-overview-declarer {
+        font-size: 0.66rem;
+        white-space: nowrap;
+    }
+}
+
+/* Les écrans ~320–360 px ont très peu de marge. On garde exactement les mêmes quatre
+   informations, mais on réduit encore les espaces avant d'accepter un retour à la ligne. */
+@media (max-width: 360px) {
+    #boardOverviewModal {
+        padding: 3px;
+    }
+
+    #boardOverviewModal .modal-panel {
+        max-height: calc(100dvh - 6px);
+    }
+
+    #boardOverviewModal .board-overview-list {
+        padding-left: 2px;
+        padding-right: 2px;
+    }
+
+    #boardOverviewModal .board-overview-row {
+        grid-template-columns: 18px minmax(0, 1fr) minmax(33px, max-content) minmax(39px, max-content);
+        column-gap: 3px;
+        padding: 6px 4px;
+        min-height: 42px;
+    }
+
+    #boardOverviewModal .board-overview-hand {
+        gap: 0 3px;
+        font-size: clamp(0.64rem, 3vw, 0.72rem);
+    }
+
+    #boardOverviewModal .board-overview-contract,
+    #boardOverviewModal .board-overview-par {
+        font-size: 0.69rem;
+    }
+
+    #boardOverviewModal .board-overview-declarer {
+        font-size: 0.61rem;
+    }
+}
