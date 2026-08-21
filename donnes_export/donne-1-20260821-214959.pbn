@@ -1,0 +1,33 @@
+[Event "Table d'enchères"]
+[Site "capgui13.github.io/play"]
+[Board "1"]
+[Dealer "N"]
+[Vulnerable "None"]
+[Deal "N:AQT4.KJ52.T43.T2 763.Q64.72.AQJ76 K982.A8.AK5.K983 J5.T973.QJ986.54"]
+[Contract "2D"]
+[Declarer "N"]
+[Auction "N"]
+Pass Pass 1NT Pass
+2D Pass Pass Pass
+[OptimumResultTable "Declarer;Denomination\2R;Result\2R"]
+N NT 10
+N S 11
+N H 10
+N D 9
+N C 10
+E NT 3
+E S 2
+E H 3
+E D 4
+E C 3
+S NT 10
+S S 11
+S H 10
+S D 9
+S C 10
+W NT 3
+W S 2
+W H 3
+W D 4
+W C 3
+
