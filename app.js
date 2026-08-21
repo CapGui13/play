@@ -2533,18 +2533,20 @@ function uiJoinRoom() {
     });
 }
 
-// Demande le pseudo avant de rejoindre une salle — voir échange avec Guillaume ("le
-// formulaire pourrait apparaître avec le précédent pseudo pré-rempli") : affiché à CHAQUE
-// fois désormais, plutôt que sauté entièrement quand un pseudo est déjà enregistré sur cet
-// appareil (voir savedNickname) — pré-rempli avec ce pseudo le cas échéant (voir
-// La sélection automatique du champ au focus est gérée par ui-events.js : le premier caractère tapé
-// remplace tout plutôt que de s'ajouter à la suite). `action` reste toujours différée
-// jusqu'à validation de la modale (voir uiConfirmNicknamePrompt).
+// Demande le pseudo avant de rejoindre une salle — affichée à CHAQUE fois. Si un pseudo
+// existe déjà sur cet appareil, on ne le met plus dans `value` (ce qui le faisait apparaître
+// sélectionné sur mobile) : on l'affiche comme placeholder grisé. Ainsi, valider sans rien
+// taper conserve le pseudo précédent, tandis que commencer à écrire crée immédiatement une
+// nouvelle valeur et remplace implicitement l'ancien pseudo sans aucune touche Effacer.
+// `action` reste différée jusqu'à validation de la modale (voir uiConfirmNicknamePrompt).
 let pendingJoinAfterNickname = null;
 function ensureNicknameThenProceed(action) {
     pendingJoinAfterNickname = action;
     const input = document.getElementById('nicknamePromptInput');
-    if (input) input.value = savedNickname || '';
+    if (input) {
+        input.value = '';
+        input.placeholder = savedNickname || 'Votre pseudo';
+    }
     const overlay = document.getElementById('nicknamePromptOverlay');
     if (overlay) overlay.style.display = 'flex';
     setTimeout(() => { if (input) input.focus(); }, 50);
@@ -2552,7 +2554,8 @@ function ensureNicknameThenProceed(action) {
 
 function uiConfirmNicknamePrompt() {
     const input = document.getElementById('nicknamePromptInput');
-    const trimmed = (input && input.value || '').trim();
+    const typed = (input && input.value || '').trim();
+    const trimmed = typed || (savedNickname || '').trim();
     if (!trimmed) {
         if (input) input.focus();
         return;
@@ -5557,22 +5560,34 @@ function updateBoardControlVisibility() {
     // Réservé à l'hôte (voir échange avec Guillaume) : changer qui est assis où reste une
     // décision d'organisation de la table, pas quelque chose qu'un simple joueur assis
     // devrait pouvoir déclencher pour tout le monde.
+    //
+    // Update UI 21/08 : sur la vue invité desktop, les emplacements invisibles de Rotation /
+    // Réorganiser ne doivent plus réserver de largeur sur la 2e ligne. L'export de session
+    // reste bien sur cette 2e ligne, mais devient son premier bouton visible. On utilise donc
+    // display:none pour ces contrôles hôte sur un invité (au lieu de visibility:hidden).
+    const isOriginalHost = isTrueOriginalHost();
     const rotateBtn = document.getElementById('rotateSeatsBtn');
-    // visibility (pas display:none) pour que l'espace du bouton reste réservé même masqué
-    // (voir échange avec Guillaume) : sinon .game-actions (flex-wrap) n'a pas le même
-    // nombre de boutons visibles selon le rôle, et la ligne se coupe différemment pour
-    // l'hôte que pour les autres.
     if (rotateBtn) {
-        rotateBtn.style.visibility = isTrueOriginalHost() ? '' : 'hidden';
-        rotateBtn.style.pointerEvents = isTrueOriginalHost() ? '' : 'none';
+        rotateBtn.style.display = isOriginalHost ? '' : 'none';
+        rotateBtn.style.visibility = isOriginalHost ? '' : 'hidden';
+        rotateBtn.style.pointerEvents = isOriginalHost ? '' : 'none';
     }
     // Voir échange avec Guillaume (session du 23 juillet) : même traitement que
     // "Rotation" juste au-dessus — réservé à l'hôte, seul à pouvoir réorganiser qui joue
     // où (voir uiOpenSeatReorgModal).
     const seatReorgBtn = document.getElementById('seatReorgBtn');
     if (seatReorgBtn) {
-        seatReorgBtn.style.visibility = isTrueOriginalHost() ? '' : 'hidden';
-        seatReorgBtn.style.pointerEvents = isTrueOriginalHost() ? '' : 'none';
+        seatReorgBtn.style.display = isOriginalHost ? '' : 'none';
+        seatReorgBtn.style.visibility = isOriginalHost ? '' : 'hidden';
+        seatReorgBtn.style.pointerEvents = isOriginalHost ? '' : 'none';
+    }
+    const gameRotateCapabilitiesBtn = document.getElementById('gameRotateCapabilitiesBtn');
+    if (gameRotateCapabilitiesBtn) {
+        gameRotateCapabilitiesBtn.style.display = isOriginalHost ? '' : 'none';
+        if (!isOriginalHost) {
+            gameRotateCapabilitiesBtn.style.visibility = 'hidden';
+            gameRotateCapabilitiesBtn.style.pointerEvents = 'none';
+        }
     }
     // Téléchargement local pur (voir uiExportSessionPBN) : contrairement à l'export PBN
     // d'une seule donne (qui écrit sur le repo GitHub, réservé à l'hôte), rien n'empêche
@@ -5637,15 +5652,17 @@ function renderGameHeader() {
         const hostParticipant = participants.find(p => p.id === 'host');
         const displayedHostName = roomCreatorName || (hostParticipant ? hostParticipant.name : null);
         if (currentRoomCode) {
-            // Salle/Hôte sont volontairement toujours sur deux lignes, desktop comme
-            // mobile. Les libellés utilisent la même colonne de 5 caractères : « Hôte »
-            // gagne ainsi exactement un espace avant « : », ce qui aligne les deux
-            // deux-points sans bricoler la position selon la largeur de l'écran.
+            // Salle/Hôte restent sur deux lignes, mais sans repousser les trois icônes :
+            // le span invisible ci-dessous réserve EXACTEMENT la largeur qu'occupait
+            // l'ancien libellé sur une seule ligne (« Salle : XXXX · Hôte : Nom »). Les
+            // boutons retrouvent donc leur ancienne position ; le bloc visible à deux
+            // lignes est simplement centré dans cette largeur historique.
             const roomLine = `<span class="game-room-code-main"><span class="game-room-code-key">Salle</span><span class="game-room-code-sep">&nbsp;:&nbsp;</span><span class="game-room-code-value">${escapeHtml(String(currentRoomCode))}</span></span>`;
             const hostLine = displayedHostName
                 ? `<span class="game-room-code-host"><span class="game-room-code-key">Hôte</span><span class="game-room-code-sep">&nbsp;:&nbsp;</span><span class="game-room-code-value">${escapeHtml(String(displayedHostName))}</span></span>`
                 : '';
-            roomCodeEl.innerHTML = roomLine + hostLine;
+            const historicalOneLine = `Salle : ${escapeHtml(String(currentRoomCode))}${displayedHostName ? ` · Hôte : ${escapeHtml(String(displayedHostName))}` : ''}`;
+            roomCodeEl.innerHTML = `<span class="game-room-code-sizer" aria-hidden="true">${historicalOneLine}</span><span class="game-room-code-visible">${roomLine}${hostLine}</span>`;
         } else {
             roomCodeEl.textContent = '';
         }

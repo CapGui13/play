@@ -100,16 +100,14 @@
         <div class="nickname-prompt-card">
             <h2>Quel est votre pseudo ?</h2>
             <p>Il sera visible par les autres joueurs de la partie.</p>
-            <!-- Voir échange avec Guillaume ("si la personne commence à taper, ça
-                 l'efface direct, pas ajouté à la suite") : pré-rempli avec le pseudo
-                 précédent (voir ensureNicknameThenProceed dans app.js) — data-ui-select-on-focus="true"
-                 sélectionne tout le texte dès l'arrivée sur le champ (y compris le focus
-                 automatique posé par JS à l'ouverture, pas seulement un clic), même
-                 principe déjà en place sur myNameInput dans le salon : la première touche
-                 tapée remplace la sélection entière plutôt que de s'insérer au milieu ou à
-                 la fin. -->
+            <!-- Voir échange avec Guillaume : le pseudo mémorisé n'est plus injecté comme
+                 valeur sélectionnée. Il est affiché en placeholder grisé : valider sans
+                 rien taper reprend ce pseudo, tandis que la toute première lettre saisie
+                 écrit directement un nouveau pseudo sans avoir à effacer l'ancien.
+                 Les suggestions/corrections automatiques du clavier sont aussi désactivées
+                 autant que le permet le navigateur mobile. -->
             <label for="nicknamePromptInput" class="visually-hidden">Votre pseudo</label>
-            <input type="text" id="nicknamePromptInput" class="name-input" maxlength="20" enterkeyhint="go" data-ui-keydown="nickname" data-ui-select-on-focus="true">
+            <input type="text" id="nicknamePromptInput" class="name-input" maxlength="20" enterkeyhint="go" data-ui-keydown="nickname" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false">
             <button type="button" class="btn btn-primary" data-ui-click="confirm-nickname">Rejoindre</button>
         </div>
     </div>
@@ -141,7 +139,7 @@
             <div class="landing-card">
                 <h2>Rejoindre une partie</h2>
                 <p>Entrez le code à 4 chiffres partagé par l'autre joueur.</p>
-                <input type="text" id="joinCodeInput" class="code-input" placeholder="EX: 4728" maxlength="4" inputmode="numeric" pattern="[0-9]*" autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="go" data-ui-keydown="join-code">
+                <input type="text" id="joinCodeInput" class="code-input" placeholder="EX: 4728" maxlength="4" inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="go" data-ui-keydown="join-code">
                 <!-- ontouchstart : ferme le clavier virtuel DÈS le début du tap sur ce bouton plutôt
                      qu'au clic — sur mobile, avec le clavier encore ouvert, le premier tap sert
                      souvent juste à le fermer (le navigateur avale le clic), d'où le "il faut

@@ -78,11 +78,25 @@ input, textarea, [contenteditable] {
     -webkit-touch-callout: default;
 }
 
+/* Le fond de la racine doit être le même que celui de l'application : sur mobile,
+   notamment Safari/iOS, le rubber-band peut momentanément révéler la toile derrière
+   <body> lorsqu'on tire au-delà du haut ou du bas de la page. Sans fond explicite sur
+   <html>, cette zone prend le blanc par défaut du navigateur. */
+html {
+    min-height: 100%;
+    background: var(--felt-deep);
+    overscroll-behavior-y: none;
+}
+
 body {
     font-family: var(--font-body);
-    background: radial-gradient(ellipse at top, var(--felt-mid) 0%, var(--felt-deep) 70%);
+    background-color: var(--felt-deep);
+    background-image: radial-gradient(ellipse at top, var(--felt-mid) 0%, var(--felt-deep) 70%);
+    background-repeat: no-repeat;
     color: var(--text);
     min-height: 100vh;
+    min-height: 100dvh;
+    overscroll-behavior-y: none;
     padding: calc(56px + var(--safe-top)) 20px 20px;
     /* Garde-fou (voir échange avec Guillaume, session du 23 juillet) : un débordement
        horizontal d'un composant (ex. le bug .game-actions découvert en test réel sur
@@ -2113,12 +2127,13 @@ button.kibitz-chip {
 }
 
 .game-room-code-label {
-    /* Le bloc Salle/Hôte occupe l'espace restant avant les 3 icônes ; son contenu est
-       centré dans CET espace, tandis que les deux lignes gardent le même départ afin que
-       les ':' puissent être parfaitement alignés. */
-    flex: 1 1 auto;
-    display: grid;
-    justify-content: center;
+    /* Retour de la géométrie historique : ce bloc ne mange PLUS tout l'espace restant
+       avant les 3 icônes. Sa largeur est donnée par .game-room-code-sizer, qui reproduit
+       invisiblement l'ancien texte sur une seule ligne. Résultat : 🔗/🏠/🐞 reviennent à
+       leur ancienne position exacte, sans renoncer au rendu Salle/Hôte sur deux lignes. */
+    flex: 0 0 auto;
+    position: relative;
+    display: inline-block;
     min-width: 0;
     max-width: 100%;
     font-size: 0.78rem;
@@ -2127,11 +2142,26 @@ button.kibitz-chip {
     letter-spacing: 0.03em;
 }
 
-/* Toujours deux lignes, desktop compris : Hôte sous Salle. Chaque ligne partage une
-   colonne libellé de 5ch : « Salle » la remplit, « Hôte » laisse donc exactement un espace
-   avant le séparateur. */
-.game-room-code-label {
+/* Invisible mais dans le flux : réserve la largeur de l'ancien libellé
+   « Salle : XXXX · Hôte : Nom ». C'est cette largeur qui fixe la position des boutons. */
+.game-room-code-sizer {
+    visibility: hidden;
+    display: inline-block;
+    min-height: 2.4em; /* garde la hauteur historique actuelle de 2 lignes */
+    white-space: nowrap;
+    pointer-events: none;
+}
+
+/* Le texte visible à deux lignes se superpose au sizer et se centre dans SA largeur :
+   il est donc légèrement plus à droite que l'ancien départ gauche, exactement l'effet
+   recherché, sans déplacer les boutons. */
+.game-room-code-visible {
+    position: absolute;
+    inset: 0;
+    display: grid;
     grid-template-columns: 5ch max-content max-content;
+    justify-content: center;
+    align-content: center;
 }
 
 .game-room-code-label .game-room-code-main,
@@ -3343,7 +3373,21 @@ table.dd-table td.dd-secondary-contract {
    conservé. */
 @media (max-width: 340px) {
     .game-room-code-row { justify-content: center; }
-    .game-room-code-label { flex: 1 0 100%; }
+    .game-room-code-label {
+        flex: 1 0 100%;
+        display: grid;
+        justify-content: center;
+    }
+    /* Sur les très petits écrans, on ne réserve pas la largeur historique sur une ligne :
+       c'est précisément elle qui causait autrefois l'overflow à ~320 px. */
+    .game-room-code-sizer { display: none; }
+    .game-room-code-visible {
+        position: static;
+        inset: auto;
+        display: grid;
+        grid-template-columns: 5ch max-content max-content;
+        justify-content: center;
+    }
 }
 
 /* ===== Écran de jeu — ajustements mobile =====
