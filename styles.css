@@ -1065,7 +1065,7 @@ a.btn {
    que le .modal-panel générique (720px) — une main complète sur une ligne a besoin de
    place, contrairement aux autres modales qui n'affichent que du texte court. */
 #boardOverviewModal .modal-panel {
-    width: min(900px, 100%);
+    width: min(860px, calc(100% - 24px));
 }
 
 /* Voir échange avec Guillaume (session du 8 août — nouvelle vue d'ensemble, avec une
@@ -1076,11 +1076,11 @@ a.btn {
    la même forme), la main prend le reste de la place disponible. */
 .board-overview-row {
     display: grid;
-    grid-template-columns: 28px 1fr auto auto;
+    grid-template-columns: 28px minmax(0, 1fr) 42px minmax(52px, max-content) minmax(58px, max-content);
     align-items: center;
-    gap: 14px;
+    gap: 12px;
     width: 100%;
-    padding: 10px 14px;
+    padding: 9px 14px;
     background: var(--bid-button);
     border: 1px solid var(--border);
     border-radius: 8px;
@@ -1108,11 +1108,14 @@ a.btn {
 
 .board-overview-hand {
     display: flex;
-    flex-wrap: wrap;
-    gap: 2px 10px;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 0 8px;
     font-family: var(--font-mono, var(--font-body));
-    font-size: 0.85rem;
+    font-size: 0.88rem;
     min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
 }
 
 .board-overview-hand-suit {
@@ -1126,10 +1129,12 @@ a.btn {
 /* Voir échange avec Guillaume ("le nombre de points, légèrement à droite des cartes...
    en italique") : dernier élément du flex .board-overview-hand ci-dessus, son gap
    existant (10px) donne déjà l'espacement voulu, pas besoin de marge dédiée. */
-.board-overview-hand-hcp {
+.board-overview-hcp {
     font-style: italic;
     color: var(--text-muted);
     white-space: nowrap;
+    text-align: right;
+    justify-self: end;
 }
 
 .board-overview-contract,
@@ -4004,19 +4009,23 @@ table.dd-table td.dd-secondary-contract {
         flex-shrink: 0;
     }
 
+    #boardOverviewModal .modal-panel {
+        width: min(680px, calc(100% - 28px));
+    }
+
     #boardOverviewModal .board-overview-list {
-        padding: 8px 4px 10px;
+        padding: 8px 6px 10px;
         gap: 5px;
     }
 
     #boardOverviewModal .board-overview-row {
-        grid-template-columns: 20px minmax(0, 1fr) minmax(36px, max-content) minmax(42px, max-content);
+        grid-template-columns: 20px minmax(0, 1fr) 28px minmax(40px, max-content) minmax(46px, max-content);
         column-gap: 4px;
         row-gap: 0;
-        padding: 7px 5px;
-        min-height: 44px;
+        padding: 7px 6px;
+        min-height: 42px;
         border-radius: 7px;
-        font-size: 0.78rem;
+        font-size: 0.76rem;
     }
 
     #boardOverviewModal .board-overview-number {
@@ -4031,7 +4040,7 @@ table.dd-table td.dd-secondary-contract {
         min-width: 0;
         overflow: hidden;
         white-space: nowrap;
-        font-size: clamp(0.69rem, 3.05vw, 0.79rem);
+        font-size: clamp(0.68rem, 3vw, 0.78rem);
         line-height: 1.05;
     }
 
@@ -4040,8 +4049,10 @@ table.dd-table td.dd-secondary-contract {
         margin: 0;
     }
 
-    #boardOverviewModal .board-overview-hand-hcp {
-        display: none;
+    #boardOverviewModal .board-overview-hcp {
+        display: block;
+        min-width: 0;
+        font-size: 0.69rem;
     }
 
     #boardOverviewModal .board-overview-contract,
@@ -4050,7 +4061,7 @@ table.dd-table td.dd-secondary-contract {
         gap: 2px;
         justify-content: center;
         white-space: nowrap;
-        font-size: 0.74rem;
+        font-size: 0.72rem;
         line-height: 1;
     }
 
@@ -4073,19 +4084,20 @@ table.dd-table td.dd-secondary-contract {
     }
 
     #boardOverviewModal .modal-panel {
+        width: calc(100% - 18px);
         max-height: calc(100dvh - 6px);
     }
 
     #boardOverviewModal .board-overview-list {
-        padding-left: 2px;
-        padding-right: 2px;
+        padding-left: 3px;
+        padding-right: 3px;
     }
 
     #boardOverviewModal .board-overview-row {
-        grid-template-columns: 18px minmax(0, 1fr) minmax(33px, max-content) minmax(39px, max-content);
+        grid-template-columns: 18px minmax(0, 1fr) 24px minmax(37px, max-content) minmax(42px, max-content);
         column-gap: 3px;
-        padding: 6px 4px;
-        min-height: 42px;
+        padding: 6px 5px;
+        min-height: 40px;
     }
 
     #boardOverviewModal .board-overview-hand {
@@ -4093,9 +4105,13 @@ table.dd-table td.dd-secondary-contract {
         font-size: clamp(0.64rem, 3vw, 0.72rem);
     }
 
+    #boardOverviewModal .board-overview-hcp {
+        font-size: 0.64rem;
+    }
+
     #boardOverviewModal .board-overview-contract,
     #boardOverviewModal .board-overview-par {
-        font-size: 0.69rem;
+        font-size: 0.67rem;
     }
 
     #boardOverviewModal .board-overview-declarer {

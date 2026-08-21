@@ -9096,10 +9096,14 @@ function contractBadgeHtml(strain, level, declarerSeat, doubled) {
 // seule ligne ici plutôt que "XX HCP" comme ailleurs.
 function compactHandHtml(hand) {
     if (!hand) return '<span class="board-overview-hand-empty">—</span>';
-    const suitsHtml = ['S', 'H', 'D', 'C'].map(suit =>
+    return ['S', 'H', 'D', 'C'].map(suit =>
         `<span class="board-overview-hand-suit">${suitIconHtml(suit)}${formatRanksForDisplay(hand[suit]) || '—'}</span>`
     ).join('');
-    return `${suitsHtml}<span class="board-overview-hand-hcp">${computeHandHcp(hand)}H</span>`;
+}
+
+function compactHandHcpText(hand) {
+    if (!hand) return '—';
+    return `${computeHandHcp(hand)}H`;
 }
 
 function renderBoardOverview() {
@@ -9108,7 +9112,9 @@ function renderBoardOverview() {
     listEl.innerHTML = deals.map((deal, idx) => {
         const hist = deal.auctionHistory || [];
         const mySeat = myEffectiveSeatForDeal(deal);
-        const handHtml = compactHandHtml(mySeat ? deal.hands[mySeat] : null);
+        const hand = mySeat ? deal.hands[mySeat] : null;
+        const handHtml = compactHandHtml(hand);
+        const handHcpText = compactHandHcpText(hand);
         const auctionOver = isAuctionOver(hist);
 
         let reachedHtml;
@@ -9161,6 +9167,7 @@ function renderBoardOverview() {
             <button type="button" class="board-overview-row${activeClass}" data-ui-click="jump-board" data-board-index="${idx}"${titleAttr ? ` title="${escapeHtml(titleAttr)}"` : ''}>
                 <span class="board-overview-number">${deal.board != null ? deal.board : idx + 1}</span>
                 <span class="board-overview-hand">${handHtml}</span>
+                <span class="board-overview-hcp">${handHcpText}</span>
                 <span class="board-overview-contract">${reachedHtml}</span>
                 <span class="board-overview-par">${parHtml}</span>
             </button>
