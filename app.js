@@ -93,17 +93,37 @@ function computeHandHcp(hand) {
 // rester bloquée. Le chargement réel est maintenant strictement séquentiel, chaque fichier
 // a une retentative réseau fraîche, et le préchargement spéculatif est désactivé sur mobile,
 // Save-Data et réseaux lents.
+const PONS_CANONICAL_RULES_URL = 'pons/canonical-rules-v1.json';
+const PONS_RAW_WASM_URL = 'pons/pons_wasm_bg.wasm';
 const PONS_CLIENT_SCRIPT_URLS = [
-    'pons/canonical-rules-v1.js',
     'pons/bridge-engine-v1-browser.js',
     'pons/fiches-engine-v1-app.js?v=20260810-006',
     'pons/pons-semantic.js?v=20260812-semantic05-v216',
     'pons/pons-critic.js?v=20260815-v251-realworld-p0',
-    'pons/pons-wasm-embedded.js?v=20260817-v2619-portable',
+    'pons/pons-wasm-runtime.js?v=20260821-mobile-memory',
     'pons/pons-engine.js?v=20260817-v2619-portable-strict'
 ];
 let ponsClientLoadPromise = null;
+let ponsCanonicalRulesPromise = null;
 let ponsClientPreloadScheduled = false;
+let ponsLoadStage = 'idle';
+let ponsLastLoadError = null;
+
+function setPonsLoadStage(stage) {
+    ponsLoadStage = stage;
+    recordPlayPerfMilestone('pons-stage', stage);
+}
+
+if (typeof window !== 'undefined') {
+    window.getPonsLoadDiagnostic = () => ({
+        stage: ponsLoadStage,
+        error: ponsLastLoadError ? String(ponsLastLoadError.message || ponsLastLoadError) : null,
+        rulesLoaded: Array.isArray(window.BRIDGE_CANONICAL_RULES_V1) ? window.BRIDGE_CANONICAL_RULES_V1.length : 0,
+        wasmReady: !!window.PonsWasmModule,
+        engineReady: !!(window.PonsEngine && window.PonsEngine.loaded),
+        mobile: isLikelyMobileDevice()
+    });
+}
 
 function setPonsClientLoadingStatus(text, kind = 'is-offline') {
     const el = document.getElementById('ponsEngineStatus');
@@ -134,18 +154,55 @@ function ponsNeededForCurrentSetup() {
 
 function prefetchPonsClientScripts() {
     if (!ponsNeededForCurrentSetup() || isLikelyMobileDevice() || isConstrainedNetworkForPreload()) return false;
-    for (const src of PONS_CLIENT_SCRIPT_URLS) {
+    const assets = [
+        { src: PONS_CANONICAL_RULES_URL, as: 'fetch' },
+        ...PONS_CLIENT_SCRIPT_URLS.map(src => ({ src, as: 'script' })),
+        { src: PONS_RAW_WASM_URL, as: 'fetch' }
+    ];
+    for (const { src, as } of assets) {
         if (Array.from(document.querySelectorAll('link[data-pons-prefetch]')).some(link => link.dataset.ponsPrefetch === src)) continue;
         const link = document.createElement('link');
         // prefetch = opportuniste/faible priorité ; contrairement à preload il ne concurrence
         // pas les requêtes interactives du salon et le navigateur peut choisir de l'ignorer.
         link.rel = 'prefetch';
-        link.as = 'script';
+        link.as = as;
         link.href = src;
         link.dataset.ponsPrefetch = src;
         document.head.appendChild(link);
     }
     return true;
+}
+
+async function loadPonsCanonicalRules() {
+    if (Array.isArray(window.BRIDGE_CANONICAL_RULES_V1) && window.BRIDGE_CANONICAL_RULES_V1.length) {
+        return window.BRIDGE_CANONICAL_RULES_V1;
+    }
+    if (ponsCanonicalRulesPromise) return ponsCanonicalRulesPromise;
+
+    ponsCanonicalRulesPromise = (async () => {
+        let lastError;
+        for (let attempt = 0; attempt < 2; attempt++) {
+            try {
+                setPonsLoadStage(attempt ? 'canonical-rules-retry' : 'canonical-rules');
+                const url = ponsAttemptUrl(PONS_CANONICAL_RULES_URL, attempt);
+                const response = await fetch(url, { cache: attempt ? 'reload' : 'default' });
+                if (!response.ok) throw new Error(`Règles PONS HTTP ${response.status}`);
+                const rules = await response.json();
+                if (!Array.isArray(rules) || rules.length < 1000) throw new Error('Règles PONS JSON invalides');
+                window.BRIDGE_CANONICAL_RULES_V1 = rules;
+                recordPlayPerfMilestone('pons-canonical-ready', rules.length);
+                return rules;
+            } catch (err) {
+                lastError = err;
+                if (attempt) break;
+            }
+        }
+        throw lastError || new Error('Règles canoniques PONS indisponibles');
+    })().catch(err => {
+        ponsCanonicalRulesPromise = null;
+        throw err;
+    });
+    return ponsCanonicalRulesPromise;
 }
 
 function ponsAttemptUrl(src, attempt) {
@@ -198,10 +255,30 @@ async function loadPonsClientScript(src) {
                 setPonsClientLoadingStatus('🧠 PONS : nouvelle tentative de chargement…');
                 recordPlayPerfMilestone('pons-script-retry', src);
             }
+            setPonsLoadStage(`script:${src.split('?')[0]}`);
             await loadPonsClientScriptOnce(src, attempt);
+            // Le nouveau loader WASM est volontairement minuscule : son événement load
+            // signifie seulement que le glue JS est parsé. Il faut aussi attendre le vrai
+            // .wasm, compilé en streaming, avant de charger pons-engine.js.
+            if (src.includes('pons-wasm-runtime.js')) {
+                if (!window.PONS_WASM_RUNTIME_READY) throw new Error('Promise WASM PONS absente');
+                await window.PONS_WASM_RUNTIME_READY;
+                if (!window.PonsWasmModule) throw new Error('Module WASM PONS absent après initialisation');
+                recordPlayPerfMilestone('pons-wasm-ready');
+            }
             return;
         } catch (err) {
             lastError = err;
+            // Un glue JS peut être chargé avec succès alors que son fetch WASM a échoué.
+            // Dans ce cas, supprimer réellement le nœud et la promise rejetée afin que la
+            // seconde tentative reparte du réseau, au lieu de recycler un faux succès.
+            const stale = Array.from(document.scripts).find(script => script.dataset && script.dataset.ponsLazySrc === src);
+            if (stale) stale.remove();
+            if (src.includes('pons-wasm-runtime.js')) {
+                try { delete window.PONS_WASM_RUNTIME_READY; } catch (_) { window.PONS_WASM_RUNTIME_READY = null; }
+                try { delete window.PONS_WASM_RUNTIME_ERROR; } catch (_) { window.PONS_WASM_RUNTIME_ERROR = null; }
+                try { delete window.PonsWasmModule; } catch (_) { window.PonsWasmModule = null; }
+            }
         }
     }
     throw lastError || new Error(`Chargement PONS impossible : ${src}`);
@@ -218,20 +295,27 @@ async function ensurePonsClientReady() {
     if (ponsClientLoadPromise) return ponsClientLoadPromise;
 
     ponsClientLoadPromise = (async () => {
+        ponsLastLoadError = null;
         recordPlayPerfMilestone('pons-load-start', { mobile: isLikelyMobileDevice() });
         setPonsClientLoadingStatus('🧠 PONS : chargement du moteur…');
-        // Pas de rafale de preloads ici : les scripts sont téléchargés ET exécutés dans
-        // l'ordre exact PONS. Le service worker/cache HTTP rend les visites suivantes rapides.
+        // Les deux anciens monstres JS (règles ~9,5 Mo et WASM base64 ~4,8 Mo) ne sont plus
+        // parsés comme JavaScript sur le client. Les règles sont un JSON chargé avant le
+        // moteur canonique ; le WASM est un vrai binaire compilé en streaming. C'est le
+        // chemin par défaut sur desktop ET mobile pour garder exactement le même moteur.
+        await loadPonsCanonicalRules();
         for (const src of PONS_CLIENT_SCRIPT_URLS) await loadPonsClientScript(src);
         if (!window.PonsEngine) throw new Error('PONS v2.61 chargé mais API navigateur absente.');
+        setPonsLoadStage('engine-ready');
         const ready = await window.PonsEngine.ready;
         if (!ready || !window.PonsEngine.loaded) {
             throw window.PonsEngine.error || new Error('PONS v2.61 n’a pas pu être initialisé.');
         }
+        setPonsLoadStage('ready');
         recordPlayPerfMilestone('pons-load-ready');
         return window.PonsEngine;
     })().catch(err => {
-        recordPlayPerfMilestone('pons-load-failed', err && err.message ? err.message : String(err));
+        ponsLastLoadError = err;
+        recordPlayPerfMilestone('pons-load-failed', { stage: ponsLoadStage, message: err && err.message ? err.message : String(err) });
         setPonsClientLoadingStatus('❌ PONS v2.61 indisponible — robots bloqués');
         ponsClientLoadPromise = null;
         throw err;

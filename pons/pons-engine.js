@@ -35,9 +35,9 @@
   const readyPromise = (async () => {
     try {
       renderStatus('wait', '🧠 PONS : chargement du moteur WebAssembly…');
-      // Version portable : pons-wasm-embedded.js est chargé juste avant ce fichier et
-      // initialise EXACTEMENT les mêmes octets WASM que PONS v2.61(9). Cela évite le
-      // blocage des import()/fetch() sous file:// tout en restant identique sur GitHub Pages.
+      // Version navigateur : pons-wasm-runtime.js est chargé juste avant ce fichier et
+      // initialise EXACTEMENT les mêmes octets WASM que PONS v2.61(9), mais depuis un vrai
+      // fichier .wasm afin d'éviter le très gros littéral base64 et ses copies mémoire sur iOS.
       const mod = root.PonsWasmModule;
       if(!mod || typeof mod.pons_bid !== 'function') throw new Error('module PONS embarqué absent');
       moduleApi = mod;
