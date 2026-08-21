@@ -7,7 +7,7 @@
 // valeur ci-dessous est réécrite AUTOMATIQUEMENT à chaque déploiement par
 // .github/workflows/deploy.yml (dérivée du SHA du commit) : ne pas l'éditer à la main, ça
 // n'aurait d'effet que le temps d'un test local avant le prochain push.
-const CACHE_NAME = 'bridge-encheres-pons-v261-9-strict-wasm-1';
+const CACHE_NAME = 'bridge-encheres-perf2-20260821';
 
 // Ressources de la même origine : mises en cache de façon fiable via cache.addAll (un seul
 // échec fait échouer toute l'installation, ce qui est le comportement voulu ici — ce sont
@@ -19,7 +19,6 @@ const CORE_ASSETS = [
     './app.js',
     './ui-events.js',
     './bidding-rules.js',
-    './bidding-engine.js',
     // PONS (~15,2 Mo brut) est volontairement absent du pré-cache d'installation.
     // Il est chargé/caché à la demande après l'entrée dans un salon ; sinon chaque
     // déploiement saturait inutilement le réseau dès l'accueil et ralentissait même
@@ -34,20 +33,10 @@ const CORE_ASSETS = [
     './icons/apple-icon-180.png'
 ];
 
-// Ressources externes (CDN PeerJS, CDN Pusher, feuille de style Google Fonts) : utiles
-// hors-ligne, mais pas strictement critiques et hors de notre contrôle (CORS,
-// disponibilité). Mises en cache en best-effort (voir Promise.allSettled dans 'install')
-// pour qu'un échec sur l'une d'elles ne bloque pas l'installation du reste. Note : la
-// feuille de style Google Fonts référence elle-même des fichiers de police (.woff2) dont
-// l'URL exacte n'est connue qu'à la lecture de son contenu — impossible de les pré-cacher
-// ici à l'avance. Ils seront mis en cache au fil de l'eau par le gestionnaire 'fetch'
-// ci-dessous, dès leur premier chargement réel (mais resteront indisponibles hors-ligne
-// tant que ce premier chargement n'a pas eu lieu au moins une fois).
-const EXTERNAL_ASSETS = [
-    'https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js',
-    'https://js.pusher.com/8.4.0/pusher.min.js',
-    'https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Work+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap'
-];
+// Les dépendances CDN ne sont plus pré-cachées pendant l'installation. PeerJS/Pusher
+// sont chargés à la demande et les polices suivent leur cache HTTP/runtime normal. Cela
+// évite qu'une nouvelle version du service worker concurrence le clic « Créer » avec des
+// téléchargements réseau sans rapport avec l'écran en cours.
 
 self.addEventListener('install', (event) => {
     event.waitUntil(
@@ -66,16 +55,6 @@ self.addEventListener('install', (event) => {
             await Promise.all(
                 CORE_ASSETS.map(async (url) => {
                     const resp = await fetch(url, { cache: 'reload' });
-                    await cache.put(url, resp);
-                })
-            );
-            await Promise.allSettled(
-                EXTERNAL_ASSETS.map(async (url) => {
-                    // mode:'no-cors' : ces domaines ne renvoient pas forcément d'en-têtes
-                    // CORS permissifs. La réponse est alors "opaque" (illisible pour nous,
-                    // mais parfaitement rejouable par le navigateur) — suffisant pour de la
-                    // mise en cache pure, sans avoir besoin d'en inspecter le contenu.
-                    const resp = await fetch(url, { mode: 'no-cors', cache: 'reload' });
                     await cache.put(url, resp);
                 })
             );
@@ -154,6 +133,27 @@ self.addEventListener('fetch', (event) => {
         try { return new URL(request.url).origin === self.location.origin; }
         catch (e) { return false; }
     })();
+    const forceFreshPons = (() => {
+        try {
+            const u = new URL(request.url);
+            return isSameOrigin && u.searchParams.has('__pons_fresh') && u.pathname.includes('/pons/');
+        } catch (e) { return false; }
+    })();
+
+    // Une retentative explicite du loader PONS doit pouvoir contourner une entrée cache
+    // douteuse. Sans ce chemin, ignoreSearch:true pourrait resservir exactement le même
+    // fichier au retry malgré son paramètre anti-cache.
+    if (forceFreshPons) {
+        event.respondWith((async () => {
+            const response = await fetch(request, { cache: 'reload' });
+            if (response && response.ok) {
+                const cache = await caches.open(CACHE_NAME);
+                await cache.put(request, response.clone());
+            }
+            return response;
+        })());
+        return;
+    }
 
     event.respondWith(
         (async () => {

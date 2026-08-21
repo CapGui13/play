@@ -60,6 +60,71 @@ const INITIAL_CONNECT_RETRY_DELAY_MS = 1500;
 // tourner indéfiniment.
 const MAX_POST_OPEN_RECONNECT_ATTEMPTS = 5;
 
+// PeerJS n'est plus un <script> bloquant de l'écran d'accueil. Il est chargé seulement
+// au premier Create/Join, depuis une version figée 1.5.4. Deux CDN indépendants sont
+// tentés : une panne/lenteur d'unpkg ne doit plus rendre PLAY inutilisable.
+const PEERJS_SCRIPT_URLS = [
+    'https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js',
+    'https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.4/peerjs.min.js'
+];
+let peerJsLoadPromise = null;
+
+function peerPerf(name, detail) {
+    try {
+        if (typeof window !== 'undefined' && typeof window.recordPlayPerfMilestone === 'function') {
+            window.recordPlayPerfMilestone(name, detail);
+        }
+    } catch (e) { /* diagnostic seulement */ }
+}
+
+function loadExternalPeerScript(url, attempt) {
+    return new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = url;
+        script.async = true;
+        script.dataset.peerjsLoader = String(attempt);
+        let settled = false;
+        const timer = setTimeout(() => finish(false, new Error('PeerJS CDN timeout')), 20000);
+        const finish = (ok, err) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            if (ok && typeof Peer !== 'undefined') resolve(Peer);
+            else {
+                script.remove();
+                reject(err || new Error('PeerJS global absent après chargement'));
+            }
+        };
+        script.addEventListener('load', () => finish(true), { once: true });
+        script.addEventListener('error', () => finish(false, new Error('PeerJS CDN indisponible')), { once: true });
+        document.head.appendChild(script);
+    });
+}
+
+async function ensurePeerJsReady() {
+    if (typeof Peer !== 'undefined') return Peer;
+    if (peerJsLoadPromise) return peerJsLoadPromise;
+    peerJsLoadPromise = (async () => {
+        peerPerf('peerjs-load-start');
+        let lastError;
+        for (let i = 0; i < PEERJS_SCRIPT_URLS.length; i++) {
+            try {
+                const value = await loadExternalPeerScript(PEERJS_SCRIPT_URLS[i], i);
+                peerPerf('peerjs-load-ready', { source: i === 0 ? 'unpkg' : 'cdnjs' });
+                return value;
+            } catch (err) {
+                lastError = err;
+                peerPerf('peerjs-load-source-failed', { source: i === 0 ? 'unpkg' : 'cdnjs' });
+            }
+        }
+        throw lastError || new Error('PeerJS indisponible');
+    })().catch(err => {
+        peerJsLoadPromise = null; // permet une vraie retentative ultérieure
+        throw err;
+    });
+    return peerJsLoadPromise;
+}
+
 // Voir échange avec Guillaume (session du 23 juillet — "rien ne se passe après
 // 'disconnected'") : délai de tolérance avant de fermer nous-mêmes une connexion dont
 // l'état ICE reste bloqué en 'disconnected'/'failed' sans jamais se rétablir tout seul
@@ -369,36 +434,44 @@ class BridgePeerConnection {
     // reprise, voir échange avec Guillaume), pas une simple malchance à contourner en
     // changeant de code.
     async _attemptCreateRoom(cap, generation = this._roomCreateGeneration) {
-        let nextRoomCode = this._forcedRoomCode;
-        if (!nextRoomCode) {
-            try {
-                // Une création NEUVE demande désormais son code au backend, qui réserve
-                // atomiquement un numéro absent de Redis. Cela garde les 4 chiffres tout
-                // en empêchant la collision avec une session cloud vieille de plusieurs
-                // jours. La reprise forcée, elle, conserve exactement son ancien code.
-                nextRoomCode = (typeof reserveFreshRoomCode === 'function')
-                    ? await reserveFreshRoomCode()
-                    : makeRoomCode(); // compat si session-storage.js n'est pas chargé
-            } catch (err) {
-                if (generation !== this._roomCreateGeneration) return;
-                this._log('Réservation du code de salle impossible :', err);
-                if (this.handlers.onError) {
-                    this.handlers.onError({
-                        type: 'room-code-reservation-failed',
-                        message: 'Impossible de réserver un code de salle libre. Réessayez dans un instant.',
-                        cause: err
-                    });
-                }
-                return;
+        // Réservation Vercel/Redis et téléchargement de PeerJS sont indépendants : on les
+        // lance en parallèle pour que le clic « Créer » paie le MAX des deux délais, pas
+        // leur somme. Sur une reprise forcée, seul PeerJS est nécessaire.
+        peerPerf('create-attempt-start', { retry: this._connectRetries });
+        const peerReadyPromise = ensurePeerJsReady();
+        const roomCodePromise = this._forcedRoomCode
+            ? Promise.resolve(this._forcedRoomCode)
+            : (typeof reserveFreshRoomCode === 'function'
+                ? reserveFreshRoomCode()
+                : Promise.resolve(makeRoomCode()));
+        let nextRoomCode;
+        try {
+            [nextRoomCode] = await Promise.all([roomCodePromise, peerReadyPromise]);
+        } catch (err) {
+            if (generation !== this._roomCreateGeneration) return;
+            const peerFailed = typeof Peer === 'undefined';
+            this._log(peerFailed ? 'Chargement PeerJS impossible :' : 'Réservation du code de salle impossible :', err);
+            if (this.handlers.onError) {
+                this.handlers.onError({
+                    type: peerFailed ? 'peer-library-load-failed' : 'room-code-reservation-failed',
+                    message: peerFailed
+                        ? 'Impossible de charger le module de connexion. Vérifiez le réseau puis réessayez.'
+                        : 'Impossible de réserver un code de salle libre. Réessayez dans un instant.',
+                    cause: err
+                });
             }
+            return;
         }
         if (generation !== this._roomCreateGeneration) return;
+        peerPerf('create-room-code-ready', { code: nextRoomCode });
         this.roomCode = nextRoomCode;
         const id = PEER_ID_PREFIX + this.roomCode;
         this._log('Création de la partie, id =', id, this._connectRetries ? `(tentative ${this._connectRetries + 1})` : '');
+        peerPerf('peer-signaling-start', { role: 'host' });
         this.peer = new Peer(id, { config: ICE_CONFIG, debug: 1 });
 
         this.peer.on('open', () => {
+            peerPerf('peer-signaling-open', { role: 'host' });
             this._log('Peer hôte ouvert, en attente de connexions...');
             this.signalingOpen = true; // aussi vrai en cas de succès d'un reconnect() après coupure
             this._everOpened = true;
@@ -505,11 +578,24 @@ class BridgePeerConnection {
     // signalisation (voir RETRIABLE_ERROR_TYPES et le handler 'error' plus bas) — le code
     // de salon, lui, ne change pas d'une tentative à l'autre (contrairement à
     // _attemptCreateRoom côté hôte).
-    _attemptJoinRoom(metadata) {
+    async _attemptJoinRoom(metadata) {
         const targetId = PEER_ID_PREFIX + this.roomCode;
+        try {
+            await ensurePeerJsReady();
+        } catch (err) {
+            this._log('Chargement PeerJS impossible :', err);
+            if (this.handlers.onError) this.handlers.onError({
+                type: 'peer-library-load-failed',
+                message: 'Impossible de charger le module de connexion. Vérifiez le réseau puis réessayez.',
+                cause: err
+            });
+            return;
+        }
+        peerPerf('peer-signaling-start', { role: 'guest' });
         this.peer = new Peer({ config: ICE_CONFIG, debug: 1 });
 
         this.peer.on('open', () => {
+            peerPerf('peer-signaling-open', { role: 'guest' });
             this._log('Peer invité ouvert, tentative de connexion à', targetId);
             this.signalingOpen = true; // aussi vrai en cas de succès d'un reconnect() après coupure
             this._everOpened = true;

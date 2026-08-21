@@ -143,7 +143,18 @@ async function fetchWithSessionCapability(roomCode, url, options = {}) {
 // lecture/relais et écriture complète host. Ce client exige les deux pour activer une
 // nouvelle salle ; déployer donc l'API avant le client pour ce lot coordonné.
 async function reserveFreshRoomCode() {
-    const request = (url, body) => fetch(url, {
+    const perf = (name, detail) => {
+        try {
+            if (typeof window !== 'undefined' && typeof window.recordPlayPerfMilestone === 'function') {
+                window.recordPlayPerfMilestone(name, detail);
+            }
+        } catch (e) { /* diagnostic seulement */ }
+    };
+    // IMPORTANT PERF : le nouvel endpoint n'a besoin d'aucun body. Un POST sans header
+    // Content-Type non-safelisted est une requête CORS "simple" : pas d'OPTIONS préalable.
+    // L'ancien JSON déclenchait un aller-retour preflight avant chaque création de salle.
+    const requestLight = (url) => fetch(url, { method: 'POST', cache: 'no-store' });
+    const requestLegacy = (url, body) => fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -151,19 +162,17 @@ async function reserveFreshRoomCode() {
     });
 
     let resp;
-    try {
-        // Endpoint volontairement léger : contrairement à /api/session, son bundle ne
-        // trace pas les ~15 Mo de PONS serveur. Cela réduit surtout les cold-starts
-        // intermittents ressentis au clic sur « Créer une partie ».
-        resp = await request(`${SESSION_API_BASE}/api/reserve-code`, { action: 'reserve-code' });
-        if (resp.status === 404 || resp.status === 405) throw new Error('reserve-endpoint-unavailable');
-    } catch (err) {
-        // Compat de déploiement : si le nouveau petit endpoint n'est pas encore présent,
-        // l'ancien /api/session reste utilisable. Une fois API-GEN à jour, cette branche
-        // n'est plus empruntée.
-        resp = await request(`${SESSION_API_BASE}/api/session`, { action: 'reserve-code' });
+    perf('reserve-start');
+    resp = await requestLight(`${SESSION_API_BASE}/api/reserve-code`);
+    if (resp.status === 404 || resp.status === 405) {
+        // Compat uniquement avec un backend réellement ancien. Une erreur RÉSEAU du petit
+        // endpoint n'est plus doublée par un second appel lourd au même Vercel : cela
+        // fabriquait précisément de très longues valeurs aberrantes lors des incidents.
+        perf('reserve-legacy-fallback');
+        resp = await requestLegacy(`${SESSION_API_BASE}/api/session`, { action: 'reserve-code' });
     }
 
+    perf('reserve-response', { status: resp.status });
     if (!resp.ok) throw new Error(`reserveFreshRoomCode: HTTP ${resp.status}`);
     const body = await resp.json();
     const code = body && String(body.code || '').trim();

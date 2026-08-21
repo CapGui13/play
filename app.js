@@ -51,15 +51,48 @@ const SEAT_PENDING = 'PENDING';
 const SEAT_ABBR_FR = { N: 'N', E: 'E', S: 'S', W: 'O' };
 const VULN_LABEL = { None: 'Non vulnérable', NS: 'NS vulnérable', EW: 'EO vulnérable', Both: 'Tous vulnérables' };
 
+// ===== Diagnostic de performance léger =====
+// Garde uniquement des timestamps/étapes, jamais de données de partie ni de secret.
+// Accessible dans la console via getPlayPerfTrace() quand une lenteur intermittente doit
+// être attribuée précisément (réservation Vercel/Redis, chargement PeerJS, signalisation...).
+const playPerfTrace = [];
+function recordPlayPerfMilestone(name, detail) {
+    const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+    const entry = { name: String(name), t: Math.round(now * 10) / 10 };
+    if (detail !== undefined) entry.detail = detail;
+    playPerfTrace.push(entry);
+    if (playPerfTrace.length > 80) playPerfTrace.shift();
+    if (typeof console !== 'undefined' && console.info) console.info('[PLAY perf]', entry.name, entry.t, entry.detail || '');
+    return entry;
+}
+if (typeof window !== 'undefined') {
+    window.recordPlayPerfMilestone = recordPlayPerfMilestone;
+    window.getPlayPerfTrace = () => playPerfTrace.slice();
+}
+recordPlayPerfMilestone('app-script-ready');
+
+// Le seul utilitaire de l'ancien bidding-engine.js encore utilisé par l'UI. Le moteur
+// legacy complet (~519 ko brut) n'a donc plus besoin d'être parsé sur l'écran d'accueil.
+const HCP_VALUE_LIGHT = { A: 4, K: 3, Q: 2, J: 1 };
+function computeHandHcp(hand) {
+    let total = 0;
+    for (const suit of ['S', 'H', 'D', 'C']) {
+        const ranks = hand && hand[suit] ? hand[suit] : '';
+        for (const c of ranks) total += HCP_VALUE_LIGHT[c] || 0;
+    }
+    return total;
+}
+
 
 // ===== Chargement différé de PONS =====
 //
-// PONS représente de très loin la majorité du poids JavaScript de PLAY (~15,2 Mo brut :
-// règles canoniques + critic + WASM embarqué). Le charger sur l'écran d'accueil bloquait
-// inutilement le premier affichage et, sur mobile/4G, pouvait encore saturer le réseau au
-// moment précis où l'utilisateur cliquait « Créer une partie ». La pile exacte est donc
-// chargée seulement APRÈS l'entrée dans un salon, puis conservée par le cache normal du
-// service worker au premier usage. Aucune règle ni aucun octet PONS n'est modifié.
+// PONS représente de très loin la majorité du poids JavaScript de PLAY (~15,2 Mo brut).
+// Sur mobile, l'ancienne optimisation lançait sept <link rel="preload"> en parallèle :
+// cela pouvait saturer le réseau/mémoire et, surtout, un <script> ayant échoué restait dans
+// le DOM ; une retentative s'abonnait alors à un événement "error" déjà passé et pouvait
+// rester bloquée. Le chargement réel est maintenant strictement séquentiel, chaque fichier
+// a une retentative réseau fraîche, et le préchargement spéculatif est désactivé sur mobile,
+// Save-Data et réseaux lents.
 const PONS_CLIENT_SCRIPT_URLS = [
     'pons/canonical-rules-v1.js',
     'pons/bridge-engine-v1-browser.js',
@@ -79,41 +112,99 @@ function setPonsClientLoadingStatus(text, kind = 'is-offline') {
     el.textContent = text;
 }
 
-function preloadPonsClientScripts() {
-    for (const src of PONS_CLIENT_SCRIPT_URLS) {
-        if (Array.from(document.querySelectorAll('link[data-pons-preload]')).some(link => link.dataset.ponsPreload === src)) continue;
-        const link = document.createElement('link');
-        link.rel = 'preload';
-        link.as = 'script';
-        link.href = src;
-        link.dataset.ponsPreload = src;
-        document.head.appendChild(link);
-    }
+function isLikelyMobileDevice() {
+    try {
+        if (window.matchMedia && window.matchMedia('(pointer: coarse)').matches && window.innerWidth <= 1024) return true;
+    } catch (e) { /* fallback largeur */ }
+    return typeof window !== 'undefined' && window.innerWidth <= 760;
 }
 
-function loadPonsClientScript(src) {
+function isConstrainedNetworkForPreload() {
+    const conn = typeof navigator !== 'undefined' && (navigator.connection || navigator.mozConnection || navigator.webkitConnection);
+    if (!conn) return false;
+    if (conn.saveData) return true;
+    return ['slow-2g', '2g'].includes(String(conn.effectiveType || '').toLowerCase());
+}
+
+function ponsNeededForCurrentSetup() {
+    if (typeof robotBiddingMode !== 'undefined' && robotBiddingMode === 'passOnly') return false;
+    if (typeof seatAssignment !== 'object' || !seatAssignment) return true;
+    return SEATS.some(seat => !seatAssignment[seat]);
+}
+
+function prefetchPonsClientScripts() {
+    if (!ponsNeededForCurrentSetup() || isLikelyMobileDevice() || isConstrainedNetworkForPreload()) return false;
+    for (const src of PONS_CLIENT_SCRIPT_URLS) {
+        if (Array.from(document.querySelectorAll('link[data-pons-prefetch]')).some(link => link.dataset.ponsPrefetch === src)) continue;
+        const link = document.createElement('link');
+        // prefetch = opportuniste/faible priorité ; contrairement à preload il ne concurrence
+        // pas les requêtes interactives du salon et le navigateur peut choisir de l'ignorer.
+        link.rel = 'prefetch';
+        link.as = 'script';
+        link.href = src;
+        link.dataset.ponsPrefetch = src;
+        document.head.appendChild(link);
+    }
+    return true;
+}
+
+function ponsAttemptUrl(src, attempt) {
+    if (!attempt) return src;
+    const url = new URL(src, window.location.href);
+    url.searchParams.set('__pons_fresh', `${Date.now()}-${attempt}`);
+    return url.href;
+}
+
+function loadPonsClientScriptOnce(src, attempt) {
     return new Promise((resolve, reject) => {
-        const existing = Array.from(document.scripts).find(script => script.dataset && script.dataset.ponsLazySrc === src);
-        if (existing) {
-            if (existing.dataset.ponsLoaded === '1') { resolve(); return; }
-            existing.addEventListener('load', () => resolve(), { once: true });
-            existing.addEventListener('error', () => reject(new Error(`Chargement PONS impossible : ${src}`)), { once: true });
-            return;
+        const stale = Array.from(document.scripts).find(script => script.dataset && script.dataset.ponsLazySrc === src);
+        if (stale) {
+            if (stale.dataset.ponsLoaded === '1') { resolve(); return; }
+            // Un script en erreur ne doit JAMAIS rester comme faux "chargement en cours".
+            // C'était une cause possible de retentative bloquée sur mobile.
+            stale.remove();
         }
         const script = document.createElement('script');
-        script.src = src;
-        // Les modules PONS se partagent des globals historiques : exécution strictement
-        // ordonnée, même si les <link rel=preload> ci-dessus permettent les téléchargements
-        // en parallèle.
+        script.src = ponsAttemptUrl(src, attempt);
         script.async = false;
         script.dataset.ponsLazySrc = src;
-        script.addEventListener('load', () => {
-            script.dataset.ponsLoaded = '1';
-            resolve();
-        }, { once: true });
-        script.addEventListener('error', () => reject(new Error(`Chargement PONS impossible : ${src}`)), { once: true });
+        script.dataset.ponsAttempt = String(attempt);
+        let settled = false;
+        const timer = setTimeout(() => finish(false, new Error(`Délai de chargement PONS dépassé : ${src}`)), 120000);
+        const finish = (ok, err) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            if (ok) {
+                script.dataset.ponsLoaded = '1';
+                resolve();
+            } else {
+                script.dataset.ponsFailed = '1';
+                script.remove();
+                reject(err || new Error(`Chargement PONS impossible : ${src}`));
+            }
+        };
+        script.addEventListener('load', () => finish(true), { once: true });
+        script.addEventListener('error', () => finish(false, new Error(`Chargement PONS impossible : ${src}`)), { once: true });
         document.body.appendChild(script);
     });
+}
+
+async function loadPonsClientScript(src) {
+    let lastError;
+    for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+            if (attempt) {
+                setPonsClientLoadingStatus('🧠 PONS : nouvelle tentative de chargement…');
+                recordPlayPerfMilestone('pons-script-retry', src);
+            }
+            await loadPonsClientScriptOnce(src, attempt);
+            return;
+        } catch (err) {
+            lastError = err;
+        }
+    }
+    throw lastError || new Error(`Chargement PONS impossible : ${src}`);
 }
 
 async function ensurePonsClientReady() {
@@ -127,19 +218,21 @@ async function ensurePonsClientReady() {
     if (ponsClientLoadPromise) return ponsClientLoadPromise;
 
     ponsClientLoadPromise = (async () => {
+        recordPlayPerfMilestone('pons-load-start', { mobile: isLikelyMobileDevice() });
         setPonsClientLoadingStatus('🧠 PONS : chargement du moteur…');
-        preloadPonsClientScripts();
+        // Pas de rafale de preloads ici : les scripts sont téléchargés ET exécutés dans
+        // l'ordre exact PONS. Le service worker/cache HTTP rend les visites suivantes rapides.
         for (const src of PONS_CLIENT_SCRIPT_URLS) await loadPonsClientScript(src);
         if (!window.PonsEngine) throw new Error('PONS v2.61 chargé mais API navigateur absente.');
         const ready = await window.PonsEngine.ready;
         if (!ready || !window.PonsEngine.loaded) {
             throw window.PonsEngine.error || new Error('PONS v2.61 n’a pas pu être initialisé.');
         }
+        recordPlayPerfMilestone('pons-load-ready');
         return window.PonsEngine;
     })().catch(err => {
+        recordPlayPerfMilestone('pons-load-failed', err && err.message ? err.message : String(err));
         setPonsClientLoadingStatus('❌ PONS v2.61 indisponible — robots bloqués');
-        // Autorise une retentative volontaire ultérieure (ex. réseau revenu), sans jamais
-        // basculer silencieusement vers le moteur legacy.
         ponsClientLoadPromise = null;
         throw err;
     });
@@ -149,19 +242,14 @@ async function ensurePonsClientReady() {
 
 function schedulePonsClientPreload() {
     if (window.PonsEngine || ponsClientLoadPromise || ponsClientPreloadScheduled) return;
+    if (!ponsNeededForCurrentSetup() || isLikelyMobileDevice() || isConstrainedNetworkForPreload()) return;
     ponsClientPreloadScheduled = true;
     const run = () => {
         ponsClientPreloadScheduled = false;
-        // Réseau uniquement : les gros fichiers sont téléchargés/cachés, mais le parsing
-        // des ~10 Mo de règles et la compilation WASM ne bloquent pas le thread principal
-        // pendant que l'utilisateur est encore dans le salon.
-        preloadPonsClientScripts();
+        prefetchPonsClientScripts();
     };
-    if (window.requestIdleCallback) {
-        window.requestIdleCallback(run, { timeout: 800 });
-    } else {
-        setTimeout(run, 120);
-    }
+    if (window.requestIdleCallback) window.requestIdleCallback(run, { timeout: 1800 });
+    else setTimeout(run, 900);
 }
 
 let peerConn = null;
@@ -1460,8 +1548,11 @@ function uiToggleRandomizeDeals() {
 // Chargé une fois au démarrage de l'appli plutôt qu'à l'entrée dans le salon : peu de
 // risque que le catalogue change en cours de session, et ça évite un aller-retour réseau
 // à chaque fois que l'hôte revient sur cet écran.
+let dealLibraryInitPromise = null;
 function initDealLibrary() {
-    fetch('donnes/catalogue.json')
+    if (dealLibraryInitPromise) return dealLibraryInitPromise;
+    recordPlayPerfMilestone('deal-library-load-start');
+    dealLibraryInitPromise = fetch('donnes/catalogue.json')
         .then(resp => {
             if (!resp.ok) throw new Error('catalogue absent ou illisible');
             return resp.json();
@@ -1473,6 +1564,8 @@ function initDealLibrary() {
             const group = document.getElementById('dealLibraryGroup');
             if (!select || !group) return;
 
+            // idempotent en cas de réouverture PeerJS de l'hôte : aucune option dupliquée.
+            while (select.options.length > 1) select.remove(1);
             filenames.forEach(filename => {
                 const option = document.createElement('option');
                 option.value = filename;
@@ -1480,12 +1573,14 @@ function initDealLibrary() {
                 select.appendChild(option);
             });
             group.style.display = 'block';
+            recordPlayPerfMilestone('deal-library-load-ready', { count: filenames.length });
         })
         .catch(() => {
             // Pas de bibliothèque déployée (ou catalogue.json absent/vide) : ce n'est pas
             // une erreur pour l'utilisateur, juste une fonctionnalité qui ne s'active pas.
             // Le groupe reste masqué (voir style initial dans index.html), pas de message.
         });
+    return dealLibraryInitPromise;
 }
 
 // --- Demande d'annulation (undo) ---
@@ -2050,6 +2145,7 @@ function rememberRoomAccessFromUrl(params) {
 }
 
 function uiCreateRoom() {
+    recordPlayPerfMilestone('create-click');
     document.getElementById('landingError').style.display = 'none';
     showConnectingOverlay('Création de la partie…');
     if (peerConn) peerConn.destroy();
@@ -2151,6 +2247,8 @@ function buildHostHandlers(onOpenExtra) {
                 renderBoard();
             } else {
                 enterLobbyScreen();
+                initDealLibrary();
+                recordPlayPerfMilestone('create-lobby-ready', { roomCode });
             }
         },
         onGuestConnected: (guestIndex, metadata) => {
@@ -5315,14 +5413,9 @@ function advanceRobotBidsOnBoard(idx) {
     while (!isAuctionOver(hist) && safety < 60) {
         const turnSeat = currentTurnSeat(deal.dealer, hist);
         if (!autoPassSeats.includes(turnSeat)) break;
-        let call, explanation;
-        if (robotBiddingMode === 'passOnly') {
-            call = 'PASS';
-            explanation = 'Mode « passe en boucle » activé';
-        } else {
-            ({ call, explanation } = decideRobotCall(turnSeat, deal, hist));
-        }
-        hist.push(explanation ? { seat: turnSeat, call, explanation } : { seat: turnSeat, call });
+        const call = 'PASS';
+        const explanation = 'Mode « passe en boucle » activé';
+        hist.push({ seat: turnSeat, call, explanation });
         safety++;
     }
 }
@@ -8971,6 +9064,27 @@ function initServiceWorker() {
     }, 30000);
 }
 
+
+function scheduleServiceWorkerInit() {
+    // L'installation d'une nouvelle version force plusieurs fetch(cache:'reload'). La faire
+    // au tout premier DOMContentLoaded pouvait concurrencer le clic « Créer » sur mobile.
+    // Un ancien SW déjà actif continue naturellement à servir la navigation ; seule la
+    // vérification/installation de la prochaine version est reportée à une période calme.
+    const run = () => {
+        // Ne jamais démarrer une installation SW au milieu d'un Create/Join ou d'une salle
+        // active : ces fetch(cache:'reload') sont utiles pour la prochaine visite, pas pour
+        // concurrencer la connexion en cours. On réessaie plus tard quand l'accueil est libre.
+        if (peerConn || pendingJoinAfterNickname) {
+            setTimeout(run, 5000);
+            return;
+        }
+        recordPlayPerfMilestone('service-worker-init');
+        initServiceWorker();
+    };
+    if (window.requestIdleCallback) window.requestIdleCallback(run, { timeout: 5000 });
+    else setTimeout(run, 2500);
+}
+
 // Voir échange avec Guillaume : plus de bannière "Nouvelle version disponible" à cliquer,
 // la mise à jour s'applique automatiquement — SAUF s'il y a une connexion de salle active
 // (peerConn non nul), qu'on soit hôte ou invité, dans le salon ou en pleine donne. Ne pas
@@ -9109,6 +9223,7 @@ function clearHostingPregameMark() {
 // ARCHITECTURE-P2P-SERVEUR.md), pensé précisément pour "continuer depuis un autre appareil
 // sans l'hôte d'origine".
 const HOST_GAME_STATE_KEY = 'bridgeBidHostGameStates'; // carte {roomCode: payload}, voir échange avec Guillaume (session du 8 août — "multi room")
+const HOST_GAME_STATE_INDEX_KEY = 'bridgeBidHostGameStatesIndexV1'; // métadonnées légères pour l'accueil
 // Passé ce délai, une session sauvegardée n'est plus proposée à la reprise — un chiffre
 // volontairement généreux (une session de club peut s'étaler sur plusieurs heures avec
 // pauses), sans non plus laisser une bannière "reprendre" resurgir des jours après une
@@ -9145,13 +9260,51 @@ function readAllHostGameStates() {
     return map;
 }
 
+function buildHostGameStateIndex(map) {
+    return Object.values(map || {}).filter(Boolean).map(entry => ({
+        roomCode: entry.roomCode,
+        savedAt: entry.savedAt,
+        dealsCount: Array.isArray(entry.deals) ? entry.deals.length : 0
+    })).filter(entry => entry.roomCode && entry.savedAt);
+}
+
 function writeAllHostGameStates(map) {
     try {
         localStorage.setItem(HOST_GAME_STATE_KEY, JSON.stringify(map));
+        localStorage.setItem(HOST_GAME_STATE_INDEX_KEY, JSON.stringify(buildHostGameStateIndex(map)));
     } catch (e) {
         // Quota localStorage dépassé, ou navigation privée stricte qui bloque l'écriture :
         // tant pis, la reprise ne sera simplement pas possible — rien d'autre n'est cassé.
     }
+}
+
+function readResumableHostIndexFast() {
+    try {
+        const raw = localStorage.getItem(HOST_GAME_STATE_INDEX_KEY);
+        if (!raw) return null; // installation venant d'une ancienne version : migration idle plus bas
+        const list = JSON.parse(raw);
+        if (!Array.isArray(list)) return null;
+        const now = Date.now();
+        return list.filter(entry => entry && entry.roomCode && Number.isFinite(entry.savedAt)
+            && now - entry.savedAt <= HOST_GAME_STATE_EXPIRY_MS)
+            .sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0));
+    } catch (e) {
+        return null;
+    }
+}
+
+let hostResumeIndexMigrationScheduled = false;
+function scheduleHostResumeIndexMigration() {
+    if (hostResumeIndexMigrationScheduled || readResumableHostIndexFast() !== null) return;
+    hostResumeIndexMigrationScheduled = true;
+    const run = () => {
+        hostResumeIndexMigrationScheduled = false;
+        const map = readAllHostGameStates(); // gros parse, mais hors chemin critique d'accueil
+        try { localStorage.setItem(HOST_GAME_STATE_INDEX_KEY, JSON.stringify(buildHostGameStateIndex(map))); } catch (e) { /* ignore */ }
+        checkForResumableHostSession();
+    };
+    if (window.requestIdleCallback) window.requestIdleCallback(run, { timeout: 2500 });
+    else setTimeout(run, 700);
 }
 
 // Sauvegarde l'état complet — appelée à chaque changement significatif (voir applyCall,
@@ -9216,8 +9369,10 @@ function readResumableHostState(roomCode) {
 
 // Renvoie toutes les sessions reprenables, triées de la plus récente à la plus ancienne.
 function readAllResumableHostStates() {
-    const map = readAllHostGameStates();
-    return Object.values(map).sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0));
+    const fast = readResumableHostIndexFast();
+    if (fast !== null) return fast;
+    scheduleHostResumeIndexMigration();
+    return [];
 }
 
 // Affiche (ou masque) la bannière de reprise à l'accueil — une entrée par salle
@@ -9240,7 +9395,7 @@ function checkForResumableHostSession() {
             const timeLabel = minutesAgo === 0 ? "à l'instant" : `il y a ${minutesAgo} min`;
             const code = escapeHtml(saved.roomCode);
             return `<div class="resume-session-row">
-                <div class="resume-session-text">🔄 Salle ${code} <span class="resume-session-details">(${saved.deals.length} donnes, ${timeLabel})</span></div>
+                <div class="resume-session-text">🔄 Salle ${code} <span class="resume-session-details">(${saved.dealsCount != null ? saved.dealsCount : (saved.deals ? saved.deals.length : 0)} donnes, ${timeLabel})</span></div>
                 <div class="resume-session-actions">
                     <button type="button" class="btn btn-primary btn-small" data-ui-click="resume-host-session" data-room-code="${escapeHtml(code)}">Reprendre</button>
                     <button type="button" class="btn btn-secondary btn-small" data-ui-click="dismiss-resume-session" data-room-code="${escapeHtml(code)}">Non merci</button>
@@ -10454,11 +10609,11 @@ function uiResumeFromCloud() {
 }
 
 window.addEventListener('DOMContentLoaded', () => {
-    initServiceWorker();
+    recordPlayPerfMilestone('dom-content-loaded');
+    scheduleServiceWorkerInit();
     initIosInstallHint();
     initIosLockScreenWarning();
     initOfflineHandling();
-    initDealLibrary();
     initChatVisibilityTracking();
 
     // Le bouton de reconnexion reste réévalué en continu plutôt que de compter sur CHAQUE
@@ -10483,7 +10638,13 @@ window.addEventListener('DOMContentLoaded', () => {
     // traitement normal du paramètre reste inchangé — la bannière de reprise s'affiche
     // simplement EN PLUS, comme une option indépendante.
     const resumableSessions = checkForResumableHostSession();
-    const matchingResumable = room && resumableSessions.find(s => s.roomCode === room.toUpperCase());
+    let matchingResumable = room && resumableSessions.find(s => s.roomCode === room.toUpperCase());
+    // Migration d'une installation antérieure : pour un lien direct vers UNE salle précise,
+    // on accepte exceptionnellement le gros parse afin de ne jamais rater une reprise hôte.
+    // L'accueil normal, lui, reste non bloquant et migre l'index en idle.
+    if (room && !matchingResumable && readResumableHostIndexFast() === null) {
+        matchingResumable = readResumableHostState(room.toUpperCase());
+    }
 
     // Voir échange avec Guillaume (session du 23 juillet) — voir HOSTING_PREGAME_KEY plus
     // haut : si ce code correspond à une salle qu'on hébergeait nous-même, encore dans le

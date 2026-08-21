@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://unpkg.com https://js.pusher.com; script-src-attr 'none'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob:; connect-src 'self' https://api-gen-beta.vercel.app https://*.peerjs.com wss://*.peerjs.com https://*.pusher.com wss://*.pusher.com; worker-src 'self' blob:; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-src 'none'; upgrade-insecure-requests">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://unpkg.com https://js.pusher.com https://cdnjs.cloudflare.com; script-src-attr 'none'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob:; connect-src 'self' https://api-gen-beta.vercel.app https://*.peerjs.com wss://*.peerjs.com https://*.pusher.com wss://*.pusher.com; worker-src 'self' blob:; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-src 'none'; upgrade-insecure-requests">
 <title>Table d'enchères — Bridge à distance</title>
 
 <!-- PWA : voir manifest.json + sw.js. theme_color/background_color y reprennent le vert
@@ -594,25 +594,18 @@
     </div>
 </div>
 
-<!-- PONS v2.61 strict : chargement séquentiel volontaire, dans le même ordre que le
-     PLAY livré avec PONS_v2.61(9). Ici la priorité est l'identité de comportement du
-     moteur, pas l'optimisation de chargement par defer. -->
-<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
-<!-- Pusher Channels pour la diffusion temps réel. -->
-<script src="https://js.pusher.com/8.4.0/pusher.min.js"></script>
-<script src="bidding-rules.js"></script>
-<!-- L'ancien moteur PLAY reste chargé uniquement pour les utilitaires/fallback canonique,
-     exactement comme bidding-engine-legacy.js dans PONS v2.61(9). -->
-<script src="bidding-engine.js"></script>
-<!-- PONS v2.61(9) : même ordre de chargement que le PLAY livré avec PONS. -->
-<!-- PONS n'est plus chargé sur l'écran d'accueil : ~15,2 Mo de JS brut (règles +
-     WASM embarqué) sont chargés à la demande après l'entrée dans un salon. app.js
-     garantit qu'un robot ne joue jamais avant que la pile PONS exacte soit prête. -->
-<script src="deal-parser.js"></script>
-<script src="peer-connection.js"></script>
-<script src="session-storage.js"></script>
-<script src="realtime-updates.js"></script>
-<script src="app.js"></script>
-<script src="ui-events.js"></script>
+<!-- Le shell d'accueil reste volontairement léger : PeerJS est chargé par
+     peer-connection.js seulement au premier Create/Join ; Pusher par realtime-updates.js
+     seulement lorsqu'une salle a réellement une capacité cloud. L'ancien bidding-engine
+     (~519 ko) n'est plus chargé dans le navigateur : l'UI ne conservait que son calcul HCP,
+     désormais minuscule dans app.js, et PONS utilise son fallback canonique v1. -->
+<script defer src="bidding-rules.js"></script>
+<!-- PONS v2.61(9) reste chargé strictement à la demande, dans le même ordre interne. -->
+<script defer src="deal-parser.js"></script>
+<script defer src="peer-connection.js"></script>
+<script defer src="session-storage.js"></script>
+<script defer src="realtime-updates.js"></script>
+<script defer src="app.js"></script>
+<script defer src="ui-events.js"></script>
 </body>
 </html>
