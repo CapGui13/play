@@ -1772,6 +1772,10 @@ function buildHostHandlers(onOpenExtra) {
             }
         },
         onGuestConnected: (guestIndex, metadata) => {
+            // Un ancien Peer hôte peut encore vider sa file de callbacks juste après un
+            // transfert réussi. Une fois démotionné, il ne doit plus pouvoir rerendre ni
+            // modifier l'interface comme hôte.
+            if (myRole !== 'host') return;
             setConnectionStatus(true);
             // Jeton fourni par l'invité (persistant côté lui, via localStorage) : s'il est
             // déjà connu, c'est un retour (reconnexion), pas un nouvel arrivant. Repli sur un
@@ -1882,6 +1886,11 @@ function buildHostHandlers(onOpenExtra) {
             }
         },
         onPeerDisconnected: (guestIndex) => {
+            // Symétrique de la garde des anciens handlers invité après promotion : après
+            // un transfert, le Peer de l'ancien hôte est volontairement détruit et peut
+            // encore émettre un callback de fermeture. Il ne doit surtout pas réappliquer
+            // un rendu/état réservé à l'hôte alors que nous sommes déjà redevenus invité.
+            if (myRole !== 'host') return;
             // Voir échange avec Guillaume (session du 23 juillet — même souci que
             // renderReconnectButton juste au-dessus) : signalingOpen (notre propre
             // connexion), pas isConnected() — sinon le statut passait à tort à "🔴
@@ -1934,10 +1943,15 @@ function buildHostHandlers(onOpenExtra) {
         // (host qui change d'appli sur iPhone juste après avoir créé la salle) : au moins,
         // maintenant, le statut reflète ce problème au lieu de rester "🟢 Connecté".
         onSignalingDisconnected: () => {
+            // Callback tardif possible du Peer qui appartenait à l'ancien hôte.
+            if (myRole !== 'host') return;
             setConnectionStatus(false);
             renderReconnectButton();
         },
         onError: (err) => {
+            // Même frontière de rôle : une erreur retardée de l'ancien Peer hôte ne doit
+            // pas polluer l'UI de l'ancien hôte maintenant connecté comme invité.
+            if (myRole !== 'host') return;
             // Voir échange avec Guillaume (session du 23 juillet — "ça m'a fait
             // redevenir invité à tort") : PAS de bascule automatique en invité ici.
             // 'unavailable-id' peut arriver sur un simple peer.reconnect() automatique
@@ -2293,6 +2307,16 @@ function connectAsGuest(code, token, nickname) {
     prevSeatAssignmentSnapshot = null;
     prevParticipantsDisconnectedSnapshot = null;
     lobbyChatAutoOpened = false;
+
+    // Important lors d'un transfert d'hôte : le rôle global vient de passer de host à
+    // guest, mais l'écran du salon contient encore les contrôles rendus pour l'ancien
+    // rôle (chargement des donnes, robots, transfert d'hôte, menus de sièges...). Ne pas
+    // attendre le premier lobby-state du nouvel hôte pour les retirer : selon l'ordre des
+    // callbacks PeerJS, cet instantané peut arriver après un callback tardif de l'ancien
+    // Peer et laisser des commandes host-only visibles. Le salon est donc rerendu
+    // immédiatement avec le NOUVEAU rôle. En cours de partie on attend le resync normal,
+    // afin de ne pas afficher transitoirement un plateau vidé de ses sièges.
+    if (!deals) enterLobbyScreen();
 
     // Voir plus bas (setTimeout de vérification cloud en parallèle) : incrémenté ICI,
     // avant la construction des handlers, pour qu'ils capturent la bonne valeur et
