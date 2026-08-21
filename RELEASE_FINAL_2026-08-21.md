@@ -10,3 +10,13 @@ Elle effectue uniquement :
 
 PONS : inchangé.
 API-GEN associée : `API_GEN_PERF2_FAST_CREATE_FULL_REPOSITORY_2026-08-21.zip` (runtime inchangé depuis le lot PERF2).
+
+
+## HARDENED FINAL R1 — 2026-08-21
+
+- Export PBN GitHub : authentification obligatoire par les capacités de salle (hôte ou participant assis) et rate-limit serveur.
+- DDS : validation sémantique stricte des 52 cartes avant solveur + rate-limit Redis par coût.
+- Import PBN/LIN : vulnérabilité explicitement invalide refusée au lieu d'être convertie silencieusement en `None`.
+- Service Worker : le pré-cache d'installation refuse désormais toute réponse HTTP non-2xx ; un déploiement partiel ne peut plus figer un 404/5xx dans le cache.
+- Aucun changement du moteur PONS ni des règles d'enchères.
+- Auto-hébergement PeerJS/Pusher conservé pour un lot séparé : Pusher charge lui-même des fallbacks dynamiques, donc le remplacer sans build fournisseur dédié aurait un risque fonctionnel disproportionné pour cette passe.

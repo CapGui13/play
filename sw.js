@@ -8,7 +8,7 @@
 // distribué ici n'embarque pas de workflow GitHub Actions qui la réécrive : elle doit donc
 // changer à chaque nouvelle release pour forcer l'installation du nouveau cache chez les
 // utilisateurs déjà passés par le Service Worker.
-const CACHE_NAME = 'bridge-encheres-final-20260821-2050';
+const CACHE_NAME = 'bridge-encheres-hardened-r1-20260821';
 
 // Ressources de la même origine : mises en cache de façon fiable via cache.addAll (un seul
 // échec fait échouer toute l'installation, ce qui est le comportement voulu ici — ce sont
@@ -56,7 +56,13 @@ self.addEventListener('install', (event) => {
             await Promise.all(
                 CORE_ASSETS.map(async (url) => {
                     const resp = await fetch(url, { cache: 'reload' });
-                    await cache.put(url, resp);
+                    // Un déploiement partiellement propagé ne doit jamais figer un 404/5xx
+                    // dans le nouveau cache. En cas d'erreur, on fait échouer l'installation
+                    // entière : l'ancien service worker fonctionnel reste alors actif.
+                    if (!resp || !resp.ok) {
+                        throw new Error(`Pré-cache impossible pour ${url} (HTTP ${resp ? resp.status : 'sans réponse'})`);
+                    }
+                    await cache.put(url, resp.clone());
                 })
             );
             // N'active pas immédiatement ce nouveau service worker : voir tryAutoApplyUpdate

@@ -77,12 +77,14 @@ function emptyHands() {
 
 // Normalise les libellés de vulnérabilité rencontrés dans la nature (PBN standard dit
 // "All", ce générateur exporte "Both" ; on accepte les deux).
-function normalizeVulnerable(v) {
+function normalizeVulnerable(v, { strict = false } = {}) {
     const s = (v || '').trim();
     if (/^all$/i.test(s) || /^both$/i.test(s)) return 'Both';
     if (/^none$/i.test(s) || s === '-' || s === '0') return 'None';
     if (/^ns$/i.test(s)) return 'NS';
     if (/^ew$/i.test(s)) return 'EW';
+    if (!strict && s === '') return 'None';
+    if (strict) throw new Error(`Vulnérabilité invalide "${v == null ? '' : v}" (attendu None, NS, EW, Both/All).`);
     return 'None';
 }
 
@@ -174,7 +176,7 @@ function parsePBN(text) {
         const parsedDeal = {
             board: boardMatch ? parseInt(boardMatch[1], 10) || boardCounter : boardCounter,
             dealer: dealerMatch ? dealerMatch[1].trim().toUpperCase() : 'N',
-            vulnerable: normalizeVulnerable(vulnMatch ? vulnMatch[1] : 'None'),
+            vulnerable: vulnMatch ? normalizeVulnerable(vulnMatch[1], { strict: true }) : 'None',
             hands,
             par,
             ddTable
@@ -287,7 +289,13 @@ function parseLIN(text) {
         const parsedDeal = {
             board: boardNumMatch ? parseInt(boardNumMatch[1], 10) : boardCounter,
             dealer,
-            vulnerable: LIN_VULN_CODE[(svMatch ? svMatch[1] : '-').trim()] || 'None',
+            vulnerable: (() => {
+                const raw = (svMatch ? svMatch[1] : '-').trim().toLowerCase();
+                if (!Object.prototype.hasOwnProperty.call(LIN_VULN_CODE, raw)) {
+                    throw new Error(`Vulnérabilité LIN invalide (donne ${boardCounter}) : "${svMatch ? svMatch[1] : ''}".`);
+                }
+                return LIN_VULN_CODE[raw];
+            })(),
             hands,
             par: null, // le format LIN ne transporte pas d'information de par
             ddTable: null

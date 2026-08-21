@@ -7884,10 +7884,32 @@ function uiExportDealPBN() {
     const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
     const filename = `donne-${deal.board}-${stamp}.pbn`;
 
+    const accessKey = (typeof getSessionAccessKey === 'function' && currentRoomCode)
+        ? getSessionAccessKey(currentRoomCode) : null;
+    const hostWriteKey = (typeof getSessionHostWriteKey === 'function' && currentRoomCode)
+        ? getSessionHostWriteKey(currentRoomCode) : null;
+    const participantCredential = hostWriteKey ? null : participantCredentialForCloudWrite();
+    if (!currentRoomCode || !accessKey || (!hostWriteKey && !participantCredential)) {
+        setDealExportStatus('❌ Export impossible : accès sécurisé à la salle indisponible.', true);
+        if (btn) btn.disabled = false;
+        return;
+    }
+
+    const exportHeaders = {
+        'Content-Type': 'application/json',
+        'X-Bridge-Session-Key': accessKey
+    };
+    if (hostWriteKey) {
+        exportHeaders['X-Bridge-Host-Write-Key'] = hostWriteKey;
+    } else {
+        exportHeaders['X-Bridge-Participant-Id'] = participantCredential.participantId;
+        exportHeaders['X-Bridge-Reconnect-Secret'] = participantCredential.reconnectSecret;
+    }
+
     fetch(DEAL_EXPORT_SERVER_URL, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filename, content })
+        headers: exportHeaders,
+        body: JSON.stringify({ roomCode: currentRoomCode, filename, content })
     })
         .then(async (response) => {
             const data = await response.json().catch(() => ({}));
