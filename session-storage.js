@@ -143,12 +143,27 @@ async function fetchWithSessionCapability(roomCode, url, options = {}) {
 // lecture/relais et écriture complète host. Ce client exige les deux pour activer une
 // nouvelle salle ; déployer donc l'API avant le client pour ce lot coordonné.
 async function reserveFreshRoomCode() {
-    const resp = await fetch(`${SESSION_API_BASE}/api/session`, {
+    const request = (url, body) => fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'reserve-code' }),
+        body: JSON.stringify(body),
         cache: 'no-store'
     });
+
+    let resp;
+    try {
+        // Endpoint volontairement léger : contrairement à /api/session, son bundle ne
+        // trace pas les ~15 Mo de PONS serveur. Cela réduit surtout les cold-starts
+        // intermittents ressentis au clic sur « Créer une partie ».
+        resp = await request(`${SESSION_API_BASE}/api/reserve-code`, { action: 'reserve-code' });
+        if (resp.status === 404 || resp.status === 405) throw new Error('reserve-endpoint-unavailable');
+    } catch (err) {
+        // Compat de déploiement : si le nouveau petit endpoint n'est pas encore présent,
+        // l'ancien /api/session reste utilisable. Une fois API-GEN à jour, cette branche
+        // n'est plus empruntée.
+        resp = await request(`${SESSION_API_BASE}/api/session`, { action: 'reserve-code' });
+    }
+
     if (!resp.ok) throw new Error(`reserveFreshRoomCode: HTTP ${resp.status}`);
     const body = await resp.json();
     const code = body && String(body.code || '').trim();

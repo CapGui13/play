@@ -51,6 +51,119 @@ const SEAT_PENDING = 'PENDING';
 const SEAT_ABBR_FR = { N: 'N', E: 'E', S: 'S', W: 'O' };
 const VULN_LABEL = { None: 'Non vulnérable', NS: 'NS vulnérable', EW: 'EO vulnérable', Both: 'Tous vulnérables' };
 
+
+// ===== Chargement différé de PONS =====
+//
+// PONS représente de très loin la majorité du poids JavaScript de PLAY (~15,2 Mo brut :
+// règles canoniques + critic + WASM embarqué). Le charger sur l'écran d'accueil bloquait
+// inutilement le premier affichage et, sur mobile/4G, pouvait encore saturer le réseau au
+// moment précis où l'utilisateur cliquait « Créer une partie ». La pile exacte est donc
+// chargée seulement APRÈS l'entrée dans un salon, puis conservée par le cache normal du
+// service worker au premier usage. Aucune règle ni aucun octet PONS n'est modifié.
+const PONS_CLIENT_SCRIPT_URLS = [
+    'pons/canonical-rules-v1.js',
+    'pons/bridge-engine-v1-browser.js',
+    'pons/fiches-engine-v1-app.js?v=20260810-006',
+    'pons/pons-semantic.js?v=20260812-semantic05-v216',
+    'pons/pons-critic.js?v=20260815-v251-realworld-p0',
+    'pons/pons-wasm-embedded.js?v=20260817-v2619-portable',
+    'pons/pons-engine.js?v=20260817-v2619-portable-strict'
+];
+let ponsClientLoadPromise = null;
+let ponsClientPreloadScheduled = false;
+
+function setPonsClientLoadingStatus(text, kind = 'is-offline') {
+    const el = document.getElementById('ponsEngineStatus');
+    if (!el) return;
+    el.className = `wbridge-status ${kind}`;
+    el.textContent = text;
+}
+
+function preloadPonsClientScripts() {
+    for (const src of PONS_CLIENT_SCRIPT_URLS) {
+        if (Array.from(document.querySelectorAll('link[data-pons-preload]')).some(link => link.dataset.ponsPreload === src)) continue;
+        const link = document.createElement('link');
+        link.rel = 'preload';
+        link.as = 'script';
+        link.href = src;
+        link.dataset.ponsPreload = src;
+        document.head.appendChild(link);
+    }
+}
+
+function loadPonsClientScript(src) {
+    return new Promise((resolve, reject) => {
+        const existing = Array.from(document.scripts).find(script => script.dataset && script.dataset.ponsLazySrc === src);
+        if (existing) {
+            if (existing.dataset.ponsLoaded === '1') { resolve(); return; }
+            existing.addEventListener('load', () => resolve(), { once: true });
+            existing.addEventListener('error', () => reject(new Error(`Chargement PONS impossible : ${src}`)), { once: true });
+            return;
+        }
+        const script = document.createElement('script');
+        script.src = src;
+        // Les modules PONS se partagent des globals historiques : exécution strictement
+        // ordonnée, même si les <link rel=preload> ci-dessus permettent les téléchargements
+        // en parallèle.
+        script.async = false;
+        script.dataset.ponsLazySrc = src;
+        script.addEventListener('load', () => {
+            script.dataset.ponsLoaded = '1';
+            resolve();
+        }, { once: true });
+        script.addEventListener('error', () => reject(new Error(`Chargement PONS impossible : ${src}`)), { once: true });
+        document.body.appendChild(script);
+    });
+}
+
+async function ensurePonsClientReady() {
+    if (window.PonsEngine) {
+        const ready = await window.PonsEngine.ready;
+        if (!ready || !window.PonsEngine.loaded) {
+            throw window.PonsEngine.error || new Error('PONS v2.61 n’a pas pu être initialisé.');
+        }
+        return window.PonsEngine;
+    }
+    if (ponsClientLoadPromise) return ponsClientLoadPromise;
+
+    ponsClientLoadPromise = (async () => {
+        setPonsClientLoadingStatus('🧠 PONS : chargement du moteur…');
+        preloadPonsClientScripts();
+        for (const src of PONS_CLIENT_SCRIPT_URLS) await loadPonsClientScript(src);
+        if (!window.PonsEngine) throw new Error('PONS v2.61 chargé mais API navigateur absente.');
+        const ready = await window.PonsEngine.ready;
+        if (!ready || !window.PonsEngine.loaded) {
+            throw window.PonsEngine.error || new Error('PONS v2.61 n’a pas pu être initialisé.');
+        }
+        return window.PonsEngine;
+    })().catch(err => {
+        setPonsClientLoadingStatus('❌ PONS v2.61 indisponible — robots bloqués');
+        // Autorise une retentative volontaire ultérieure (ex. réseau revenu), sans jamais
+        // basculer silencieusement vers le moteur legacy.
+        ponsClientLoadPromise = null;
+        throw err;
+    });
+
+    return ponsClientLoadPromise;
+}
+
+function schedulePonsClientPreload() {
+    if (window.PonsEngine || ponsClientLoadPromise || ponsClientPreloadScheduled) return;
+    ponsClientPreloadScheduled = true;
+    const run = () => {
+        ponsClientPreloadScheduled = false;
+        // Réseau uniquement : les gros fichiers sont téléchargés/cachés, mais le parsing
+        // des ~10 Mo de règles et la compilation WASM ne bloquent pas le thread principal
+        // pendant que l'utilisateur est encore dans le salon.
+        preloadPonsClientScripts();
+    };
+    if (window.requestIdleCallback) {
+        window.requestIdleCallback(run, { timeout: 800 });
+    } else {
+        setTimeout(run, 120);
+    }
+}
+
 let peerConn = null;
 let myRole = null;          // 'host' | 'guest'
 let myParticipantId = null; // 'host', ou le jeton de reconnexion de l'invité (stable entre reconnexions)
@@ -1110,6 +1223,7 @@ function uiGenerateRandomDeals() {
         return;
     }
     lastGeneratedConstraintsJSON = JSON.stringify(constraints);
+    schedulePonsClientPreload();
 
     // Désélectionne les deux autres sources, comme elles se désélectionnent déjà
     // mutuellement entre elles (voir uiHandleDealFileChosen/uiHandleDealLibraryChosen) :
@@ -4050,6 +4164,8 @@ function uiHandleDealFileChosen() {
         return;
     }
 
+    schedulePonsClientPreload();
+
     // Un fichier local et une donne de bibliothèque sont mutuellement exclusifs (une
     // seule source à la fois, pour éviter toute ambiguïté sur celle qui sera utilisée) :
     // choisir l'un désélectionne l'autre.
@@ -4078,6 +4194,8 @@ function uiHandleDealLibraryChosen() {
         setDealStatusEmpty();
         return;
     }
+
+    schedulePonsClientPreload();
 
     // Réciproquement, choisir dans la bibliothèque désélectionne le fichier local.
     const fileInput = document.getElementById('dealFileInput');
@@ -4360,7 +4478,7 @@ function renderDealPreview(dealsToPreview) {
     `).join('');
 }
 
-function uiStartGameAsHost() {
+async function uiStartGameAsHost() {
     const fileInput = document.getElementById('dealFileInput');
     const librarySelect = document.getElementById('dealLibrarySelect');
     const file = (fileInput.files && fileInput.files[0]) || null;
@@ -4374,6 +4492,23 @@ function uiStartGameAsHost() {
     if (!file && !libraryFilename && !hasRandomDeals) {
         setHostSetupMessage('Choisissez un fichier .pbn ou .lin, une donne dans la bibliothèque, ou générez des donnes aléatoires.', false);
         return;
+    }
+
+    // Le chargement différé ne doit JAMAIS changer le moteur réellement utilisé : si un
+    // siège robot doit enchérir en mode normal, on attend explicitement PONS avant de
+    // lancer la séance. Le mode « passe en boucle » n'a, lui, besoin d'aucun moteur.
+    const needsPonsAtLaunch = robotBiddingMode !== 'passOnly' && SEATS.some(seat => !seatAssignment[seat]);
+    if (needsPonsAtLaunch) {
+        showConnectingOverlay('Préparation du moteur PONS…');
+        try {
+            await ensurePonsClientReady();
+        } catch (err) {
+            hideConnectingOverlay();
+            setHostSetupMessage('Le moteur PONS n’a pas pu être chargé. Vérifie la connexion puis réessaie.', false);
+            console.error('[PLAY/PONS lazy] lancement bloqué : moteur indisponible', err);
+            return;
+        }
+        hideConnectingOverlay();
     }
 
     // Reçoit les donnes déjà dans l'ordre à utiliser pour jouer (mélangé ou non, voir
@@ -5168,9 +5303,10 @@ function relayIfHost(msg, fromGuestIndex) {
 }
 
 function advanceRobotBidsOnBoard(idx) {
-    // PONS est asynchrone (WASM). Ne jamais pré-calculer une donne PONS avec le moteur
-    // synchrone de secours : cela mélangerait deux systèmes sur la même session.
-    if (window.PonsEngine) return;
+    // PONS est asynchrone (WASM). Depuis son chargement différé, l'absence momentanée de
+    // window.PonsEngine signifie « pas encore chargé », JAMAIS « utiliser le legacy ».
+    // Ce helper synchrone ne reste donc valable que pour le mode volontaire passOnly.
+    if (robotBiddingMode !== 'passOnly') return;
     if (!deals || !deals[idx]) return;
     const deal = deals[idx];
     if (!deal.auctionHistory) deal.auctionHistory = [];
@@ -5221,15 +5357,14 @@ async function resolveFullBotBoardInBackground(idx, generation) {
             if (robotBiddingMode === 'passOnly') {
                 call = 'PASS';
                 explanation = 'Mode « passe en boucle » activé';
-            } else if (window.PonsEngine) {
+            } else {
                 try {
-                    ({ call, explanation } = await window.PonsEngine.decideRobotCallForApp(turnSeat, deal, hist, autoPassSeats));
+                    const pons = await ensurePonsClientReady();
+                    ({ call, explanation } = await pons.decideRobotCallForApp(turnSeat, deal, hist, autoPassSeats));
                 } catch (err) {
                     console.error('[PLAY/PONS strict] calcul arrière-plan arrêté : PONS indisponible', err);
                     return;
                 }
-            } else {
-                ({ call, explanation } = decideRobotCall(turnSeat, deal, hist));
             }
 
             if (generation !== fullBotBackgroundGeneration) return;
@@ -5269,13 +5404,19 @@ async function resolveAllOtherFullBotBoards(excludeIdx) {
 
 // Applique le pré-calcul aux autres donnes sans jamais mélanger PONS et le moteur legacy.
 function advanceRobotBidsOnAllBoards(excludeIdx) {
-    if (!deals) return;
+    if (!deals || !autoPassSeats || autoPassSeats.length === 0) return;
     if (window.PonsEngine) {
         if (isFullBotTable()) {
             resolveAllOtherFullBotBoards(excludeIdx).catch(err =>
                 console.warn('[Robot PONS arrière-plan] pré-calcul interrompu', err)
             );
         }
+        return;
+    }
+    if (robotBiddingMode !== 'passOnly') {
+        ensurePonsClientReady()
+            .then(() => advanceRobotBidsOnAllBoards(excludeIdx))
+            .catch(err => console.warn('[Robot PONS arrière-plan] moteur indisponible', err));
         return;
     }
     deals.forEach((_, idx) => {
@@ -5324,7 +5465,8 @@ function cancelStartupLegacyRobotPrecalc() {
 
 function scheduleStartupLegacyRobotPrecalc(excludeIdx) {
     cancelStartupLegacyRobotPrecalc();
-    if (!deals || window.PonsEngine) return;
+    // Le legacy n'est plus un substitut temporaire pendant le lazy-load de PONS.
+    if (!deals || window.PonsEngine || robotBiddingMode !== 'passOnly') return;
 
     const generation = startupLegacyPrecalcGeneration;
     const queue = deals.map((_, idx) => idx).filter(idx => idx !== excludeIdx);
@@ -5346,7 +5488,7 @@ function scheduleStartupLegacyRobotPrecalc(excludeIdx) {
     const runOneBoard = () => {
         startupLegacyPrecalcHandle = null;
         startupLegacyPrecalcHandleKind = null;
-        if (generation !== startupLegacyPrecalcGeneration || !deals || window.PonsEngine) return;
+        if (generation !== startupLegacyPrecalcGeneration || !deals) return;
 
         if (cursor >= queue.length) {
             saveHostGameStateToStorage();
@@ -5415,15 +5557,14 @@ function maybeRobotBid() {
         if (robotBiddingMode === 'passOnly') {
             call = 'PASS';
             explanation = 'Mode « passe en boucle » activé';
-        } else if (window.PonsEngine) {
+        } else {
             try {
-                ({ call, explanation } = await window.PonsEngine.decideRobotCallForApp(turnSeat, currentDeal(), auctionHistory, autoPassSeats));
+                const pons = await ensurePonsClientReady();
+                ({ call, explanation } = await pons.decideRobotCallForApp(turnSeat, currentDeal(), auctionHistory, autoPassSeats));
             } catch (err) {
                 console.error("[PLAY/PONS strict] robot bloqué : PONS v2.61 n'est pas disponible", err);
                 return;
             }
-        } else {
-            ({ call, explanation } = decideRobotCall(turnSeat, currentDeal(), auctionHistory));
         }
 
         // PONS est asynchrone : vérifier que rien n'a changé pendant son calcul.

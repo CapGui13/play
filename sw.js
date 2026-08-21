@@ -20,13 +20,10 @@ const CORE_ASSETS = [
     './ui-events.js',
     './bidding-rules.js',
     './bidding-engine.js',
-    './pons/canonical-rules-v1.js',
-    './pons/bridge-engine-v1-browser.js',
-    './pons/fiches-engine-v1-app.js',
-    './pons/pons-semantic.js',
-    './pons/pons-critic.js',
-    './pons/pons-engine.js',
-    './pons/pons-wasm-embedded.js',
+    // PONS (~15,2 Mo brut) est volontairement absent du pré-cache d'installation.
+    // Il est chargé/caché à la demande après l'entrée dans un salon ; sinon chaque
+    // déploiement saturait inutilement le réseau dès l'accueil et ralentissait même
+    // la réservation du code de salle.
     './deal-parser.js',
     './peer-connection.js',
     './session-storage.js',
