@@ -2084,7 +2084,11 @@ function buildHostHandlers(onOpenExtra) {
             // Ne jamais donner la capacité cloud à un simple nouveau pair qui connaît
             // seulement le code 4 chiffres. Une reconnexion déjà assise, elle, prouve son
             // identité par sa preuve de reconnexion privée et peut récupérer la capacité.
-            if (isReturning && wasAlreadySeatedBeforeConnect) {
+            const isSeatedAfterConnect = SEATS.some(seat => seatAssignment[seat] === token);
+            if ((isReturning && wasAlreadySeatedBeforeConnect) || (!isReturning && isSeatedAfterConnect)) {
+                // Un siège PENDING revendiqué automatiquement est une autorisation de jeu
+                // explicite au même titre qu'une attribution manuelle : enregistre d'abord
+                // la preuve privée côté serveur, puis remet la capacité cloud.
                 sendSessionAccessToParticipant(token);
             }
 
@@ -3496,14 +3500,37 @@ function flashSeatsRotatedToast() {
     toast._hideTimer = setTimeout(() => toast.classList.remove('visible'), 3000);
 }
 
-function sendSessionAccessToParticipant(participantId) {
+function participantCredentialForCloudWrite() {
+    if (!currentRoomCode || myParticipantId === 'host') return null;
+    if (typeof getSessionHostWriteKey === 'function' && getSessionHostWriteKey(currentRoomCode)) return null;
+    const credential = getGuestRoomCredential(currentRoomCode, false);
+    if (!credential || credential.participantId !== myParticipantId || !isValidReconnectSecret(credential.reconnectSecret)) return null;
+    return credential;
+}
+
+async function sendSessionAccessToParticipant(participantId) {
     if (myRole !== 'host' || !participantId || participantId === 'host') return false;
     if (typeof getSessionAccessKey !== 'function') return false;
     const accessKey = getSessionAccessKey(currentRoomCode);
     if (!accessKey) return false;
     const guestIndex = guestIndexForParticipant(participantId);
     if (guestIndex == null) return false;
-    peerConn.send({ type: 'session-access', accessKey }, guestIndex);
+
+    // Avant de remettre la capacité de lecture/relais à un participant, le serveur
+    // enregistre sa preuve privée de reconnexion sous l'autorité d'écriture du host.
+    // Ainsi, la capacité de salle seule ne suffit jamais à se faire passer pour un autre
+    // participant lors d'une écriture de repli serveur.
+    const reconnectSecret = guestReconnectSecretsByParticipantId[participantId];
+    if (!reconnectSecret || typeof registerSessionParticipantCredential !== 'function') return false;
+    const registered = await registerSessionParticipantCredential(currentRoomCode, participantId, reconnectSecret);
+    if (!registered) {
+        pushDebugLog(`Accès cloud non remis à ${participantId.slice(0, 10)}… : preuve participant non enregistrée côté serveur.`);
+        return false;
+    }
+    // La connexion a pu changer pendant l'aller-retour HTTP.
+    const currentGuestIndex = guestIndexForParticipant(participantId);
+    if (currentGuestIndex == null) return false;
+    peerConn.send({ type: 'session-access', accessKey }, currentGuestIndex);
     return true;
 }
 
@@ -5777,6 +5804,7 @@ async function pushChatViaServerFallback(msg) {
     try {
         const stateToPush = { ...baseState, savedAt: Date.now() };
         const result = await pushSessionState(cloudCtx.roomCode, stateToPush, expectedVersion, {
+            participantCredential: participantCredentialForCloudWrite(),
             onConflict: (current) => {
                 // Même raisonnement que pushCallViaServerFallback : pas de retentative
                 // en boucle ici, le prochain sondage/abonnement rattrapera le coup.
@@ -5789,7 +5817,7 @@ async function pushChatViaServerFallback(msg) {
         if (!isCloudSyncContextActive(cloudCtx)) return;
         if (result) {
             lastKnownCloudVersion = result.version;
-            cloudLastSyncedState = cloneCloudData(stateToPush);
+            cloudLastSyncedState = cloneCloudData(result.state || stateToPush);
             pushDebugLog(`Message de chat remonté au serveur avec succès (version ${result.version}).`);
         }
     } catch (e) {
@@ -7907,6 +7935,7 @@ async function pushUndoViaServerFallback() {
         const stateToPush = { ...baseState, savedAt: Date.now() };
 
         const result = await pushSessionState(cloudCtx.roomCode, stateToPush, expectedVersion, {
+            participantCredential: participantCredentialForCloudWrite(),
             onConflict: (current) => {
                 // Même raisonnement que pushCallViaServerFallback : pas de retentative
                 // en boucle ici, le prochain sondage/reconnexion rattrapera le coup.
@@ -7919,7 +7948,7 @@ async function pushUndoViaServerFallback() {
         if (!isCloudSyncContextActive(cloudCtx)) { done(); return; }
         if (result) {
             lastKnownCloudVersion = result.version;
-            cloudLastSyncedState = cloneCloudData(stateToPush);
+            cloudLastSyncedState = cloneCloudData(result.state || stateToPush);
             pushDebugLog(`Undo remonté au serveur avec succès (version ${result.version}).`);
             // Applique aussi tout de suite en local (retour visuel immédiat), seulement
             // si c'est bien la donne actuellement affichée — sinon, la prochaine
@@ -9396,9 +9425,16 @@ function pushCloudGameState() {
     const payload = buildCloudStatePayload();
     const expectedVersion = lastKnownCloudVersion;
     const baseStateAtStart = cloneCloudData(cloudLastSyncedState);
+    const participantCredential = participantCredentialForCloudWrite();
+    const hasHostWriteAuthority = typeof getSessionHostWriteKey === 'function' && !!getSessionHostWriteKey(ctx.roomCode);
+    if (!hasHostWriteAuthority && !participantCredential) {
+        pushDebugLog('Push cloud refusé localement : aucune autorité d’écriture host ni preuve participant disponible.');
+        return;
+    }
     cloudPushInFlight = true;
 
     pushSessionState(ctx.roomCode, payload, expectedVersion, {
+        participantCredential,
         onConflict: (current) => {
             if (!isCloudSyncContextActive(ctx)) return;
             const validatedCurrent = validateCloudSnapshot(current, ctx.roomCode);
@@ -9432,7 +9468,15 @@ function pushCloudGameState() {
         if (!isCloudSyncContextActive(ctx)) return;
         if (result && Number.isInteger(result.version)) {
             lastKnownCloudVersion = result.version;
-            cloudLastSyncedState = cloneCloudData(payload);
+            if (result.state) {
+                const restricted = validateCloudSnapshot({ version: result.version, updatedAt: result.updatedAt, state: result.state }, ctx.roomCode);
+                if (restricted) {
+                    cloudLastSyncedState = cloneCloudData(restricted.state);
+                    applyCloudUpdate(restricted, { expectedRoomCode: ctx.roomCode });
+                }
+            } else {
+                cloudLastSyncedState = cloneCloudData(payload);
+            }
             clearCloudExitRecovery(ctx.roomCode);
         }
     }).catch(err => {
@@ -9504,6 +9548,7 @@ async function pushCallViaServerFallback(seat, call, explanation) {
         const stateToPush = { ...baseState, savedAt: Date.now() };
 
         const result = await pushSessionState(cloudCtx.roomCode, stateToPush, expectedVersion, {
+            participantCredential: participantCredentialForCloudWrite(),
             onConflict: (current) => {
                 // Quelqu'un d'autre a écrit entre ma lecture et ma tentative d'écrite —
                 // pas la peine de retenter en boucle ici (contrairement à
@@ -9522,7 +9567,7 @@ async function pushCallViaServerFallback(seat, call, explanation) {
         if (!isCloudSyncContextActive(cloudCtx)) return;
         if (result) {
             lastKnownCloudVersion = result.version;
-            cloudLastSyncedState = cloneCloudData(stateToPush);
+            cloudLastSyncedState = cloneCloudData(result.state || stateToPush);
             pushDebugLog(`Annonce ${call} (${seat}) remontée au serveur avec succès (version ${result.version}).`);
         } else {
             pushDebugLog(`Annonce ${call} (${seat}) : pushSessionState n'a renvoyé aucun résultat (ni succès, ni conflit signalé) — à surveiller.`);

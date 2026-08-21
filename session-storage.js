@@ -2,15 +2,19 @@
 //
 // Le code 4 chiffres reste un identifiant humain. L'accès cloud utilise en plus une clé
 // de capacité aléatoire propre à la salle, stockée localement sur chaque appareil ayant
-// réellement participé. Cette clé est reçue lors de la réservation, via le lien de partage
-// ou via le P2P ('session-access'). Elle n'est jamais incluse dans le snapshot de partie.
+// réellement participé. La capacité de lecture/relais est reçue lors de la réservation
+// (hôte) ou via le P2P ciblé ('session-access') après autorisation par l'hôte. Le lien
+// de partage court ne transporte aucun secret. La capacité d'écriture complète du host
+// est distincte, reste locale à l'appareil hôte et n'est jamais envoyée aux invités.
 
 const SESSION_API_BASE = 'https://api-gen-beta.vercel.app';
 const SESSION_PUSH_RETRIES = 2;
 const SESSION_PUSH_RETRY_DELAY_MS = 1000;
 const SESSION_ACCESS_KEYS_STORAGE = 'bridgeSessionAccessKeysV1';
+const SESSION_HOST_WRITE_KEYS_STORAGE = 'bridgeSessionHostWriteKeysV1';
 const SESSION_ACCESS_KEY_MAX_AGE_MS = 70 * 24 * 60 * 60 * 1000;
 let fallbackSessionAccessKeys = {};
+let fallbackSessionHostWriteKeys = {};
 
 function normalizeSessionRoomCode(roomCode) {
     return String(roomCode || '').toUpperCase().trim();
@@ -62,6 +66,52 @@ function forgetSessionAccessKey(roomCode) {
     try { localStorage.setItem(SESSION_ACCESS_KEYS_STORAGE, JSON.stringify(map)); } catch (e) { /* mémoire seulement */ }
 }
 
+function readSessionHostWriteKeyMap() {
+    let map = {};
+    try { map = JSON.parse(localStorage.getItem(SESSION_HOST_WRITE_KEYS_STORAGE) || '{}'); }
+    catch (e) { map = fallbackSessionHostWriteKeys || {}; }
+    if (!map || typeof map !== 'object' || Array.isArray(map)) map = {};
+    const now = Date.now();
+    let changed = false;
+    for (const code of Object.keys(map)) {
+        const item = map[code];
+        if (!item || typeof item.key !== 'string' || !item.key || !Number.isFinite(item.savedAt)
+            || now - item.savedAt > SESSION_ACCESS_KEY_MAX_AGE_MS) {
+            delete map[code]; changed = true;
+        }
+    }
+    if (changed) {
+        try { localStorage.setItem(SESSION_HOST_WRITE_KEYS_STORAGE, JSON.stringify(map)); }
+        catch (e) { fallbackSessionHostWriteKeys = map; }
+    }
+    return map;
+}
+
+function rememberSessionHostWriteKey(roomCode, writeKey) {
+    const code = normalizeSessionRoomCode(roomCode);
+    const key = typeof writeKey === 'string' ? writeKey.trim() : '';
+    if (!code || !key || key.length < 24 || key.length > 256) return false;
+    const map = readSessionHostWriteKeyMap();
+    map[code] = { key, savedAt: Date.now() };
+    fallbackSessionHostWriteKeys = map;
+    try { localStorage.setItem(SESSION_HOST_WRITE_KEYS_STORAGE, JSON.stringify(map)); } catch (e) { /* mémoire seulement */ }
+    return true;
+}
+
+function getSessionHostWriteKey(roomCode) {
+    const code = normalizeSessionRoomCode(roomCode);
+    const item = readSessionHostWriteKeyMap()[code];
+    return item && typeof item.key === 'string' ? item.key : null;
+}
+
+function forgetSessionHostWriteKey(roomCode) {
+    const code = normalizeSessionRoomCode(roomCode);
+    const map = readSessionHostWriteKeyMap();
+    delete map[code];
+    fallbackSessionHostWriteKeys = map;
+    try { localStorage.setItem(SESSION_HOST_WRITE_KEYS_STORAGE, JSON.stringify(map)); } catch (e) { /* mémoire seulement */ }
+}
+
 function sessionApiUrl(roomCode) {
     return `${SESSION_API_BASE}/api/session?code=${encodeURIComponent(roomCode)}&_=${Date.now()}`;
 }
@@ -89,9 +139,9 @@ async function fetchWithSessionCapability(roomCode, url, options = {}) {
     return fetch(url, opts);
 }
 
-// Réserve un code 4 chiffres. Avec le backend sécurisé, la réponse contient aussi la clé
-// de capacité ; les anciens backends ne renvoient que le code, ce qui garde un déploiement
-// client-first possible (le polling continue alors en mode legacy jusqu'au déploiement API).
+// Réserve un code 4 chiffres. Le backend courant renvoie deux capacités distinctes :
+// lecture/relais et écriture complète host. Ce client exige les deux pour activer une
+// nouvelle salle ; déployer donc l'API avant le client pour ce lot coordonné.
 async function reserveFreshRoomCode() {
     const resp = await fetch(`${SESSION_API_BASE}/api/session`, {
         method: 'POST',
@@ -104,6 +154,7 @@ async function reserveFreshRoomCode() {
     const code = body && String(body.code || '').trim();
     if (!/^\d{4}$/.test(code)) throw new Error('reserveFreshRoomCode: réponse serveur invalide');
     if (body && typeof body.accessKey === 'string') rememberSessionAccessKey(code, body.accessKey);
+    if (body && typeof body.hostWriteKey === 'string') rememberSessionHostWriteKey(code, body.hostWriteKey);
     return code;
 }
 
@@ -114,12 +165,39 @@ async function reserveFreshRoomCode() {
 async function activateRoomAccess(roomCode) {
     const code = normalizeSessionRoomCode(roomCode);
     const accessKey = getSessionAccessKey(code);
-    if (!code || !accessKey) return false;
+    const hostWriteKey = getSessionHostWriteKey(code);
+    if (!code || !accessKey || !hostWriteKey) return false;
     try {
         const resp = await fetch(`${SESSION_API_BASE}/api/session`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'X-Bridge-Session-Key': accessKey },
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Bridge-Session-Key': accessKey,
+                'X-Bridge-Host-Write-Key': hostWriteKey
+            },
             body: JSON.stringify({ action: 'activate-room', code }),
+            cache: 'no-store'
+        });
+        return resp.ok;
+    } catch (e) {
+        return false;
+    }
+}
+
+async function registerSessionParticipantCredential(roomCode, participantId, reconnectSecret) {
+    const code = normalizeSessionRoomCode(roomCode);
+    const accessKey = getSessionAccessKey(code);
+    const hostWriteKey = getSessionHostWriteKey(code);
+    if (!code || !accessKey || !hostWriteKey || !participantId || !reconnectSecret) return false;
+    try {
+        const resp = await fetch(`${SESSION_API_BASE}/api/session`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Bridge-Session-Key': accessKey,
+                'X-Bridge-Host-Write-Key': hostWriteKey
+            },
+            body: JSON.stringify({ action: 'register-participant', code, participantId, reconnectSecret }),
             cache: 'no-store'
         });
         return resp.ok;
@@ -135,11 +213,20 @@ async function pullSessionState(roomCode) {
     return resp.json();
 }
 
-async function pushSessionState(roomCode, state, expectedVersion, { onConflict, retriesLeft = SESSION_PUSH_RETRIES } = {}) {
+async function pushSessionState(roomCode, state, expectedVersion, { onConflict, retriesLeft = SESSION_PUSH_RETRIES, participantCredential = null } = {}) {
     try {
+        const code = normalizeSessionRoomCode(roomCode);
+        const headers = { 'Content-Type': 'application/json' };
+        const hostWriteKey = getSessionHostWriteKey(code);
+        if (hostWriteKey) {
+            headers['X-Bridge-Host-Write-Key'] = hostWriteKey;
+        } else if (participantCredential && participantCredential.participantId && participantCredential.reconnectSecret) {
+            headers['X-Bridge-Participant-Id'] = participantCredential.participantId;
+            headers['X-Bridge-Reconnect-Secret'] = participantCredential.reconnectSecret;
+        }
         const resp = await fetchWithSessionCapability(roomCode, sessionApiUrl(roomCode), {
             method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
+            headers,
             body: JSON.stringify({ state, expectedVersion }),
             keepalive: true
         });
@@ -153,7 +240,7 @@ async function pushSessionState(roomCode, state, expectedVersion, { onConflict, 
     } catch (err) {
         if (retriesLeft > 0) {
             await new Promise(r => setTimeout(r, SESSION_PUSH_RETRY_DELAY_MS));
-            return pushSessionState(roomCode, state, expectedVersion, { onConflict, retriesLeft: retriesLeft - 1 });
+            return pushSessionState(roomCode, state, expectedVersion, { onConflict, retriesLeft: retriesLeft - 1, participantCredential });
         }
         console.warn('[session-storage] push cloud échoué (partie continue localement) :', err);
         return null;
@@ -187,6 +274,8 @@ if (typeof module !== 'undefined' && module.exports) {
         pullSessionState, pushSessionState, reserveFreshRoomCode,
         pushSessionLogEntries, pullSessionLog,
         getSessionAccessKey, rememberSessionAccessKey, forgetSessionAccessKey,
+        getSessionHostWriteKey, rememberSessionHostWriteKey, forgetSessionHostWriteKey,
+        registerSessionParticipantCredential,
         claimLegacySessionAccess, activateRoomAccess
     };
 }
