@@ -147,6 +147,24 @@
                 <h2>Rejoindre une partie</h2>
                 <p>Entrez le code à 4 chiffres partagé par l'autre joueur.</p>
                 <input type="text" id="joinCodeInput" class="code-input" placeholder="EX: 4728" maxlength="4" inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="go" data-ui-keydown="join-code">
+                <!-- Sur téléphone, PLAY active ce pavé numérique maison et rend le champ
+                     ci-dessus non éditable : aucun clavier système iOS/Android ne s'ouvre, donc
+                     aucune barre AutoFill (clé / carte / adresse) ne peut venir se superposer.
+                     Desktop conserve le champ clavier normal. -->
+                <div id="mobileRoomCodeKeypad" class="mobile-room-code-keypad" aria-label="Pavé numérique du code de salle">
+                    <button type="button" class="mobile-room-code-key" data-ui-click="join-code-digit" data-digit="1">1</button>
+                    <button type="button" class="mobile-room-code-key" data-ui-click="join-code-digit" data-digit="2">2</button>
+                    <button type="button" class="mobile-room-code-key" data-ui-click="join-code-digit" data-digit="3">3</button>
+                    <button type="button" class="mobile-room-code-key" data-ui-click="join-code-digit" data-digit="4">4</button>
+                    <button type="button" class="mobile-room-code-key" data-ui-click="join-code-digit" data-digit="5">5</button>
+                    <button type="button" class="mobile-room-code-key" data-ui-click="join-code-digit" data-digit="6">6</button>
+                    <button type="button" class="mobile-room-code-key" data-ui-click="join-code-digit" data-digit="7">7</button>
+                    <button type="button" class="mobile-room-code-key" data-ui-click="join-code-digit" data-digit="8">8</button>
+                    <button type="button" class="mobile-room-code-key" data-ui-click="join-code-digit" data-digit="9">9</button>
+                    <span class="mobile-room-code-key-spacer" aria-hidden="true"></span>
+                    <button type="button" class="mobile-room-code-key" data-ui-click="join-code-digit" data-digit="0">0</button>
+                    <button type="button" class="mobile-room-code-key mobile-room-code-key-backspace" data-ui-click="join-code-backspace" aria-label="Effacer le dernier chiffre">⌫</button>
+                </div>
                 <!-- ontouchstart : ferme le clavier virtuel DÈS le début du tap sur ce bouton plutôt
                      qu'au clic — sur mobile, avec le clavier encore ouvert, le premier tap sert
                      souvent juste à le fermer (le navigateur avale le clic), d'où le "il faut
@@ -234,9 +252,6 @@
                                 <span class="ios-switch-track"><span class="ios-switch-thumb"></span></span>
                             </span>
                         </label>
-                    </div>
-                    <div id="hostCapabilityRotationGroup" class="form-group-checkbox form-group-checkbox-left">
-                        <button type="button" id="rotateCapabilitiesBtn" class="btn btn-secondary btn-small" style="display:none;" data-ui-click="rotate-capabilities" title="Révoquer les anciennes capacités cloud et en générer de nouvelles">🔐 Renouveler les accès</button>
                     </div>
                 </div>
             </div>
@@ -473,7 +488,6 @@
                     <button id="seatReorgBtn" type="button" class="btn btn-secondary btn-small" style="visibility:hidden; pointer-events:none;" data-ui-click="open-seat-reorg"><span class="btn-label-full">🪑 Réorganiser les sièges</span><span class="btn-label-short">🪑 Sièges</span></button>
                     <!-- Export de session déplacé ici : 3e bouton de la 2e ligne, après Rotation et Réorganiser. -->
                     <button id="exportSessionBtn" type="button" class="btn btn-secondary btn-small" style="display:none;" data-ui-click="export-session-pbn"><span class="btn-label-full">📦 Exporter la session</span><span class="btn-label-short">📦 Session</span></button>
-                    <button id="gameRotateCapabilitiesBtn" type="button" class="btn btn-secondary btn-small" style="visibility:hidden; pointer-events:none;" data-ui-click="rotate-capabilities" title="Révoquer les anciennes capacités cloud et en générer de nouvelles"><span class="btn-label-full">🔐 Renouveler les accès</span><span class="btn-label-short">🔐 Accès</span></button>
                 </div>
                 <span id="undoStatusText" class="undo-status-text" role="status" aria-live="polite" aria-atomic="true"></span>
             </div>

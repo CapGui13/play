@@ -2684,6 +2684,48 @@ function uiJoinCodeInputKeydown(event) {
     uiJoinRoom();
 }
 
+// Pavé de code de salle mobile : contrairement à un <input> éditable, il n'ouvre
+// jamais le clavier système. C'est volontairement activé uniquement sur un appareil à
+// interaction tactile/mobile ; desktop conserve la saisie clavier habituelle.
+function mobileRoomCodeKeypadPreferred() {
+    if (isIosDevice()) return true;
+    if (/Android|Mobile|Tablet/i.test(navigator.userAgent || '')) return true;
+    return !!(window.matchMedia && window.matchMedia('(hover: none) and (pointer: coarse)').matches);
+}
+
+function initMobileRoomCodeKeypad() {
+    const input = document.getElementById('joinCodeInput');
+    if (!input) return;
+    const enabled = mobileRoomCodeKeypadPreferred();
+    document.documentElement.classList.toggle('mobile-room-code-keypad-enabled', enabled);
+    if (!enabled) return;
+
+    // readonly + inputmode=none empêchent l'ouverture du clavier ; tabindex=-1 évite
+    // qu'un tap ou un parcours clavier mobile ne place malgré tout le curseur dedans.
+    input.readOnly = true;
+    input.setAttribute('inputmode', 'none');
+    input.setAttribute('aria-readonly', 'true');
+    input.setAttribute('tabindex', '-1');
+}
+
+function uiJoinCodeKeypadDigit(digit) {
+    if (!/^\d$/.test(String(digit))) return;
+    const input = document.getElementById('joinCodeInput');
+    if (!input) return;
+    if (input.value.length >= 4) return;
+    input.value += String(digit);
+    const error = document.getElementById('landingError');
+    if (error) error.style.display = 'none';
+}
+
+function uiJoinCodeKeypadBackspace() {
+    const input = document.getElementById('joinCodeInput');
+    if (!input) return;
+    input.value = input.value.slice(0, -1);
+    const error = document.getElementById('landingError');
+    if (error) error.style.display = 'none';
+}
+
 // Voir échange avec Guillaume ("si un joueur avait déjà été dans une session, on ne doit
 // pas lui redemander [son pseudo]") : distingue "rejoindre une salle où j'étais déjà
 // activement présent" (silencieux, pas de modale) de "rejoindre une salle pour la première
@@ -3021,7 +3063,10 @@ function enterLobbyScreen() {
     // en bas du fichier — reposé à chaque appel (enterLobbyScreen est réappelée à chaque
     // changement de participant), inoffensif de le refaire à chaque fois.
     if (myRole === 'host') markHostingPregame(currentRoomCode);
-    document.getElementById('lobbyRoomCodeBlock').style.display = myRole === 'host' ? 'block' : 'none';
+    // Le lien d'invitation est utile à tous les participants du salon : un invité peut
+    // lui aussi inviter quelqu'un. updateShareLinkForRoom() est alimenté côté hôte ET
+    // côté invité, donc ne pas masquer ce bloc selon le rôle.
+    document.getElementById('lobbyRoomCodeBlock').style.display = 'block';
     document.getElementById('hostSetupPanel').style.display = myRole === 'host' ? 'block' : 'none';
     // Voir échange avec Guillaume (session du 23 juillet) : déplacé hors de hostSetupPanel
     // (voir index.html), donc sa visibilité host-only doit être pilotée séparément ici,
@@ -10613,6 +10658,7 @@ window.addEventListener('DOMContentLoaded', () => {
     scheduleServiceWorkerInit();
     initIosInstallHint();
     initIosLockScreenWarning();
+    initMobileRoomCodeKeypad();
     initOfflineHandling();
     initChatVisibilityTracking();
 

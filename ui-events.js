@@ -54,6 +54,8 @@
             case 'confirm-nickname': return call('uiConfirmNicknamePrompt');
             case 'create-room': return call('uiCreateRoom');
             case 'join-room': return call('uiJoinRoom');
+            case 'join-code-digit': return call('uiJoinCodeKeypadDigit', el.dataset.digit || '');
+            case 'join-code-backspace': return call('uiJoinCodeKeypadBackspace');
             case 'dismiss-ios-lock': return call('uiDismissIosLockScreenWarning');
             case 'report-bug': return call('uiReportBug');
             case 'copy-share-link': return call('uiCopyShareLink', el);

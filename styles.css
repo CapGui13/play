@@ -744,6 +744,48 @@ a.btn {
     border-color: var(--brass);
 }
 
+/* Pavé numérique PLAY pour le code de salle. Caché par défaut :
+   initMobileRoomCodeKeypad ajoute la classe racine uniquement sur téléphone/tablette. */
+.mobile-room-code-keypad {
+    display: none;
+}
+
+.mobile-room-code-keypad-enabled .mobile-room-code-keypad {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+    width: min(100%, 250px);
+    margin: 10px auto 12px;
+}
+
+.mobile-room-code-key {
+    min-height: 46px;
+    border-radius: 9px;
+    border: 1px solid var(--line);
+    background: var(--surface-2);
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: 1.15rem;
+    font-weight: 600;
+    cursor: pointer;
+    touch-action: manipulation;
+}
+
+.mobile-room-code-key:active {
+    transform: translateY(1px);
+}
+
+.mobile-room-code-key-spacer {
+    min-height: 46px;
+}
+
+.mobile-room-code-keypad-enabled #joinCodeInput {
+    caret-color: transparent;
+    cursor: default;
+    pointer-events: none;
+    user-select: none;
+}
+
 .name-input {
     width: 100%;
     max-width: 260px;
@@ -3865,4 +3907,37 @@ table.dd-table td.dd-secondary-contract {
 .hand-card-title-name,
 .ledger-seat-label {
     display: inline-block;
+}
+
+/* MINI UPDATE 2026-08-21 — Salle/Hôte mobile
+   Sur mobile uniquement, retour au placement précédent : le bloc Salle/Hôte reprend
+   l'espace disponible avant 🔗/🏠/🐞 et son contenu reste centré dans cet espace. Le
+   sizer historique introduit pour le desktop est neutralisé afin qu'il ne puisse plus
+   provoquer le retour à la ligne du bouton 🐞. Le desktop conserve la nouvelle géométrie. */
+@media (max-width: 760px) {
+    .game-room-code-label {
+        flex: 1 1 auto;
+        position: static;
+        display: grid;
+        grid-template-columns: 5ch max-content max-content;
+        justify-content: center;
+        min-width: 0;
+        max-width: 100%;
+    }
+
+    .game-room-code-sizer {
+        display: none;
+    }
+
+    .game-room-code-visible {
+        position: static;
+        inset: auto;
+        display: contents;
+    }
+}
+
+@media (max-width: 340px) {
+    .game-room-code-label {
+        flex: 1 0 100%;
+    }
 }
