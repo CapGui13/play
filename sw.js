@@ -7,7 +7,7 @@
 // valeur ci-dessous est réécrite AUTOMATIQUEMENT à chaque déploiement par
 // .github/workflows/deploy.yml (dérivée du SHA du commit) : ne pas l'éditer à la main, ça
 // n'aurait d'effet que le temps d'un test local avant le prochain push.
-const CACHE_NAME = 'bridge-encheres-mini3-mobile-pons-20260821';
+const CACHE_NAME = 'bridge-encheres-mini4-pons-diag-20260821';
 
 // Ressources de la même origine : mises en cache de façon fiable via cache.addAll (un seul
 // échec fait échouer toute l'installation, ce qui est le comportement voulu ici — ce sont

@@ -95,6 +95,8 @@ function computeHandHcp(hand) {
 // Save-Data et réseaux lents.
 const PONS_CANONICAL_RULES_URL = 'pons/canonical-rules-v1.json';
 const PONS_RAW_WASM_URL = 'pons/pons_wasm_bg.wasm';
+const PONS_CANONICAL_RULES_LEGACY_URL = 'pons/canonical-rules-v1.js?v=20260821-mobile-fallback';
+const PONS_WASM_EMBEDDED_FALLBACK_URL = 'pons/pons-wasm-embedded.js?v=20260821-mobile-fallback';
 const PONS_CLIENT_SCRIPT_URLS = [
     'pons/bridge-engine-v1-browser.js',
     'pons/fiches-engine-v1-app.js?v=20260810-006',
@@ -120,8 +122,15 @@ if (typeof window !== 'undefined') {
         error: ponsLastLoadError ? String(ponsLastLoadError.message || ponsLastLoadError) : null,
         rulesLoaded: Array.isArray(window.BRIDGE_CANONICAL_RULES_V1) ? window.BRIDGE_CANONICAL_RULES_V1.length : 0,
         wasmReady: !!window.PonsWasmModule,
+        wasmRuntimeError: window.PONS_WASM_RUNTIME_ERROR ? String(window.PONS_WASM_RUNTIME_ERROR.message || window.PONS_WASM_RUNTIME_ERROR) : null,
         engineReady: !!(window.PonsEngine && window.PonsEngine.loaded),
-        mobile: isLikelyMobileDevice()
+        engineError: window.PonsEngine && window.PonsEngine.error ? String(window.PonsEngine.error.message || window.PonsEngine.error) : null,
+        mobile: isLikelyMobileDevice(),
+        online: navigator.onLine,
+        userAgent: navigator.userAgent,
+        platform: navigator.platform || '',
+        standalone: !!(window.matchMedia && window.matchMedia('(display-mode: standalone)').matches),
+        serviceWorkerControlled: !!(navigator.serviceWorker && navigator.serviceWorker.controller)
     });
 }
 
@@ -197,7 +206,22 @@ async function loadPonsCanonicalRules() {
                 if (attempt) break;
             }
         }
-        throw lastError || new Error('Règles canoniques PONS indisponibles');
+        // Dernier filet de sécurité mobile : si le chemin JSON optimisé échoue, reprendre
+        // exactement l'ancien producteur JS qui fonctionnait avant PERF2. Il n'est chargé
+        // qu'après deux échecs JSON, donc aucun coût sur le chemin normal rapide.
+        try {
+            setPonsLoadStage('canonical-rules-legacy-fallback');
+            await loadPonsClientScript(PONS_CANONICAL_RULES_LEGACY_URL);
+            if (!Array.isArray(window.BRIDGE_CANONICAL_RULES_V1) || window.BRIDGE_CANONICAL_RULES_V1.length < 1000) {
+                throw new Error('Règles PONS legacy invalides');
+            }
+            recordPlayPerfMilestone('pons-canonical-legacy-ready', window.BRIDGE_CANONICAL_RULES_V1.length);
+            return window.BRIDGE_CANONICAL_RULES_V1;
+        } catch (fallbackErr) {
+            const primary = lastError ? String(lastError.message || lastError) : 'inconnu';
+            const fallback = String(fallbackErr.message || fallbackErr);
+            throw new Error(`Règles PONS indisponibles (JSON: ${primary}; fallback JS: ${fallback})`);
+        }
     })().catch(err => {
         ponsCanonicalRulesPromise = null;
         throw err;
@@ -303,7 +327,27 @@ async function ensurePonsClientReady() {
         // moteur canonique ; le WASM est un vrai binaire compilé en streaming. C'est le
         // chemin par défaut sur desktop ET mobile pour garder exactement le même moteur.
         await loadPonsCanonicalRules();
-        for (const src of PONS_CLIENT_SCRIPT_URLS) await loadPonsClientScript(src);
+        for (const src of PONS_CLIENT_SCRIPT_URLS) {
+            if (src.includes('pons-wasm-runtime.js')) {
+                try {
+                    await loadPonsClientScript(src);
+                } catch (rawWasmErr) {
+                    // Si le nouveau .wasm brut échoue (réseau/MIME/Safari), reprendre le
+                    // bundle WASM embarqué historique. C'est plus lourd, mais uniquement
+                    // comme secours et avec exactement les mêmes octets WASM.
+                    setPonsLoadStage('wasm-embedded-fallback');
+                    recordPlayPerfMilestone('pons-wasm-embedded-fallback', String(rawWasmErr.message || rawWasmErr));
+                    try { delete window.PONS_WASM_RUNTIME_READY; } catch (_) { window.PONS_WASM_RUNTIME_READY = null; }
+                    try { delete window.PONS_WASM_RUNTIME_ERROR; } catch (_) { window.PONS_WASM_RUNTIME_ERROR = null; }
+                    try { delete window.PonsWasmModule; } catch (_) { window.PonsWasmModule = null; }
+                    await loadPonsClientScript(PONS_WASM_EMBEDDED_FALLBACK_URL);
+                    if (!window.PonsWasmModule) throw rawWasmErr;
+                    recordPlayPerfMilestone('pons-wasm-embedded-ready');
+                }
+            } else {
+                await loadPonsClientScript(src);
+            }
+        }
         if (!window.PonsEngine) throw new Error('PONS v2.61 chargé mais API navigateur absente.');
         setPonsLoadStage('engine-ready');
         const ready = await window.PonsEngine.ready;
@@ -322,6 +366,120 @@ async function ensurePonsClientReady() {
     });
 
     return ponsClientLoadPromise;
+}
+
+async function ponsDiagnosticFetchProbe(url) {
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timer = controller ? setTimeout(() => controller.abort(), 10000) : null;
+    try {
+        const response = await fetch(url, {
+            method: 'HEAD',
+            cache: 'reload',
+            signal: controller ? controller.signal : undefined
+        });
+        return `${response.status} ${response.headers.get('content-type') || '(sans MIME)'}`;
+    } catch (err) {
+        return `ECHEC ${String(err && err.message ? err.message : err)}`;
+    } finally {
+        if (timer) clearTimeout(timer);
+    }
+}
+
+async function ponsDiagnosticWasmProbe() {
+    if (typeof WebAssembly === 'undefined') return 'ABSENT';
+    try {
+        // Module WASM minimal valide : magic + version uniquement. Ce test distingue un
+        // blocage CSP/WebKit d'un problème de téléchargement de notre gros binaire.
+        await WebAssembly.compile(new Uint8Array([0,97,115,109,1,0,0,0]));
+        return 'OK';
+    } catch (err) {
+        return `ECHEC ${String(err && err.message ? err.message : err)}`;
+    }
+}
+
+async function buildPonsFailureDiagnostic() {
+    const base = window.getPonsLoadDiagnostic ? window.getPonsLoadDiagnostic() : {};
+    const [rulesHttp, wasmHttp, wasmProbe] = await Promise.all([
+        ponsDiagnosticFetchProbe(PONS_CANONICAL_RULES_URL),
+        ponsDiagnosticFetchProbe(PONS_RAW_WASM_URL),
+        ponsDiagnosticWasmProbe()
+    ]);
+    let cacheNames = [];
+    try { if (window.caches && caches.keys) cacheNames = await caches.keys(); } catch (_) { /* non critique */ }
+    return [
+        'PLAY / PONS mobile diagnostic',
+        `stage=${base.stage || 'inconnu'}`,
+        `error=${base.error || '(aucune)'}`,
+        `wasmRuntimeError=${base.wasmRuntimeError || '(aucune)'}`,
+        `engineError=${base.engineError || '(aucune)'}`,
+        `rulesLoaded=${base.rulesLoaded || 0}`,
+        `wasmReady=${!!base.wasmReady}`,
+        `engineReady=${!!base.engineReady}`,
+        `wasmCompileProbe=${wasmProbe}`,
+        `rulesHEAD=${rulesHttp}`,
+        `wasmHEAD=${wasmHttp}`,
+        `online=${base.online}`,
+        `mobile=${base.mobile}`,
+        `standalone=${base.standalone}`,
+        `serviceWorkerControlled=${base.serviceWorkerControlled}`,
+        `cacheNames=${cacheNames.join(',') || '(aucun)'}`,
+        `platform=${base.platform || ''}`,
+        `userAgent=${base.userAgent || navigator.userAgent || ''}`
+    ].join('\n');
+}
+
+async function showPonsFailureDiagnostic() {
+    const panel = document.getElementById('ponsFailureDiagnostic');
+    const text = document.getElementById('ponsFailureDiagnosticText');
+    if (!panel || !text) return;
+    panel.style.display = 'block';
+    text.value = 'Diagnostic PONS en cours…';
+    try { text.value = await buildPonsFailureDiagnostic(); }
+    catch (err) { text.value = `Diagnostic lui-même en échec : ${String(err && err.message ? err.message : err)}`; }
+}
+
+function hidePonsFailureDiagnostic() {
+    const panel = document.getElementById('ponsFailureDiagnostic');
+    if (panel) panel.style.display = 'none';
+}
+
+async function uiCopyPonsDiagnostic() {
+    const text = document.getElementById('ponsFailureDiagnosticText');
+    if (!text) return;
+    const value = text.value || '';
+    try {
+        await navigator.clipboard.writeText(value);
+        setHostSetupMessage('Diagnostic PONS copié. Colle-le dans ChatGPT.', 'warning');
+    } catch (_) {
+        text.focus();
+        text.select();
+        setHostSetupMessage('Diagnostic sélectionné : utilise Copier dans le menu du téléphone.', 'warning');
+    }
+}
+
+function resetPonsEngineForRetry() {
+    ponsClientLoadPromise = null;
+    const engineSrc = PONS_CLIENT_SCRIPT_URLS.find(src => src.includes('pons-engine.js'));
+    if (engineSrc) {
+        Array.from(document.scripts)
+            .filter(script => script.dataset && script.dataset.ponsLazySrc === engineSrc)
+            .forEach(script => script.remove());
+    }
+    try { delete window.PonsEngine; } catch (_) { window.PonsEngine = null; }
+}
+
+async function uiRetryPonsFromDiagnostic() {
+    setHostSetupMessage('Nouvelle tentative de chargement PONS…', 'warning');
+    hidePonsFailureDiagnostic();
+    resetPonsEngineForRetry();
+    try {
+        await ensurePonsClientReady();
+        setHostSetupMessage('PONS est maintenant chargé. Tu peux relancer la partie.', 'success');
+    } catch (err) {
+        ponsLastLoadError = err;
+        setHostSetupMessage('PONS bloque encore. Le diagnostic ci-dessous indique l’étape exacte.', false);
+        await showPonsFailureDiagnostic();
+    }
 }
 
 function schedulePonsClientPreload() {
@@ -4729,9 +4887,12 @@ async function uiStartGameAsHost() {
         showConnectingOverlay('Préparation du moteur PONS…');
         try {
             await ensurePonsClientReady();
+            hidePonsFailureDiagnostic();
         } catch (err) {
             hideConnectingOverlay();
-            setHostSetupMessage('Le moteur PONS n’a pas pu être chargé. Vérifie la connexion puis réessaie.', false);
+            ponsLastLoadError = err;
+            setHostSetupMessage('Le moteur PONS n’a pas pu être chargé. Le diagnostic ci-dessous indique maintenant l’étape exacte.', false);
+            showPonsFailureDiagnostic();
             console.error('[PLAY/PONS lazy] lancement bloqué : moteur indisponible', err);
             return;
         }

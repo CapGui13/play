@@ -64,6 +64,8 @@
             case 'generate-random-deals': return call('uiGenerateRandomDeals');
             case 'preview-deals': return call('uiPreviewDeals');
             case 'start-game': return call('uiStartGameAsHost');
+            case 'retry-pons': return call('uiRetryPonsFromDiagnostic');
+            case 'copy-pons-diagnostic': return call('uiCopyPonsDiagnostic');
             case 'prev-board': return call('uiHostSkipPrevBoard');
             case 'skip-next-board': return call('uiHostSkipNextBoard');
             case 'fast-forward': return call('uiFastForwardToMyTurn');

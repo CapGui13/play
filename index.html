@@ -402,6 +402,14 @@
                 </div>
             </div>
             <div id="hostSetupError" class="error-banner" style="display:none;"></div>
+            <div id="ponsFailureDiagnostic" class="pons-failure-diagnostic" style="display:none;">
+                <div class="pons-failure-diagnostic-title">Diagnostic PONS mobile</div>
+                <textarea id="ponsFailureDiagnosticText" class="pons-failure-diagnostic-text" readonly aria-label="Diagnostic de chargement PONS"></textarea>
+                <div class="pons-failure-diagnostic-actions">
+                    <button type="button" class="btn btn-secondary btn-small" data-ui-click="retry-pons">↻ Réessayer PONS</button>
+                    <button type="button" class="btn btn-secondary btn-small" data-ui-click="copy-pons-diagnostic">📋 Copier diagnostic</button>
+                </div>
+            </div>
             <!-- Voir échange avec Guillaume (session du 23 juillet) : toujours visible, au
                  même endroit — rouge ("is-empty", voir styles.css) tant qu'aucune donne
                  n'est prête, vert une fois chargée ou générée (voir setDealStatusEmpty /
