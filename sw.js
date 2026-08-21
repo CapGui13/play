@@ -8,7 +8,7 @@
 // distribué ici n'embarque pas de workflow GitHub Actions qui la réécrive : elle doit donc
 // changer à chaque nouvelle release pour forcer l'installation du nouveau cache chez les
 // utilisateurs déjà passés par le Service Worker.
-const CACHE_NAME = 'bridge-encheres-hardened-r1-20260821';
+const CACHE_NAME = 'bridge-encheres-hardened-r2-no-auto-reload-20260821';
 
 // Ressources de la même origine : mises en cache de façon fiable via cache.addAll (un seul
 // échec fait échouer toute l'installation, ce qui est le comportement voulu ici — ce sont
@@ -65,9 +65,9 @@ self.addEventListener('install', (event) => {
                     await cache.put(url, resp.clone());
                 })
             );
-            // N'active pas immédiatement ce nouveau service worker : voir tryAutoApplyUpdate
-            // dans app.js, qui attend qu'aucune salle ne soit active avant d'appeler
-            // skipWaiting() automatiquement.
+            // Ne pas appeler skipWaiting(). Une version installée reste volontairement
+            // "waiting" tant qu'un ancien onglet PLAY est vivant. Elle s'activera selon le
+            // cycle standard du navigateur lors d'une prochaine vraie ouverture/navigation.
         })()
     );
 });
@@ -189,9 +189,7 @@ self.addEventListener('fetch', (event) => {
     );
 });
 
-// Message envoyé par app.js quand l'utilisateur clique "Recharger" sur la bannière de mise
-// à jour (voir initServiceWorker) : fait passer ce nouveau service worker en 'activate'
-// immédiatement au lieu d'attendre la fermeture de tous les onglets.
-self.addEventListener('message', (event) => {
-    if (event.data === 'skipWaiting') self.skipWaiting();
-});
+// Pas de listener `skipWaiting` volontairement. C'est aussi une protection de migration :
+// une page encore chargée avec l'ancien app.js R1 peut tenter d'envoyer ce message au
+// nouveau worker R2 ; R2 l'ignore, reste waiting et ne peut donc pas provoquer de
+// controllerchange/reload dans cet ancien onglet.

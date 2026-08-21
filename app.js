@@ -2085,9 +2085,9 @@ function showScreen(id) {
     // ligne parasite (voir la règle CSS body.on-landing-screen .connection-bar).
     document.body.classList.toggle('on-landing-screen', id === 'screen-landing');
 
-    // Chaque changement d'écran est une occasion de retenter une mise à jour PWA restée en
-    // attente (voir tryAutoApplyUpdate) — sans effet tant qu'une connexion de salle est
-    // active, donc sans risque à appeler ici systématiquement, y compris pour screen-game.
+    // Une mise à jour PWA détectée reste volontairement en attente pendant toute la vie
+    // de cet onglet. Elle sera utilisée lors d'une prochaine vraie ouverture/navigation,
+    // jamais en rechargeant automatiquement l'écran courant (voir initServiceWorker).
     tryAutoApplyUpdate();
 }
 
@@ -9359,9 +9359,10 @@ function initServiceWorker() {
     if (!('serviceWorker' in navigator)) return;
 
     navigator.serviceWorker.register('sw.js').then((registration) => {
-        // Un service worker déjà en attente (installé lors d'une visite précédente, jamais
-        // activé faute de rechargement) : on tente de l'appliquer tout de suite, pas
-        // seulement lors d'une future mise à jour détectée dans cette session.
+        // Une version déjà en attente ou nouvellement installée est simplement mémorisée.
+        // IMPORTANT : on ne lui envoie plus jamais skipWaiting() depuis la page. L'ancien
+        // comportement pouvait activer le nouveau SW au milieu d'un clic « Créer », puis
+        // controllerchange déclenchait window.location.reload() et interrompait la création.
         if (registration.waiting) {
             pendingSwRegistration = registration;
             tryAutoApplyUpdate();
@@ -9371,68 +9372,33 @@ function initServiceWorker() {
             const newWorker = registration.installing;
             if (!newWorker) return;
             newWorker.addEventListener('statechange', () => {
-                // 'installed' + un controller déjà actif = une mise à jour est prête et
-                // attend ; sans controller actif, ce serait la toute première installation
-                // du site, pas une mise à jour à appliquer.
+                // 'installed' + controller actif = mise à jour prête. Elle reste en attente
+                // jusqu'à ce que les onglets utilisant l'ancienne version soient réellement
+                // quittés. Aucun F5 automatique, aucun changement de contrôleur à chaud.
                 if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
                     pendingSwRegistration = registration;
+                    recordPlayPerfMilestone('service-worker-update-waiting');
                     tryAutoApplyUpdate();
                 }
             });
         });
 
-        // Revérifie explicitement toutes les 60s si une nouvelle version existe, plutôt que
-        // de dépendre uniquement du cycle de vérification du navigateur (qui peut attendre
-        // jusqu'à 24h avant de re-regarder sw.js) — sans ça, une page laissée ouverte
-        // pouvait mettre très longtemps à seulement DÉTECTER un déploiement, avant même de
-        // songer à l'appliquer.
+        // Continuer à détecter une nouvelle version sur un onglet laissé ouvert, mais sans
+        // jamais l'appliquer à chaud. Le téléchargement/installation peut se faire en
+        // arrière-plan ; l'activation attend le cycle de vie normal du Service Worker.
         setInterval(() => registration.update(), 60000);
     }).catch((err) => {
         pushDebugLog('Service worker : échec d\'enregistrement — ' + (err && err.message));
     });
 
-    // Une fois que le nouveau service worker prend effectivement le contrôle de la page
-    // (après skipWaiting), recharger pour utiliser les nouveaux fichiers plutôt que ceux
-    // encore en mémoire depuis avant la mise à jour. Protégé par un drapeau : cet
-    // événement peut en théorie se déclencher plusieurs fois.
-    //
-    // Voir échange avec Guillaume ("ça glitch comme si j'avais pressé F5" pendant la
-    // saisie du pseudo, reproduit sur PC/Chrome sans émulateur) : CE listener-ci n'était
-    // pas protégé par le même garde-fou que tryAutoApplyUpdate() plus bas. Il peut se
-    // déclencher tout seul, à l'initiative du NAVIGATEUR (pas de notre fait), dès le tout
-    // premier chargement d'un onglet flambant neuf si une version plus récente était déjà
-    // "en attente" suite à un déploiement précédent (fréquent ce soir, vu le nombre de
-    // déploiements coup sur coup) — rechargeant la page inconditionnellement, pile pendant
-    // que quelqu'un tape son pseudo. Même principe de report ici : si ce n'est pas sûr de
-    // recharger maintenant, on le note et on réessaie via le même sondage périodique.
-    let reloadedForUpdate = false;
-    let controllerChangeReloadPending = false;
+    // controllerchange peut encore arriver lors d'une navigation/reprise normale du
+    // navigateur. Il ne doit JAMAIS provoquer lui-même un reload : on journalise seulement
+    // l'événement. La version déjà chargée en mémoire continue jusqu'à la prochaine vraie
+    // navigation choisie par l'utilisateur.
     navigator.serviceWorker.addEventListener('controllerchange', () => {
-        if (reloadedForUpdate) return;
-        if (peerConn || pendingJoinAfterNickname) {
-            controllerChangeReloadPending = true;
-            return;
-        }
-        reloadedForUpdate = true;
-        window.location.reload();
+        recordPlayPerfMilestone('service-worker-controller-change');
     });
-
-    // Filet de sécurité : si une mise à jour est détectée pendant qu'une connexion de salle
-    // est active (voir tryAutoApplyUpdate ci-dessous), elle reste en attente sans jamais
-    // relancer d'elle-même — ce sondage périodique retente régulièrement, pour l'appliquer
-    // dès qu'on revient à un moment sûr (plus aucune salle active) sans dépendre uniquement
-    // d'un changement d'écran pour s'en rendre compte. Couvre aussi le rattrapage du
-    // controllerchange différé juste au-dessus.
-    setInterval(() => {
-        if (controllerChangeReloadPending && !reloadedForUpdate && !peerConn && !pendingJoinAfterNickname) {
-            reloadedForUpdate = true;
-            window.location.reload();
-            return;
-        }
-        tryAutoApplyUpdate();
-    }, 30000);
 }
-
 
 function scheduleServiceWorkerInit() {
     // L'installation d'une nouvelle version force plusieurs fetch(cache:'reload'). La faire
@@ -9454,25 +9420,17 @@ function scheduleServiceWorkerInit() {
     else setTimeout(run, 2500);
 }
 
-// Voir échange avec Guillaume : plus de bannière "Nouvelle version disponible" à cliquer,
-// la mise à jour s'applique automatiquement — SAUF s'il y a une connexion de salle active
-// (peerConn non nul), qu'on soit hôte ou invité, dans le salon ou en pleine donne. Ne pas
-// se limiter à "pas en pleine donne" (deals) : un rechargement forcé pendant que l'hôte est
-// encore dans le salon le laisserait bloqué, sans façon de s'y reconnecter (voir la
-// limitation déjà documentée dans le README — l'identifiant de connexion de l'hôte change à
-// chaque nouvelle partie). Dans ce cas, retenté plus tard (voir les appels dans showScreen
-// et le sondage périodique) : au pire, elle s'appliquera à la prochaine ouverture de la
-// page, exactement comme avant, juste sans bouton à cliquer.
+// Politique de mise à jour PWA : volontairement passive.
+//
+// Une nouvelle version peut être téléchargée et arriver à l'état "waiting", mais PLAY ne
+// lui envoie plus skipWaiting() et ne recharge plus l'onglet. C'est le cycle de vie standard
+// du Service Worker qui l'activera lorsque les anciens clients auront été réellement quittés
+// (fermeture/navigation), puis elle servira la prochaine ouverture. Cette fonction reste
+// appelée depuis quelques chemins historiques afin d'éviter une refonte inutile : elle ne
+// fait désormais qu'enregistrer l'état en attente pour le diagnostic.
 function tryAutoApplyUpdate() {
     if (!pendingSwRegistration || !pendingSwRegistration.waiting) return;
-    if (peerConn) return;
-    // Voir échange avec Guillaume (session asynchrone à deux — "ça saute comme si j'avais
-    // refresh" pendant la saisie du pseudo) : entre l'ouverture du lien et la validation du
-    // pseudo, peerConn n'existe pas ENCORE (voir ensureNicknameThenProceed) — sans ce
-    // garde-fou, une mise à jour détectée pile à ce moment-là rechargeait la page sous les
-    // doigts de la personne en train de taper, avant même la moindre tentative de connexion.
-    if (pendingJoinAfterNickname) return;
-    pendingSwRegistration.waiting.postMessage('skipWaiting');
+    recordPlayPerfMilestone('service-worker-update-deferred');
 }
 
 // iPadOS se fait passer pour un Mac (navigator.platform "MacIntel") depuis la version 13 :
