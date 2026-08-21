@@ -43,8 +43,13 @@ Erreur de départ corrigée en cours de discussion : la validation d'une annonce
 fonction pure sur l'état public de la partie. Le mode différé le prouve déjà : un joueur
 seul face à son propre appareil valide sa propre annonce, sans hôte en ligne.
 
-**Donc : chacun valide sa propre annonce**, qu'il soit en `p2p` ou en `server` — pas
-l'hôte à sa place. Le rôle d'hôte se réduit à ce qu'il est déjà en pratique pour tout le
+**Donc : chacun valide sa propre annonce HUMAINE**, qu'il soit en `p2p` ou en `server` — pas
+l'hôte à sa place. **Exception importante depuis le hardening P2 du 21 août 2026 : une
+annonce ROBOT relayée par le serveur n'est plus choisie par le client.** Le participant
+peut seulement provoquer l'avancement quand c'est réellement le tour d'un siège robot ;
+`api/session.js` repart du snapshot Redis autoritaire et exécute la même pile PONS v2.61
+côté serveur. Une annonce robot fournie dans le snapshot client est ignorée, même si elle
+est légalement valide. Le rôle d'hôte se réduit à ce qu'il est déjà en pratique pour tout le
 reste :
 - lancer la partie, recommencer l'enchère
 - réorganiser/faire tourner les sièges
@@ -137,7 +142,8 @@ Chaque type de message existant a besoin de sa propre réponse à "et si ce siè
 
 | Message | Aujourd'hui (P2P) | En `server` |
 |---|---|---|
-| `call` (annonce) | host valide + relaie | chacun valide, écrit dans Redis (voir plus haut) |
+| `call` humain | host valide + relaie | le joueur valide/propose sa propre annonce ; le serveur revalide tour + légalité + propriété du siège |
+| `call` robot | PONS du host live + relais P2P | **PONS serveur autoritaire** ; toute valeur robot proposée par un participant est ignorée |
 | `chat` | `relayIfHost` | écrit dans Redis, Pusher notifie, tout le monde relit |
 | `wizz` | relais ciblé par l'hôte | probablement à dégrader silencieusement en `server` (pas de notification "instantanée" possible sans canal direct — voir la décision déjà prise de masquer la cloche en mode différé, même logique) |
 | `seats-rotated` / réorganisation | `peerConn.send` | doit aussi s'écrire dans Redis pour qu'un siège en `server` le voie |
@@ -229,6 +235,20 @@ réconciliation de façon reproductible.
    réellement coupé de l'hôte : l'enchère atteint l'hôte en ~1 seconde via le relais
    serveur, puis se relaie en P2P à tout le monde. Voir le journal de test complet
    dans la conversation — comportement conforme à ce qui était visé.
+
+   **[Hardening P2 — 21 août 2026] Autorité robot déplacée côté serveur pour le relais** :
+   - le PUT restreint participant ne consomme plus aucune valeur `call` provenant du client
+     dès que le tour attendu appartient à un siège robot ;
+   - la pile PONS v2.61 embarquée dans PLAY (WASM + Critic + Semantic + fallback canonique)
+     est également embarquée dans API-gen et exécutée dans `api/pons-server.js` ;
+   - `PonsSemanticLedger` est isolé entre requêtes par sérialisation + reconstruction de la
+     branche avant chaque calcul, afin d'éviter toute contamination inter-salles ;
+   - après une annonce humaine relayée, le serveur enchaîne lui-même les robots consécutifs
+     jusqu'au prochain siège humain ou à la fin de l'enchère ;
+   - en reprise différée, un client sans capacité d'écriture host délègue son tour robot au
+     serveur au lieu d'exécuter PONS localement comme autorité ;
+   - si PONS serveur ne peut pas s'initialiser ou produit une décision invalide, l'écriture
+     échoue fermée (`503`) : jamais de repli sur une annonce robot fournie par le client.
 
    **[Fait — 12 août 2026] Chat et changements de sièges via le relais serveur** :
    - `uiSendChatMessage` bascule sur `pushChatViaServerFallback` (même principe que

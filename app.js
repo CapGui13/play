@@ -5238,6 +5238,20 @@ function maybeRobotBid() {
     const turnSeat = currentTurnSeat(deal.dealer, auctionHistory);
     if (!autoPassSeats.includes(turnSeat)) return;
 
+    // Autorité PONS serveur en mode relais/différé : un client qui n'a PAS la capacité
+    // d'écriture host mais possède une preuve participant ne calcule plus l'annonce robot
+    // localement. Il pousse seulement son snapshot courant ; api/session.js ignore toute
+    // proposition robot et fait progresser PONS côté serveur à partir de l'état Redis.
+    // Le host live conserve le chemin local historique (latence minimale + P2P direct).
+    const relayCredential = participantCredentialForCloudWrite();
+    const hasHostCloudAuthority = typeof getSessionHostWriteKey === 'function'
+        && !!getSessionHostWriteKey(currentRoomCode);
+    if (relayCredential && !hasHostCloudAuthority) {
+        pushDebugLog(`Tour robot ${turnSeat} : décision déléguée à l'autorité PONS serveur.`);
+        pushCloudGameState();
+        return;
+    }
+
     const boardAtSchedule = boardIndex;
     const historyLengthAtSchedule = auctionHistory.length;
 
@@ -9567,7 +9581,25 @@ async function pushCallViaServerFallback(seat, call, explanation) {
         if (!isCloudSyncContextActive(cloudCtx)) return;
         if (result) {
             lastKnownCloudVersion = result.version;
-            cloudLastSyncedState = cloneCloudData(result.state || stateToPush);
+            if (result.state) {
+                // Une écriture participant peut désormais contenir PLUS que mon annonce :
+                // api/session.js fait immédiatement jouer PONS côté serveur tant que le
+                // tour reste à un robot. Appliquer cette réponse autoritaire tout de suite
+                // évite d'attendre le prochain polling pour voir les annonces robot.
+                const restricted = validateCloudSnapshot({
+                    version: result.version,
+                    updatedAt: result.updatedAt,
+                    state: result.state
+                }, cloudCtx.roomCode);
+                if (restricted) {
+                    cloudLastSyncedState = cloneCloudData(restricted.state);
+                    applyCloudUpdate(restricted, { expectedRoomCode: cloudCtx.roomCode });
+                } else {
+                    cloudLastSyncedState = cloneCloudData(stateToPush);
+                }
+            } else {
+                cloudLastSyncedState = cloneCloudData(stateToPush);
+            }
             pushDebugLog(`Annonce ${call} (${seat}) remontée au serveur avec succès (version ${result.version}).`);
         } else {
             pushDebugLog(`Annonce ${call} (${seat}) : pushSessionState n'a renvoyé aucun résultat (ni succès, ni conflit signalé) — à surveiller.`);
