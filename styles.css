@@ -54,11 +54,11 @@
 @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Work+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap');
 
 /* touch-action: manipulation partout (voir échange avec Guillaume : le double-tap ne doit
-   jamais zoomer sur téléphone) — en plus de maximum-scale=1/user-scalable=no dans le
-   <meta viewport> (index.html), que certains navigateurs mobiles n'appliquent qu'en
-   partie. Supprime aussi, en prime, le délai de ~300ms avant déclenchement du clic sur les
-   navigateurs mobiles qui l'appliquent encore. Le pan/scroll normal à un doigt reste
-   entièrement fonctionnel : seuls le double-tap-zoom et le pincement sont concernés. */
+   pas déclencher un zoom accidentel sur les contrôles). Le meta viewport n'interdit plus
+   le zoom volontaire de l'utilisateur. Supprime aussi, en prime, le délai de ~300ms avant
+   déclenchement du clic sur les navigateurs mobiles qui l'appliquent encore. Le pan/scroll
+   normal à un doigt et le pincement volontaire restent fonctionnels ; le but ici est surtout
+   d'éviter les gestes de double-tap interprétés comme zoom sur les contrôles. */
 * { margin: 0; padding: 0; box-sizing: border-box; touch-action: manipulation; }
 
 /* Empêche la sélection de texte (et, sur iOS, le menu Copier/Partager) au tap long —

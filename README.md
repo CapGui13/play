@@ -51,7 +51,7 @@ participant reçoit alors uniquement la ou les mains qu'on lui a assignées.
 5. Après une minute ou deux, le site est accessible à
    `https://<ton-compte>.github.io/<ton-depot>/`.
 
-Aucune clé, aucun compte externe à configurer : tout fonctionne dès la mise en ligne.
+PLAY lui-même est statique sur GitHub Pages, mais les fonctions réseau actuelles s'appuient sur l'API-GEN déjà déployée (Vercel/Upstash/Pusher). Pour un nouveau déploiement indépendant, ces services doivent être configurés côté API.
 
 ## Utilisation
 
@@ -787,22 +787,16 @@ Aucune configuration : le navigateur détecte `manifest.json` et propose l'insta
 automatiquement (Android), ou l'utilisateur passe par Partager → Sur l'écran d'accueil
 (iOS — l'appli affiche une invite dédiée la première fois).
 
-**Mise à jour du cache : automatique, via GitHub Actions.** `sw.js` gère l'invalidation du
-cache via la constante `CACHE_NAME` en tête de fichier, mais elle n'est plus à incrémenter
-à la main : le workflow `.github/workflows/deploy.yml` la réécrit tout seul à chaque push
-sur `main`, avec un identifiant dérivé du commit (`bridge-encheres-<sha>`), avant de
-déployer. Chaque déploiement a donc forcément un `CACHE_NAME` différent du précédent, et le
-service worker détecte toujours la mise à jour — appliquée **automatiquement**, sans rien à
-cliquer, chez les joueurs ayant déjà installé l'appli. Par sécurité, elle attend qu'aucune
-salle ne soit active (ni hôte ni invité connecté à une partie, en salon ou en jeu) avant de
-recharger la page toute seule — sinon elle patiente et retente régulièrement, jusqu'à ce que
-ce soit le cas. Ça vaut aussi pour `donnes/catalogue.json` et les fichiers de `donnes/`, mis
-en cache dès leur premier chargement bien que non listés dans `CORE_ASSETS` (voir
-`donnes/README.md`).
+**Mise à jour du cache : versionnée par release.** `sw.js` gère l'invalidation via la
+constante `CACHE_NAME` en tête de fichier. Le paquet distribué ici utilise un identifiant de
+release propre ; à chaque future release, cette valeur doit être changée avant publication.
+Le nouveau Service Worker peut alors installer un cache frais, puis l'application attend
+qu'aucune salle ne soit active avant d'appliquer automatiquement la mise à jour. Les fichiers
+`donnes/catalogue.json` et `donnes/` restent mis en cache à leur premier chargement même s'ils
+ne figurent pas dans `CORE_ASSETS`.
 
-Prérequis pour que ce workflow s'exécute : **Settings → Pages → Source** doit être réglé
-sur *"GitHub Actions"* (pas *"Deploy from a branch"*). Après un `git push`, l'onglet
-**Actions** du dépôt montre le déploiement en cours puis son statut.
+Le mode de déploiement documenté plus haut reste **GitHub Pages → Deploy from a branch** ;
+aucun workflow GitHub Actions n'est requis par ce paquet.
 
 
 ## Sécurité : capacités, CSP et rotation
@@ -812,7 +806,7 @@ sur *"GitHub Actions"* (pas *"Deploy from a branch"*). Après un `git push`, l'o
 - Le code court de salle est un identifiant humain, **pas** un secret cloud. La lecture et
   le relais utilisent une `accessKey`; l'écriture complète utilise une `hostWriteKey`
   distincte, conservée par l'hôte.
-- Le bouton **🔐 Renouveler les accès** de l'hôte remplace atomiquement ces deux capacités.
+- La fonction de rotation/révocation des capacités est conservée dans le code, mais son bouton a été volontairement retiré de l'interface. Elle peut être réexposée plus tard dans un menu d'administration si nécessaire.
   Les anciennes deviennent immédiatement inutilisables ; seuls les joueurs encore
   connectés et assis reçoivent la nouvelle `accessKey`.
 - `index.html` applique une Content Security Policy : aucun handler JavaScript inline,

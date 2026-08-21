@@ -4,10 +4,11 @@
 // chaque <script>/<link> de index.html (pratique manuelle de cache-busting, redondante
 // une fois qu'un service worker gère lui-même l'invalidation). C'est CACHE_NAME qui fait
 // foi (voir l'événement 'activate', qui purge automatiquement les anciens caches) — et sa
-// valeur ci-dessous est réécrite AUTOMATIQUEMENT à chaque déploiement par
-// .github/workflows/deploy.yml (dérivée du SHA du commit) : ne pas l'éditer à la main, ça
-// n'aurait d'effet que le temps d'un test local avant le prochain push.
-const CACHE_NAME = 'bridge-encheres-mini4-pons-diag-20260821';
+// valeur ci-dessous est volontairement versionnée à chaque paquet de release. Le dépôt
+// distribué ici n'embarque pas de workflow GitHub Actions qui la réécrive : elle doit donc
+// changer à chaque nouvelle release pour forcer l'installation du nouveau cache chez les
+// utilisateurs déjà passés par le Service Worker.
+const CACHE_NAME = 'bridge-encheres-final-20260821-2050';
 
 // Ressources de la même origine : mises en cache de façon fiable via cache.addAll (un seul
 // échec fait échouer toute l'installation, ce qui est le comportement voulu ici — ce sont
