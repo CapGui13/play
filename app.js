@@ -11121,6 +11121,7 @@ function initMobileEdgeResistanceAndBoardSwipe() {
     let verticalBounceScreen = null;
     let verticalBounceOffset = 0;
     let verticalBounceAnimation = null;
+    let gameSwipeSettleCleanupTimer = null;
 
     function isMobileGestureViewport() {
         return window.innerWidth <= MOBILE_MAX_WIDTH && navigator.maxTouchPoints > 0;
@@ -11266,9 +11267,63 @@ function initMobileEdgeResistanceAndBoardSwipe() {
         }
     }
 
+    function getGameSwipeSettleTargets() {
+        const screen = document.getElementById('screen-game');
+        if (!screen) return [];
+        return [
+            { el: screen.querySelector('.game-header'), offset: 20, delay: 0 },
+            { el: screen.querySelector('.hand-display-options'), offset: 16, delay: 26 },
+            { el: screen.querySelector('.hands-panel'), offset: 26, delay: 54 },
+            { el: screen.querySelector('.auction-panel'), offset: 22, delay: 78 }
+        ].filter(item => item.el);
+    }
+
+    function clearGameSwipeSettleStyles() {
+        if (gameSwipeSettleCleanupTimer) {
+            clearTimeout(gameSwipeSettleCleanupTimer);
+            gameSwipeSettleCleanupTimer = null;
+        }
+        for (const { el } of getGameSwipeSettleTargets()) {
+            el.style.transition = '';
+            el.style.transform = '';
+            el.style.opacity = '';
+            el.style.willChange = '';
+        }
+    }
+
+    function runGameSwipeSettleAnimation(direction) {
+        const targets = getGameSwipeSettleTargets();
+        if (!targets.length || prefersReducedMotion()) return;
+        clearGameSwipeSettleStyles();
+        const settleSign = direction < 0 ? 1 : -1;
+        for (const { el, offset, delay } of targets) {
+            el.style.willChange = 'transform, opacity';
+            el.style.transition = 'none';
+            el.style.transform = `translate3d(${settleSign * offset}px, 0, 0)`;
+            el.style.opacity = '0.985';
+            // Force le style de départ par bloc pour que Safari n'écrase pas l'état
+            // initial si le parent entre lui aussi en animation au même moment.
+            void el.offsetWidth;
+            el.style.transition = `transform 300ms cubic-bezier(.18,.78,.24,1) ${delay}ms, opacity 220ms ease ${delay}ms`;
+            el.style.transform = 'translate3d(0, 0, 0)';
+            el.style.opacity = '1';
+        }
+        const maxDelay = targets.reduce((acc, item) => Math.max(acc, item.delay), 0);
+        gameSwipeSettleCleanupTimer = window.setTimeout(() => {
+            gameSwipeSettleCleanupTimer = null;
+            for (const { el } of targets) {
+                el.style.transition = '';
+                el.style.transform = '';
+                el.style.opacity = '';
+                el.style.willChange = '';
+            }
+        }, 430 + maxDelay);
+    }
+
     function setGameSwipeDrag(rawDx) {
         const screen = document.getElementById('screen-game');
         if (!screen) return;
+        clearGameSwipeSettleStyles();
         const canNavigate = canNavigateSwipeDirection(rawDx);
         const factor = canNavigate ? SWIPE_DRAG_FACTOR : SWIPE_BLOCKED_FACTOR;
         const maxPx = canNavigate
@@ -11286,6 +11341,7 @@ function initMobileEdgeResistanceAndBoardSwipe() {
     function resetGameSwipeVisual(animated = true) {
         const screen = document.getElementById('screen-game');
         if (!screen) return;
+        clearGameSwipeSettleStyles();
         if (animated && !prefersReducedMotion()) {
             screen.style.transition = 'transform 190ms cubic-bezier(.22,.78,.28,1)';
             screen.style.transform = 'translate3d(0, 0, 0)';
@@ -11351,6 +11407,8 @@ function initMobileEdgeResistanceAndBoardSwipe() {
             // La nouvelle donne arrive depuis le côté opposé, comme la diapositive suivante.
             const inX = -direction * viewportTravel;
             screen.style.transform = `translate3d(${inX}px, 0, 0)`;
+            clearGameSwipeSettleStyles();
+            runGameSwipeSettleAnimation(direction);
             // Force un calcul de style afin que Safari iOS enregistre bien la position de départ
             // avant de lancer l'animation d'entrée.
             void screen.offsetWidth;
@@ -11358,8 +11416,8 @@ function initMobileEdgeResistanceAndBoardSwipe() {
                 { transform: `translate3d(${inX}px, 0, 0)` },
                 { transform: 'translate3d(0, 0, 0)' }
             ], {
-                duration: 260,
-                easing: 'cubic-bezier(.20,.72,.26,1)',
+                duration: 280,
+                easing: 'cubic-bezier(.18,.74,.24,1)',
                 fill: 'forwards'
             });
             const finish = () => {
@@ -11367,6 +11425,7 @@ function initMobileEdgeResistanceAndBoardSwipe() {
                 screen.style.transition = '';
                 screen.style.transform = '';
                 screen.style.opacity = '';
+                clearGameSwipeSettleStyles();
             };
             enter.onfinish = finish;
             enter.oncancel = finish;
