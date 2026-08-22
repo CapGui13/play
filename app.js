@@ -11121,6 +11121,8 @@ function initMobileEdgeResistanceAndBoardSwipe() {
     let verticalBounceScreen = null;
     let verticalBounceOffset = 0;
     let verticalBounceAnimation = null;
+    let inertialBounceFrame = null;
+    let inertialBounceAutoResetTimer = null;
     let gameSwipeSettleCleanupTimer = null;
 
     function isMobileGestureViewport() {
@@ -11184,6 +11186,64 @@ function initMobileEdgeResistanceAndBoardSwipe() {
         if (dx < 0) return boardIndex < deals.length - 1;
         if (dx > 0) return boardIndex > 0;
         return false;
+    }
+
+    function cancelInertialBounceWatch() {
+        if (inertialBounceFrame != null) {
+            try { cancelAnimationFrame(inertialBounceFrame); } catch (_) {}
+            inertialBounceFrame = null;
+        }
+        if (inertialBounceAutoResetTimer) {
+            clearTimeout(inertialBounceAutoResetTimer);
+            inertialBounceAutoResetTimer = null;
+        }
+    }
+
+    function startInertialEdgeBounceWatch(releaseFingerDeltaY, filteredSpeedY) {
+        cancelInertialBounceWatch();
+        if (!isMobileGestureViewport() || boardSwipeAnimating) return;
+        const absRelease = Math.abs(releaseFingerDeltaY || 0);
+        const targetIsTop = releaseFingerDeltaY > 0;
+        const targetIsBottom = releaseFingerDeltaY < 0;
+        if ((!targetIsTop && !targetIsBottom) || filteredSpeedY < 0.42 || absRelease < 7) return;
+
+        const startedAt = performance.now();
+        let lastScrollTop = -1;
+        let stagnantFrames = 0;
+
+        function step() {
+            inertialBounceFrame = null;
+            if (gesture || boardSwipeAnimating) return;
+            const doc = document.documentElement;
+            const scrollTop = Math.max(0, window.scrollY || doc.scrollTop || 0);
+            const maxScroll = Math.max(0, doc.scrollHeight - window.innerHeight);
+            const atTop = scrollTop <= 1;
+            const atBottom = maxScroll - scrollTop <= 1;
+            const reached = targetIsTop ? atTop : atBottom;
+
+            if (reached) {
+                // Rebond inertiel : on convertit la vitesse de relâchement en une faible
+                // impulsion visuelle. Pas besoin d'un grand delta, la fonction maison
+                // ajoute déjà une part liée à la vitesse et comprime naturellement.
+                const syntheticFingerDelta = releaseFingerDeltaY * 0.72;
+                setVerticalEdgeBounce(syntheticFingerDelta, filteredSpeedY);
+                inertialBounceAutoResetTimer = window.setTimeout(() => {
+                    inertialBounceAutoResetTimer = null;
+                    if (verticalBounceScreen) resetVerticalEdgeBounce(true);
+                }, 34);
+                return;
+            }
+
+            if (lastScrollTop >= 0 && Math.abs(scrollTop - lastScrollTop) < 0.5) stagnantFrames += 1;
+            else stagnantFrames = 0;
+            lastScrollTop = scrollTop;
+
+            const elapsed = performance.now() - startedAt;
+            if (elapsed > 520 || stagnantFrames >= 4) return;
+            inertialBounceFrame = requestAnimationFrame(step);
+        }
+
+        inertialBounceFrame = requestAnimationFrame(step);
     }
 
     function getVisibleScreenForVerticalBounce() {
@@ -11443,12 +11503,14 @@ function initMobileEdgeResistanceAndBoardSwipe() {
             return;
         }
         const t = event.touches[0];
+        cancelInertialBounceWatch();
         gesture = {
             startX: t.clientX,
             startY: t.clientY,
             lastY: t.clientY,
             lastMoveTs: performance.now(),
             filteredSpeedY: 0,
+            lastFingerDeltaY: 0,
             axis: null,
             target: event.target,
             swipeAllowed: canSwipeBoardsFrom(event.target, t.clientX),
@@ -11491,6 +11553,7 @@ function initMobileEdgeResistanceAndBoardSwipe() {
         gesture.lastY = t.clientY;
         gesture.lastMoveTs = now;
         if (!fingerDeltaY) return;
+        gesture.lastFingerDeltaY = fingerDeltaY;
 
         // Vitesse verticale filtrée pour éviter que le freinage ne change de force à
         // chaque micro-variation d'un touchmove. Le calcul est volontairement très léger.
@@ -11533,7 +11596,11 @@ function initMobileEdgeResistanceAndBoardSwipe() {
         const g = gesture;
         gesture = null;
 
-        if (verticalBounceScreen) resetVerticalEdgeBounce(true);
+        if (verticalBounceScreen) {
+            resetVerticalEdgeBounce(true);
+        } else if (g.axis === 'y' && g.windowScrollAllowed) {
+            startInertialEdgeBounceWatch(g.lastFingerDeltaY, g.filteredSpeedY);
+        }
 
         if (!g.swipeAllowed || g.axis !== 'x' || !event.changedTouches || event.changedTouches.length !== 1) {
             if (g.swipeDragged) resetGameSwipeVisual(true);
@@ -11560,6 +11627,7 @@ function initMobileEdgeResistanceAndBoardSwipe() {
     document.addEventListener('touchcancel', () => {
         const g = gesture;
         gesture = null;
+        cancelInertialBounceWatch();
         if (verticalBounceScreen) resetVerticalEdgeBounce(true);
         if (g && g.swipeDragged) resetGameSwipeVisual(true);
     }, { passive: true });
