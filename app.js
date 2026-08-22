@@ -3631,13 +3631,13 @@ function buildSeatBoxesHtml(assignmentObj, onSelect, { enableDrag = false, withF
                 ? `${avatarHtml(assignedId)}<span class="kibitz-chip-name">${escapeHtml(occupantP.name)}</span>`
                 : isPending
                     ? `<span class="mini-avatar mini-avatar-pending">⏳</span><span class="kibitz-chip-name">En attente…</span>`
-                    : `<span class="kibitz-chip-name">${robotSeatDisplayName(seat)}</span><span class="mini-avatar mini-avatar-robot">🤖</span>`;
+                    : `<span class="mini-avatar mini-avatar-robot">🤖</span><span class="kibitz-chip-name">Robot</span>`;
 
             const robotOptionClass = assignedId ? '' : ' is-current';
             const pendingOptionClass = isPending ? ' is-current' : '';
             const optionsHtml = [`
                 <div class="seat-dropdown-option${robotOptionClass}" data-ui-click="seat-select" data-ui-seat-handler="${onSelect === 'uiStageSeatAssignment' ? 'stage' : 'assign'}" data-seat="${seat}" data-participant-id="">
-                    <span>${robotSeatDisplayName(seat)}</span><span class="mini-avatar mini-avatar-robot">🤖</span>
+                    <span class="mini-avatar mini-avatar-robot">🤖</span><span>Robot</span>
                 </div>
                 <div class="seat-dropdown-option${pendingOptionClass}" data-ui-click="seat-select" data-ui-seat-handler="${onSelect === 'uiStageSeatAssignment' ? 'stage' : 'assign'}" data-seat="${seat}" data-participant-id="${SEAT_PENDING}">
                     <span class="mini-avatar mini-avatar-pending">⏳</span><span>En attente d'un partenaire</span>
@@ -3652,7 +3652,7 @@ function buildSeatBoxesHtml(assignmentObj, onSelect, { enableDrag = false, withF
             }));
 
             return `
-                <div class="seat-box seat-pos-${seat}${flashClass}"${boxDragAttrs}${dropAttrs}>
+                <div class="seat-box seat-pos-${seat}${flashClass}" data-ui-click="toggle-seat-dropdown" data-seat="${seat}"${boxDragAttrs}${dropAttrs}>
                     <span class="seat-box-label">${SEAT_FULL_NAME[seat]}</span>
                     <div class="seat-occupant-dropdown">
                         <button type="button" class="kibitz-chip seat-occupant-chip${occupantP ? '' : ' seat-occupant-chip-robot'}" data-ui-click="toggle-seat-dropdown" data-seat="${seat}">
@@ -3666,12 +3666,12 @@ function buildSeatBoxesHtml(assignmentObj, onSelect, { enableDrag = false, withF
         }
         const isPendingReadOnly = assignedId === SEAT_PENDING;
         const p = (assignedId && !isPendingReadOnly) ? participants.find(x => x.id === assignedId) : null;
-        const name = p ? escapeHtml(p.name) : (isPendingReadOnly ? 'En attente…' : robotSeatDisplayName(seat));
+        const name = p ? escapeHtml(p.name) : (isPendingReadOnly ? 'En attente…' : 'Robot');
         const nameRowHtml = p
             ? `${avatarHtml(assignedId)}<span class="seat-box-name">${name}</span>`
             : isPendingReadOnly
                 ? `<span class="mini-avatar mini-avatar-pending">⏳</span><span class="seat-box-name">${name}</span>`
-                : `<span class="seat-box-name">${name}</span><span class="mini-avatar mini-avatar-robot">🤖</span>`;
+                : `<span class="mini-avatar mini-avatar-robot">🤖</span><span class="seat-box-name">${name}</span>`;
         return `
             <div class="seat-box seat-pos-${seat}${flashClass}">
                 <span class="seat-box-label">${SEAT_FULL_NAME[seat]}</span>
@@ -3766,13 +3766,13 @@ function uiToggleSeatDropdown(event, seat) {
     // plutôt qu'un id global "seatDropdownMenu-${seat}" — maintenant que la grille peut
     // exister en double (salon + modale de réorganisation en cours de partie), un id
     // global ne trouverait toujours que la PREMIÈRE des deux copies.
-    const menu = event.currentTarget.parentElement.querySelector('.seat-dropdown-menu');
+    const seatBox = event.currentTarget.closest ? event.currentTarget.closest('.seat-box') : null;
+    const menu = seatBox ? seatBox.querySelector('.seat-dropdown-menu') : null;
     if (!menu) return;
     const wasOpen = menu.style.display !== 'none';
     uiCloseSeatDropdowns();
     if (!wasOpen) {
         menu.style.display = 'block';
-        const seatBox = menu.closest('.seat-box');
         if (seatBox) seatBox.classList.add('dropdown-open');
     }
 }

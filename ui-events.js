@@ -100,6 +100,9 @@
             case 'rename-participant': return call('uiStartRenamingParticipant', e, el.dataset.participantId || '');
             case 'toggle-seat-dropdown': return call('uiToggleSeatDropdown', e, el.dataset.seat || '');
             case 'seat-select': {
+                // Le menu vit dans une .seat-box elle-même cliquable : arrêter ici la
+                // propagation empêche la sélection d'une option de rouvrir aussitôt le menu parent.
+                event.stopPropagation();
                 const seat = el.dataset.seat || '';
                 const participantId = el.dataset.participantId || '';
                 if (el.dataset.uiSeatHandler === 'stage') call('uiStageSeatAssignment', seat, participantId);
