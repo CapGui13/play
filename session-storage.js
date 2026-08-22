@@ -16,6 +16,22 @@ const SESSION_ACCESS_KEY_MAX_AGE_MS = 70 * 24 * 60 * 60 * 1000;
 let fallbackSessionAccessKeys = {};
 let fallbackSessionHostWriteKeys = {};
 
+// Mode de développement par ouverture directe du fichier index.html (file://).
+// Dans ce contexte le navigateur ne possède pas une origine HTTP normale pour les appels
+// CORS vers l'API de session. La table P2P/PeerJS reste parfaitement utilisable : on
+// désactive donc uniquement la couche cloud de session et on laisse le reste de l'app
+// fonctionner normalement. Le site hébergé n'emprunte jamais cette branche.
+function isLocalFileSessionMode() {
+    try { return typeof window !== 'undefined' && window.location && window.location.protocol === 'file:'; }
+    catch (e) { return false; }
+}
+
+function makeLocalSessionRoomCode() {
+    let code = '';
+    for (let i = 0; i < 4; i++) code += Math.floor(Math.random() * 10);
+    return code;
+}
+
 function normalizeSessionRoomCode(roomCode) {
     return String(roomCode || '').toUpperCase().trim();
 }
@@ -143,6 +159,11 @@ async function fetchWithSessionCapability(roomCode, url, options = {}) {
 // lecture/relais et écriture complète host. Ce client exige les deux pour activer une
 // nouvelle salle ; déployer donc l'API avant le client pour ce lot coordonné.
 async function reserveFreshRoomCode() {
+    // Ouverture directe depuis le disque : pas d'appel Vercel/CORS. Une éventuelle
+    // collision PeerJS est déjà gérée par _attemptCreateRoom(), qui redemande alors un
+    // nouveau code à cette même fonction.
+    if (isLocalFileSessionMode()) return makeLocalSessionRoomCode();
+
     const perf = (name, detail) => {
         try {
             if (typeof window !== 'undefined' && typeof window.recordPlayPerfMilestone === 'function') {
@@ -187,6 +208,7 @@ async function reserveFreshRoomCode() {
 // avant le premier snapshot. Un ancien backend peut répondre 400 : c'est volontairement
 // non bloquant pendant un déploiement client-first.
 async function activateRoomAccess(roomCode) {
+    if (isLocalFileSessionMode()) return true;
     const code = normalizeSessionRoomCode(roomCode);
     const accessKey = getSessionAccessKey(code);
     const hostWriteKey = getSessionHostWriteKey(code);
@@ -243,6 +265,7 @@ async function probeSessionCapabilities(roomCode, accessKey, hostWriteKey) {
 // sont choisies AVANT la requête : si la réponse se perd après le commit Redis, le client
 // peut vérifier le couple proposé et éviter de perdre l'autorité de la salle.
 async function rotateSessionCapabilities(roomCode) {
+    if (isLocalFileSessionMode()) return false;
     const code = normalizeSessionRoomCode(roomCode);
     const oldAccessKey = getSessionAccessKey(code);
     const oldHostWriteKey = getSessionHostWriteKey(code);
@@ -287,6 +310,7 @@ async function rotateSessionCapabilities(roomCode) {
 }
 
 async function registerSessionParticipantCredential(roomCode, participantId, reconnectSecret) {
+    if (isLocalFileSessionMode()) return false;
     const code = normalizeSessionRoomCode(roomCode);
     const accessKey = getSessionAccessKey(code);
     const hostWriteKey = getSessionHostWriteKey(code);
@@ -309,6 +333,7 @@ async function registerSessionParticipantCredential(roomCode, participantId, rec
 }
 
 async function pullSessionState(roomCode) {
+    if (isLocalFileSessionMode()) return null;
     const resp = await fetchWithSessionCapability(roomCode, sessionApiUrl(roomCode), { method: 'GET', cache: 'no-store' });
     if (resp.status === 404) return null;
     if (!resp.ok) throw new Error(`pullSessionState: HTTP ${resp.status}`);
@@ -316,6 +341,7 @@ async function pullSessionState(roomCode) {
 }
 
 async function pushSessionState(roomCode, state, expectedVersion, { onConflict, retriesLeft = SESSION_PUSH_RETRIES, participantCredential = null } = {}) {
+    if (isLocalFileSessionMode()) return null;
     try {
         const code = normalizeSessionRoomCode(roomCode);
         const headers = { 'Content-Type': 'application/json' };
@@ -350,6 +376,7 @@ async function pushSessionState(roomCode, state, expectedVersion, { onConflict, 
 }
 
 async function pushSessionLogEntries(roomCode, entries) {
+    if (isLocalFileSessionMode()) return;
     if (!entries || entries.length === 0) return;
     try {
         const resp = await fetchWithSessionCapability(roomCode, sessionLogApiUrl(roomCode), {
@@ -365,6 +392,7 @@ async function pushSessionLogEntries(roomCode, entries) {
 }
 
 async function pullSessionLog(roomCode) {
+    if (isLocalFileSessionMode()) return [];
     const resp = await fetchWithSessionCapability(roomCode, sessionLogApiUrl(roomCode), { method: 'GET', cache: 'no-store' });
     if (!resp.ok) throw new Error(`pullSessionLog: HTTP ${resp.status}`);
     const body = await resp.json();

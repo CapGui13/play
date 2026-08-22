@@ -3587,6 +3587,10 @@ function uiRenameParticipantBlur(participantId, inputEl) {
 // fonction appelée au clic sur une option (diffère : immédiat pour le salon, brouillon
 // seulement pour la modale). `enableDrag`/`withFlash` n'ont de sens que pour la grille live
 // (le glisser-déposer et l'animation d'arrivée/départ ne concernent que l'état réel).
+function robotSeatDisplayName(seat) {
+    return SEAT_FULL_NAME[seat];
+}
+
 function buildSeatBoxesHtml(assignmentObj, onSelect, { enableDrag = false, withFlash = false } = {}) {
     const isHost = myRole === 'host';
 
@@ -3627,13 +3631,13 @@ function buildSeatBoxesHtml(assignmentObj, onSelect, { enableDrag = false, withF
                 ? `${avatarHtml(assignedId)}<span class="kibitz-chip-name">${escapeHtml(occupantP.name)}</span>`
                 : isPending
                     ? `<span class="mini-avatar mini-avatar-pending">⏳</span><span class="kibitz-chip-name">En attente…</span>`
-                    : `<span class="mini-avatar mini-avatar-robot">🤖</span><span class="kibitz-chip-name">Robot</span>`;
+                    : `<span class="kibitz-chip-name">${robotSeatDisplayName(seat)}</span><span class="mini-avatar mini-avatar-robot">🤖</span>`;
 
             const robotOptionClass = assignedId ? '' : ' is-current';
             const pendingOptionClass = isPending ? ' is-current' : '';
             const optionsHtml = [`
                 <div class="seat-dropdown-option${robotOptionClass}" data-ui-click="seat-select" data-ui-seat-handler="${onSelect === 'uiStageSeatAssignment' ? 'stage' : 'assign'}" data-seat="${seat}" data-participant-id="">
-                    <span class="mini-avatar mini-avatar-robot">🤖</span><span>Robot</span>
+                    <span>${robotSeatDisplayName(seat)}</span><span class="mini-avatar mini-avatar-robot">🤖</span>
                 </div>
                 <div class="seat-dropdown-option${pendingOptionClass}" data-ui-click="seat-select" data-ui-seat-handler="${onSelect === 'uiStageSeatAssignment' ? 'stage' : 'assign'}" data-seat="${seat}" data-participant-id="${SEAT_PENDING}">
                     <span class="mini-avatar mini-avatar-pending">⏳</span><span>En attente d'un partenaire</span>
@@ -3662,18 +3666,17 @@ function buildSeatBoxesHtml(assignmentObj, onSelect, { enableDrag = false, withF
         }
         const isPendingReadOnly = assignedId === SEAT_PENDING;
         const p = (assignedId && !isPendingReadOnly) ? participants.find(x => x.id === assignedId) : null;
-        const name = p ? escapeHtml(p.name) : (isPendingReadOnly ? 'En attente…' : 'Robot');
-        const avatarMarkup = p
-            ? avatarHtml(assignedId)
+        const name = p ? escapeHtml(p.name) : (isPendingReadOnly ? 'En attente…' : robotSeatDisplayName(seat));
+        const nameRowHtml = p
+            ? `${avatarHtml(assignedId)}<span class="seat-box-name">${name}</span>`
             : isPendingReadOnly
-                ? '<span class="mini-avatar mini-avatar-pending">⏳</span>'
-                : '<span class="mini-avatar mini-avatar-robot">🤖</span>';
+                ? `<span class="mini-avatar mini-avatar-pending">⏳</span><span class="seat-box-name">${name}</span>`
+                : `<span class="seat-box-name">${name}</span><span class="mini-avatar mini-avatar-robot">🤖</span>`;
         return `
             <div class="seat-box seat-pos-${seat}${flashClass}">
                 <span class="seat-box-label">${SEAT_FULL_NAME[seat]}</span>
                 <span class="seat-box-name-row">
-                    ${avatarMarkup}
-                    <span class="seat-box-name">${name}</span>
+                    ${nameRowHtml}
                 </span>
             </div>
         `;
@@ -7069,7 +7072,7 @@ function formatCallCellHtml(entry) {
 function ledgerSeatLabel(seat) {
     if (!showLedgerNames) return SEAT_FULL_NAME[seat];
     const pid = typeof seatAssignment !== 'undefined' ? seatAssignment[seat] : null;
-    if (!pid) return 'Bot'; // siège non assigné : joué par le robot (voir maybeRobotBid)
+    if (!pid) return `${SEAT_FULL_NAME[seat]} 🤖`; // siège non assigné : joué par le robot (voir maybeRobotBid)
     const p = participants.find(x => x.id === pid);
     const name = p && p.name ? p.name.trim() : '';
     return name || SEAT_FULL_NAME[seat]; // quelqu'un est bien assigné ici, pas un bot : jamais "Bot" dans ce cas
