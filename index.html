@@ -548,16 +548,20 @@
 
                         <div id="undoAskBanner" class="undo-ask-banner" style="display:none;" role="alert" aria-atomic="true"></div>
 
-                        <div id="parBiddingToggleWrap" class="par-bidding-toggle-wrap" style="display:none;">
-                            <button id="parBiddingToggleBtn" type="button" class="btn btn-secondary btn-small" data-ui-click="toggle-par">📊 Voir le PAR</button>
-                        </div>
-
                         <div id="auctionViewStack" class="auction-view-stack">
                             <div id="contractResult" class="contract-result" style="display:none;"></div>
                             <div id="auctionBiddingView" class="auction-bidding-view">
                                 <div id="biddingBox" class="bidding-box"></div>
                                 <div id="turnIndicator" class="turn-indicator" role="status" aria-live="polite" aria-atomic="true"></div>
                             </div>
+                        </div>
+
+                        <!-- Le bouton PAR est volontairement APRÈS la pile Enchères/PAR :
+                             sa présence réservée à l'hôte ne décale ainsi plus la boîte
+                             d'enchères ni l'indicateur « À vous d'enchérir / En attente… ».
+                             Il reste aussi visible sous la vue PAR pour pouvoir revenir aux enchères. -->
+                        <div id="parBiddingToggleWrap" class="par-bidding-toggle-wrap" style="display:none;">
+                            <button id="parBiddingToggleBtn" type="button" class="btn btn-secondary btn-small" data-ui-click="toggle-par">📊 Voir le PAR</button>
                         </div>
                     </div>
                 </div>

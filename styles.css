@@ -3381,7 +3381,23 @@ table.dd-table td.dd-secondary-contract {
        peut dépasser en largeur sur un petit écran, surtout une fois déconnecté (le
        bouton "Se reconnecter" apparaît en plus) : on autorise le retour à la ligne plutôt
        que de laisser déborder la page horizontalement. */
-    .connection-bar { flex-wrap: wrap; row-gap: 6px; padding: 6px 12px; }
+    .connection-bar {
+        flex-wrap: wrap;
+        row-gap: 6px;
+        padding: 6px 12px;
+        /* Mobile : retirer uniquement l'habillage visuel de la barre supérieure tout en
+           conservant exactement sa boîte de positionnement. Le bouton Chat, enfant de
+           cette barre, reste ainsi aux mêmes coordonnées et le reste de la page ne bouge
+           pas. */
+        background: transparent;
+        backdrop-filter: none;
+        -webkit-backdrop-filter: none;
+        border-bottom-color: transparent;
+        box-shadow: none;
+    }
+
+    /* Sur mobile, le seul contrôle conservé dans cette zone est le raccourci Chat. */
+    #reconnectBtn { display: none !important; }
 
     /* Cibles tactiles un peu agrandies (les flèches de navigation entre donnes et le
        bouton debug étaient pensés pour un clic souris précis, pas un doigt). */
