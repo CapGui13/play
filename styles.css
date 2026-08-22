@@ -2529,22 +2529,22 @@ button.kibitz-chip {
     display: flex;
     align-items: stretch;
     justify-content: flex-start;
-    gap: 0;
+    gap: 2px;
     width: 100%;
     min-width: 0;
 }
 
 #myHandsContainer .mini-bridge-card {
     display: grid;
-    grid-template-rows: 24px 24px;
+    grid-template-rows: 30px 28px;
     align-content: start;
-    justify-items: start;
+    justify-items: center;
     flex: 1 1 0;
     min-width: 0;
     max-width: none;
-    height: 66px;
-    padding: 5px 0 0 7px;
-    border-radius: 4px;
+    height: 78px;
+    padding: 7px 0 0;
+    border-radius: 10px;
     background: linear-gradient(180deg, #ffffff 0%, #f6f7fa 100%);
     border: 1px solid rgba(198, 204, 214, 0.96);
     box-shadow:
@@ -2560,27 +2560,23 @@ button.kibitz-chip {
 #myHandsContainer .mini-bridge-card-rank {
     display: inline-flex;
     align-items: flex-end;
-    justify-content: flex-start;
-    width: 100%;
-    min-height: 24px;
+    justify-content: center;
+    min-height: 30px;
     font-family: var(--font-mono);
-    font-size: 1.18rem;
+    font-size: 1.34rem;
     line-height: 1;
     font-weight: 800;
     letter-spacing: -0.02em;
     font-variant-numeric: lining-nums tabular-nums;
-    text-align: left;
 }
 
 #myHandsContainer .mini-bridge-card-suit {
     display: inline-flex;
     align-items: flex-start;
-    justify-content: flex-start;
-    width: 100%;
-    min-height: 24px;
+    justify-content: center;
+    min-height: 28px;
     line-height: 1;
     transform: none;
-    text-align: left;
 }
 
 #myHandsContainer .mini-bridge-card-suit .suit-icon {
@@ -3734,33 +3730,33 @@ table.dd-table td.dd-secondary-contract {
     }
 
     #myHandsContainer .strip-physical-cards {
-        gap: 0;
+        gap: 1px;
     }
 
     #myHandsContainer .mini-bridge-card {
-        grid-template-rows: 21px 21px;
+        grid-template-rows: 27px 25px;
         max-width: none;
-        height: clamp(46px, 11.6vw, 58px);
-        border-radius: 4px;
-        padding: 3px 0 0 5px;
+        height: clamp(62px, 15.8vw, 76px);
+        border-radius: 9px;
+        padding: 6px 0 0;
     }
 
     #myHandsContainer .mini-bridge-card-suit-start {
-        margin-left: clamp(2px, 0.7vw, 3px);
+        margin-left: clamp(2px, 0.8vw, 4px);
     }
 
     #myHandsContainer .mini-bridge-card-rank {
-        min-height: 21px;
-        font-size: clamp(0.92rem, 3.45vw, 1.08rem);
+        min-height: 27px;
+        font-size: clamp(1.02rem, 4.05vw, 1.24rem);
         line-height: 1;
     }
 
     #myHandsContainer .mini-bridge-card-suit {
-        min-height: 21px;
+        min-height: 25px;
     }
 
     #myHandsContainer .mini-bridge-card-suit .suit-icon {
-        font-size: clamp(1.00rem, 3.8vw, 1.14rem);
+        font-size: clamp(1.00rem, 3.8vw, 1.18rem);
     }
 }
 
