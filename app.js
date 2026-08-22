@@ -11070,7 +11070,7 @@ function uiResumeFromCloud() {
 //
 // 1) Résistance verticale : le scroll reste NATIF partout. À l'approche du haut/bas,
 //    le déplacement demandé est progressivement amorti. Une fois exactement au bord,
-//    tout geste qui cherche à aller plus loin est absorbé sans le moindre déplacement visuel.
+//    un petit overscroll visuel résistant accompagne l'élan puis revient au relâchement.
 //
 // 2) Swipe horizontal : une fois la partie lancée, l'hôte peut parcourir les donnes par
 //    un geste gauche/droite exactement comme avec les flèches ◀▶ existantes. Pendant le
@@ -11094,6 +11094,13 @@ function initMobileEdgeResistanceAndBoardSwipe() {
     const EDGE_ZONE_SPEED_GAIN = 68; // px de zone ajoutés par px/ms de vitesse filtrée
     const EDGE_VELOCITY_FILTER = 0.30;
     const EDGE_CRAWL_FACTOR = 0.08;
+    // Bounce vertical maison : faible amplitude, résistance croissante et retour souple.
+    // On garde overscroll-behavior:none afin d'éviter le rubber-band natif iOS, souvent
+    // plus ample et moins prévisible, et on anime uniquement l'écran visible.
+    const EDGE_BOUNCE_MAX_PX = 28;
+    const EDGE_BOUNCE_DRAG_FACTOR = 0.48;
+    const EDGE_BOUNCE_SPEED_GAIN = 7;
+    const EDGE_BOUNCE_RETURN_MS = 260;
     const AXIS_LOCK_PX = 10;
     const SWIPE_MIN_PX = 64;
     const SWIPE_DOMINANCE = 1.28;
@@ -11111,6 +11118,9 @@ function initMobileEdgeResistanceAndBoardSwipe() {
 
     let gesture = null;
     let boardSwipeAnimating = false;
+    let verticalBounceScreen = null;
+    let verticalBounceOffset = 0;
+    let verticalBounceAnimation = null;
 
     function isMobileGestureViewport() {
         return window.innerWidth <= MOBILE_MAX_WIDTH && navigator.maxTouchPoints > 0;
@@ -11173,6 +11183,87 @@ function initMobileEdgeResistanceAndBoardSwipe() {
         if (dx < 0) return boardIndex < deals.length - 1;
         if (dx > 0) return boardIndex > 0;
         return false;
+    }
+
+    function getVisibleScreenForVerticalBounce() {
+        for (const id of ['screen-game', 'screen-lobby', 'screen-landing']) {
+            const el = document.getElementById(id);
+            if (el && getComputedStyle(el).display !== 'none') return el;
+        }
+        return null;
+    }
+
+    function setVerticalEdgeBounce(fingerDeltaY, speedPxPerMs) {
+        const screen = getVisibleScreenForVerticalBounce();
+        if (!screen || boardSwipeAnimating) return;
+
+        if (verticalBounceAnimation) {
+            const anim = verticalBounceAnimation;
+            verticalBounceAnimation = null;
+            anim.onfinish = null;
+            anim.oncancel = null;
+            try { anim.cancel(); } catch (_) {}
+        }
+
+        // Le premier mouvement suit assez bien le doigt puis la résistance augmente
+        // rapidement. L'élan autorise seulement quelques pixels de plus, jamais un
+        // grand rubber-band. Si le doigt change de sens au bord, on repart de zéro afin
+        // d'éviter un saut instantané d'un côté à l'autre.
+        const signed = Math.sign(fingerDeltaY) || 1;
+        const previous = Math.sign(verticalBounceOffset) === signed ? Math.abs(verticalBounceOffset) : 0;
+        const requested = previous
+            + Math.abs(fingerDeltaY) * EDGE_BOUNCE_DRAG_FACTOR
+            + Math.min(EDGE_BOUNCE_SPEED_GAIN, speedPxPerMs * EDGE_BOUNCE_SPEED_GAIN);
+        const compressed = EDGE_BOUNCE_MAX_PX * (1 - Math.exp(-requested / EDGE_BOUNCE_MAX_PX));
+        verticalBounceOffset = signed * Math.min(EDGE_BOUNCE_MAX_PX, compressed);
+        verticalBounceScreen = screen;
+        screen.style.transition = 'none';
+        screen.style.transform = `translate3d(0, ${verticalBounceOffset}px, 0)`;
+        screen.style.opacity = '1';
+    }
+
+    function resetVerticalEdgeBounce(animated = true) {
+        const screen = verticalBounceScreen;
+        verticalBounceScreen = null;
+        verticalBounceOffset = 0;
+        if (!screen) return;
+
+        if (verticalBounceAnimation) {
+            const oldAnim = verticalBounceAnimation;
+            verticalBounceAnimation = null;
+            oldAnim.onfinish = null;
+            oldAnim.oncancel = null;
+            try { oldAnim.cancel(); } catch (_) {}
+        }
+
+        if (animated && !prefersReducedMotion() && screen.animate) {
+            const current = getComputedStyle(screen).transform;
+            screen.style.transition = '';
+            const anim = screen.animate([
+                { transform: current === 'none' ? 'translate3d(0, 0, 0)' : current },
+                { transform: 'translate3d(0, 0, 0)' }
+            ], {
+                duration: EDGE_BOUNCE_RETURN_MS,
+                easing: 'cubic-bezier(.20,.88,.28,1)',
+                fill: 'forwards'
+            });
+            verticalBounceAnimation = anim;
+            const cleanup = () => {
+                if (verticalBounceAnimation === anim) verticalBounceAnimation = null;
+                anim.onfinish = null;
+                anim.oncancel = null;
+                try { anim.cancel(); } catch (_) {}
+                screen.style.transition = '';
+                screen.style.transform = '';
+                screen.style.opacity = '';
+            };
+            anim.onfinish = cleanup;
+            anim.oncancel = cleanup;
+        } else {
+            screen.style.transition = '';
+            screen.style.transform = '';
+            screen.style.opacity = '';
+        }
     }
 
     function setGameSwipeDrag(rawDx) {
@@ -11287,6 +11378,7 @@ function initMobileEdgeResistanceAndBoardSwipe() {
     }
 
     document.addEventListener('touchstart', (event) => {
+        if (verticalBounceAnimation || verticalBounceScreen) resetVerticalEdgeBounce(false);
         if (!isMobileGestureViewport() || event.touches.length !== 1 || boardSwipeAnimating) {
             gesture = null;
             return;
@@ -11361,10 +11453,17 @@ function initMobileEdgeResistanceAndBoardSwipe() {
         event.preventDefault();
         const distance = towardTop ? scrollTop : distanceBottom;
 
-        // Butée dure au bord exact : la résistance existe AVANT le bord, mais dès que
-        // celui-ci est atteint on n'applique plus ni scroll résiduel ni translation.
-        // Exemple : tout en bas + doigt vers le haut => absolument aucun mouvement.
-        if (distance <= 1) return;
+        // Au bord exact, on passe du freinage progressif à un petit overscroll visuel
+        // contrôlé. Le document ne dépasse jamais réellement sa limite : seul l'écran
+        // visible accompagne encore un peu le doigt, puis reviendra au relâchement.
+        if (distance <= 1) {
+            setVerticalEdgeBounce(fingerDeltaY, gesture.filteredSpeedY);
+            return;
+        }
+
+        // Si on était en bounce et que le doigt repart vers l'intérieur, on remet tout
+        // de suite l'écran à sa position réelle avant de reprendre le scroll normal.
+        if (verticalBounceScreen) resetVerticalEdgeBounce(false);
 
         const factor = edgeResistanceFactor(distance, brakeZone);
         window.scrollBy(0, -fingerDeltaY * factor);
@@ -11375,6 +11474,7 @@ function initMobileEdgeResistanceAndBoardSwipe() {
         const g = gesture;
         gesture = null;
 
+        if (verticalBounceScreen) resetVerticalEdgeBounce(true);
 
         if (!g.swipeAllowed || g.axis !== 'x' || !event.changedTouches || event.changedTouches.length !== 1) {
             if (g.swipeDragged) resetGameSwipeVisual(true);
@@ -11401,6 +11501,7 @@ function initMobileEdgeResistanceAndBoardSwipe() {
     document.addEventListener('touchcancel', () => {
         const g = gesture;
         gesture = null;
+        if (verticalBounceScreen) resetVerticalEdgeBounce(true);
         if (g && g.swipeDragged) resetGameSwipeVisual(true);
     }, { passive: true });
 }
