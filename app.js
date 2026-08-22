@@ -738,6 +738,56 @@ function forgetGuestRoomCredential(roomCode) {
     }
 }
 
+// Invitation différée pré-autorisée : contrairement à un invité live, le futur partenaire
+// peut arriver alors que le créateur est complètement hors ligne. On prépare donc, tant
+// que le host est encore présent, UNE credential invitée et on l'enregistre côté serveur.
+// Elle voyage uniquement dans le fragment (#...) du lien différé, est capturée localement
+// par le destinataire puis immédiatement retirée de l'URL. Le code 4 chiffres seul ne
+// contient jamais ce secret.
+const DEFERRED_INVITE_CREDENTIALS_KEY = 'bridgeBidDeferredInviteCredentialsV1';
+
+function readDeferredInviteCredentialMap() {
+    let map = {};
+    try { map = JSON.parse(localStorage.getItem(DEFERRED_INVITE_CREDENTIALS_KEY) || '{}'); }
+    catch (e) { map = {}; }
+    if (!map || typeof map !== 'object' || Array.isArray(map)) map = {};
+    return map;
+}
+
+function getOrCreateDeferredInviteCredential(roomCode) {
+    const code = String(roomCode || '').trim();
+    if (!/^\d{4}$/.test(code)) return null;
+    const map = readDeferredInviteCredentialMap();
+    const existing = map[code];
+    if (existing && isModernGuestParticipantId(existing.participantId) && isValidReconnectSecret(existing.reconnectSecret)) {
+        return { participantId: existing.participantId, reconnectSecret: existing.reconnectSecret };
+    }
+    const credential = createGuestReconnectCredential();
+    map[code] = { ...credential, savedAt: Date.now() };
+    try { localStorage.setItem(DEFERRED_INVITE_CREDENTIALS_KEY, JSON.stringify(map)); }
+    catch (e) { /* la session live continue ; seul le join différé à froid perdra ce filet */ }
+    return credential;
+}
+
+async function ensureDeferredInviteCredentialRegistered(roomCode = currentRoomCode) {
+    if (myRole !== 'host' || !roomCode) return null;
+    if (!SEATS.some(seat => seatAssignment[seat] === SEAT_PENDING) && !deferredRoomMode) return null;
+    const credential = getOrCreateDeferredInviteCredential(roomCode);
+    if (!credential) return null;
+    // Le host doit connaître le même secret si le partenaire arrive pendant qu'il est
+    // encore en ligne en P2P ; côté serveur, cette pré-inscription autorise ensuite les
+    // écritures du même partenaire s'il arrive seulement après fermeture du host.
+    registerHostGuestReconnectSecret(credential.participantId, credential.reconnectSecret);
+    if (typeof registerSessionParticipantCredential === 'function') {
+        try {
+            await registerSessionParticipantCredential(roomCode, credential.participantId, credential.reconnectSecret);
+        } catch (e) {
+            pushDebugLog('Pré-autorisation du partenaire différé impossible : ' + ((e && e.message) || e));
+        }
+    }
+    return credential;
+}
+
 // Table privée du host courant. Elle n'est jamais placée dans les messages P2P généraux
 // ni dans buildCloudStatePayload(). Elle survit à un reload du même host via localStorage.
 let guestReconnectSecretsByParticipantId = {};
@@ -800,6 +850,11 @@ function guestConnectionMetadata(roomCode, nickname, credentialOverride = null) 
 
 let mySeats = null;         // sièges contrôlés par ce joueur pendant la partie
 let autoPassSeats = [];     // sièges non assignés (robot "passe") — décidé par l'hôte au lancement
+// Marqueur sémantique du mode différé. Il est figé au lancement lorsqu'au moins un siège
+// vaut SEAT_PENDING, puis persisté dans les snapshots/messages. Ne pas le déduire du type
+// de connexion : depuis l'architecture P2P + relais serveur, le créateur d'une salle
+// différée peut conserver une vraie BridgePeerConnection tout en restant en mode différé.
+let deferredRoomMode = false;
 // Mode d'enchère des robots (voir échange avec Guillaume) : 'smart' = système appris (le
 // moteur habituel, decideRobotCall), 'passOnly' = passe en boucle sans réfléchir, quel que
 // soit le jeu. Configurable UNIQUEMENT dans le salon, avant de lancer la session (voir
@@ -2375,16 +2430,37 @@ function hideConnectingOverlay() {
     if (overlay) overlay.style.display = 'none';
 }
 
-// Le lien partagé reste volontairement court : le code 4 chiffres suffit pour rejoindre
-// le salon P2P. La capacité cloud privée n'est JAMAIS ajoutée au lien copié ; elle est
-// transmise séparément par l'hôte lorsqu'un participant est effectivement autorisé. On
-// continue néanmoins d'accepter à la lecture les anciens liens #access=... (voir
-// rememberRoomAccessFromUrl) pour ne pas casser un lien déjà envoyé avant ce correctif.
+// Le lien partagé reste court en mode live. En mode différé, le lien doit aussi permettre
+// l'arrivée du partenaire lorsque le créateur est hors ligne : on place alors les
+// capacités nécessaires dans le FRAGMENT (#...), jamais dans la requête HTTP. Elles sont
+// capturées puis effacées localement à l'ouverture (voir rememberRoomAccessFromUrl).
 function buildRoomShareUrl(roomCode) {
     const url = new URL(window.location.href);
     url.searchParams.set('room', roomCode);
-    url.searchParams.delete('access'); // retire un éventuel ancien format de test
-    url.hash = '';                     // ne jamais republier une capacité héritée de l'URL
+    url.searchParams.delete('access');
+    url.hash = '';
+
+    const hasPendingSeat = SEATS.some(seat => seatAssignment[seat] === SEAT_PENDING);
+    const isDeferredInvite = deferredRoomMode || hasPendingSeat;
+    const accessKey = isDeferredInvite && typeof getSessionAccessKey === 'function'
+        ? getSessionAccessKey(roomCode)
+        : null;
+    if (accessKey) {
+        const hashParams = new URLSearchParams();
+        hashParams.set('access', accessKey);
+        // Tant qu'un siège attend encore quelqu'un, le lien porte aussi une identité
+        // pré-autorisée à revendiquer ce siège et à écrire ensuite via le relais serveur.
+        // Une fois le siège revendiqué, on conserve seulement la capacité de lecture :
+        // un nouveau visiteur peut encore kibbitzer sans pouvoir usurper le partenaire.
+        if (hasPendingSeat) {
+            const invite = getOrCreateDeferredInviteCredential(roomCode);
+            if (invite) {
+                hashParams.set('pid', invite.participantId);
+                hashParams.set('secret', invite.reconnectSecret);
+            }
+        }
+        url.hash = hashParams.toString();
+    }
     return url;
 }
 
@@ -2400,18 +2476,31 @@ function rememberRoomAccessFromUrl(params) {
     const hashParams = new URLSearchParams(String(window.location.hash || '').replace(/^#/, ''));
     // Fragment = format normal. Query = compat avec les tout premiers prototypes locaux.
     const accessKey = hashParams.get('access') || params.get('access');
+    const invitedParticipantId = hashParams.get('pid') || params.get('pid');
+    const invitedReconnectSecret = hashParams.get('secret') || params.get('secret');
     if (!room || !accessKey) return;
     rememberSessionAccessKey(room, accessKey);
-    // Après capture, la capacité disparaît aussi de l'historique/adresse locale.
+    if (isModernGuestParticipantId(invitedParticipantId) && isValidReconnectSecret(invitedReconnectSecret)) {
+        rememberGuestRoomCredential(room, {
+            participantId: invitedParticipantId,
+            reconnectSecret: invitedReconnectSecret
+        });
+    }
+    // Après capture, les capacités disparaissent aussi de l'historique/adresse locale.
     const cleanUrl = new URL(window.location.href);
     cleanUrl.searchParams.delete('access');
+    cleanUrl.searchParams.delete('pid');
+    cleanUrl.searchParams.delete('secret');
     const cleanHash = new URLSearchParams(String(cleanUrl.hash || '').replace(/^#/, ''));
     cleanHash.delete('access');
+    cleanHash.delete('pid');
+    cleanHash.delete('secret');
     cleanUrl.hash = cleanHash.toString();
     window.history.replaceState(null, '', cleanUrl.toString());
 }
 
 function uiCreateRoom() {
+    deferredRoomMode = false;
     recordPlayPerfMilestone('create-click');
     document.getElementById('landingError').style.display = 'none';
     showConnectingOverlay('Création de la partie…');
@@ -2591,6 +2680,10 @@ function buildHostHandlers(onOpenExtra) {
                 if (pendingSeat) {
                     seatAssignment[pendingSeat] = token;
                     autoPassSeats = SEATS.filter(seat => !seatAssignment[seat]);
+                    // Le secret d'invitation différée est à usage de la place PENDING :
+                    // dès qu'elle est revendiquée, reconstruire le lien sans cette
+                    // credential pour qu'un futur kibbitz ne réutilise pas l'identité.
+                    if (currentRoomCode) updateShareLinkForRoom(currentRoomCode);
                     pushDebugLog(`Siège ${pendingSeat} en attente → attribué automatiquement à ${p.name} (${token.slice(0, 10)}…).`);
                 }
             } else {
@@ -2642,6 +2735,7 @@ function buildHostHandlers(onOpenExtra) {
                     // d'élection automatique d'un autre hôte).
                     hostReconnectToken: getReconnectToken(),
                     roomCreatorName,
+                    deferredRoomMode,
                     // Voir échange avec Guillaume (session du 23 juillet) : permet au client
                     // de distinguer un tout nouveau participant d'un simple retour de coupure
                     // (isReturning), pour n'ouvrir le chat automatiquement que dans le premier
@@ -3108,6 +3202,7 @@ function uiNicknamePromptKeydown(event) {
 // salon vierge, qui sera reconstitué dès réception du premier 'lobby-state' du nouvel hôte —
 // exactement comme un rejoin normal.
 function connectAsGuest(code, token, nickname, credentialOverride = null) {
+    deferredRoomMode = false;
     if (peerConn) peerConn.destroy();
     // Statut honnête tout de suite : sans ça, la barre garde l'affichage précédent
     // ("Connecté") pendant tout le temps de la nouvelle connexion, ce qui pouvait laisser
@@ -3625,7 +3720,9 @@ function buildSeatBoxesHtml(assignmentObj, onSelect, { enableDrag = false, withF
             // la modale de réorganisation n'a pas de glisser-déposer, seulement les menus.
             const isPending = assignedId === SEAT_PENDING;
             const occupantP = (assignedId && !isPending) ? participants.find(x => x.id === assignedId) : null;
-            const boxDragAttrs = (enableDrag && occupantP) ? ` draggable="true" data-ui-dragstart="participant" data-participant-id="${escapeHtml(assignedId)}" data-from-seat="${seat}"` : '';
+            const canNativeDrag = enableDrag && occupantP
+                && (!window.matchMedia || window.matchMedia('(hover: hover) and (pointer: fine)').matches);
+            const boxDragAttrs = canNativeDrag ? ` draggable="true" data-ui-dragstart="participant" data-participant-id="${escapeHtml(assignedId)}" data-from-seat="${seat}"` : '';
             const dropAttrs = enableDrag ? ` data-ui-dragover="allow-drop" data-ui-dragenter="drop-target" data-ui-dragleave="drop-target" data-ui-drop="seat" data-seat="${seat}"` : '';
             const triggerContent = occupantP
                 ? `${avatarHtml(assignedId)}<span class="kibitz-chip-name">${escapeHtml(occupantP.name)}</span>`
@@ -3655,7 +3752,7 @@ function buildSeatBoxesHtml(assignmentObj, onSelect, { enableDrag = false, withF
                 <div class="seat-box seat-pos-${seat}${flashClass}" data-ui-click="toggle-seat-dropdown" data-seat="${seat}"${boxDragAttrs}${dropAttrs}>
                     <span class="seat-box-label">${SEAT_FULL_NAME[seat]}</span>
                     <div class="seat-occupant-dropdown">
-                        <button type="button" class="kibitz-chip seat-occupant-chip${occupantP ? '' : ' seat-occupant-chip-robot'}" data-ui-click="toggle-seat-dropdown" data-seat="${seat}">
+                        <button type="button" class="kibitz-chip seat-occupant-chip${occupantP ? '' : ' seat-occupant-chip-robot'}" data-seat="${seat}" aria-label="Choisir l’occupant du siège ${SEAT_FULL_NAME[seat]}">
                             ${triggerContent}
                             <span class="seat-dropdown-chevron">▾</span>
                         </button>
@@ -3796,6 +3893,14 @@ function uiAssignSeat(seat, participantId) {
     // un bug de duplication, alors que c'est exactement ce que cette assignation doit
     // pouvoir faire.
     seatAssignment[seat] = participantId || null;
+    // Prépare immédiatement l'identité secrète du futur partenaire tant que le host est
+    // encore là. L'enregistrement HTTP tourne en arrière-plan ; le lien peut être copié
+    // tout de suite et contient déjà la même credential.
+    if (participantId === SEAT_PENDING && currentRoomCode) ensureDeferredInviteCredentialRegistered(currentRoomCode);
+    // Le lien différé embarque ses capacités uniquement lorsqu'un siège PENDING est
+    // réellement présent. Mettre le champ à jour immédiatement évite de copier l'ancien
+    // lien court créé avant le choix "En attente…".
+    if (!deals && currentRoomCode) updateShareLinkForRoom(currentRoomCode);
     // Voir échange avec Guillaume (session du 23 juillet — "le bot n'enchérit pas") :
     // autoPassSeats (qui détermine quels sièges sont pilotés par un robot) n'était calculé
     // qu'une fois, au lancement de la partie — jamais mis à jour quand un siège change de
@@ -4965,6 +5070,9 @@ async function uiStartGameAsHost() {
 
         const botSeats = SEATS.filter(seat => !seatAssignment[seat]);
         autoPassSeats = botSeats;
+        deferredRoomMode = SEATS.some(seat => seatAssignment[seat] === SEAT_PENDING);
+        if (deferredRoomMode) ensureDeferredInviteCredentialRegistered(currentRoomCode);
+        if (currentRoomCode) updateShareLinkForRoom(currentRoomCode);
 
         // Toutes les informations nécessaires à l'affichage de la première donne sont
         // maintenant prêtes. Calculer les autres donnes, sérialiser toute la séance pour
@@ -4998,7 +5106,8 @@ async function uiStartGameAsHost() {
                     type: 'start-game',
                     deals, yourSeats: seatsForThisGuest, botSeats,
                     hostReconnectToken: getReconnectToken(),
-                    roomCreatorName
+                    roomCreatorName,
+                    deferredRoomMode
                 }, guestIndex);
             });
 
@@ -5415,6 +5524,7 @@ function handlePeerData(msg, guestIndex) {
             // diffusion (voir broadcastLobbyState), toujours utile pour identifier
             // correctement l'hôte dans mes propres échanges avec le serveur.
             currentHostReconnectToken = msg.hostReconnectToken || null;
+            deferredRoomMode = !!msg.deferredRoomMode;
             if (msg.roomCreatorName) roomCreatorName = msg.roomCreatorName;
             // Ce message est aussi renvoyé quand la connectivité change en pleine partie
             // (quelqu'un se (re)connecte) : on ne bascule à l'écran du salon que si la
@@ -5469,6 +5579,7 @@ function handlePeerData(msg, guestIndex) {
             // d'ici (plus d'élection automatique d'un autre hôte) — hostReconnectToken reste, connu dès
             // le lancement (voir uiStartGameAsHost, qui l'inclut dans ce message).
             currentHostReconnectToken = msg.hostReconnectToken || null;
+            deferredRoomMode = !!msg.deferredRoomMode;
             if (msg.roomCreatorName) roomCreatorName = msg.roomCreatorName;
             hostPendingUndo = null;
             clearUndoUiState();
@@ -9477,7 +9588,7 @@ function renderBoardSkipControls() {
     // ailleurs, le bouton n'a donc pas de sens et ne doit pas apparaître, même pour
     // l'hôte. Même repère que pollCloudForUpdates pour détecter le mode différé
     // (`peerConn instanceof NullPeerConnection`), fixé au lancement de la salle.
-    const isDeferredRoom = peerConn instanceof NullPeerConnection;
+    const isDeferredRoom = deferredRoomMode;
     const showFastForward = isHost && isDeferredRoom;
     if (fastForwardBtn) {
         fastForwardBtn.style.display = showFastForward ? '' : 'none';
@@ -9793,7 +9904,7 @@ function saveHostGameStateToStorage() {
     const payload = {
         roomCode: currentRoomCode,
         deals, boardIndex, seatAssignment, participants, autoPassSeats,
-        roomCreatorName, roomCreatorToken,
+        roomCreatorName, roomCreatorToken, deferredRoomMode,
         // Voir échange avec Guillaume (session du 23 juillet — "sauve aussi le chat") :
         // sans ça, la conversation repartait de zéro à chaque reprise, même s'il y
         // avait des messages échangés juste avant la fermeture de l'onglet.
@@ -9973,6 +10084,7 @@ async function uiResumeHostSession(roomCode) {
     }
     seatAssignment = resumedSeatAssignment;
     participants = resumedParticipants;
+    deferredRoomMode = saved.deferredRoomMode === true || SEATS.some(seat => seatAssignment[seat] === SEAT_PENDING);
     // Repli sur le participant 'host' actuel pour une sauvegarde antérieure à l'ajout de
     // ce champ (voir échange avec Guillaume) — sans quoi une session déjà en cours au
     // moment de la mise à jour du code perdrait ce nom au premier rechargement.
@@ -10377,7 +10489,7 @@ function buildCloudStatePayload() {
     return {
         roomCode: currentRoomCode,
         deals, boardIndex, seatAssignment, participants, autoPassSeats, chatMessages,
-        roomCreatorName,
+        roomCreatorName, deferredRoomMode,
         // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 3) : roomCreatorToken n'est jamais
         // renseigné localement côté invité (variable réservée à l'hôte) — l'utiliser
         // tel quel écraserait la bonne valeur en cloud avec null si un invité pousse
@@ -10637,7 +10749,7 @@ function startDeferredPolling() {
 // Même garde-fou que pollCloudForUpdates : ne fait rien tant qu'on est pleinement en P2P.
 function onCloudPusherEvent(data) {
     if (myRole !== 'host' || !currentRoomCode) return;
-    if (!(peerConn instanceof NullPeerConnection) && !hasDisconnectedOccupiedSeat()) return;
+    if (!deferredRoomMode && !(peerConn instanceof NullPeerConnection) && !hasDisconnectedOccupiedSeat()) return;
     if (!data || typeof data.version !== 'number' || data.version <= lastKnownCloudVersion) return;
     if (cloudPushInFlight || cloudPushQueued) return; // pas la peine de relire ce qu'on vient tout juste d'envoyer
 
@@ -10687,7 +10799,7 @@ async function pollCloudForUpdates() {
     // connecté (voir applyCloudUpdate). Tant que tout le monde est en P2P, cette
     // condition est fausse et rien ne se passe ici — aucun coût réseau ajouté au cas
     // normal.
-    if (!(peerConn instanceof NullPeerConnection) && !hasDisconnectedOccupiedSeat()) return;
+    if (!deferredRoomMode && !(peerConn instanceof NullPeerConnection) && !hasDisconnectedOccupiedSeat()) return;
     // Ne sonde pas pendant qu'on est nous-mêmes en train d'écrire (voir pushCloudGameState)
     // — pas la peine de relire ce qu'on vient tout juste d'envoyer.
     if (cloudPushInFlight || cloudPushQueued) return;
@@ -10732,6 +10844,7 @@ function applyCloudUpdate(result, options = {}) {
     deals = st.deals;
     seatAssignment = st.seatAssignment || seatAssignment;
     participants = st.participants || participants;
+    deferredRoomMode = st.deferredRoomMode === true || deferredRoomMode || SEATS.some(seat => seatAssignment[seat] === SEAT_PENDING);
     autoPassSeats = SEATS.filter(seat => !seatAssignment[seat]);
     chatMessages = st.chatMessages || [];
     // Voir échange avec Guillaume : la sauvegarde qu'on vient de lire reflète le point de
@@ -10956,6 +11069,7 @@ function uiResumeFromCloud() {
     auctionHistory = deals[boardIndex].auctionHistory;
     seatAssignment = st.seatAssignment;
     participants = st.participants || [];
+    deferredRoomMode = st.deferredRoomMode === true || SEATS.some(seat => seatAssignment[seat] === SEAT_PENDING);
     // Recalculé plutôt que de faire confiance à st.autoPassSeats (qui peut dater d'avant
     // ma propre revendication de siège, cas 2 ci-dessus).
     autoPassSeats = SEATS.filter(seat => !seatAssignment[seat]);
