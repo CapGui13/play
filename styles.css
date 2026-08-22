@@ -2511,20 +2511,25 @@ button.kibitz-chip {
     display: block;
     width: 100%;
     min-width: 0;
-    padding: 4px 0 2px;
+    padding: 0;
     overflow: hidden;
 }
 
 #myHandsContainer.hand-strip-mode .hand-card {
     width: 100%;
-    max-width: 720px;
+    max-width: 760px;
+    padding: 16px 14px 14px;
+}
+
+#myHandsContainer.hand-strip-mode .hand-card .hand-card-title {
+    margin-bottom: 10px;
 }
 
 #myHandsContainer .strip-physical-cards {
     display: flex;
     align-items: stretch;
-    justify-content: center;
-    gap: 3px;
+    justify-content: flex-start;
+    gap: 0;
     width: 100%;
     min-width: 0;
 }
@@ -2533,41 +2538,44 @@ button.kibitz-chip {
     display: flex;
     flex: 1 1 0;
     min-width: 0;
-    max-width: 44px;
-    height: 60px;
+    max-width: none;
+    height: 66px;
     flex-direction: column;
     align-items: center;
-    justify-content: center;
-    gap: 1px;
-    border-radius: 8px;
+    justify-content: flex-start;
+    padding-top: 6px;
+    gap: 0;
+    border-radius: 4px;
     background: linear-gradient(180deg, #ffffff 0%, #f6f7fa 100%);
-    border: 1px solid rgba(194, 201, 210, 0.92);
+    border: 1px solid rgba(198, 204, 214, 0.96);
     box-shadow:
-        inset 0 1px 0 rgba(255,255,255,0.96),
-        0 0 0 1px rgba(171, 180, 190, 0.26),
-        0 2px 5px rgba(74, 84, 96, 0.12);
+        inset 0 1px 0 rgba(255,255,255,0.97),
+        0 0 0 1px rgba(171, 180, 190, 0.18),
+        0 1px 3px rgba(74, 84, 96, 0.10);
 }
 
 #myHandsContainer .mini-bridge-card-suit-start {
-    margin-left: 6px;
+    margin-left: 3px;
 }
 
 #myHandsContainer .mini-bridge-card-rank {
     font-family: var(--font-mono);
-    font-size: 0.96rem;
-    line-height: 1;
+    font-size: 1.18rem;
+    line-height: 0.92;
     font-weight: 800;
+    letter-spacing: -0.02em;
 }
 
 #myHandsContainer .mini-bridge-card-suit {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    line-height: 1;
+    line-height: 0.82;
+    transform: translateY(-1px);
 }
 
 #myHandsContainer .mini-bridge-card-suit .suit-icon {
-    font-size: 1.18rem;
+    font-size: 1.26rem;
 }
 
 #myHandsContainer .mini-bridge-card-S,
@@ -3709,30 +3717,35 @@ table.dd-table td.dd-secondary-contract {
     /* Bandeau tactile : toujours 13 cartes sur une seule ligne. Le cadre extérieur de
        la main ne grossit pas ; les cartes se partagent la largeur disponible. */
     #myHandsContainer.hand-strip-mode .hand-card {
-        padding-left: 10px;
-        padding-right: 10px;
+        padding: 14px 8px 12px;
+    }
+
+    #myHandsContainer.hand-strip-mode .hand-card .hand-card-title {
+        margin-bottom: 8px;
     }
 
     #myHandsContainer .strip-physical-cards {
-        gap: 1px;
+        gap: 0;
     }
 
     #myHandsContainer .mini-bridge-card {
         max-width: none;
-        height: clamp(44px, 11vw, 56px);
-        border-radius: 6px;
+        height: clamp(46px, 11.6vw, 58px);
+        border-radius: 4px;
+        padding-top: 4px;
     }
 
     #myHandsContainer .mini-bridge-card-suit-start {
-        margin-left: clamp(2px, 0.9vw, 4px);
+        margin-left: clamp(2px, 0.7vw, 3px);
     }
 
     #myHandsContainer .mini-bridge-card-rank {
-        font-size: clamp(0.76rem, 2.9vw, 0.92rem);
+        font-size: clamp(0.92rem, 3.45vw, 1.08rem);
+        line-height: 0.9;
     }
 
     #myHandsContainer .mini-bridge-card-suit .suit-icon {
-        font-size: clamp(0.92rem, 3.3vw, 1.06rem);
+        font-size: clamp(1.00rem, 3.8vw, 1.14rem);
     }
 }
 
