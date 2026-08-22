@@ -114,6 +114,7 @@ let ponsLastLoadError = null;
 function setPonsLoadStage(stage) {
     ponsLoadStage = stage;
     recordPlayPerfMilestone('pons-stage', stage);
+    if (typeof recordSyncTrace === 'function') recordSyncTrace('pons.stage', { stage });
 }
 
 if (typeof window !== 'undefined') {
@@ -2245,6 +2246,7 @@ function showScreen(id) {
 }
 
 function setConnectionStatus(connected) {
+    recordSyncTrace('connection.ui', { connected: !!connected });
     const bar = document.getElementById('connectionBar');
     const status = document.getElementById('connectionStatus');
     bar.style.display = 'flex';
@@ -2261,6 +2263,72 @@ function showLandingError(msg) {
 // ===== Panneau de diagnostic (visible à l'écran, utile sur mobile sans accès aux DevTools) =====
 
 const debugLogLines = [];
+
+// ===== Trace structurée de synchronisation =====
+// Complément du journal humain ci-dessus : événements courts et structurés pour diagnostiquer
+// les courses P2P/cloud/reconnexion sans devoir déduire l'état à partir de phrases libres.
+// IMPORTANT : aucune capacité, clé, credential ou secret n'est jamais conservé ici.
+const syncTraceEntries = [];
+const SYNC_TRACE_MAX_ENTRIES = 600;
+
+function sanitizeSyncTraceDetail(value, key = '', depth = 0) {
+    if (depth > 3) return '[depth-limit]';
+    if (/(access|secret|writekey|hostwrite|credential|capability)/i.test(String(key))) return '[redacted]';
+    if (value == null || typeof value === 'number' || typeof value === 'boolean') return value;
+    if (typeof value === 'string') {
+        // Les ids participant ne sont pas secrets, mais leur préfixe suffit largement au diagnostic.
+        if (/participant|token|actor|target|sender/i.test(String(key)) && value.length > 12) return value.slice(0, 10) + '…';
+        return value.length > 160 ? value.slice(0, 157) + '…' : value;
+    }
+    if (Array.isArray(value)) return value.slice(0, 12).map((v, i) => sanitizeSyncTraceDetail(v, `${key}[${i}]`, depth + 1));
+    if (typeof value === 'object') {
+        const out = {};
+        for (const [k, v] of Object.entries(value).slice(0, 24)) out[k] = sanitizeSyncTraceDetail(v, k, depth + 1);
+        return out;
+    }
+    return String(value);
+}
+
+function currentSyncTraceState() {
+    let p2pConnected = false;
+    let signalingOpen = false;
+    try {
+        p2pConnected = !!(peerConn && typeof peerConn.isConnected === 'function' && peerConn.isConnected());
+        signalingOpen = !!(peerConn && peerConn.signalingOpen);
+    } catch (e) { /* diagnostic uniquement */ }
+    return {
+        role: myRole || null,
+        deferred: !!deferredRoomMode,
+        room: currentRoomCode || null,
+        board: Number.isInteger(boardIndex) ? boardIndex : null,
+        cloudVersion: Number.isFinite(lastKnownCloudVersion) ? lastKnownCloudVersion : null,
+        p2pConnected,
+        signalingOpen,
+        seats: Array.isArray(mySeats) ? mySeats.slice() : []
+    };
+}
+
+function recordSyncTrace(eventName, detail = {}) {
+    try {
+        const entry = {
+            ts: Date.now(),
+            event: String(eventName || 'event'),
+            state: currentSyncTraceState(),
+            detail: sanitizeSyncTraceDetail(detail)
+        };
+        syncTraceEntries.push(entry);
+        if (syncTraceEntries.length > SYNC_TRACE_MAX_ENTRIES) syncTraceEntries.splice(0, syncTraceEntries.length - SYNC_TRACE_MAX_ENTRIES);
+        return entry;
+    } catch (e) {
+        return null;
+    }
+}
+
+if (typeof window !== 'undefined') {
+    window.recordSyncTrace = recordSyncTrace;
+    window.getPlaySyncTrace = () => syncTraceEntries.map(entry => JSON.parse(JSON.stringify(entry)));
+    window.clearPlaySyncTrace = () => { syncTraceEntries.length = 0; };
+}
 
 // Voir échange avec Guillaume ("un clic pour tout transmettre, sans avoir besoin du
 // journal d'un joueur spécifique") : chaque ligne journalisée localement est aussi mise
@@ -2399,6 +2467,16 @@ async function buildBugReportText(maxLogChars) {
         log = `[…tronqué, ${totalLineCount} lignes au total, voir la fin…]\n` + log.slice(-maxLogChars);
     }
     lines.push(log || '(journal vide)');
+
+    // Ajoute la trace structurée en fin de rapport. Elle est volontairement locale : elle
+    // décrit le chemin réseau de CET appareil et complète le journal combiné de la salle.
+    // Limite séparée pour ne pas rendre le rapport inutilisable sur mobile.
+    if (syncTraceEntries.length) {
+        let traceText = syncTraceEntries.map(entry => JSON.stringify(entry)).join('\n');
+        const traceLimit = Math.min(9000, Math.max(2500, Math.floor(maxLogChars * 0.45)));
+        if (traceText.length > traceLimit) traceText = '[…trace tronquée, fin conservée…]\n' + traceText.slice(-traceLimit);
+        lines.push('', `--- Trace synchro locale (${syncTraceEntries.length} événements) ---`, traceText);
+    }
 
     return lines.join('\n');
 }
@@ -2613,6 +2691,7 @@ function buildHostHandlers(onOpenExtra) {
             hideConnectingOverlay();
             currentRoomCode = roomCode;
             ensureCloudSyncContext(roomCode);
+            recordSyncTrace('p2p.host.open', { roomCode });
             // La réservation cloud courte est promue seulement APRÈS ouverture réelle de
             // PeerJS : une collision d'identifiant ne verrouille donc pas inutilement un
             // code, tandis qu'un salon qui reste ouvert longtemps garde sa capacité valide.
@@ -2686,6 +2765,7 @@ function buildHostHandlers(onOpenExtra) {
 
             let p = participants.find(x => x.id === token);
             const isReturning = !!p;
+            recordSyncTrace('p2p.host.guest-connected', { guestIndex, participantId: token, returning: isReturning });
 
             // En mode différé, la place PENDING possède UNE identité déterministe dérivée
             // du code à 4 chiffres (pré-autorisée côté serveur). Il faut utiliser cette même
@@ -2842,6 +2922,7 @@ function buildHostHandlers(onOpenExtra) {
             setConnectionStatus(peerConn ? peerConn.signalingOpen : false);
             renderReconnectButton();
             const token = tokenForGuestIndex(guestIndex);
+            recordSyncTrace('p2p.host.guest-disconnected', { guestIndex, participantId: token || null });
             if (token) {
                 delete guestIndexByToken[token];
                 // On NE supprime pas le participant ni son siège : ils restent réservés, en
@@ -2889,6 +2970,7 @@ function buildHostHandlers(onOpenExtra) {
         onSignalingDisconnected: () => {
             // Callback tardif possible du Peer qui appartenait à l'ancien hôte.
             if (myRole !== 'host') return;
+            recordSyncTrace('p2p.host.signaling-disconnected');
             setConnectionStatus(false);
             renderReconnectButton();
         },
@@ -2926,6 +3008,7 @@ function buildGuestHandlers() {
     const myAttemptToken = guestJoinAttemptToken;
     return {
         onOpen: (role, roomCode) => {
+            recordSyncTrace('p2p.guest.signaling-open', { roomCode });
             document.getElementById('lobbyRoomCodeInline').textContent = `(code ${roomCode})`;
             // Voir échange avec Guillaume (session du 23 juillet) : même correctif que
             // côté hôte — la barre d'adresse ne reflétait jusqu'ici jamais le code de
@@ -2942,6 +3025,7 @@ function buildGuestHandlers() {
             updateShareLinkForRoom(roomCode);
         },
         onGuestConnected: () => {
+            recordSyncTrace('p2p.guest.connected-to-host');
             hideConnectingOverlay();
             everConnectedAsGuest = true;
             setConnectionStatus(true);
@@ -2980,6 +3064,7 @@ function buildGuestHandlers() {
             if (chatPanelOpen) { renderRoomBoard(); renderChat(); }
         },
         onPeerDisconnected: () => {
+            recordSyncTrace('p2p.guest.peer-disconnected');
             // Un ancien BridgePeerConnection invité peut encore émettre son événement
             // de fermeture quelques millisecondes après un transfert d'hôte réussi.
             // À ce moment-là les globals ont déjà basculé vers le rôle hôte : ce handler
@@ -3029,6 +3114,7 @@ function buildGuestHandlers() {
         // ne provoque pas de fermeture propre de la DataConnection passait complètement
         // inaperçue — ni le statut ni le bouton ne se mettaient à jour.
         onSignalingDisconnected: () => {
+            recordSyncTrace('p2p.guest.signaling-disconnected');
             // Même garde que pour onPeerDisconnected : après une promotion en hôte,
             // l'ancienne connexion invitée est volontairement détruite et ses callbacks
             // tardifs n'appartiennent plus au rôle courant.
@@ -4219,6 +4305,7 @@ let guestPullSequence = 0;
 
 function attemptGuestAutoReconnect() {
     if (myRole !== 'guest' || !currentRoomCode) return;
+    recordSyncTrace('reconnect.guest.attempt');
     if (peerConn && peerConn.isConnected()) return; // déjà reconnecté entre-temps (onGuestConnected a dû annuler ce cycle)
     // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 3) : tant que la reconnexion P2P n'a pas
     // encore réussi, relit aussi l'état serveur en tâche de fond — sans ça, mon propre
@@ -6802,28 +6889,58 @@ async function pushAvatarColorViaServerFallback(avatarColor) {
         return;
     }
     if (!pulled) return;
-    const proposed = cloneCloudData(pulled.state);
-    const me = (proposed.participants || []).find(p => p.id === myParticipantId);
-    if (!me) return;
-    me.avatarColor = color;
 
+    let authoritative = pulled;
+    const maxConflictRebases = 3;
     try {
-        const result = await pushSessionState(cloudCtx.roomCode, { ...proposed, savedAt: Date.now() }, pulled.version, {
-            participantCredential: participantCredentialForCloudWrite(),
-            onConflict: (current) => {
-                if (!isCloudSyncContextActive(cloudCtx)) return;
-                const validCurrent = current && validateCloudSnapshot(current, cloudCtx.roomCode);
-                if (validCurrent) {
-                    lastKnownCloudVersion = validCurrent.version;
-                    cloudLastSyncedState = cloneCloudData(validCurrent.state);
-                    applyCloudUpdate(validCurrent);
-                }
-                pushDebugLog('Couleur avatar : conflit de version, état serveur conservé.');
+        for (let conflictAttempt = 0; conflictAttempt <= maxConflictRebases; conflictAttempt++) {
+            const proposed = cloneCloudData(authoritative.state);
+            const me = (proposed.participants || []).find(p => p.id === myParticipantId);
+            if (!me) return;
+
+            // Idempotence après réponse perdue : si la couleur demandée est déjà la valeur
+            // autoritaire, le serveur a fait le travail. Ne crée pas une version de plus.
+            if (normalizeAvatarColor(me.avatarColor) === color) {
+                lastKnownCloudVersion = authoritative.version;
+                cloudLastSyncedState = cloneCloudData(authoritative.state);
+                applyCloudUpdate(authoritative, { expectedRoomCode: cloudCtx.roomCode });
+                recordSyncTrace('avatar.cloud-fallback.already-committed', { version: authoritative.version });
+                return;
             }
-        });
-        if (!isCloudSyncContextActive(cloudCtx) || !result) return;
-        const restricted = validateCloudSnapshot({ version: result.version, updatedAt: result.updatedAt, state: result.state }, cloudCtx.roomCode);
-        if (restricted) applyCloudUpdate(restricted);
+
+            me.avatarColor = color;
+            let conflictCurrent = null;
+            const result = await pushSessionState(cloudCtx.roomCode, { ...proposed, savedAt: Date.now() }, authoritative.version, {
+                participantCredential: participantCredentialForCloudWrite(),
+                onConflict: (current) => {
+                    if (!isCloudSyncContextActive(cloudCtx)) return;
+                    const validCurrent = current && validateCloudSnapshot(current, cloudCtx.roomCode);
+                    if (validCurrent) {
+                        conflictCurrent = validCurrent;
+                        lastKnownCloudVersion = validCurrent.version;
+                        cloudLastSyncedState = cloneCloudData(validCurrent.state);
+                    }
+                    recordSyncTrace('avatar.cloud-fallback.conflict', { version: validCurrent && validCurrent.version, attempt: conflictAttempt + 1 });
+                }
+            });
+            if (!isCloudSyncContextActive(cloudCtx)) return;
+            if (result) {
+                const restricted = validateCloudSnapshot({ version: result.version, updatedAt: result.updatedAt, state: result.state }, cloudCtx.roomCode);
+                if (restricted) {
+                    lastKnownCloudVersion = restricted.version;
+                    cloudLastSyncedState = cloneCloudData(restricted.state);
+                    applyCloudUpdate(restricted, { expectedRoomCode: cloudCtx.roomCode });
+                }
+                return;
+            }
+            if (conflictCurrent && conflictAttempt < maxConflictRebases) {
+                authoritative = conflictCurrent;
+                continue;
+            }
+            if (conflictCurrent) applyCloudUpdate(conflictCurrent, { expectedRoomCode: cloudCtx.roomCode });
+            pushDebugLog('Couleur avatar : trop de conflits successifs, état serveur conservé.');
+            return;
+        }
     } catch (e) {
         pushDebugLog('Couleur avatar : écriture serveur impossible : ' + ((e && e.message) || e));
     }
@@ -6847,30 +6964,77 @@ async function pushChatViaServerFallback(msg) {
         pushDebugLog('Remontée serveur du message de chat impossible (lecture) : ' + ((e && e.message) || e));
         return;
     }
+    if (!pulled) return;
 
-    const baseState = pulled ? pulled.state : buildCloudStatePayload();
-    const expectedVersion = pulled ? pulled.version : 0;
-    if (!baseState.chatMessages) baseState.chatMessages = [];
-    baseState.chatMessages.push(msg);
+    const initialChat = cloneCloudData((pulled.state && pulled.state.chatMessages) || []);
+    let authoritative = pulled;
+    const maxConflictRebases = 3;
 
     try {
-        const stateToPush = { ...baseState, savedAt: Date.now() };
-        const result = await pushSessionState(cloudCtx.roomCode, stateToPush, expectedVersion, {
-            participantCredential: participantCredentialForCloudWrite(),
-            onConflict: (current) => {
-                // Même raisonnement que pushCallViaServerFallback : pas de retentative
-                // en boucle ici, le prochain sondage/abonnement rattrapera le coup.
-                if (!isCloudSyncContextActive(cloudCtx)) return;
-                const validCurrent = current && validateCloudSnapshot(current, cloudCtx.roomCode);
-                if (validCurrent) { lastKnownCloudVersion = validCurrent.version; cloudLastSyncedState = cloneCloudData(validCurrent.state); }
-                pushDebugLog('Message de chat : conflit de version au moment de pousser, abandon (une resynchronisation suivra).');
+        for (let conflictAttempt = 0; conflictAttempt <= maxConflictRebases; conflictAttempt++) {
+            const baseState = cloneCloudData(authoritative.state);
+            if (!baseState.chatMessages) baseState.chatMessages = [];
+            const serverChat = baseState.chatMessages;
+
+            // Le chat serveur est append-only. Si le préfixe initial a été réécrit par une
+            // action hôte exceptionnelle, on ne tente pas de reconstruire l'intention sur
+            // une histoire différente. Sinon on peut rebaser sans risque après un conflit
+            // causé par une enchère, une présence ou une autre donne.
+            const prefixStillIntact = serverChat.length >= initialChat.length
+                && sameCloudData(serverChat.slice(0, initialChat.length), initialChat);
+            if (!prefixStillIntact) {
+                pushDebugLog('Message de chat : historique serveur réécrit pendant le conflit, resynchronisation sans réinsertion.');
+                applyCloudUpdate(authoritative, { expectedRoomCode: cloudCtx.roomCode });
+                return;
             }
-        });
-        if (!isCloudSyncContextActive(cloudCtx)) return;
-        if (result) {
-            lastKnownCloudVersion = result.version;
-            cloudLastSyncedState = cloneCloudData(result.state || stateToPush);
-            pushDebugLog(`Message de chat remonté au serveur avec succès (version ${result.version}).`);
+
+            // Idempotence après réponse perdue : le premier message qui suit exactement le
+            // préfixe initial est notre position de commit. S'il est déjà identique, ne pas
+            // ajouter un doublon.
+            const committed = serverChat[initialChat.length];
+            if (committed && sameCloudData(committed, msg)) {
+                lastKnownCloudVersion = authoritative.version;
+                cloudLastSyncedState = cloneCloudData(authoritative.state);
+                applyCloudUpdate(authoritative, { expectedRoomCode: cloudCtx.roomCode });
+                recordSyncTrace('chat.cloud-fallback.already-committed', { version: authoritative.version });
+                return;
+            }
+
+            baseState.chatMessages.push(msg);
+            const stateToPush = { ...baseState, savedAt: Date.now() };
+            let conflictCurrent = null;
+            const result = await pushSessionState(cloudCtx.roomCode, stateToPush, authoritative.version, {
+                participantCredential: participantCredentialForCloudWrite(),
+                onConflict: (current) => {
+                    if (!isCloudSyncContextActive(cloudCtx)) return;
+                    const validCurrent = current && validateCloudSnapshot(current, cloudCtx.roomCode);
+                    if (validCurrent) {
+                        conflictCurrent = validCurrent;
+                        lastKnownCloudVersion = validCurrent.version;
+                        cloudLastSyncedState = cloneCloudData(validCurrent.state);
+                    }
+                    recordSyncTrace('chat.cloud-fallback.conflict', { version: validCurrent && validCurrent.version, attempt: conflictAttempt + 1 });
+                }
+            });
+            if (!isCloudSyncContextActive(cloudCtx)) return;
+            if (result) {
+                lastKnownCloudVersion = result.version;
+                cloudLastSyncedState = cloneCloudData(result.state || stateToPush);
+                if (result.state) {
+                    const restricted = validateCloudSnapshot({ version: result.version, updatedAt: result.updatedAt, state: result.state }, cloudCtx.roomCode);
+                    if (restricted) applyCloudUpdate(restricted, { expectedRoomCode: cloudCtx.roomCode });
+                }
+                pushDebugLog(`Message de chat remonté au serveur avec succès (version ${result.version}).`);
+                return;
+            }
+            if (conflictCurrent && conflictAttempt < maxConflictRebases) {
+                authoritative = conflictCurrent;
+                recordSyncTrace('chat.cloud-fallback.rebase', { version: conflictCurrent.version, attempt: conflictAttempt + 1 });
+                continue;
+            }
+            if (conflictCurrent) applyCloudUpdate(conflictCurrent, { expectedRoomCode: cloudCtx.roomCode });
+            pushDebugLog('Message de chat : trop de conflits successifs, resynchronisation sans forcer l\'écriture.');
+            return;
         }
     } catch (e) {
         pushDebugLog('Remontée serveur du message de chat impossible (écriture) : ' + ((e && e.message) || e));
@@ -9091,64 +9255,118 @@ async function pushUndoViaServerFallback(targetBoardIndex = boardIndex) {
             done();
             return;
         }
+        if (!pulled) { done(); return; }
 
-        const baseState = pulled ? pulled.state : buildCloudStatePayload();
-        const expectedVersion = pulled ? pulled.version : 0;
         const idx = Number.isInteger(targetBoardIndex) ? targetBoardIndex : boardIndex;
-        const boardDeals = baseState.deals;
-        if (!boardDeals || !boardDeals[idx]) {
+        const initialDeals = pulled.state && pulled.state.deals;
+        if (!initialDeals || !initialDeals[idx]) {
             pushDebugLog(`Undo abandonné : donne ${idx} introuvable dans l'état serveur relu.`);
             done();
             return;
         }
-        if (!boardDeals[idx].auctionHistory) boardDeals[idx].auctionHistory = [];
-        const hist = boardDeals[idx].auctionHistory;
-
-        const targetIndex = findUndoTargetIndex(myParticipantId, hist);
-        const partnerIndex = findPartnerLastCallIndex(myParticipantId, hist);
+        const initialHistory = cloneCloudData(initialDeals[idx].auctionHistory || []);
+        const targetIndex = findUndoTargetIndex(myParticipantId, initialHistory);
+        const partnerIndex = findPartnerLastCallIndex(myParticipantId, initialHistory);
         if (targetIndex < 0 || targetIndex <= partnerIndex) {
             pushDebugLog('Undo abandonné : plus valide par rapport à l\'état serveur relu (rien à moi à annuler, ou mon partenaire a annoncé depuis) — resynchronisation.');
             setUndoStatus(undoRejectReasonText(targetIndex < 0 ? 'nothing' : 'partner-since'));
-            if (pulled) applyCloudUpdate(pulled);
+            applyCloudUpdate(pulled, { expectedRoomCode: cloudCtx.roomCode });
             done();
             return;
         }
+        const desiredHistory = cloneCloudData(initialHistory.slice(0, targetIndex));
+        let authoritative = pulled;
+        const maxConflictRebases = 3;
 
-        hist.length = targetIndex;
-        const stateToPush = { ...baseState, savedAt: Date.now() };
+        for (let conflictAttempt = 0; conflictAttempt <= maxConflictRebases; conflictAttempt++) {
+            const baseState = cloneCloudData(authoritative.state);
+            const boardDeals = baseState && baseState.deals;
+            if (!boardDeals || !boardDeals[idx]) {
+                pushDebugLog(`Undo abandonné : donne ${idx} absente après conflit.`);
+                applyCloudUpdate(authoritative, { expectedRoomCode: cloudCtx.roomCode });
+                done();
+                return;
+            }
+            if (!boardDeals[idx].auctionHistory) boardDeals[idx].auctionHistory = [];
+            const hist = boardDeals[idx].auctionHistory;
 
-        const result = await pushSessionState(cloudCtx.roomCode, stateToPush, expectedVersion, {
-            participantCredential: participantCredentialForCloudWrite(),
-            onConflict: (current) => {
-                // Même raisonnement que pushCallViaServerFallback : pas de retentative
-                // en boucle ici, le prochain sondage/reconnexion rattrapera le coup.
-                if (!isCloudSyncContextActive(cloudCtx)) return;
-                const validCurrent = current && validateCloudSnapshot(current, cloudCtx.roomCode);
-                if (validCurrent) { lastKnownCloudVersion = validCurrent.version; cloudLastSyncedState = cloneCloudData(validCurrent.state); }
-                pushDebugLog('Undo : conflit de version au moment de pousser, abandon (une resynchronisation suivra).');
+            // Idempotence : si l'undo a déjà été commité (ou qu'un autre undo a raccourci
+            // encore davantage le même préfixe), l'objectif est atteint. Ne jamais
+            // ressusciter des annonces pour obtenir exactement notre longueur d'origine.
+            const currentIsAtLeastAsUndone = hist.length <= desiredHistory.length
+                && sameCloudData(desiredHistory.slice(0, hist.length), hist);
+            if (currentIsAtLeastAsUndone) {
+                lastKnownCloudVersion = authoritative.version;
+                cloudLastSyncedState = cloneCloudData(authoritative.state);
+                applyCloudUpdate(authoritative, { expectedRoomCode: cloudCtx.roomCode });
+                recordSyncTrace('undo.cloud-fallback.already-committed', { targetBoardIndex: idx, version: authoritative.version });
+                done();
+                return;
             }
-        });
-        if (!isCloudSyncContextActive(cloudCtx)) { done(); return; }
-        if (result) {
-            lastKnownCloudVersion = result.version;
-            cloudLastSyncedState = cloneCloudData(result.state || stateToPush);
-            pushDebugLog(`Undo remonté au serveur avec succès (version ${result.version}).`);
-            // Applique aussi tout de suite en local (retour visuel immédiat), seulement
-            // si c'est bien la donne actuellement affichée — sinon, la prochaine
-            // relecture périodique/reconnexion s'en chargera (voir "Ne touche jamais
-            // boardIndex ici" dans applyCloudUpdate, même esprit ici : jamais question
-            // de changer ce qui est affiché à l'écran sous les pieds de quelqu'un).
-            if (idx === boardIndex) {
-                auctionHistory.length = targetIndex;
-                renderAuctionLedger();
-                renderBiddingBox();
-                renderMyHands();
-                checkAuctionEnd();
+
+            // Un conflit causé par une autre donne/chat/présence laisse CET historique
+            // strictement identique : on peut rebaser l'undo. Si cette donne a changé,
+            // l'intention est devenue stale ; resync sans réécriture.
+            if (!sameCloudData(hist, initialHistory)) {
+                recordSyncTrace('undo.cloud-fallback.same-board-conflict', { targetBoardIndex: idx, version: authoritative.version });
+                pushDebugLog(`Undo abandonné : la donne ${idx} a changé pendant le conflit — resynchronisation sans réécriture.`);
+                applyCloudUpdate(authoritative, { expectedRoomCode: cloudCtx.roomCode });
+                done();
+                return;
             }
+
+            hist.length = targetIndex;
+            const stateToPush = { ...baseState, savedAt: Date.now() };
+            let conflictCurrent = null;
+            const result = await pushSessionState(cloudCtx.roomCode, stateToPush, authoritative.version, {
+                participantCredential: participantCredentialForCloudWrite(),
+                onConflict: (current) => {
+                    if (!isCloudSyncContextActive(cloudCtx)) return;
+                    const validCurrent = current && validateCloudSnapshot(current, cloudCtx.roomCode);
+                    if (validCurrent) {
+                        conflictCurrent = validCurrent;
+                        lastKnownCloudVersion = validCurrent.version;
+                        cloudLastSyncedState = cloneCloudData(validCurrent.state);
+                    }
+                    recordSyncTrace('undo.cloud-fallback.conflict', { targetBoardIndex: idx, version: validCurrent && validCurrent.version, attempt: conflictAttempt + 1 });
+                }
+            });
+            if (!isCloudSyncContextActive(cloudCtx)) { done(); return; }
+
+            if (result) {
+                lastKnownCloudVersion = result.version;
+                cloudLastSyncedState = cloneCloudData(result.state || stateToPush);
+                if (result.state) {
+                    const restricted = validateCloudSnapshot({ version: result.version, updatedAt: result.updatedAt, state: result.state }, cloudCtx.roomCode);
+                    if (restricted) applyCloudUpdate(restricted, { expectedRoomCode: cloudCtx.roomCode });
+                } else if (idx === boardIndex) {
+                    auctionHistory.length = targetIndex;
+                    renderAuctionLedger();
+                    renderBiddingBox();
+                    renderMyHands();
+                    checkAuctionEnd();
+                }
+                recordSyncTrace('undo.cloud-fallback.success', { targetBoardIndex: idx, version: result.version, conflictRebases: conflictAttempt });
+                pushDebugLog(`Undo remonté au serveur avec succès (version ${result.version}).`);
+                done();
+                return;
+            }
+
+            if (conflictCurrent && conflictAttempt < maxConflictRebases) {
+                authoritative = conflictCurrent;
+                recordSyncTrace('undo.cloud-fallback.rebase', { targetBoardIndex: idx, version: conflictCurrent.version, attempt: conflictAttempt + 1 });
+                continue;
+            }
+            if (conflictCurrent) applyCloudUpdate(conflictCurrent, { expectedRoomCode: cloudCtx.roomCode });
+            pushDebugLog('Undo : trop de conflits successifs, resynchronisation sans forcer l\'écriture.');
+            done();
+            return;
         }
     } catch (e) {
         pushDebugLog('Undo : échec inattendu de la remontée serveur — ' + ((e && (e.message || e.stack)) || e));
     } finally {
+        // `done` est idempotent visuellement ; les retours de succès l'appellent déjà pour
+        // rendre immédiatement les contrôles, et ce filet couvre toute exception imprévue.
         done();
     }
 }
@@ -9779,10 +9997,10 @@ function initServiceWorker() {
     if (!('serviceWorker' in navigator)) return;
 
     navigator.serviceWorker.register('sw.js').then((registration) => {
-        // Une version déjà en attente ou nouvellement installée est simplement mémorisée.
-        // IMPORTANT : on ne lui envoie plus jamais skipWaiting() depuis la page. L'ancien
-        // comportement pouvait activer le nouveau SW au milieu d'un clic « Créer », puis
-        // controllerchange déclenchait window.location.reload() et interrompait la création.
+        // Une version déjà en attente ou nouvellement installée est mémorisée pour le
+        // diagnostic. La page ne lui envoie jamais skipWaiting() elle-même : depuis R2,
+        // c'est le Service Worker qui s'active une fois son cache complet, sans forcer de
+        // reload de la salle courante.
         if (registration.waiting) {
             pendingSwRegistration = registration;
             tryAutoApplyUpdate();
@@ -9792,9 +10010,8 @@ function initServiceWorker() {
             const newWorker = registration.installing;
             if (!newWorker) return;
             newWorker.addEventListener('statechange', () => {
-                // 'installed' + controller actif = mise à jour prête. Elle reste en attente
-                // jusqu'à ce que les onglets utilisant l'ancienne version soient réellement
-                // quittés. Aucun F5 automatique, aucun changement de contrôleur à chaud.
+                // 'installed' + controller actif = nouvelle version prête. Le worker R2+
+                // s'active lui-même ; côté page on ne force aucune navigation/reload à chaud.
                 if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
                     pendingSwRegistration = registration;
                     recordPlayPerfMilestone('service-worker-update-waiting');
@@ -9803,9 +10020,9 @@ function initServiceWorker() {
             });
         });
 
-        // Continuer à détecter une nouvelle version sur un onglet laissé ouvert, mais sans
-        // jamais l'appliquer à chaud. Le téléchargement/installation peut se faire en
-        // arrière-plan ; l'activation attend le cycle de vie normal du Service Worker.
+        // Continuer à détecter une nouvelle version sur un onglet laissé ouvert. Le worker
+        // peut s'activer en arrière-plan, mais le JavaScript déjà chargé dans cet onglet
+        // reste intact jusqu'à une navigation utilisateur.
         setInterval(() => registration.update(), 60000);
     }).catch((err) => {
         pushDebugLog('Service worker : échec d\'enregistrement — ' + (err && err.message));
@@ -9840,14 +10057,12 @@ function scheduleServiceWorkerInit() {
     else setTimeout(run, 2500);
 }
 
-// Politique de mise à jour PWA : volontairement passive.
+// Politique de mise à jour PWA : pas de reload forcé par la page.
 //
-// Une nouvelle version peut être téléchargée et arriver à l'état "waiting", mais PLAY ne
-// lui envoie plus skipWaiting() et ne recharge plus l'onglet. C'est le cycle de vie standard
-// du Service Worker qui l'activera lorsque les anciens clients auront été réellement quittés
-// (fermeture/navigation), puis elle servira la prochaine ouverture. Cette fonction reste
-// appelée depuis quelques chemins historiques afin d'éviter une refonte inutile : elle ne
-// fait désormais qu'enregistrer l'état en attente pour le diagnostic.
+// Le worker R2+ peut s'activer immédiatement après construction complète de son cache, mais
+// PLAY ne recharge jamais de lui-même une salle en cours. Cette fonction conserve seulement
+// l'information "mise à jour détectée" pour le diagnostic ; le nouvel ensemble de fichiers
+// sera utilisé à la prochaine vraie navigation/ouverture.
 function tryAutoApplyUpdate() {
     if (!pendingSwRegistration || !pendingSwRegistration.waiting) return;
     recordPlayPerfMilestone('service-worker-update-deferred');
@@ -10498,14 +10713,18 @@ function mergeAuctionHistoryThreeWay(base, local, remote, dealer) {
     if (sameCloudData(local, base)) return cloneCloudData(remote);
     if (sameCloudData(remote, base)) return cloneCloudData(local);
     if (sameCloudData(local, remote)) return cloneCloudData(local);
-    if (arrayIsPrefix(local, remote)) return cloneCloudData(remote);
-    if (arrayIsPrefix(remote, local)) return cloneCloudData(local);
 
     // Deux annulations concurrentes sur le même historique : conserver la plus courte
     // (elle satisfait les deux intentions sans ressusciter une annonce annulée).
+    // IMPORTANT : ce cas doit être testé AVANT les préfixes local↔remote ci-dessous.
+    // Sinon, si l'un a annulé deux annonces et l'autre une seule, le plus court est
+    // naturellement préfixe du plus long et l'ancienne priorité réacceptait le plus long.
     if (arrayIsPrefix(local, base) && arrayIsPrefix(remote, base)) {
         return cloneCloudData(local.length <= remote.length ? local : remote);
     }
+
+    if (arrayIsPrefix(local, remote)) return cloneCloudData(remote);
+    if (arrayIsPrefix(remote, local)) return cloneCloudData(local);
 
     // Deux extensions concurrentes du même préfixe : l'état serveur a déjà gagné. On ne
     // rejoue l'extension locale APRÈS lui que si elle reste légalement applicable ; sinon
@@ -10781,14 +11000,8 @@ async function pushCallViaServerFallback(targetBoardIndex, seat, call, explanati
         pushDebugLog(`Annonce ${call} (${seat}) : impossible de tenter le relais serveur (currentRoomCode ou fonctions cloud manquantes).`);
         return;
     }
-    // Voir échange avec Guillaume ("l'enchère de l'invité n'arrive jamais chez l'hôte,
-    // aucune trace dans le journal") : fonction entièrement enveloppée dans un try/catch
-    // désormais — une partie du corps (entre les deux try/catch précédents) pouvait
-    // échouer silencieusement (exception non interceptée = promesse rejetée sans aucune
-    // trace), laissant croire à tort que l'annonce était juste restée en attente alors
-    // qu'elle n'était jamais partie du tout. Log de départ ajouté aussi, pour confirmer
-    // sans ambiguïté que ce chemin a bien été emprunté.
     pushDebugLog(`Annonce ${call} (${seat}) : tentative de remontée au serveur (déconnecté de l'hôte).`);
+    recordSyncTrace('call.cloud-fallback.begin', { targetBoardIndex, seat, call });
     const cloudCtx = captureCloudSyncContext(currentRoomCode);
     try {
         let pulled;
@@ -10801,73 +11014,130 @@ async function pushCallViaServerFallback(targetBoardIndex, seat, call, explanati
             return;
         }
 
-        const baseState = pulled ? pulled.state : buildCloudStatePayload();
-        const expectedVersion = pulled ? pulled.version : 0;
         const idx = Number.isInteger(targetBoardIndex) ? targetBoardIndex : boardIndex;
-        const boardDeals = baseState.deals;
-        if (!boardDeals || !boardDeals[idx]) {
+        const initialState = pulled ? pulled.state : buildCloudStatePayload();
+        const initialDeals = initialState && initialState.deals;
+        if (!initialDeals || !initialDeals[idx]) {
             pushDebugLog(`Annonce ${call} (${seat}) abandonnée : état serveur relu inattendu (donne ${idx} introuvable).`);
             return;
         }
-        if (!boardDeals[idx].auctionHistory) boardDeals[idx].auctionHistory = [];
-        const hist = boardDeals[idx].auctionHistory;
+        const initialServerHistory = cloneCloudData(initialDeals[idx].auctionHistory || []);
+        let authoritative = pulled;
+        const maxConflictRebases = 3;
 
-        const expectedSeat = currentTurnSeat(boardDeals[idx].dealer, hist);
-        if (seat !== expectedSeat || !isCallLegal(hist, call, seat)) {
-            pushDebugLog(`Annonce ${call} (${seat}) abandonnée : plus valide par rapport à l'état serveur relu (tour attendu : ${expectedSeat}) — resynchronisation.`);
-            if (pulled) applyCloudUpdate(pulled);
-            return;
-        }
-
-        hist.push(explanation ? { seat, call, explanation } : { seat, call });
-        const stateToPush = { ...baseState, savedAt: Date.now() };
-
-        const result = await pushSessionState(cloudCtx.roomCode, stateToPush, expectedVersion, {
-            participantCredential: participantCredentialForCloudWrite(),
-            onConflict: (current) => {
-                // Quelqu'un d'autre a écrit entre ma lecture et ma tentative d'écrite —
-                // pas la peine de retenter en boucle ici (contrairement à
-                // pushCloudGameState) : la prochaine chose que je ferai (mon propre
-                // sondage/abonnement, voir startDeferredPolling) relira et
-                // resynchronisera de toute façon.
-                if (!isCloudSyncContextActive(cloudCtx)) return;
-                const validCurrent = current && validateCloudSnapshot(current, cloudCtx.roomCode);
-                if (validCurrent) {
-                    lastKnownCloudVersion = validCurrent.version;
-                    cloudLastSyncedState = cloneCloudData(validCurrent.state);
-                }
-                pushDebugLog(`Annonce ${call} (${seat}) : conflit de version au moment de pousser, abandon (une resynchronisation suivra).`);
+        for (let conflictAttempt = 0; conflictAttempt <= maxConflictRebases; conflictAttempt++) {
+            const baseState = authoritative ? cloneCloudData(authoritative.state) : cloneCloudData(initialState);
+            const expectedVersion = authoritative ? authoritative.version : 0;
+            const boardDeals = baseState && baseState.deals;
+            if (!boardDeals || !boardDeals[idx]) {
+                pushDebugLog(`Annonce ${call} (${seat}) abandonnée : donne ${idx} absente après conflit.`);
+                if (authoritative) applyCloudUpdate(authoritative, { expectedRoomCode: cloudCtx.roomCode });
+                return;
             }
-        });
-        if (!isCloudSyncContextActive(cloudCtx)) return;
-        if (result) {
-            lastKnownCloudVersion = result.version;
-            if (result.state) {
-                // Une écriture participant peut désormais contenir PLUS que mon annonce :
-                // api/session.js fait immédiatement jouer PONS côté serveur tant que le
-                // tour reste à un robot. Appliquer cette réponse autoritaire tout de suite
-                // évite d'attendre le prochain polling pour voir les annonces robot.
-                const restricted = validateCloudSnapshot({
-                    version: result.version,
-                    updatedAt: result.updatedAt,
-                    state: result.state
-                }, cloudCtx.roomCode);
-                if (restricted) {
-                    cloudLastSyncedState = cloneCloudData(restricted.state);
-                    applyCloudUpdate(restricted, { expectedRoomCode: cloudCtx.roomCode });
+            if (!boardDeals[idx].auctionHistory) boardDeals[idx].auctionHistory = [];
+            const hist = boardDeals[idx].auctionHistory;
+
+            // Idempotence : un timeout réseau peut avoir laissé croire que le PUT a échoué
+            // alors que le serveur l'a commité puis a déjà ajouté un ou plusieurs appels
+            // PONS. Si le préfixe serveur initial est intact et que NOTRE appel se trouve
+            // exactement à la position attendue, il est déjà acquis : ne jamais le doubler.
+            const sameInitialPrefix = hist.length >= initialServerHistory.length
+                && sameCloudData(hist.slice(0, initialServerHistory.length), initialServerHistory);
+            const committedEntry = sameInitialPrefix ? hist[initialServerHistory.length] : null;
+            const callAlreadyCommitted = !!committedEntry
+                && committedEntry.seat === seat
+                && String(committedEntry.call || '').toUpperCase() === String(call || '').toUpperCase();
+            if (callAlreadyCommitted) {
+                if (authoritative) {
+                    lastKnownCloudVersion = authoritative.version;
+                    cloudLastSyncedState = cloneCloudData(authoritative.state);
+                    applyCloudUpdate(authoritative, { expectedRoomCode: cloudCtx.roomCode });
+                }
+                recordSyncTrace('call.cloud-fallback.already-committed', { targetBoardIndex: idx, seat, call, version: authoritative && authoritative.version });
+                pushDebugLog(`Annonce ${call} (${seat}) déjà présente sur le serveur après conflit ; aucune duplication.`);
+                return;
+            }
+
+            // On ne rebase automatiquement que si CETTE donne n'a pas changé depuis notre
+            // lecture initiale. Un conflit causé par une autre donne/chat/présence peut donc
+            // être rejoué sans perdre l'action utilisateur. En revanche, si la même donne a
+            // changé, la décision métier n'est plus forcément valable : fail-closed + resync.
+            if (!sameCloudData(hist, initialServerHistory)) {
+                recordSyncTrace('call.cloud-fallback.same-board-conflict', { targetBoardIndex: idx, seat, call, currentVersion: authoritative && authoritative.version });
+                pushDebugLog(`Annonce ${call} (${seat}) abandonnée : la donne ${idx} a changé pendant le conflit — resynchronisation sans réécriture.`);
+                if (authoritative) applyCloudUpdate(authoritative, { expectedRoomCode: cloudCtx.roomCode });
+                return;
+            }
+
+            const expectedSeat = currentTurnSeat(boardDeals[idx].dealer, hist);
+            if (seat !== expectedSeat || !isCallLegal(hist, call, seat)) {
+                pushDebugLog(`Annonce ${call} (${seat}) abandonnée : plus valide par rapport à l'état serveur relu (tour attendu : ${expectedSeat}) — resynchronisation.`);
+                if (authoritative) applyCloudUpdate(authoritative, { expectedRoomCode: cloudCtx.roomCode });
+                return;
+            }
+
+            hist.push(explanation ? { seat, call, explanation } : { seat, call });
+            const stateToPush = { ...baseState, savedAt: Date.now() };
+            let conflictCurrent = null;
+            const result = await pushSessionState(cloudCtx.roomCode, stateToPush, expectedVersion, {
+                participantCredential: participantCredentialForCloudWrite(),
+                onConflict: (current) => {
+                    if (!isCloudSyncContextActive(cloudCtx)) return;
+                    const validCurrent = current && validateCloudSnapshot(current, cloudCtx.roomCode);
+                    if (validCurrent) {
+                        conflictCurrent = validCurrent;
+                        lastKnownCloudVersion = validCurrent.version;
+                        cloudLastSyncedState = cloneCloudData(validCurrent.state);
+                    }
+                    recordSyncTrace('call.cloud-fallback.conflict', {
+                        targetBoardIndex: idx, seat, call,
+                        currentVersion: validCurrent && validCurrent.version,
+                        attempt: conflictAttempt + 1
+                    });
+                }
+            });
+            if (!isCloudSyncContextActive(cloudCtx)) return;
+
+            if (result) {
+                lastKnownCloudVersion = result.version;
+                if (result.state) {
+                    // Une écriture participant peut contenir PLUS que mon annonce : le
+                    // serveur fait immédiatement jouer PONS tant que le tour reste robot.
+                    const restricted = validateCloudSnapshot({
+                        version: result.version,
+                        updatedAt: result.updatedAt,
+                        state: result.state
+                    }, cloudCtx.roomCode);
+                    if (restricted) {
+                        cloudLastSyncedState = cloneCloudData(restricted.state);
+                        applyCloudUpdate(restricted, { expectedRoomCode: cloudCtx.roomCode });
+                    } else {
+                        cloudLastSyncedState = cloneCloudData(stateToPush);
+                    }
                 } else {
                     cloudLastSyncedState = cloneCloudData(stateToPush);
                 }
-            } else {
-                cloudLastSyncedState = cloneCloudData(stateToPush);
+                recordSyncTrace('call.cloud-fallback.success', { targetBoardIndex: idx, seat, call, version: result.version, conflictRebases: conflictAttempt });
+                pushDebugLog(`Annonce ${call} (${seat}) remontée au serveur avec succès (version ${result.version}).`);
+                return;
             }
-            pushDebugLog(`Annonce ${call} (${seat}) remontée au serveur avec succès (version ${result.version}).`);
-        } else {
-            pushDebugLog(`Annonce ${call} (${seat}) : pushSessionState n'a renvoyé aucun résultat (ni succès, ni conflit signalé) — à surveiller.`);
+
+            if (conflictCurrent && conflictAttempt < maxConflictRebases) {
+                authoritative = conflictCurrent;
+                recordSyncTrace('call.cloud-fallback.rebase', { targetBoardIndex: idx, seat, call, version: conflictCurrent.version, attempt: conflictAttempt + 1 });
+                continue;
+            }
+
+            if (conflictCurrent) {
+                pushDebugLog(`Annonce ${call} (${seat}) : trop de conflits successifs ; resynchronisation sans forcer l'écriture.`);
+                applyCloudUpdate(conflictCurrent, { expectedRoomCode: cloudCtx.roomCode });
+            } else {
+                pushDebugLog(`Annonce ${call} (${seat}) : pushSessionState n'a renvoyé aucun résultat exploitable — à surveiller.`);
+            }
+            return;
         }
     } catch (e) {
-        // Filet de sécurité ultime : capture toute exception inattendue ailleurs dans le
-        // corps de la fonction, pour ne plus jamais échouer en silence total.
+        recordSyncTrace('call.cloud-fallback.error', { targetBoardIndex, seat, call, message: (e && e.message) || String(e) });
         pushDebugLog(`Annonce ${call} (${seat}) : échec inattendu de la remontée serveur — ` + ((e && (e.message || e.stack)) || e));
     }
 }
@@ -10906,6 +11176,7 @@ function startDeferredPolling() {
         subscribeToSessionUpdates(currentRoomCode, onCloudPusherEvent);
     }
     if (deferredPollIntervalId) return;
+    recordSyncTrace('cloud.consume.start', { intervalMs: DEFERRED_POLL_INTERVAL_MS });
     deferredPollIntervalId = setInterval(pollCloudForUpdates, DEFERRED_POLL_INTERVAL_MS);
     // Sondage immédiat dès que l'onglet redevient actif — pas la peine d'attendre le
     // prochain sondage si on vient de revenir dessus après être allé voir ailleurs (autre
@@ -10938,6 +11209,7 @@ function shouldConsumeCloudUpdates() {
 
 function onCloudPusherEvent(data) {
     if (!shouldConsumeCloudUpdates()) return;
+    recordSyncTrace('cloud.pusher.event', { version: data && data.version, stateIncluded: !!(data && data.state) });
     if (!data || typeof data.version !== 'number' || data.version <= lastKnownCloudVersion) return;
     if (cloudPushInFlight || cloudPushQueued) return; // pas la peine de relire ce qu'on vient tout juste d'envoyer
 
@@ -11000,8 +11272,10 @@ async function pollCloudForUpdates() {
         if (!result || result.version <= lastKnownCloudVersion) return; // rien de neuf
         result = validateCloudSnapshot(result, cloudCtx.roomCode);
         if (!result) return;
+        recordSyncTrace('cloud.poll.update', { fromVersion: lastKnownCloudVersion, toVersion: result.version });
         applyCloudUpdate(result, { expectedRoomCode: cloudCtx.roomCode });
     } catch (e) {
+        recordSyncTrace('cloud.poll.error', { message: (e && e.message) || String(e) });
         // Panne réseau passagère : tant pis, on retentera au prochain sondage.
     }
 }
@@ -11014,6 +11288,9 @@ function applyCloudUpdate(result, options = {}) {
     const validated = validateCloudSnapshot(result, expectedRoomCode);
     if (!validated) return false;
     const st = validated.state;
+    const tracePreviousVersion = lastKnownCloudVersion;
+    const traceLocalBoard = boardIndex;
+    recordSyncTrace('cloud.apply.begin', { fromVersion: tracePreviousVersion, toVersion: validated.version, localBoard: traceLocalBoard, serverBoard: st.boardIndex });
     const exactServerState = options.serverState ? cloneCloudData(options.serverState) : cloneCloudData(st);
     // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 3) : capturé AVANT tout remplacement, pour
     // pouvoir relayer en P2P (plus bas) uniquement ce qui est réellement NOUVEAU apporté
@@ -11116,6 +11393,7 @@ function applyCloudUpdate(result, options = {}) {
         renderRoomBoard();
         renderChat();
     }
+    recordSyncTrace('cloud.apply.end', { version: lastKnownCloudVersion, localBoard: boardIndex, preservedBoard: boardIndex === traceLocalBoard });
     return true;
 }
 
@@ -11316,6 +11594,7 @@ function uiResumeFromCloud() {
     // puis republiait cette opinion comme vérité commune.
     myRole = isCreatorResume ? 'host' : 'guest';
     myParticipantId = isCreatorResume ? 'host' : myToken;
+    recordSyncTrace('resume.cloud.role-resolved', { creatorResume: isCreatorResume, version: candidate.version, participantId: myParticipantId });
     const me = participants.find(p => p && p.id === myParticipantId);
     if (me) { me.disconnected = false; me.disconnectedAt = null; }
     mySeats = SEATS.filter(seat => seatAssignment[seat] === myParticipantId);
