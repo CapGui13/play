@@ -6960,34 +6960,6 @@ function handCardVulnClass(seat, dealVulnerable) {
     return isVuln ? 'hand-card-vuln' : 'hand-card-safe';
 }
 
-function buildPhysicalStripCardHtml(suit, displayRank) {
-    return `
-        <span class="mini-bridge-card mini-bridge-card-${suit}">
-            <span class="mini-bridge-card-corner">
-                <span class="mini-bridge-card-rank">${displayRank}</span>
-                <span class="mini-bridge-card-suit">${suitIconHtml(suit)}</span>
-            </span>
-            <span class="mini-bridge-card-center">${suitIconHtml(suit)}</span>
-        </span>
-    `;
-}
-
-function buildPhysicalStripSuitGroupHtml(hand, suit) {
-    const ranks = formatRanksForDisplay(hand[suit] || '').split('').filter(Boolean);
-    const cards = ranks.map(rank => buildPhysicalStripCardHtml(suit, rank)).join('');
-    const content = cards || '<span class="strip-void-card">—</span>';
-    return `
-        <div class="strip-suit-group strip-suit-group-${suit}">
-            <span class="strip-suit-chip">${suitIconHtml(suit)}</span>
-            <div class="strip-physical-cards">${content}</div>
-        </div>
-    `;
-}
-
-function buildPhysicalHandStripHtml(hand) {
-    return ['S', 'H', 'D', 'C'].map(suit => buildPhysicalStripSuitGroupHtml(hand, suit)).join('');
-}
-
 function renderMyHands() {
     const deal = currentDeal();
     const container = document.getElementById('myHandsContainer');
@@ -7021,7 +6993,15 @@ function renderMyHands() {
     container.innerHTML = mySeats.map(seat => {
         const hand = deal.hands[seat];
         const lines = showHandStrip
-            ? buildPhysicalHandStripHtml(hand)
+            ? `<div class="strip-physical-cards">${['S', 'H', 'D', 'C'].map((suit, suitIndex) => {
+                const ranks = String(formatRanksForDisplay(hand[suit]) || '');
+                return ranks.split('').map((rank, rankIndex) => `
+                    <span class="mini-bridge-card mini-bridge-card-${suit}${suitIndex > 0 && rankIndex === 0 ? ' mini-bridge-card-suit-start' : ''}">
+                        <span class="mini-bridge-card-rank">${rank}</span>
+                        <span class="mini-bridge-card-suit">${suitIconHtml(suit)}</span>
+                    </span>
+                `).join('');
+            }).join('')}</div>`
             : ['S', 'H', 'D', 'C'].map(suit => `
                 <div class="card-line">
                     <span class="suit-symbol">${suitIconHtml(suit)}</span>
