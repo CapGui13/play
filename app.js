@@ -11069,9 +11069,8 @@ function uiResumeFromCloud() {
 // ===== Gestes tactiles mobile : résistance de bord + swipe entre donnes =====
 //
 // 1) Résistance verticale : le scroll reste NATIF partout. À l'approche du haut/bas,
-//    le déplacement demandé est progressivement amorti. Sur l'accueil, où il n'y a
-//    souvent aucun scroll réel possible, on ajoute une petite translation visuelle de la
-//    page pour matérialiser cette "butée souple", puis elle revient en place au relâchement.
+//    le déplacement demandé est progressivement amorti. Une fois exactement au bord,
+//    tout geste qui cherche à aller plus loin est absorbé sans le moindre déplacement visuel.
 //
 // 2) Swipe horizontal : une fois la partie lancée, l'hôte peut parcourir les donnes par
 //    un geste gauche/droite exactement comme avec les flèches ◀▶ existantes. Pendant le
@@ -11088,8 +11087,6 @@ function initMobileEdgeResistanceAndBoardSwipe() {
     const MOBILE_MAX_WIDTH = 760;
     const EDGE_ZONE_PX = 88;
     const EDGE_MIN_FACTOR = 0.34;
-    const LANDING_PULL_FACTOR = 0.22;
-    const LANDING_PULL_MAX_PX = 18;
     const AXIS_LOCK_PX = 10;
     const SWIPE_MIN_PX = 64;
     const SWIPE_DOMINANCE = 1.28;
@@ -11148,31 +11145,6 @@ function initMobileEdgeResistanceAndBoardSwipe() {
 
     function clamp(value, min, max) {
         return Math.max(min, Math.min(max, value));
-    }
-
-    function setLandingPull(offsetY) {
-        const screen = document.getElementById('screen-landing');
-        if (!screen) return;
-        screen.style.transition = 'none';
-        screen.style.transform = `translate3d(0, ${offsetY}px, 0)`;
-    }
-
-    function resetLandingPull(animated = true) {
-        const screen = document.getElementById('screen-landing');
-        if (!screen) return;
-        if (animated && !prefersReducedMotion()) {
-            screen.style.transition = 'transform 190ms cubic-bezier(.22,.78,.28,1)';
-            screen.style.transform = 'translate3d(0, 0, 0)';
-            window.setTimeout(() => {
-                if (screen.style.transform === 'translate3d(0, 0, 0)') {
-                    screen.style.transition = '';
-                    screen.style.transform = '';
-                }
-            }, 220);
-        } else {
-            screen.style.transition = '';
-            screen.style.transform = '';
-        }
     }
 
     function canNavigateSwipeDirection(dx) {
@@ -11298,8 +11270,6 @@ function initMobileEdgeResistanceAndBoardSwipe() {
             target: event.target,
             swipeAllowed: canSwipeBoardsFrom(event.target, t.clientX),
             windowScrollAllowed: !hasOwnVerticalScroller(event.target),
-            landingPullAllowed: isLandingVisible() && !startedOnInteractive(event.target),
-            landingPulled: false,
             swipeDragged: false
         };
     }, { passive: true });
@@ -11349,23 +11319,13 @@ function initMobileEdgeResistanceAndBoardSwipe() {
 
         event.preventDefault();
         const distance = towardTop ? scrollTop : distanceBottom;
+
+        // Butée dure au bord exact : la résistance existe AVANT le bord, mais dès que
+        // celui-ci est atteint on n'applique plus ni scroll résiduel ni translation.
+        // Exemple : tout en bas + doigt vers le haut => absolument aucun mouvement.
+        if (distance <= 1) return;
+
         const factor = edgeResistanceFactor(distance);
-
-        // Accueil : quand il n'y a rien à faire défiler (cas habituel) ou que l'on tire
-        // réellement au-delà d'un bord, matérialise la résistance par un léger déplacement
-        // de l'écran. Le déplacement est plafonné à 18px pour rester subtil.
-        if (gesture.landingPullAllowed && isLandingVisible()) {
-            const noScrollableRoom = maxScroll <= 1;
-            const atTopEdge = scrollTop <= 1 && dy > 0;
-            const atBottomEdge = distanceBottom <= 1 && dy < 0;
-            if (noScrollableRoom || atTopEdge || atBottomEdge) {
-                const pull = clamp(dy * LANDING_PULL_FACTOR, -LANDING_PULL_MAX_PX, LANDING_PULL_MAX_PX);
-                setLandingPull(pull);
-                gesture.landingPulled = true;
-                return;
-            }
-        }
-
         window.scrollBy(0, -fingerDeltaY * factor);
     }, { passive: false });
 
@@ -11374,7 +11334,6 @@ function initMobileEdgeResistanceAndBoardSwipe() {
         const g = gesture;
         gesture = null;
 
-        if (g.landingPulled) resetLandingPull(true);
 
         if (!g.swipeAllowed || g.axis !== 'x' || !event.changedTouches || event.changedTouches.length !== 1) {
             if (g.swipeDragged) resetGameSwipeVisual(true);
@@ -11401,7 +11360,6 @@ function initMobileEdgeResistanceAndBoardSwipe() {
     document.addEventListener('touchcancel', () => {
         const g = gesture;
         gesture = null;
-        if (g && g.landingPulled) resetLandingPull(true);
         if (g && g.swipeDragged) resetGameSwipeVisual(true);
     }, { passive: true });
 }
