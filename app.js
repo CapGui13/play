@@ -11074,8 +11074,8 @@ function uiResumeFromCloud() {
 //
 // 2) Swipe horizontal : une fois la partie lancée, l'hôte peut parcourir les donnes par
 //    un geste gauche/droite exactement comme avec les flèches ◀▶ existantes. Pendant le
-//    geste, l'écran de jeu suit légèrement le doigt. Si le swipe est validé, l'ancienne
-//    donne sort dans le sens du geste et la nouvelle entre depuis le côté opposé ; si le
+//    geste, l'écran de jeu suit presque le doigt. Si le swipe est validé, l'ancienne
+//    donne sort entièrement du viewport et la nouvelle entre depuis le côté opposé ; si le
 //    geste est trop court ou bute sur la première/dernière donne, l'écran revient en place.
 //    La détection attend une intention franchement horizontale afin de ne jamais transformer
 //    un scroll vertical/diagonal en navigation. Les gestes démarrés sur un contrôle interactif
@@ -11097,8 +11097,10 @@ function initMobileEdgeResistanceAndBoardSwipe() {
     const AXIS_LOCK_PX = 10;
     const SWIPE_MIN_PX = 64;
     const SWIPE_DOMINANCE = 1.28;
-    const SWIPE_DRAG_FACTOR = 0.34;
-    const SWIPE_DRAG_MAX_PX = 54;
+    // Le contenu suit presque le doigt : on veut une vraie sensation de page que l'on pousse,
+    // pas un simple indice de déplacement avant une transition.
+    const SWIPE_DRAG_FACTOR = 0.90;
+    const SWIPE_DRAG_MAX_VIEWPORT_FACTOR = 0.72;
     const SWIPE_BLOCKED_FACTOR = 0.13;
     const SWIPE_BLOCKED_MAX_PX = 20;
     const IOS_SYSTEM_EDGE_PX = 22;
@@ -11178,11 +11180,15 @@ function initMobileEdgeResistanceAndBoardSwipe() {
         if (!screen) return;
         const canNavigate = canNavigateSwipeDirection(rawDx);
         const factor = canNavigate ? SWIPE_DRAG_FACTOR : SWIPE_BLOCKED_FACTOR;
-        const maxPx = canNavigate ? SWIPE_DRAG_MAX_PX : SWIPE_BLOCKED_MAX_PX;
+        const maxPx = canNavigate
+            ? Math.max(54, window.innerWidth * SWIPE_DRAG_MAX_VIEWPORT_FACTOR)
+            : SWIPE_BLOCKED_MAX_PX;
         const shownDx = clamp(rawDx * factor, -maxPx, maxPx);
         screen.style.transition = 'none';
         screen.style.transform = `translate3d(${shownDx}px, 0, 0)`;
-        screen.style.opacity = String(1 - Math.min(0.055, Math.abs(shownDx) / 1000));
+        // Pas de fondu : l'écran reste parfaitement opaque et donne réellement
+        // l'impression d'être poussé hors du viewport.
+        screen.style.opacity = '1';
         return shownDx;
     }
 
@@ -11190,7 +11196,7 @@ function initMobileEdgeResistanceAndBoardSwipe() {
         const screen = document.getElementById('screen-game');
         if (!screen) return;
         if (animated && !prefersReducedMotion()) {
-            screen.style.transition = 'transform 170ms cubic-bezier(.22,.78,.28,1), opacity 170ms ease';
+            screen.style.transition = 'transform 190ms cubic-bezier(.22,.78,.28,1)';
             screen.style.transform = 'translate3d(0, 0, 0)';
             screen.style.opacity = '1';
             window.setTimeout(() => {
@@ -11227,38 +11233,43 @@ function initMobileEdgeResistanceAndBoardSwipe() {
         }
 
         const currentTransform = screen.style.transform || 'translate3d(0, 0, 0)';
-        // Sortie courte : assez visible pour donner une continuité au geste, sans donner
-        // l'impression que toute la page change d'écran.
-        const outX = direction * 92;
+        // Transition type "diapositive" : l'écran courant sort COMPLÈTEMENT du viewport.
+        // Aucun fondu n'est utilisé ; la continuité est uniquement spatiale.
+        const viewportTravel = Math.max(window.innerWidth, document.documentElement.clientWidth || 0) + 28;
+        const outX = direction * viewportTravel;
         const out = screen.animate([
-            { transform: currentTransform, opacity: Number(screen.style.opacity || 1) },
-            { transform: `translate3d(${outX}px, 0, 0)`, opacity: 0.84 }
+            { transform: currentTransform },
+            { transform: `translate3d(${outX}px, 0, 0)` }
         ], {
-            duration: 105,
-            easing: 'cubic-bezier(.4,0,.8,.35)',
+            duration: 220,
+            easing: 'cubic-bezier(.34,.02,.66,.24)',
             fill: 'forwards'
         });
 
         out.onfinish = () => {
-            // Change la donne entre les deux demi-transitions.
+            // L'ancienne donne est maintenant entièrement hors écran : on peut remplacer
+            // son contenu sans que l'utilisateur voie le changement au milieu du viewport.
             if (direction < 0) uiHostSkipNextBoard();
             else uiHostSkipPrevBoard();
 
-            // Nettoie les styles du drag avant l'animation d'entrée.
             screen.style.transition = '';
-            screen.style.transform = '';
-            screen.style.opacity = '';
+            screen.style.opacity = '1';
             out.oncancel = null;
             try { out.cancel(); } catch (_) {}
 
-            const inX = -direction * 68;
+            // La nouvelle donne arrive depuis le côté opposé, comme la diapositive suivante.
+            const inX = -direction * viewportTravel;
+            screen.style.transform = `translate3d(${inX}px, 0, 0)`;
+            // Force un calcul de style afin que Safari iOS enregistre bien la position de départ
+            // avant de lancer l'animation d'entrée.
+            void screen.offsetWidth;
             const enter = screen.animate([
-                { transform: `translate3d(${inX}px, 0, 0)`, opacity: 0.86 },
-                { transform: 'translate3d(0, 0, 0)', opacity: 1 }
+                { transform: `translate3d(${inX}px, 0, 0)` },
+                { transform: 'translate3d(0, 0, 0)' }
             ], {
-                duration: 185,
-                easing: 'cubic-bezier(.18,.74,.28,1)',
-                fill: 'none'
+                duration: 260,
+                easing: 'cubic-bezier(.20,.72,.26,1)',
+                fill: 'forwards'
             });
             const finish = () => {
                 boardSwipeAnimating = false;
