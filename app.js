@@ -11065,12 +11065,168 @@ function uiResumeFromCloud() {
     saveHostGameStateToStorage();
 }
 
+
+// ===== Gestes tactiles mobile : résistance de bord + swipe entre donnes =====
+//
+// 1) Résistance verticale : on laisse le scroll NATIF partout, sauf dans une petite
+//    zone proche du haut/bas de la page et seulement lorsque le doigt continue vers ce
+//    bord. Là, on prend temporairement la main et on réduit progressivement le déplacement
+//    demandé. Aucun effet sur desktop, et aucun effet dans un panneau qui possède son
+//    propre scroll (chat, modal, etc.).
+//
+// 2) Swipe horizontal : une fois la partie lancée, l'hôte peut parcourir les donnes par
+//    un geste gauche/droite exactement comme avec les flèches ◀▶ existantes. On ne change
+//    donc PAS la règle d'autorité de la session : chez un invité, les flèches sont cachées
+//    et le swipe ne change pas non plus la donne globale. La détection attend une intention
+//    franchement horizontale afin de ne jamais transformer un scroll vertical/diagonal en
+//    navigation. Les gestes démarrés sur un contrôle interactif sont également ignorés.
+function initMobileEdgeResistanceAndBoardSwipe() {
+    if (window.__mobileEdgeAndBoardSwipeInit) return;
+    window.__mobileEdgeAndBoardSwipeInit = true;
+
+    const MOBILE_MAX_WIDTH = 760;
+    const EDGE_ZONE_PX = 88;
+    const EDGE_MIN_FACTOR = 0.34;
+    const AXIS_LOCK_PX = 10;
+    const SWIPE_MIN_PX = 64;
+    const SWIPE_DOMINANCE = 1.28;
+    const IOS_SYSTEM_EDGE_PX = 22;
+    const INTERACTIVE_SELECTOR = [
+        'button', 'a', 'input', 'select', 'textarea', 'label',
+        '[contenteditable="true"]', '[role="button"]'
+    ].join(',');
+
+    let gesture = null;
+
+    function isMobileGestureViewport() {
+        return window.innerWidth <= MOBILE_MAX_WIDTH && navigator.maxTouchPoints > 0;
+    }
+
+    function isGameVisible() {
+        const screen = document.getElementById('screen-game');
+        return !!(screen && getComputedStyle(screen).display !== 'none');
+    }
+
+    function hasOwnVerticalScroller(node) {
+        for (let el = node instanceof Element ? node : null; el && el !== document.body; el = el.parentElement) {
+            const style = getComputedStyle(el);
+            const oy = style.overflowY;
+            if ((oy === 'auto' || oy === 'scroll') && el.scrollHeight > el.clientHeight + 2) return true;
+        }
+        return false;
+    }
+
+    function canSwipeBoardsFrom(target, startX) {
+        if (!isGameVisible() || !deals || deals.length < 2 || myRole !== 'host') return false;
+        // Conserve les gestes système iOS (retour/avance) quand ils partent vraiment du bord.
+        if (startX <= IOS_SYSTEM_EDGE_PX || startX >= window.innerWidth - IOS_SYSTEM_EDGE_PX) return false;
+        if (target instanceof Element && target.closest(INTERACTIVE_SELECTOR)) return false;
+        if (target instanceof Element && target.closest('#chatPanel, .modal, .dialog, [role="dialog"]')) return false;
+        return true;
+    }
+
+    function edgeResistanceFactor(distanceToEdge) {
+        const ratio = Math.max(0, Math.min(1, distanceToEdge / EDGE_ZONE_PX));
+        // Courbe volontairement douce : ~34 % au bord, puis retour progressif à 100 %.
+        return EDGE_MIN_FACTOR + (1 - EDGE_MIN_FACTOR) * ratio;
+    }
+
+    document.addEventListener('touchstart', (event) => {
+        if (!isMobileGestureViewport() || event.touches.length !== 1) {
+            gesture = null;
+            return;
+        }
+        const t = event.touches[0];
+        gesture = {
+            startX: t.clientX,
+            startY: t.clientY,
+            lastY: t.clientY,
+            axis: null,
+            target: event.target,
+            swipeAllowed: canSwipeBoardsFrom(event.target, t.clientX),
+            windowScrollAllowed: !hasOwnVerticalScroller(event.target)
+        };
+    }, { passive: true });
+
+    document.addEventListener('touchmove', (event) => {
+        if (!gesture || !isMobileGestureViewport() || event.touches.length !== 1) return;
+
+        const t = event.touches[0];
+        const dx = t.clientX - gesture.startX;
+        const dy = t.clientY - gesture.startY;
+        const absX = Math.abs(dx);
+        const absY = Math.abs(dy);
+
+        if (!gesture.axis && Math.max(absX, absY) >= AXIS_LOCK_PX) {
+            if (absX > absY * 1.12) gesture.axis = 'x';
+            else if (absY > absX * 1.12) gesture.axis = 'y';
+        }
+
+        if (gesture.axis === 'x') {
+            if (gesture.swipeAllowed) event.preventDefault();
+            return;
+        }
+
+        if (gesture.axis !== 'y' || !gesture.windowScrollAllowed) {
+            gesture.lastY = t.clientY;
+            return;
+        }
+
+        const fingerDeltaY = t.clientY - gesture.lastY;
+        gesture.lastY = t.clientY;
+        if (!fingerDeltaY) return;
+
+        const scrollTop = Math.max(0, window.scrollY || document.documentElement.scrollTop || 0);
+        const doc = document.documentElement;
+        const maxScroll = Math.max(0, doc.scrollHeight - window.innerHeight);
+        const distanceBottom = Math.max(0, maxScroll - scrollTop);
+
+        // Doigt vers le bas => la page veut remonter vers le haut.
+        const towardTop = fingerDeltaY > 0 && scrollTop < EDGE_ZONE_PX;
+        // Doigt vers le haut => la page veut descendre vers le bas.
+        const towardBottom = fingerDeltaY < 0 && distanceBottom < EDGE_ZONE_PX;
+        if (!towardTop && !towardBottom) return;
+
+        event.preventDefault();
+        const distance = towardTop ? scrollTop : distanceBottom;
+        const factor = edgeResistanceFactor(distance);
+        window.scrollBy(0, -fingerDeltaY * factor);
+    }, { passive: false });
+
+    function finishGesture(event) {
+        if (!gesture) return;
+        const g = gesture;
+        gesture = null;
+        if (!g.swipeAllowed || g.axis !== 'x' || !event.changedTouches || event.changedTouches.length !== 1) return;
+
+        const t = event.changedTouches[0];
+        const dx = t.clientX - g.startX;
+        const dy = t.clientY - g.startY;
+        const absX = Math.abs(dx);
+        const absY = Math.abs(dy);
+        if (absX < SWIPE_MIN_PX || absX < absY * SWIPE_DOMINANCE) return;
+
+        if (dx < 0) {
+            // Swipe gauche = donne suivante. La fonction existante gère la borne finale,
+            // diffuse le changement à la table et applique le fondu déjà utilisé par ▶.
+            uiHostSkipNextBoard();
+        } else {
+            // Swipe droite = donne précédente. Sur la donne 1, aucun effet.
+            uiHostSkipPrevBoard();
+        }
+    }
+
+    document.addEventListener('touchend', finishGesture, { passive: true });
+    document.addEventListener('touchcancel', () => { gesture = null; }, { passive: true });
+}
+
 window.addEventListener('DOMContentLoaded', () => {
     recordPlayPerfMilestone('dom-content-loaded');
     scheduleServiceWorkerInit();
     initIosInstallHint();
     initIosLockScreenWarning();
     initMobileRoomCodeKeypad();
+    initMobileEdgeResistanceAndBoardSwipe();
     initOfflineHandling();
     initChatVisibilityTracking();
 
