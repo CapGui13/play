@@ -3450,11 +3450,14 @@ table.dd-table td.dd-secondary-contract {
     body { padding-top: calc(84px + var(--safe-top)); }
 
     /* Écrans de jeu et salon : la barre mobile n'affiche désormais plus que Chat, qui est
-       fixe et n'a pas besoin de réserver 84px dans le flux. On applique au salon la même
-       remontée globale que celle déjà validée sur l'écran de jeu, sans toucher à ses marges
-       internes ni à la position fixe de Chat. */
-    body.on-game-screen,
-    body.on-lobby-screen { padding-top: calc(12px + var(--safe-top)); }
+       fixe et n'a pas besoin de réserver 84px dans le flux. Le jeu conserve la remontée
+       validée ; le salon garde quelques pixels de respiration supplémentaires pour que
+       Chat ne touche pas sa bordure supérieure. */
+    body.on-game-screen { padding-top: calc(12px + var(--safe-top)); }
+    /* Salon d'attente : on redonne seulement quelques pixels de respiration en haut.
+       Le bouton Chat reste fixe et inchangé ; ce petit décalage évite simplement qu'il
+       vienne visuellement toucher/chevaucher la bordure supérieure du salon. */
+    body.on-lobby-screen { padding-top: calc(24px + var(--safe-top)); }
     .debug-panel { top: calc(68px + var(--safe-top)); }
     body:not(.on-landing-screen) #offlineBanner { top: calc(84px + var(--safe-top)); }
     .chat-panel.chat-panel-docked { scroll-margin-top: calc(92px + var(--safe-top)); }
@@ -3649,13 +3652,32 @@ table.dd-table td.dd-secondary-contract {
         max-width: 560px;
     }
 
+    /* Bandeau MOBILE uniquement : conserver exactement le même cadre, mais rendre les
+       cartes plus lisibles. On augmente la taille du texte et des symboles tout en
+       resserrant légèrement les espaces et l'interlettrage. On récupère aussi une partie
+       du grand padding horizontal INTERNE de la carte : sa taille extérieure ne change
+       pas, mais le bandeau et le badge K&R disposent de davantage de largeur utile. Le
+       desktop n'est volontairement pas concerné par ces règles. */
+    #myHandsContainer.hand-strip-mode .hand-card {
+        padding-left: 14px;
+        padding-right: 14px;
+    }
+
     #myHandsContainer .hand-cards-strip {
-        gap: 9px;
-        font-size: clamp(0.78rem, 3.1vw, 0.95rem);
+        gap: 6px;
+        font-size: clamp(0.90rem, 4vw, 1.05rem);
+    }
+
+    #myHandsContainer .hand-cards-strip .card-line {
+        gap: 3px;
+    }
+
+    #myHandsContainer .hand-cards-strip .cards {
+        letter-spacing: 0.5px;
     }
 
     #myHandsContainer .hand-cards-strip .suit-symbol .suit-icon {
-        font-size: clamp(0.92rem, 3.5vw, 1.08rem);
+        font-size: clamp(1.05rem, 4.4vw, 1.18rem);
     }
 }
 
