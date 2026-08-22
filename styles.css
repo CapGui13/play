@@ -2535,16 +2535,15 @@ button.kibitz-chip {
 }
 
 #myHandsContainer .mini-bridge-card {
-    display: flex;
+    display: grid;
+    grid-template-rows: 24px 24px;
+    align-content: start;
+    justify-items: center;
     flex: 1 1 0;
     min-width: 0;
     max-width: none;
     height: 66px;
-    flex-direction: column;
-    align-items: center;
-    justify-content: flex-start;
-    padding-top: 6px;
-    gap: 0;
+    padding: 5px 0 0;
     border-radius: 4px;
     background: linear-gradient(180deg, #ffffff 0%, #f6f7fa 100%);
     border: 1px solid rgba(198, 204, 214, 0.96);
@@ -2559,19 +2558,25 @@ button.kibitz-chip {
 }
 
 #myHandsContainer .mini-bridge-card-rank {
+    display: inline-flex;
+    align-items: flex-end;
+    justify-content: center;
+    min-height: 24px;
     font-family: var(--font-mono);
     font-size: 1.18rem;
-    line-height: 0.92;
+    line-height: 1;
     font-weight: 800;
     letter-spacing: -0.02em;
+    font-variant-numeric: lining-nums tabular-nums;
 }
 
 #myHandsContainer .mini-bridge-card-suit {
     display: inline-flex;
-    align-items: center;
+    align-items: flex-start;
     justify-content: center;
-    line-height: 0.82;
-    transform: translateY(-1px);
+    min-height: 24px;
+    line-height: 1;
+    transform: none;
 }
 
 #myHandsContainer .mini-bridge-card-suit .suit-icon {
@@ -3729,10 +3734,11 @@ table.dd-table td.dd-secondary-contract {
     }
 
     #myHandsContainer .mini-bridge-card {
+        grid-template-rows: 21px 21px;
         max-width: none;
         height: clamp(46px, 11.6vw, 58px);
         border-radius: 4px;
-        padding-top: 4px;
+        padding: 3px 0 0;
     }
 
     #myHandsContainer .mini-bridge-card-suit-start {
@@ -3740,8 +3746,13 @@ table.dd-table td.dd-secondary-contract {
     }
 
     #myHandsContainer .mini-bridge-card-rank {
+        min-height: 21px;
         font-size: clamp(0.92rem, 3.45vw, 1.08rem);
-        line-height: 0.9;
+        line-height: 1;
+    }
+
+    #myHandsContainer .mini-bridge-card-suit {
+        min-height: 21px;
     }
 
     #myHandsContainer .mini-bridge-card-suit .suit-icon {
