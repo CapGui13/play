@@ -3737,7 +3737,7 @@ table.dd-table td.dd-secondary-contract {
         grid-template-rows: 27px 25px;
         max-width: none;
         height: clamp(62px, 15.8vw, 76px);
-        border-radius: 5px;
+        border-radius: 5px 5px 0 0;
         padding: 6px 0 0;
     }
 
