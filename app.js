@@ -886,6 +886,7 @@ let savedAvatarColor = loadStringPref('bridgeBidAvatarColor', null);
 let useFrenchRanks = loadBoolPref('bridgeBidFrenchRanks', false); // R/D/V/X au lieu de K/Q/J/T
 let showHcp = loadBoolPref('bridgeBidShowHcp', false);            // affiche le compte de points d'honneur par main
 let showKr = loadBoolPref('bridgeBidShowKr', false);              // affiche l'évaluation Kaplan-Rubens par main
+let showHandStrip = loadBoolPref('bridgeBidShowHandStrip', false);      // main du joueur sur une seule ligne (♠… ♥… ♦… ♣…)
 let showLedgerNames = loadBoolPref('bridgeBidShowLedgerNames', false); // noms des joueurs au lieu de N/E/S/O dans le tableau d'enchères
 // (Hôte uniquement) Voir les 4 mains à tout moment pendant la partie, même en pleine
 // enchère — voir uiToggleHostSeeAllHands. Jamais envoyé aux autres joueurs.
@@ -1163,6 +1164,20 @@ function uiToggleShowKr() {
     }
 }
 
+// Option « Affichage bandeau » : purement locale et persistée. Elle ne change que la
+// présentation de la/les main(s) réellement contrôlée(s) par ce joueur ; le diagramme
+// « Voir les 4 mains » conserve volontairement sa présentation 4 lignes.
+function uiToggleHandStrip() {
+    const mobileBiddingAnchor = captureHandDisplayOptionViewportAnchor();
+    showHandStrip = !showHandStrip;
+    saveBoolPref('bridgeBidShowHandStrip', showHandStrip);
+    renderHandDisplayOptionButtons();
+    if (deals) {
+        renderMyHands();
+        restoreHandDisplayOptionViewportAnchor(mobileBiddingAnchor);
+    }
+}
+
 function uiToggleLedgerNames() {
     const mobileBiddingAnchor = captureHandDisplayOptionViewportAnchor();
     showLedgerNames = !showLedgerNames;
@@ -1227,6 +1242,12 @@ function renderHandDisplayOptionButtons() {
     if (krBtn) {
         krBtn.classList.toggle('is-active', showKr);
         krBtn.setAttribute('aria-pressed', showKr ? 'true' : 'false');
+    }
+
+    const handStripBtn = document.getElementById('handStripToggleBtn');
+    if (handStripBtn) {
+        handStripBtn.classList.toggle('is-active', showHandStrip);
+        handStripBtn.setAttribute('aria-pressed', showHandStrip ? 'true' : 'false');
     }
 
     const hostSeeAllBtn = document.getElementById('hostSeeAllHandsBtn');
@@ -2084,9 +2105,10 @@ function showScreen(id) {
     // trait de séparation sous la barre de statut n'a donc rien à séparer et fait juste
     // ligne parasite (voir la règle CSS body.on-landing-screen .connection-bar).
     document.body.classList.toggle('on-landing-screen', id === 'screen-landing');
-    // Écran de jeu : classe dédiée pour permettre les seuls ajustements de géométrie
-    // propres à cette vue (notamment l'écart supérieur mobile), sans toucher au salon.
+    // Écrans jeu/salon : classes dédiées pour permettre les ajustements de géométrie
+    // propres à chaque vue (notamment l'écart supérieur mobile), sans toucher à l'accueil.
     document.body.classList.toggle('on-game-screen', id === 'screen-game');
+    document.body.classList.toggle('on-lobby-screen', id === 'screen-lobby');
 
     // Une mise à jour PWA détectée reste volontairement en attente pendant toute la vie
     // de cet onglet. Elle sera utilisée lors d'une prochaine vraie ouverture/navigation,
@@ -6949,7 +6971,7 @@ function renderMyHands() {
         // le même emplacement central, en grille N/E/S/O, que celui utilisé quand l'hôte
         // active "Voir les 4 mains". Les construire ici, dans le panneau latéral étroit
         // des mains, les aurait affichées à l'étroit et mal calibrées plutôt qu'au centre.
-        container.classList.remove('my-hands-multi');
+        container.classList.remove('my-hands-multi', 'hand-strip-mode');
         container.innerHTML =
             '<div class="info-text kibbitz-note">👁 Vous suivez la partie en kibbitz : vous voyez les 4 mains ci-dessous.</div>';
         return;
@@ -6961,6 +6983,7 @@ function renderMyHands() {
     // mains les empilait verticalement même sur mobile, où l'espace horizontal disponible
     // suffit largement pour les mettre côte à côte.
     container.classList.toggle('my-hands-multi', mySeats.length > 1);
+    container.classList.toggle('hand-strip-mode', showHandStrip);
 
     // Distinction main active / inactive : seulement utile quand on contrôle plusieurs
     // sièges, et seulement pendant l'enchère (une fois terminée, plus de "tour" à signaler).
@@ -6992,7 +7015,7 @@ function renderMyHands() {
                     <span class="hand-card-title-name">${seatFullName(seat)}</span>
                     <span class="hand-card-badges">${hcpBadge}${krBadge}</span>
                 </div>
-                <div class="hand-cards">${lines}</div>
+                <div class="hand-cards${showHandStrip ? ' hand-cards-strip' : ''}">${lines}</div>
             </div>
         `;
     }).join('');

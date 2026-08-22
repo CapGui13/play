@@ -520,10 +520,14 @@
                 <button id="krToggleBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" data-ui-click="toggle-kr" aria-pressed="false"><span class="btn-label-full">Afficher Kaplan-Rubens</span><span class="btn-label-short">K&amp;R</span></button>
                 <button id="hostSeeAllHandsBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" style="display:none;" data-ui-click="toggle-all-hands" title="Réservé à vous : ne change rien pour les autres joueurs" aria-pressed="false"><span class="btn-label-full">👁 Voir les 4 mains</span><span class="btn-label-short">👁 4 mains</span></button>
             </div>
-            <!-- En desktop, Noms reste séparé à droite. Sur mobile, les cinq options sont
-                 volontairement conservées sur une seule ligne horizontale ; la rangée peut
-                 défiler latéralement sur les écrans étroits (voir styles.css). -->
-            <button id="ledgerNamesToggleBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" data-ui-click="toggle-ledger-names" aria-pressed="false"><span class="btn-label-full">Noms des joueurs</span><span class="btn-label-short">Noms</span></button>
+            <!-- En desktop, Bandeau et Noms restent groupés dans la colonne centrale,
+                 Bandeau immédiatement à gauche de Noms. Sur mobile, le wrapper disparaît
+                 visuellement (display:contents) afin que toutes les options restent sur la
+                 même ligne horizontale, dans le même ordre. -->
+            <div class="hand-display-options-right">
+                <button id="handStripToggleBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" data-ui-click="toggle-hand-strip" aria-pressed="false" title="Afficher votre main sur une seule ligne"><span class="btn-label-full">Affichage bandeau</span><span class="btn-label-short">Bandeau</span></button>
+                <button id="ledgerNamesToggleBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" data-ui-click="toggle-ledger-names" aria-pressed="false"><span class="btn-label-full">Noms des joueurs</span><span class="btn-label-short">Noms</span></button>
+            </div>
         </div>
 
         <div class="game-content-row">

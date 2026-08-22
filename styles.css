@@ -2475,6 +2475,15 @@ button.kibitz-chip {
     flex-shrink: 0;
 }
 
+/* Groupe central : le nouveau mode Bandeau vit immédiatement à gauche de Noms des
+   joueurs, sans modifier l'espacement du groupe d'options de gauche. */
+.hand-display-options-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
 .hand-option-btn {
     opacity: 0.75;
 }
@@ -2494,6 +2503,30 @@ button.kibitz-chip {
     align-items: center;
     gap: 6px;
     margin-bottom: 3px;
+}
+
+/* Mode « Bandeau » : les quatre couleurs de la main du joueur sont placées sur UNE
+   seule ligne. Le diagramme des 4 mains n'utilise jamais cette classe et reste inchangé. */
+#myHandsContainer .hand-cards-strip {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    width: 100%;
+    white-space: nowrap;
+}
+
+#myHandsContainer .hand-cards-strip .card-line {
+    display: flex;
+    grid-template-columns: none;
+    align-items: center;
+    gap: 4px;
+    margin-bottom: 0;
+    min-width: 0;
+}
+
+#myHandsContainer.hand-strip-mode .hand-card {
+    max-width: 560px;
 }
 
 .suit-symbol { display: flex; align-items: center; justify-content: center; }
@@ -3416,12 +3449,12 @@ table.dd-table td.dd-secondary-contract {
        contenu de la page passe dessous. */
     body { padding-top: calc(84px + var(--safe-top)); }
 
-    /* Écran de jeu seulement : la barre mobile n'affiche désormais plus que Chat, qui est
-       fixe et n'a pas besoin de réserver 84px dans le flux. 12px de padding body + les
-       20px déjà portés par .screen donnent ~32px avant la ligne du numéro de donne, soit
-       l'écart de la capture de référence. Chat ne bouge pas, puisqu'il reste dans la barre
-       fixe ; accueil et salon conservent strictement leur géométrie actuelle. */
-    body.on-game-screen { padding-top: calc(12px + var(--safe-top)); }
+    /* Écrans de jeu et salon : la barre mobile n'affiche désormais plus que Chat, qui est
+       fixe et n'a pas besoin de réserver 84px dans le flux. On applique au salon la même
+       remontée globale que celle déjà validée sur l'écran de jeu, sans toucher à ses marges
+       internes ni à la position fixe de Chat. */
+    body.on-game-screen,
+    body.on-lobby-screen { padding-top: calc(12px + var(--safe-top)); }
     .debug-panel { top: calc(68px + var(--safe-top)); }
     body:not(.on-landing-screen) #offlineBanner { top: calc(84px + var(--safe-top)); }
     .chat-panel.chat-panel-docked { scroll-margin-top: calc(92px + var(--safe-top)); }
@@ -3525,8 +3558,8 @@ table.dd-table td.dd-secondary-contract {
         white-space: nowrap;
     }
 
-    /* Sur mobile, Guillaume préfère avoir FR / HCP / K&R / 4 mains / Noms sur une
-       seule ligne horizontale. On aplatit donc le groupe de gauche, on garde tout sur une
+    /* Sur mobile, Guillaume préfère avoir FR / HCP / K&R / 4 mains / Bandeau / Noms sur
+       une seule ligne horizontale. On aplatit donc les deux groupes, on garde tout sur une
        seule rangée et on autorise un très léger scroll horizontal plutôt qu'une 2e ligne. */
     .hand-display-options {
         flex-wrap: nowrap;
@@ -3543,6 +3576,10 @@ table.dd-table td.dd-secondary-contract {
     .hand-display-options-left {
         width: auto;
         flex-shrink: 0;
+        display: contents;
+    }
+
+    .hand-display-options-right {
         display: contents;
     }
 
@@ -3596,6 +3633,29 @@ table.dd-table td.dd-secondary-contract {
 
     #myHandsContainer.my-hands-multi .suit-symbol .suit-icon {
         font-size: 1rem;
+    }
+
+    /* En mode Bandeau, une main a besoin de la largeur disponible pour tenir réellement
+       sur une ligne. Si un joueur contrôle deux sièges sur mobile, on empile donc les deux
+       bandeaux au lieu de les comprimer côte à côte et de couper les cartes. */
+    #myHandsContainer.my-hands-multi.hand-strip-mode {
+        flex-direction: column;
+        flex-wrap: nowrap;
+        align-items: center;
+    }
+
+    #myHandsContainer.my-hands-multi.hand-strip-mode .hand-card {
+        width: 100%;
+        max-width: 560px;
+    }
+
+    #myHandsContainer .hand-cards-strip {
+        gap: 9px;
+        font-size: clamp(0.78rem, 3.1vw, 0.95rem);
+    }
+
+    #myHandsContainer .hand-cards-strip .suit-symbol .suit-icon {
+        font-size: clamp(0.92rem, 3.5vw, 1.08rem);
     }
 }
 

@@ -85,6 +85,7 @@
             case 'toggle-hcp': return call('uiToggleShowHcp');
             case 'toggle-kr': return call('uiToggleShowKr');
             case 'toggle-all-hands': return call('uiToggleHostSeeAllHands');
+            case 'toggle-hand-strip': return call('uiToggleHandStrip');
             case 'toggle-ledger-names': return call('uiToggleLedgerNames');
             case 'toggle-par': return call('uiToggleParBiddingView');
             case 'close-deal-preview-backdrop': return call('uiCloseDealPreviewOnBackdrop', e);
