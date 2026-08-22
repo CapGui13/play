@@ -4273,3 +4273,16 @@ table.dd-table td.dd-secondary-contract {
         grid-template-columns: 1fr;
     }
 }
+
+/* Mobile — défilement vertical natif.
+   Le bounce JavaScript a été supprimé : Safari/iOS gère lui-même l'inertie et le
+   rubber-band, ce qui produit un rebond plus naturel, y compris après un flick rapide
+   avec le doigt déjà relâché. `contain` conserve l'effet local tout en limitant le
+   chaînage/pull-to-refresh lorsque le navigateur le respecte. */
+@media (max-width: 760px) {
+    html,
+    body {
+        overscroll-behavior-y: contain;
+        -webkit-overflow-scrolling: touch;
+    }
+}
