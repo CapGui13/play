@@ -11085,8 +11085,15 @@ function initMobileEdgeResistanceAndBoardSwipe() {
     window.__mobileEdgeAndBoardSwipeInit = true;
 
     const MOBILE_MAX_WIDTH = 760;
-    const EDGE_ZONE_PX = 88;
-    const EDGE_MIN_FACTOR = 0.34;
+    // Freinage vertical adaptatif : plus le doigt arrive vite vers un bord, plus
+    // la zone de décélération s'allonge. À faible vitesse, elle reste discrète.
+    // La courbe smoothstep rejoint 100 % sans cassure à l'entrée de zone et
+    // tend naturellement vers 0 au bord, avant la butée dure à 0 px.
+    const EDGE_ZONE_MIN_PX = 76;
+    const EDGE_ZONE_MAX_PX = 188;
+    const EDGE_ZONE_SPEED_GAIN = 68; // px de zone ajoutés par px/ms de vitesse filtrée
+    const EDGE_VELOCITY_FILTER = 0.30;
+    const EDGE_CRAWL_FACTOR = 0.08;
     const AXIS_LOCK_PX = 10;
     const SWIPE_MIN_PX = 64;
     const SWIPE_DOMINANCE = 1.28;
@@ -11137,10 +11144,22 @@ function initMobileEdgeResistanceAndBoardSwipe() {
         return true;
     }
 
-    function edgeResistanceFactor(distanceToEdge) {
-        const ratio = Math.max(0, Math.min(1, distanceToEdge / EDGE_ZONE_PX));
-        // Courbe volontairement douce : ~34 % au bord, puis retour progressif à 100 %.
-        return EDGE_MIN_FACTOR + (1 - EDGE_MIN_FACTOR) * ratio;
+    function edgeBrakeZonePx(speedPxPerMs) {
+        return clamp(
+            EDGE_ZONE_MIN_PX + Math.max(0, speedPxPerMs) * EDGE_ZONE_SPEED_GAIN,
+            EDGE_ZONE_MIN_PX,
+            EDGE_ZONE_MAX_PX
+        );
+    }
+
+    function edgeResistanceFactor(distanceToEdge, brakeZonePx) {
+        const ratio = clamp(distanceToEdge / Math.max(1, brakeZonePx), 0, 1);
+        // Smoothstep : pente nulle aux deux extrémités. On passe donc du scroll natif
+        // au freinage sans à-coup. Un filet de 8 % évite de rester artificiellement
+        // bloqué quelques pixels avant la vraie butée ; au bord exact, la règle ci-dessous
+        // absorbe toujours complètement le geste.
+        const smooth = ratio * ratio * (3 - 2 * ratio);
+        return EDGE_CRAWL_FACTOR + (1 - EDGE_CRAWL_FACTOR) * smooth;
     }
 
     function clamp(value, min, max) {
@@ -11266,6 +11285,8 @@ function initMobileEdgeResistanceAndBoardSwipe() {
             startX: t.clientX,
             startY: t.clientY,
             lastY: t.clientY,
+            lastMoveTs: performance.now(),
+            filteredSpeedY: 0,
             axis: null,
             target: event.target,
             swipeAllowed: canSwipeBoardsFrom(event.target, t.clientX),
@@ -11302,9 +11323,18 @@ function initMobileEdgeResistanceAndBoardSwipe() {
             return;
         }
 
+        const now = performance.now();
         const fingerDeltaY = t.clientY - gesture.lastY;
+        const elapsedMs = Math.max(8, Math.min(64, now - gesture.lastMoveTs));
         gesture.lastY = t.clientY;
+        gesture.lastMoveTs = now;
         if (!fingerDeltaY) return;
+
+        // Vitesse verticale filtrée pour éviter que le freinage ne change de force à
+        // chaque micro-variation d'un touchmove. Le calcul est volontairement très léger.
+        const instantSpeed = Math.abs(fingerDeltaY) / elapsedMs;
+        gesture.filteredSpeedY += (instantSpeed - gesture.filteredSpeedY) * EDGE_VELOCITY_FILTER;
+        const brakeZone = edgeBrakeZonePx(gesture.filteredSpeedY);
 
         const scrollTop = Math.max(0, window.scrollY || document.documentElement.scrollTop || 0);
         const doc = document.documentElement;
@@ -11312,9 +11342,9 @@ function initMobileEdgeResistanceAndBoardSwipe() {
         const distanceBottom = Math.max(0, maxScroll - scrollTop);
 
         // Doigt vers le bas => la page veut remonter vers le haut.
-        const towardTop = fingerDeltaY > 0 && scrollTop < EDGE_ZONE_PX;
+        const towardTop = fingerDeltaY > 0 && scrollTop < brakeZone;
         // Doigt vers le haut => la page veut descendre vers le bas.
-        const towardBottom = fingerDeltaY < 0 && distanceBottom < EDGE_ZONE_PX;
+        const towardBottom = fingerDeltaY < 0 && distanceBottom < brakeZone;
         if (!towardTop && !towardBottom) return;
 
         event.preventDefault();
@@ -11325,7 +11355,7 @@ function initMobileEdgeResistanceAndBoardSwipe() {
         // Exemple : tout en bas + doigt vers le haut => absolument aucun mouvement.
         if (distance <= 1) return;
 
-        const factor = edgeResistanceFactor(distance);
+        const factor = edgeResistanceFactor(distance, brakeZone);
         window.scrollBy(0, -fingerDeltaY * factor);
     }, { passive: false });
 
