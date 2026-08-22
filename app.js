@@ -6998,20 +6998,12 @@ function renderMyHands() {
         const lines = showHandStrip
             ? `<div class="strip-physical-cards">${['S', 'H', 'D', 'C'].map((suit, suitIndex) => {
                 const ranks = String(formatRanksForDisplay(hand[suit]) || '');
-                return ranks.split('').map((rank, rankIndex, arr) => {
-                    const extraClasses = [
-                        `mini-bridge-card-${suit}`,
-                        rankIndex === 0 ? 'mini-bridge-card-group-start' : '',
-                        rankIndex === arr.length - 1 ? 'mini-bridge-card-group-end' : '',
-                        suitIndex > 0 && rankIndex === 0 ? 'mini-bridge-card-suit-start' : ''
-                    ].filter(Boolean).join(' ');
-                    return `
-                    <span class="mini-bridge-card ${extraClasses}">
+                return ranks.split('').map((rank, rankIndex) => `
+                    <span class="mini-bridge-card mini-bridge-card-${suit}${suitIndex > 0 && rankIndex === 0 ? ' mini-bridge-card-suit-start' : ''}">
                         <span class="mini-bridge-card-rank">${rank}</span>
                         <span class="mini-bridge-card-suit">${suitIconHtml(suit)}</span>
                     </span>
-                `;
-                }).join('');
+                `).join('');
             }).join('')}</div>`
             : ['S', 'H', 'D', 'C'].map(suit => `
                 <div class="card-line">

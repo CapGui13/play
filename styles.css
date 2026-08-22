@@ -2529,7 +2529,7 @@ button.kibitz-chip {
     display: flex;
     align-items: stretch;
     justify-content: flex-start;
-    gap: 0;
+    gap: 2px;
     width: 100%;
     min-width: 0;
 }
@@ -2544,27 +2544,13 @@ button.kibitz-chip {
     max-width: none;
     height: 78px;
     padding: 7px 0 0;
-    border-radius: 0;
+    border-radius: 10px;
     background: linear-gradient(180deg, #ffffff 0%, #f6f7fa 100%);
     border: 1px solid rgba(198, 204, 214, 0.96);
     box-shadow:
         inset 0 1px 0 rgba(255,255,255,0.97),
         0 0 0 1px rgba(171, 180, 190, 0.18),
         0 1px 3px rgba(74, 84, 96, 0.10);
-}
-
-#myHandsContainer .mini-bridge-card + .mini-bridge-card {
-    margin-left: -1px;
-}
-
-#myHandsContainer .mini-bridge-card-group-start {
-    border-top-left-radius: 10px;
-    border-bottom-left-radius: 10px;
-}
-
-#myHandsContainer .mini-bridge-card-group-end {
-    border-top-right-radius: 10px;
-    border-bottom-right-radius: 10px;
 }
 
 #myHandsContainer .mini-bridge-card-suit-start {
@@ -3744,25 +3730,15 @@ table.dd-table td.dd-secondary-contract {
     }
 
     #myHandsContainer .strip-physical-cards {
-        gap: 0;
+        gap: 1px;
     }
 
     #myHandsContainer .mini-bridge-card {
         grid-template-rows: 27px 25px;
         max-width: none;
         height: clamp(62px, 15.8vw, 76px);
-        border-radius: 0;
+        border-radius: 5px;
         padding: 6px 0 0;
-    }
-
-    #myHandsContainer .mini-bridge-card-group-start {
-        border-top-left-radius: 5px;
-        border-bottom-left-radius: 5px;
-    }
-
-    #myHandsContainer .mini-bridge-card-group-end {
-        border-top-right-radius: 5px;
-        border-bottom-right-radius: 5px;
     }
 
     #myHandsContainer .mini-bridge-card-suit-start {
