@@ -2538,12 +2538,12 @@ button.kibitz-chip {
     display: grid;
     grid-template-rows: 24px 24px;
     align-content: start;
-    justify-items: center;
+    justify-items: start;
     flex: 1 1 0;
     min-width: 0;
     max-width: none;
     height: 66px;
-    padding: 5px 0 0;
+    padding: 5px 0 0 7px;
     border-radius: 4px;
     background: linear-gradient(180deg, #ffffff 0%, #f6f7fa 100%);
     border: 1px solid rgba(198, 204, 214, 0.96);
@@ -2560,7 +2560,8 @@ button.kibitz-chip {
 #myHandsContainer .mini-bridge-card-rank {
     display: inline-flex;
     align-items: flex-end;
-    justify-content: center;
+    justify-content: flex-start;
+    width: 100%;
     min-height: 24px;
     font-family: var(--font-mono);
     font-size: 1.18rem;
@@ -2568,15 +2569,18 @@ button.kibitz-chip {
     font-weight: 800;
     letter-spacing: -0.02em;
     font-variant-numeric: lining-nums tabular-nums;
+    text-align: left;
 }
 
 #myHandsContainer .mini-bridge-card-suit {
     display: inline-flex;
     align-items: flex-start;
-    justify-content: center;
+    justify-content: flex-start;
+    width: 100%;
     min-height: 24px;
     line-height: 1;
     transform: none;
+    text-align: left;
 }
 
 #myHandsContainer .mini-bridge-card-suit .suit-icon {
@@ -3738,7 +3742,7 @@ table.dd-table td.dd-secondary-contract {
         max-width: none;
         height: clamp(46px, 11.6vw, 58px);
         border-radius: 4px;
-        padding: 3px 0 0;
+        padding: 3px 0 0 5px;
     }
 
     #myHandsContainer .mini-bridge-card-suit-start {
