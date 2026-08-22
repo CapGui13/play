@@ -3415,6 +3415,13 @@ table.dd-table td.dd-secondary-contract {
        (voir flex-wrap ci-dessus) : on réserve la place en conséquence pour ne pas que le
        contenu de la page passe dessous. */
     body { padding-top: calc(84px + var(--safe-top)); }
+
+    /* Écran de jeu seulement : la barre mobile n'affiche désormais plus que Chat, qui est
+       fixe et n'a pas besoin de réserver 84px dans le flux. 12px de padding body + les
+       20px déjà portés par .screen donnent ~32px avant la ligne du numéro de donne, soit
+       l'écart de la capture de référence. Chat ne bouge pas, puisqu'il reste dans la barre
+       fixe ; accueil et salon conservent strictement leur géométrie actuelle. */
+    body.on-game-screen { padding-top: calc(12px + var(--safe-top)); }
     .debug-panel { top: calc(68px + var(--safe-top)); }
     body:not(.on-landing-screen) #offlineBanner { top: calc(84px + var(--safe-top)); }
     .chat-panel.chat-panel-docked { scroll-margin-top: calc(92px + var(--safe-top)); }
@@ -3671,16 +3678,44 @@ table.dd-table td.dd-secondary-contract {
 }
 
 /* ===== Bascule Enchères / PAR =====
-   Desktop : la géométrie reste celle d'origine ; seule la vue entrante reçoit un fondu.
-   Mobile : les deux vues partagent la même cellule de grille. La vue masquée reste dans
-   le calcul de hauteur (opacity:0) : le panneau garde donc immédiatement la hauteur de la
-   plus grande vue, sans calcul JS différé et sans "blanc retardé" quand le PAR arrive. */
+   Desktop pendant l'enchère et mobile : les deux vues partagent la même cellule de grille.
+   La vue masquée reste dans le calcul de hauteur (opacity:0) : le bouton de bascule garde
+   donc le même emplacement vertical entre Enchères et PAR et le panneau ne resize pas au
+   clic. La fin de donne conserve son rendu normal. */
 .auction-view-stack {
     min-width: 0;
 }
 
 .auction-bidding-view {
     min-width: 0;
+}
+
+@media (min-width: 761px) {
+    /* Desktop uniquement : pendant une enchère où le PAR est consultable, les deux vues
+       occupent la même cellule. La plus haute fixe la hauteur de la pile : « Voir le PAR »
+       et « Voir les enchères » sont donc rigoureusement au même emplacement vertical. */
+    .auction-view-stack.is-desktop-par-stacked {
+        display: grid;
+    }
+
+    .auction-view-stack.is-desktop-par-stacked > .contract-result,
+    .auction-view-stack.is-desktop-par-stacked > .auction-bidding-view {
+        grid-area: 1 / 1;
+        align-self: start;
+        min-width: 0;
+    }
+
+    .auction-view-stack.is-desktop-par-stacked.show-bidding > .contract-result,
+    .auction-view-stack.is-desktop-par-stacked.show-par > .auction-bidding-view {
+        opacity: 0;
+        pointer-events: none;
+    }
+
+    .auction-view-stack.is-desktop-par-stacked.show-bidding > .auction-bidding-view,
+    .auction-view-stack.is-desktop-par-stacked.show-par > .contract-result {
+        opacity: 1;
+        pointer-events: auto;
+    }
 }
 
 @media (max-width: 760px) {
@@ -4132,5 +4167,27 @@ table.dd-table td.dd-secondary-contract {
 
     #boardOverviewModal .board-overview-declarer {
         font-size: 0.61rem;
+    }
+}
+
+/* Choix de destination d'export : modale compacte, sans modifier les écrans existants. */
+.export-choice-panel {
+    width: min(430px, 100%);
+}
+
+.export-choice-content {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    padding: 20px;
+}
+
+.export-choice-btn {
+    min-height: 52px;
+}
+
+@media (max-width: 520px) {
+    .export-choice-content {
+        grid-template-columns: 1fr;
     }
 }

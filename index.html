@@ -572,6 +572,20 @@
 </div>
 
 
+<!-- Choix de destination commun aux exports PBN d'une donne et de la session. -->
+<div id="exportChoiceModal" class="modal-overlay" style="display:none;" data-ui-click="close-export-choice-backdrop">
+    <div class="modal-panel export-choice-panel" role="dialog" aria-modal="true" aria-labelledby="exportChoiceTitle" tabindex="-1">
+        <div class="modal-header">
+            <h3 id="exportChoiceTitle">Exporter</h3>
+            <button type="button" class="btn btn-secondary btn-small" data-ui-click="close-export-choice">Annuler</button>
+        </div>
+        <div class="export-choice-content">
+            <button type="button" class="btn btn-primary export-choice-btn" data-ui-click="export-choice-local" data-modal-initial-focus>💾 Export local</button>
+            <button type="button" class="btn btn-secondary export-choice-btn" data-ui-click="export-choice-github">☁️ Export GitHub</button>
+        </div>
+    </div>
+</div>
+
 <div id="dealPreviewModal" class="modal-overlay" style="display:none;" data-ui-click="close-deal-preview-backdrop">
     <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="dealPreviewTitle" tabindex="-1">
         <div class="modal-header">

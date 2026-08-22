@@ -76,6 +76,10 @@
             case 'rotate-seats': return call('uiRotateSeatsClockwise');
             case 'open-seat-reorg': return call('uiOpenSeatReorgModal');
             case 'export-session-pbn': return call('uiExportSessionPBN');
+            case 'export-choice-local': return call('uiChooseExportLocal');
+            case 'export-choice-github': return call('uiChooseExportGitHub');
+            case 'close-export-choice': return call('uiCloseExportChoice');
+            case 'close-export-choice-backdrop': return call('uiCloseExportChoiceOnBackdrop', e);
             case 'rotate-capabilities': return call('uiRotateRoomCapabilities');
             case 'toggle-french-ranks': return call('uiToggleFrenchRanks');
             case 'toggle-hcp': return call('uiToggleShowHcp');

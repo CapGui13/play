@@ -2084,6 +2084,9 @@ function showScreen(id) {
     // trait de séparation sous la barre de statut n'a donc rien à séparer et fait juste
     // ligne parasite (voir la règle CSS body.on-landing-screen .connection-bar).
     document.body.classList.toggle('on-landing-screen', id === 'screen-landing');
+    // Écran de jeu : classe dédiée pour permettre les seuls ajustements de géométrie
+    // propres à cette vue (notamment l'écart supérieur mobile), sans toucher au salon.
+    document.body.classList.toggle('on-game-screen', id === 'screen-game');
 
     // Une mise à jour PWA détectée reste volontairement en attente pendant toute la vie
     // de cet onglet. Elle sera utilisée lors d'une prochaine vraie ouverture/navigation,
@@ -2573,10 +2576,14 @@ function buildHostHandlers(onOpenExtra) {
                 p.disconnectedAt = null;
             }
             pushDebugLog(`Connexion #${guestIndex} : identité ${token.slice(0, 10)}… → ${isReturning ? 'reconnexion prouvée (' + p.name + ')' : 'nouveau participant'}`);
-            // Voir échange avec Guillaume (session du 23 juillet — "un bandeau similaire
-            // à celui du wizz") : remplace flashWelcomeBack, même mécanique de toast que
-            // le wizz (voir styles.css), texte simplifié avec le siège si assis.
-            if (wasDisconnected) flashPresenceToast(`✅ ${presenceLabelFor(p)} s'est reconnecté`, true);
+            // Présence pendant une partie : même toast vert pour un retour après coupure
+            // et pour une vraie nouvelle arrivée qui n'était pas connue au lancement.
+            // Avant le lancement, le salon suffit : aucun toast d'arrivée n'est nécessaire.
+            if (wasDisconnected) {
+                flashPresenceToast(`✅ ${presenceLabelFor(p)} s'est reconnecté`, true);
+            } else if (!isReturning && deals) {
+                flashPresenceToast(`✅ ${presenceLabelFor(p)} a rejoint la partie`, true);
+            }
 
             peerConn.send({
                 type: 'welcome',
@@ -5360,7 +5367,13 @@ function handlePeerData(msg, guestIndex) {
                 newParticipants.forEach(p => {
                     if (p.id === myParticipantId) return; // notre propre transition est gérée à part (voir onGuestConnected/onPeerDisconnected)
                     const wasDisconnected = prevParticipantsDisconnectedSnapshot[p.id];
-                    if (wasDisconnected === undefined) return; // tout nouveau participant, rien à comparer
+                    if (wasDisconnected === undefined) {
+                        // Le snapshot précédent existe déjà : cette identité est donc une
+                        // vraie nouvelle arrivée en cours de partie, pas l'initialisation
+                        // de la liste au premier affichage.
+                        if (!p.disconnected) flashPresenceToast(`✅ ${presenceLabelFor(p)} a rejoint la partie`, true);
+                        return;
+                    }
                     if (wasDisconnected && !p.disconnected) {
                         flashPresenceToast(`✅ ${presenceLabelFor(p)} s'est reconnecté`, true);
                     } else if (!wasDisconnected && p.disconnected && SEATS.some(s => seatAssignment[s] === p.id)) {
@@ -6113,9 +6126,8 @@ function updateBoardControlVisibility() {
             gameRotateCapabilitiesBtn.style.pointerEvents = 'none';
         }
     }
-    // Téléchargement local pur (voir uiExportSessionPBN) : contrairement à l'export PBN
-    // d'une seule donne (qui écrit sur le repo GitHub, réservé à l'hôte), rien n'empêche
-    // n'importe quel joueur actif de récupérer sa propre vue locale de la session.
+    // Export de session : le choix Local / GitHub est disponible à tout joueur actif,
+    // avec la même authentification cloud que l'export PBN d'une donne.
     const exportBtn = document.getElementById('exportSessionBtn');
     if (exportBtn) exportBtn.style.display = canControlBoard() ? '' : 'none';
 }
@@ -7789,19 +7801,17 @@ function renderDDTable(ddTable, dealVulnerable) {
     `;
 }
 
-// ===== Export PBN d'une donne jouée (voir échange avec Guillaume) =====
+// ===== Export PBN d'une donne jouée =====
 //
-// Envoie la donne courante à une fonction serverless Vercel dédiée (à ajouter au même
-// projet que l'API de double mort, voir api/export-deal.js — pas fourni ici en l'état,
-// c'est un fichier à part que Guillaume doit déployer lui-même), qui l'écrit dans
-// donnes_export/ sur GitHub. Le jeton d'écriture reste entièrement côté serveur — jamais
-// transmis ni visible depuis le navigateur (voir le commentaire en tête de ce fichier-là).
+// Les deux exports (donne seule et session) proposent maintenant le même choix :
+// téléchargement local ou envoi GitHub. L'envoi GitHub passe par la fonction serverless
+// existante, qui écrit les fichiers PBN dans donnes_export/ ; le jeton d'écriture reste
+// entièrement côté serveur et n'est jamais exposé dans le navigateur.
 const DEAL_EXPORT_SERVER_URL = 'https://api-gen-beta.vercel.app/api/export-deal';
 
 // Construit le contenu PBN d'une donne JOUÉE : mêmes tags que buildPBNBlock dans
 // generator.js (gen/) pour la donne elle-même et la table du double mort si disponible,
-// complétés par le contrat obtenu et l'enchère réellement menée — propre à une donne
-// jouée ici, pas à une donne fraîchement générée.
+// complétés par le contrat obtenu et l'enchère réellement menée.
 function buildPlayedDealPBN(deal, history) {
     const handsStr = ['N', 'E', 'S', 'W']
         .map(pos => ['S', 'H', 'D', 'C'].map(suit => deal.hands[pos][suit]).join('.'))
@@ -7815,17 +7825,12 @@ function buildPlayedDealPBN(deal, history) {
     pbn += `[Vulnerable "${deal.vulnerable}"]\n`;
     pbn += `[Deal "N:${handsStr}"]\n`;
 
-    // Contrat obtenu (pas un résultat de levées : l'appli ne couvre que la phase
-    // d'enchères, pas le jeu de la carte — voir README) et déclarant, si l'enchère n'a pas
-    // été passée sans annonce.
     const contract = determineContract(history);
     if (contract) {
         pbn += `[Contract "${contract.level}${contract.strain}${contract.doubled}"]\n`;
         pbn += `[Declarer "${contract.declarer}"]\n`;
     }
 
-    // Séquence d'enchères réellement menée (4 annonces par ligne, convention PBN
-    // courante mais non obligatoire — juste plus lisible à l'œil).
     if (history.length > 0) {
         pbn += `[Auction "${deal.dealer}"]\n`;
         const tokens = history.map(entry => (isPass(entry.call) ? 'Pass' : entry.call));
@@ -7834,9 +7839,6 @@ function buildPlayedDealPBN(deal, history) {
         }
     }
 
-    // Table complète du double mort, si elle a eu le temps d'être calculée (voir
-    // kickOffBackgroundDD) — même format que buildPBNBlock dans generator.js, pour rester
-    // relisible par les mêmes outils (dont cette appli elle-même).
     if (deal.ddTable) {
         pbn += `[OptimumResultTable "Declarer;Denomination\\2R;Result\\2R"]\n`;
         const denomForStrain = { N: 'NT', S: 'S', H: 'H', D: 'D', C: 'C' };
@@ -7858,63 +7860,133 @@ function setDealExportStatus(text, isError) {
     el.classList.toggle('is-error', !!isError);
 }
 
-// Bouton "📤 Export PBN" sous la table du double mort (voir checkAuctionEnd) : envoie la
-// donne courante, telle qu'elle a été effectivement jouée, à la fonction serverless
-// dédiée. Nom de fichier horodaté à la seconde près : collision quasiment impossible mais,
-// le cas échéant, l'export échoue proprement (voir api/export-deal.js) plutôt que
-// d'écraser silencieusement un export précédent.
-// Voir échange avec Guillaume ("le bouton export PBN doit être disponible également pour
-// les invités") : canControlBoard() plutôt que myRole==='host' — n'importe quel joueur
-// assis (hôte ou invité), pas seulement l'hôte ; un simple kibitz reste exclu (aucun siège
-// à lui, rien de personnel à exporter). Aucune restriction technique ne l'empêchait déjà
-// côté serveur (le jeton d'écriture GitHub vit côté fonction Vercel, jamais dans le
-// navigateur) — seule la condition d'affichage ci-dessous, et ce garde, la limitaient.
+function exportTimestamp(includeSeconds = true) {
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    const day = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`;
+    const time = `${pad(now.getHours())}${pad(now.getMinutes())}${includeSeconds ? pad(now.getSeconds()) : ''}`;
+    return `${day}-${time}`;
+}
+
+function downloadPbnContent(content, filename) {
+    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+}
+
+function cloudPbnExportCredentials() {
+    const accessKey = (typeof getSessionAccessKey === 'function' && currentRoomCode)
+        ? getSessionAccessKey(currentRoomCode) : null;
+    const hostWriteKey = (typeof getSessionHostWriteKey === 'function' && currentRoomCode)
+        ? getSessionHostWriteKey(currentRoomCode) : null;
+    const participantCredential = hostWriteKey ? null : participantCredentialForCloudWrite();
+    if (!currentRoomCode || !accessKey || (!hostWriteKey && !participantCredential)) return null;
+
+    const headers = {
+        'Content-Type': 'application/json',
+        'X-Bridge-Session-Key': accessKey
+    };
+    if (hostWriteKey) {
+        headers['X-Bridge-Host-Write-Key'] = hostWriteKey;
+    } else {
+        headers['X-Bridge-Participant-Id'] = participantCredential.participantId;
+        headers['X-Bridge-Reconnect-Secret'] = participantCredential.reconnectSecret;
+    }
+    return headers;
+}
+
+async function exportPbnToGitHub(filename, content) {
+    const headers = cloudPbnExportCredentials();
+    if (!headers) throw new Error('accès sécurisé à la salle indisponible');
+    const response = await fetch(DEAL_EXPORT_SERVER_URL, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ roomCode: currentRoomCode, filename, content })
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.ok) throw new Error(data.error || ('HTTP ' + response.status));
+    return data;
+}
+
+// ===== Choix Local / GitHub =====
+let pendingPbnExportKind = null; // 'deal' | 'session'
+
+function openPbnExportChoice(kind) {
+    const modal = document.getElementById('exportChoiceModal');
+    const title = document.getElementById('exportChoiceTitle');
+    if (!modal || !title) return;
+    pendingPbnExportKind = kind;
+    title.textContent = kind === 'session' ? 'Exporter la session' : 'Exporter le PBN';
+    modal.style.display = 'flex';
+    activateAccessibleModal(modal, { closeOnEscape: uiCloseExportChoice });
+}
+
+function uiCloseExportChoice() {
+    const modal = document.getElementById('exportChoiceModal');
+    if (!modal) return;
+    modal.style.display = 'none';
+    pendingPbnExportKind = null;
+    deactivateAccessibleModal(modal);
+}
+
+function uiCloseExportChoiceOnBackdrop(evt) {
+    if (evt.target.id === 'exportChoiceModal') uiCloseExportChoice();
+}
+
+function uiChooseExportLocal() {
+    const kind = pendingPbnExportKind;
+    uiCloseExportChoice();
+    if (kind === 'deal') exportCurrentDealPbnLocal();
+    else if (kind === 'session') exportSessionPbnLocal();
+}
+
+function uiChooseExportGitHub() {
+    const kind = pendingPbnExportKind;
+    uiCloseExportChoice();
+    if (kind === 'deal') exportCurrentDealPbnGitHub();
+    else if (kind === 'session') exportSessionPbnGitHub();
+}
+
+// Le bouton de la donne ouvre seulement le choix de destination. Il reste disponible pour
+// tout joueur assis, hôte ou invité, comme auparavant.
 function uiExportDealPBN() {
+    if (!canControlBoard() || !currentDeal()) return;
+    openPbnExportChoice('deal');
+}
+
+function exportCurrentDealPbnLocal() {
+    if (!canControlBoard()) return;
+    const deal = currentDeal();
+    if (!deal) return;
+    const content = buildPlayedDealPBN(deal, auctionHistory);
+    const filename = `donne-${deal.board}-${exportTimestamp(true)}.pbn`;
+    downloadPbnContent(content, filename);
+    // Confirmation volontairement sans chemin ni nom de fichier.
+    setDealExportStatus('✅ Export local effectué.', false);
+}
+
+function exportCurrentDealPbnGitHub() {
     if (!canControlBoard()) return;
     const deal = currentDeal();
     if (!deal) return;
 
     const btn = document.getElementById('dealExportBtn');
     if (btn) btn.disabled = true;
-    setDealExportStatus('⏳ Export en cours...', false);
+    setDealExportStatus('⏳ Export GitHub en cours...', false);
 
     const content = buildPlayedDealPBN(deal, auctionHistory);
-    const now = new Date();
-    const pad = (n) => String(n).padStart(2, '0');
-    const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
-    const filename = `donne-${deal.board}-${stamp}.pbn`;
+    const filename = `donne-${deal.board}-${exportTimestamp(true)}.pbn`;
 
-    const accessKey = (typeof getSessionAccessKey === 'function' && currentRoomCode)
-        ? getSessionAccessKey(currentRoomCode) : null;
-    const hostWriteKey = (typeof getSessionHostWriteKey === 'function' && currentRoomCode)
-        ? getSessionHostWriteKey(currentRoomCode) : null;
-    const participantCredential = hostWriteKey ? null : participantCredentialForCloudWrite();
-    if (!currentRoomCode || !accessKey || (!hostWriteKey && !participantCredential)) {
-        setDealExportStatus('❌ Export impossible : accès sécurisé à la salle indisponible.', true);
-        if (btn) btn.disabled = false;
-        return;
-    }
-
-    const exportHeaders = {
-        'Content-Type': 'application/json',
-        'X-Bridge-Session-Key': accessKey
-    };
-    if (hostWriteKey) {
-        exportHeaders['X-Bridge-Host-Write-Key'] = hostWriteKey;
-    } else {
-        exportHeaders['X-Bridge-Participant-Id'] = participantCredential.participantId;
-        exportHeaders['X-Bridge-Reconnect-Secret'] = participantCredential.reconnectSecret;
-    }
-
-    fetch(DEAL_EXPORT_SERVER_URL, {
-        method: 'POST',
-        headers: exportHeaders,
-        body: JSON.stringify({ roomCode: currentRoomCode, filename, content })
-    })
-        .then(async (response) => {
-            const data = await response.json().catch(() => ({}));
-            if (!response.ok || !data.ok) throw new Error(data.error || ('HTTP ' + response.status));
-            setDealExportStatus(`✅ Exportée : ${data.path}`, false);
+    exportPbnToGitHub(filename, content)
+        .then(() => {
+            // Ne jamais afficher data.path / filename dans la confirmation.
+            setDealExportStatus('✅ Export GitHub réussi.', false);
         })
         .catch((err) => {
             setDealExportStatus('❌ Échec de l\'export : ' + ((err && err.message) || err), true);
@@ -7924,39 +7996,62 @@ function uiExportDealPBN() {
         });
 }
 
-// Export de TOUTE la session (voir échange avec Guillaume) : combine les donnes
-// effectivement jouées (enchère terminée, quel que soit le résultat) en un seul fichier
-// PBN multi-donnes, en réutilisant tel quel buildPlayedDealPBN pour chacune — un fichier
-// PBN standard accepte naturellement plusieurs donnes à la suite, chacune avec ses propres
-// tags [Board]/[Deal]/[Auction]/etc. Contrairement à l'export d'une seule donne (qui écrit
-// sur le repo GitHub via le proxy Vercel), ici pas de serveur impliqué : téléchargement
-// direct dans le navigateur, à donner ensuite tel quel pour des retours précis
-// ("donne 2, Sud a contré mais...").
+function playedSessionDeals() {
+    if (!deals) return [];
+    return deals.filter(d => d.auctionHistory && isAuctionOver(d.auctionHistory));
+}
+
+// Le bouton session propose désormais lui aussi Local / GitHub.
 function uiExportSessionPBN() {
-    if (!deals) return;
-    const playedDeals = deals.filter(d => d.auctionHistory && isAuctionOver(d.auctionHistory));
+    if (!canControlBoard()) return;
+    const playedDeals = playedSessionDeals();
+    if (playedDeals.length === 0) {
+        flashSessionExportToast('Aucune donne terminée à exporter pour l\'instant.');
+        return;
+    }
+    openPbnExportChoice('session');
+}
+
+function exportSessionPbnLocal() {
+    if (!canControlBoard()) return;
+    const playedDeals = playedSessionDeals();
+    if (playedDeals.length === 0) {
+        flashSessionExportToast('Aucune donne terminée à exporter pour l\'instant.');
+        return;
+    }
+    const content = playedDeals.map(d => buildPlayedDealPBN(d, d.auctionHistory)).join('');
+    const filename = `session-${exportTimestamp(false)}.pbn`;
+    downloadPbnContent(content, filename);
+    flashSessionExportToast(`📦 ${playedDeals.length} donne(s) exportée(s) localement.`);
+}
+
+function exportSessionPbnGitHub() {
+    if (!canControlBoard()) return;
+    const playedDeals = playedSessionDeals();
     if (playedDeals.length === 0) {
         flashSessionExportToast('Aucune donne terminée à exporter pour l\'instant.');
         return;
     }
 
+    const btn = document.getElementById('exportSessionBtn');
+    if (btn) btn.disabled = true;
+    flashSessionExportToast('⏳ Export GitHub en cours...');
+
     const content = playedDeals.map(d => buildPlayedDealPBN(d, d.auctionHistory)).join('');
-    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
+    // Même endpoint que l'export d'une donne : côté serveur, il écrit dans donnes_export/.
+    const filename = `session-${exportTimestamp(true)}.pbn`;
 
-    const now = new Date();
-    const pad = (n) => String(n).padStart(2, '0');
-    const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}`;
-
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `session-${stamp}.pbn`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-
-    flashSessionExportToast(`📦 ${playedDeals.length} donne(s) exportée(s).`);
+    exportPbnToGitHub(filename, content)
+        .then(() => {
+            // Confirmation volontairement sans chemin ni nom de fichier.
+            flashSessionExportToast(`✅ Session exportée sur GitHub (${playedDeals.length} donne(s)).`);
+        })
+        .catch((err) => {
+            flashSessionExportToast('❌ Échec de l\'export : ' + ((err && err.message) || err));
+        })
+        .finally(() => {
+            if (btn) btn.disabled = false;
+        });
 }
 
 // Même mécanique de bandeau que flashWizzToast/uiShowCallExplanation (voir ces
@@ -8010,7 +8105,7 @@ function resetAuctionVisualModeForNewSession() {
     const stack = document.getElementById('auctionViewStack');
     const resultEl = document.getElementById('contractResult');
     const biddingViewEl = document.getElementById('auctionBiddingView');
-    if (stack) stack.classList.remove('is-mobile-stacked', 'show-par', 'show-bidding');
+    if (stack) stack.classList.remove('is-mobile-stacked', 'is-desktop-par-stacked', 'show-par', 'show-bidding');
     if (resultEl) {
         resultEl.style.display = 'none';
         resultEl.innerHTML = '';
@@ -8050,7 +8145,8 @@ function replayQuickFade(el) {
 
 // Centralise Enchères ↔ PAR.
 // - mobile : superposition CSS, donc hauteur stable dès le premier rendu et crossfade.
-// - desktop : display normal comme avant, avec simple fondu de la vue entrante.
+// - desktop pendant l'enchère : même réservation de hauteur pour figer le bouton de
+//   bascule, avec le simple fondu historique sur la vue entrante.
 function setAuctionVisualMode(mode, { parCapable = false, ddTableHtml = '' } = {}) {
     const stack = document.getElementById('auctionViewStack');
     const resultEl = document.getElementById('contractResult');
@@ -8059,6 +8155,11 @@ function setAuctionVisualMode(mode, { parCapable = false, ddTableHtml = '' } = {
 
     const mobile = window.matchMedia && window.matchMedia('(max-width: 760px)').matches;
     const shouldStackMobile = mobile && (parCapable || mode === 'final');
+    // Desktop, pendant l'enchère seulement : garder Enchères et PAR dans la même cellule
+    // de grille, comme sur mobile. La vue masquée continue ainsi de réserver sa hauteur :
+    // le bouton de bascule reste EXACTEMENT au même Y entre « Voir le PAR » et
+    // « Voir les enchères ». Aucun changement de géométrie n'est appliqué au mobile.
+    const shouldStackDesktopPar = !mobile && parCapable && mode !== 'final';
     const modeChanged = lastAuctionVisualMode !== mode;
 
     // Toujours alimenter la vue PAR avec le double mort de LA DONNE COURANTE.
@@ -8067,7 +8168,7 @@ function setAuctionVisualMode(mode, { parCapable = false, ddTableHtml = '' } = {
     // elle participe à la hauteur de la pile et empêche tout resizing au clic. Cela
     // évite aussi de conserver, sur la donne suivante, le résultat final de la donne
     // précédente dans la vue invisible.
-    if (shouldStackMobile && mode !== 'final') {
+    if ((shouldStackMobile || shouldStackDesktopPar) && mode !== 'final') {
         resultEl.innerHTML = ddTableHtml || renderDDTablePlaceholder();
     } else if (mode === 'par' && ddTableHtml) {
         // Desktop : injection explicite au moment d'afficher le PAR — indispensable dès
@@ -8075,11 +8176,12 @@ function setAuctionVisualMode(mode, { parCapable = false, ddTableHtml = '' } = {
         resultEl.innerHTML = ddTableHtml;
     }
 
-    if (shouldStackMobile) {
+    if (shouldStackMobile || shouldStackDesktopPar) {
 
         resultEl.style.display = 'block';
         biddingViewEl.style.display = 'block';
-        stack.classList.add('is-mobile-stacked');
+        stack.classList.toggle('is-mobile-stacked', shouldStackMobile);
+        stack.classList.toggle('is-desktop-par-stacked', shouldStackDesktopPar);
         stack.classList.toggle('show-par', mode === 'par' || mode === 'final');
         stack.classList.toggle('show-bidding', mode === 'bidding');
 
@@ -8088,8 +8190,13 @@ function setAuctionVisualMode(mode, { parCapable = false, ddTableHtml = '' } = {
         biddingViewEl.setAttribute('aria-hidden', resultHidden ? 'false' : 'true');
         if ('inert' in biddingViewEl) biddingViewEl.inert = !resultHidden;
         if ('inert' in resultEl) resultEl.inert = resultHidden;
+        // Desktop conservait un léger fondu de la vue entrante : on le garde, sans
+        // crossfade ni changement de position du bouton de bascule.
+        if (shouldStackDesktopPar && modeChanged) {
+            replayQuickFade(resultHidden ? biddingViewEl : resultEl);
+        }
     } else {
-        stack.classList.remove('is-mobile-stacked', 'show-par', 'show-bidding');
+        stack.classList.remove('is-mobile-stacked', 'is-desktop-par-stacked', 'show-par', 'show-bidding');
         resultEl.removeAttribute('aria-hidden');
         biddingViewEl.removeAttribute('aria-hidden');
         if ('inert' in biddingViewEl) biddingViewEl.inert = false;
