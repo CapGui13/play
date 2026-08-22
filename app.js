@@ -11068,18 +11068,19 @@ function uiResumeFromCloud() {
 
 // ===== Gestes tactiles mobile : résistance de bord + swipe entre donnes =====
 //
-// 1) Résistance verticale : on laisse le scroll NATIF partout, sauf dans une petite
-//    zone proche du haut/bas de la page et seulement lorsque le doigt continue vers ce
-//    bord. Là, on prend temporairement la main et on réduit progressivement le déplacement
-//    demandé. Aucun effet sur desktop, et aucun effet dans un panneau qui possède son
-//    propre scroll (chat, modal, etc.).
+// 1) Résistance verticale : le scroll reste NATIF partout. À l'approche du haut/bas,
+//    le déplacement demandé est progressivement amorti. Sur l'accueil, où il n'y a
+//    souvent aucun scroll réel possible, on ajoute une petite translation visuelle de la
+//    page pour matérialiser cette "butée souple", puis elle revient en place au relâchement.
 //
 // 2) Swipe horizontal : une fois la partie lancée, l'hôte peut parcourir les donnes par
-//    un geste gauche/droite exactement comme avec les flèches ◀▶ existantes. On ne change
-//    donc PAS la règle d'autorité de la session : chez un invité, les flèches sont cachées
-//    et le swipe ne change pas non plus la donne globale. La détection attend une intention
-//    franchement horizontale afin de ne jamais transformer un scroll vertical/diagonal en
-//    navigation. Les gestes démarrés sur un contrôle interactif sont également ignorés.
+//    un geste gauche/droite exactement comme avec les flèches ◀▶ existantes. Pendant le
+//    geste, l'écran de jeu suit légèrement le doigt. Si le swipe est validé, l'ancienne
+//    donne sort dans le sens du geste et la nouvelle entre depuis le côté opposé ; si le
+//    geste est trop court ou bute sur la première/dernière donne, l'écran revient en place.
+//    La détection attend une intention franchement horizontale afin de ne jamais transformer
+//    un scroll vertical/diagonal en navigation. Les gestes démarrés sur un contrôle interactif
+//    sont également ignorés.
 function initMobileEdgeResistanceAndBoardSwipe() {
     if (window.__mobileEdgeAndBoardSwipeInit) return;
     window.__mobileEdgeAndBoardSwipeInit = true;
@@ -11087,9 +11088,15 @@ function initMobileEdgeResistanceAndBoardSwipe() {
     const MOBILE_MAX_WIDTH = 760;
     const EDGE_ZONE_PX = 88;
     const EDGE_MIN_FACTOR = 0.34;
+    const LANDING_PULL_FACTOR = 0.22;
+    const LANDING_PULL_MAX_PX = 18;
     const AXIS_LOCK_PX = 10;
     const SWIPE_MIN_PX = 64;
     const SWIPE_DOMINANCE = 1.28;
+    const SWIPE_DRAG_FACTOR = 0.34;
+    const SWIPE_DRAG_MAX_PX = 54;
+    const SWIPE_BLOCKED_FACTOR = 0.13;
+    const SWIPE_BLOCKED_MAX_PX = 20;
     const IOS_SYSTEM_EDGE_PX = 22;
     const INTERACTIVE_SELECTOR = [
         'button', 'a', 'input', 'select', 'textarea', 'label',
@@ -11097,15 +11104,19 @@ function initMobileEdgeResistanceAndBoardSwipe() {
     ].join(',');
 
     let gesture = null;
+    let boardSwipeAnimating = false;
 
     function isMobileGestureViewport() {
         return window.innerWidth <= MOBILE_MAX_WIDTH && navigator.maxTouchPoints > 0;
     }
 
-    function isGameVisible() {
-        const screen = document.getElementById('screen-game');
+    function isScreenVisible(id) {
+        const screen = document.getElementById(id);
         return !!(screen && getComputedStyle(screen).display !== 'none');
     }
+
+    function isGameVisible() { return isScreenVisible('screen-game'); }
+    function isLandingVisible() { return isScreenVisible('screen-landing'); }
 
     function hasOwnVerticalScroller(node) {
         for (let el = node instanceof Element ? node : null; el && el !== document.body; el = el.parentElement) {
@@ -11116,11 +11127,15 @@ function initMobileEdgeResistanceAndBoardSwipe() {
         return false;
     }
 
+    function startedOnInteractive(target) {
+        return target instanceof Element && !!target.closest(INTERACTIVE_SELECTOR);
+    }
+
     function canSwipeBoardsFrom(target, startX) {
-        if (!isGameVisible() || !deals || deals.length < 2 || myRole !== 'host') return false;
+        if (boardSwipeAnimating || !isGameVisible() || !deals || deals.length < 2 || myRole !== 'host') return false;
         // Conserve les gestes système iOS (retour/avance) quand ils partent vraiment du bord.
         if (startX <= IOS_SYSTEM_EDGE_PX || startX >= window.innerWidth - IOS_SYSTEM_EDGE_PX) return false;
-        if (target instanceof Element && target.closest(INTERACTIVE_SELECTOR)) return false;
+        if (startedOnInteractive(target)) return false;
         if (target instanceof Element && target.closest('#chatPanel, .modal, .dialog, [role="dialog"]')) return false;
         return true;
     }
@@ -11131,8 +11146,146 @@ function initMobileEdgeResistanceAndBoardSwipe() {
         return EDGE_MIN_FACTOR + (1 - EDGE_MIN_FACTOR) * ratio;
     }
 
+    function clamp(value, min, max) {
+        return Math.max(min, Math.min(max, value));
+    }
+
+    function setLandingPull(offsetY) {
+        const screen = document.getElementById('screen-landing');
+        if (!screen) return;
+        screen.style.transition = 'none';
+        screen.style.transform = `translate3d(0, ${offsetY}px, 0)`;
+    }
+
+    function resetLandingPull(animated = true) {
+        const screen = document.getElementById('screen-landing');
+        if (!screen) return;
+        if (animated && !prefersReducedMotion()) {
+            screen.style.transition = 'transform 190ms cubic-bezier(.22,.78,.28,1)';
+            screen.style.transform = 'translate3d(0, 0, 0)';
+            window.setTimeout(() => {
+                if (screen.style.transform === 'translate3d(0, 0, 0)') {
+                    screen.style.transition = '';
+                    screen.style.transform = '';
+                }
+            }, 220);
+        } else {
+            screen.style.transition = '';
+            screen.style.transform = '';
+        }
+    }
+
+    function canNavigateSwipeDirection(dx) {
+        if (!deals || !deals.length) return false;
+        if (dx < 0) return boardIndex < deals.length - 1;
+        if (dx > 0) return boardIndex > 0;
+        return false;
+    }
+
+    function setGameSwipeDrag(rawDx) {
+        const screen = document.getElementById('screen-game');
+        if (!screen) return;
+        const canNavigate = canNavigateSwipeDirection(rawDx);
+        const factor = canNavigate ? SWIPE_DRAG_FACTOR : SWIPE_BLOCKED_FACTOR;
+        const maxPx = canNavigate ? SWIPE_DRAG_MAX_PX : SWIPE_BLOCKED_MAX_PX;
+        const shownDx = clamp(rawDx * factor, -maxPx, maxPx);
+        screen.style.transition = 'none';
+        screen.style.transform = `translate3d(${shownDx}px, 0, 0)`;
+        screen.style.opacity = String(1 - Math.min(0.055, Math.abs(shownDx) / 1000));
+        return shownDx;
+    }
+
+    function resetGameSwipeVisual(animated = true) {
+        const screen = document.getElementById('screen-game');
+        if (!screen) return;
+        if (animated && !prefersReducedMotion()) {
+            screen.style.transition = 'transform 170ms cubic-bezier(.22,.78,.28,1), opacity 170ms ease';
+            screen.style.transform = 'translate3d(0, 0, 0)';
+            screen.style.opacity = '1';
+            window.setTimeout(() => {
+                if (!boardSwipeAnimating) {
+                    screen.style.transition = '';
+                    screen.style.transform = '';
+                    screen.style.opacity = '';
+                }
+            }, 200);
+        } else {
+            screen.style.transition = '';
+            screen.style.transform = '';
+            screen.style.opacity = '';
+        }
+    }
+
+    function animateValidatedBoardSwipe(dx) {
+        const screen = document.getElementById('screen-game');
+        if (!screen || boardSwipeAnimating || !canNavigateSwipeDirection(dx)) {
+            resetGameSwipeVisual(true);
+            return;
+        }
+
+        boardSwipeAnimating = true;
+        const direction = dx < 0 ? -1 : 1;
+        const reduced = prefersReducedMotion();
+
+        if (reduced || !screen.animate) {
+            resetGameSwipeVisual(false);
+            if (direction < 0) uiHostSkipNextBoard();
+            else uiHostSkipPrevBoard();
+            boardSwipeAnimating = false;
+            return;
+        }
+
+        const currentTransform = screen.style.transform || 'translate3d(0, 0, 0)';
+        // Sortie courte : assez visible pour donner une continuité au geste, sans donner
+        // l'impression que toute la page change d'écran.
+        const outX = direction * 92;
+        const out = screen.animate([
+            { transform: currentTransform, opacity: Number(screen.style.opacity || 1) },
+            { transform: `translate3d(${outX}px, 0, 0)`, opacity: 0.84 }
+        ], {
+            duration: 105,
+            easing: 'cubic-bezier(.4,0,.8,.35)',
+            fill: 'forwards'
+        });
+
+        out.onfinish = () => {
+            // Change la donne entre les deux demi-transitions.
+            if (direction < 0) uiHostSkipNextBoard();
+            else uiHostSkipPrevBoard();
+
+            // Nettoie les styles du drag avant l'animation d'entrée.
+            screen.style.transition = '';
+            screen.style.transform = '';
+            screen.style.opacity = '';
+            out.oncancel = null;
+            try { out.cancel(); } catch (_) {}
+
+            const inX = -direction * 68;
+            const enter = screen.animate([
+                { transform: `translate3d(${inX}px, 0, 0)`, opacity: 0.86 },
+                { transform: 'translate3d(0, 0, 0)', opacity: 1 }
+            ], {
+                duration: 185,
+                easing: 'cubic-bezier(.18,.74,.28,1)',
+                fill: 'none'
+            });
+            const finish = () => {
+                boardSwipeAnimating = false;
+                screen.style.transition = '';
+                screen.style.transform = '';
+                screen.style.opacity = '';
+            };
+            enter.onfinish = finish;
+            enter.oncancel = finish;
+        };
+        out.oncancel = () => {
+            boardSwipeAnimating = false;
+            resetGameSwipeVisual(false);
+        };
+    }
+
     document.addEventListener('touchstart', (event) => {
-        if (!isMobileGestureViewport() || event.touches.length !== 1) {
+        if (!isMobileGestureViewport() || event.touches.length !== 1 || boardSwipeAnimating) {
             gesture = null;
             return;
         }
@@ -11144,7 +11297,10 @@ function initMobileEdgeResistanceAndBoardSwipe() {
             axis: null,
             target: event.target,
             swipeAllowed: canSwipeBoardsFrom(event.target, t.clientX),
-            windowScrollAllowed: !hasOwnVerticalScroller(event.target)
+            windowScrollAllowed: !hasOwnVerticalScroller(event.target),
+            landingPullAllowed: isLandingVisible() && !startedOnInteractive(event.target),
+            landingPulled: false,
+            swipeDragged: false
         };
     }, { passive: true });
 
@@ -11163,7 +11319,11 @@ function initMobileEdgeResistanceAndBoardSwipe() {
         }
 
         if (gesture.axis === 'x') {
-            if (gesture.swipeAllowed) event.preventDefault();
+            if (gesture.swipeAllowed) {
+                event.preventDefault();
+                setGameSwipeDrag(dx);
+                gesture.swipeDragged = true;
+            }
             return;
         }
 
@@ -11190,6 +11350,22 @@ function initMobileEdgeResistanceAndBoardSwipe() {
         event.preventDefault();
         const distance = towardTop ? scrollTop : distanceBottom;
         const factor = edgeResistanceFactor(distance);
+
+        // Accueil : quand il n'y a rien à faire défiler (cas habituel) ou que l'on tire
+        // réellement au-delà d'un bord, matérialise la résistance par un léger déplacement
+        // de l'écran. Le déplacement est plafonné à 18px pour rester subtil.
+        if (gesture.landingPullAllowed && isLandingVisible()) {
+            const noScrollableRoom = maxScroll <= 1;
+            const atTopEdge = scrollTop <= 1 && dy > 0;
+            const atBottomEdge = distanceBottom <= 1 && dy < 0;
+            if (noScrollableRoom || atTopEdge || atBottomEdge) {
+                const pull = clamp(dy * LANDING_PULL_FACTOR, -LANDING_PULL_MAX_PX, LANDING_PULL_MAX_PX);
+                setLandingPull(pull);
+                gesture.landingPulled = true;
+                return;
+            }
+        }
+
         window.scrollBy(0, -fingerDeltaY * factor);
     }, { passive: false });
 
@@ -11197,27 +11373,37 @@ function initMobileEdgeResistanceAndBoardSwipe() {
         if (!gesture) return;
         const g = gesture;
         gesture = null;
-        if (!g.swipeAllowed || g.axis !== 'x' || !event.changedTouches || event.changedTouches.length !== 1) return;
+
+        if (g.landingPulled) resetLandingPull(true);
+
+        if (!g.swipeAllowed || g.axis !== 'x' || !event.changedTouches || event.changedTouches.length !== 1) {
+            if (g.swipeDragged) resetGameSwipeVisual(true);
+            return;
+        }
 
         const t = event.changedTouches[0];
         const dx = t.clientX - g.startX;
         const dy = t.clientY - g.startY;
         const absX = Math.abs(dx);
         const absY = Math.abs(dy);
-        if (absX < SWIPE_MIN_PX || absX < absY * SWIPE_DOMINANCE) return;
+        const validGesture = absX >= SWIPE_MIN_PX && absX >= absY * SWIPE_DOMINANCE;
+        const validDirection = canNavigateSwipeDirection(dx);
 
-        if (dx < 0) {
-            // Swipe gauche = donne suivante. La fonction existante gère la borne finale,
-            // diffuse le changement à la table et applique le fondu déjà utilisé par ▶.
-            uiHostSkipNextBoard();
-        } else {
-            // Swipe droite = donne précédente. Sur la donne 1, aucun effet.
-            uiHostSkipPrevBoard();
+        if (!validGesture || !validDirection) {
+            resetGameSwipeVisual(true);
+            return;
         }
+
+        animateValidatedBoardSwipe(dx);
     }
 
     document.addEventListener('touchend', finishGesture, { passive: true });
-    document.addEventListener('touchcancel', () => { gesture = null; }, { passive: true });
+    document.addEventListener('touchcancel', () => {
+        const g = gesture;
+        gesture = null;
+        if (g && g.landingPulled) resetLandingPull(true);
+        if (g && g.swipeDragged) resetGameSwipeVisual(true);
+    }, { passive: true });
 }
 
 window.addEventListener('DOMContentLoaded', () => {
