@@ -2472,8 +2472,10 @@ function hideConnectingOverlay() {
 // nécessaire dans l'URL. rememberRoomAccessFromUrl() reste présent pour accepter les
 // anciens liens différés contenant encore #access/#pid/#secret.
 function buildRoomShareUrl(roomCode) {
+    const code = String(roomCode || '').trim();
+    if (!/^\d{4}$/.test(code)) throw new Error('Code de salle invalide : 4 chiffres requis.');
     const url = new URL(window.location.href);
-    url.searchParams.set('room', roomCode);
+    url.searchParams.set('room', code);
     url.searchParams.delete('access');
     url.searchParams.delete('pid');
     url.searchParams.delete('secret');
@@ -3778,23 +3780,23 @@ function buildSeatBoxesHtml(assignmentObj, onSelect, { enableDrag = false, withF
             const robotOptionClass = assignedId ? '' : ' is-current';
             const pendingOptionClass = isPending ? ' is-current' : '';
             const optionsHtml = [`
-                <div class="seat-dropdown-option${robotOptionClass}" data-ui-click="seat-select" data-ui-seat-handler="${onSelect === 'uiStageSeatAssignment' ? 'stage' : 'assign'}" data-seat="${seat}" data-participant-id="">
+                <div class="seat-dropdown-option${robotOptionClass}" data-seat-select="1" data-ui-seat-handler="${onSelect === 'uiStageSeatAssignment' ? 'stage' : 'assign'}" data-seat="${seat}" data-participant-id="">
                     <span class="mini-avatar mini-avatar-robot">🤖</span><span>Robot</span>
                 </div>
-                <div class="seat-dropdown-option${pendingOptionClass}" data-ui-click="seat-select" data-ui-seat-handler="${onSelect === 'uiStageSeatAssignment' ? 'stage' : 'assign'}" data-seat="${seat}" data-participant-id="${SEAT_PENDING}">
+                <div class="seat-dropdown-option${pendingOptionClass}" data-seat-select="1" data-ui-seat-handler="${onSelect === 'uiStageSeatAssignment' ? 'stage' : 'assign'}" data-seat="${seat}" data-participant-id="${SEAT_PENDING}">
                     <span class="mini-avatar mini-avatar-pending">⏳</span><span>En attente d'un partenaire</span>
                 </div>
             `].concat(participants.map(p => {
                 const currentClass = p.id === assignedId ? ' is-current' : '';
                 return `
-                    <div class="seat-dropdown-option${currentClass}" data-ui-click="seat-select" data-ui-seat-handler="${onSelect === 'uiStageSeatAssignment' ? 'stage' : 'assign'}" data-seat="${seat}" data-participant-id="${escapeHtml(p.id)}">
+                    <div class="seat-dropdown-option${currentClass}" data-seat-select="1" data-ui-seat-handler="${onSelect === 'uiStageSeatAssignment' ? 'stage' : 'assign'}" data-seat="${seat}" data-participant-id="${escapeHtml(p.id)}">
                         ${avatarHtml(p.id)}<span>${escapeHtml(p.name)}</span>
                     </div>
                 `;
             }));
 
             return `
-                <div class="seat-box seat-pos-${seat}${flashClass}" data-ui-click="toggle-seat-dropdown" data-seat="${seat}"${boxDragAttrs}${dropAttrs}>
+                <div class="seat-box seat-pos-${seat}${flashClass}" data-seat-toggle="1" data-seat="${seat}"${boxDragAttrs}${dropAttrs}>
                     <span class="seat-box-label">${SEAT_FULL_NAME[seat]}</span>
                     <div class="seat-occupant-dropdown">
                         <button type="button" class="kibitz-chip seat-occupant-chip${occupantP ? '' : ' seat-occupant-chip-robot'}" data-seat="${seat}" aria-label="Choisir l’occupant du siège ${SEAT_FULL_NAME[seat]}">
@@ -3825,10 +3827,43 @@ function buildSeatBoxesHtml(assignmentObj, onSelect, { enableDrag = false, withF
     }).join('');
 }
 
+function bindSeatBoxToggleHandlers(container) {
+    if (!container) return;
+
+    // OLD avait deux gestes directs : le déclencheur ouvrait/fermait le menu et chaque
+    // option appliquait le choix puis fermait. On reproduit cette mécanique sans onclick
+    // inline, mais avec de VRAIS listeners sur les éléments rendus — aucun de ces gestes ne
+    // dépend désormais d'un listener global sur document.
+    container.querySelectorAll('.seat-dropdown-option[data-seat-select="1"]').forEach((option) => {
+        option.addEventListener('click', (event) => {
+            event.stopPropagation();
+            const seat = option.dataset.seat || '';
+            const participantId = option.dataset.participantId || '';
+            try {
+                if (option.dataset.uiSeatHandler === 'stage') uiStageSeatAssignment(seat, participantId);
+                else uiAssignSeat(seat, participantId);
+            } finally {
+                // Même en cas d'erreur applicative aval, un choix ne doit jamais laisser
+                // le menu visuellement coincé ouvert.
+                uiCloseSeatDropdowns();
+            }
+        });
+    });
+
+    container.querySelectorAll('.seat-box[data-seat-toggle="1"]').forEach((seatBox) => {
+        // Listener posé sur la CASE elle-même. Le stopPropagation se produit donc AVANT
+        // d'atteindre document et ne dépend plus de l'ordre des listeners délégués.
+        seatBox.addEventListener('click', (event) => {
+            uiToggleSeatDropdown(event, seatBox.dataset.seat || '');
+        });
+    });
+}
+
 function renderSeatAssignmentGrid() {
     const container = document.getElementById('seatAssignmentGrid');
     if (!container) return;
     container.innerHTML = buildSeatBoxesHtml(seatAssignment, 'uiAssignSeat', { enableDrag: true, withFlash: true });
+    bindSeatBoxToggleHandlers(container);
     prevSeatAssignmentSnapshot = { ...seatAssignment };
 }
 
@@ -3840,6 +3875,7 @@ function renderSeatReorgModalGrid() {
     const container = document.getElementById('seatReorgModalGrid');
     if (!container || !seatReorgDraft) return;
     container.innerHTML = buildSeatBoxesHtml(seatReorgDraft, 'uiStageSeatAssignment', { enableDrag: false, withFlash: false });
+    bindSeatBoxToggleHandlers(container);
 }
 
 let nameUpdateDebounceTimer = null;
@@ -3925,15 +3961,13 @@ function uiCloseSeatDropdowns() {
 }
 
 // Ferme les menus seulement lors d'un VRAI clic extérieur. Depuis la migration CSP vers
-// ui-events.js, le clic de la case est lui aussi délégué sur `document` : l'ancien listener
-// global s'exécutait donc AVANT le toggle et refermait le menu juste avant que le toggle ne
-// le rouvre. Résultat : ouvrir marchait, mais recliquer sur la même case ne pouvait plus le
-// fermer. Dans OLD, stopPropagation() était posé directement sur le bouton et empêchait ce
-// listener d'être atteint. On reproduit exactement cette sémantique sans inline onclick :
-// toute case de siège gère son propre toggle ; seul un clic réellement extérieur ferme.
+// La case possède maintenant son propre listener réel (bindSeatBoxToggleHandlers), au lieu
+// de faire remonter son toggle jusqu'au routeur global de ui-events.js. C'est le point qui
+// reproduit réellement la sémantique de OLD : le second clic voit le menu encore ouvert,
+// le ferme, puis stopPropagation empêche tout autre listener document de le rouvrir.
 function uiCloseSeatDropdownsOnOutsideClick(event) {
     const target = event && event.target instanceof Element ? event.target : null;
-    if (target && target.closest('.seat-box[data-ui-click="toggle-seat-dropdown"]')) return;
+    if (target && target.closest('.seat-box[data-seat-toggle="1"]')) return;
     uiCloseSeatDropdowns();
 }
 document.addEventListener('click', uiCloseSeatDropdownsOnOutsideClick);

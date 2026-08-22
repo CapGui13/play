@@ -8,7 +8,7 @@
 // distribué ici n'embarque pas de workflow GitHub Actions qui la réécrive : elle doit donc
 // changer à chaque nouvelle release pour forcer l'installation du nouveau cache chez les
 // utilisateurs déjà passés par le Service Worker.
-const CACHE_NAME = 'bridge-encheres-hardened-r6-deferred-stability-20260822';
+const CACHE_NAME = 'bridge-encheres-hardened-r6-cache-recovery-seat-toggle-20260822';
 
 // Ressources de la même origine : mises en cache de façon fiable via cache.addAll (un seul
 // échec fait échouer toute l'installation, ce qui est le comportement voulu ici — ce sont
@@ -65,11 +65,22 @@ self.addEventListener('install', (event) => {
                     await cache.put(url, resp.clone());
                 })
             );
-            // Ne pas appeler skipWaiting(). Une version installée reste volontairement
-            // "waiting" tant qu'un ancien onglet PLAY est vivant. Elle s'activera selon le
-            // cycle standard du navigateur lors d'une prochaine vraie ouverture/navigation.
+            // IMPORTANT : une politique "waiting" passive a laissé, en pratique, des
+            // navigateurs exécuter plusieurs releases de retard (symptômes visibles : ancien
+            // toggle de sièges et anciens liens différés à capacités longues). Le nouveau
+            // cache est déjà entièrement construit ici ; on active donc ce worker aussitôt.
+            // Cela ne recharge pas la page courante : le JS déjà en mémoire continue jusqu'à
+            // la prochaine navigation, mais celle-ci sera garantie sur la nouvelle release.
+            await self.skipWaiting();
         })()
     );
+});
+
+// Compatibilité avec les anciennes pages PLAY qui demandaient explicitement l'activation.
+self.addEventListener('message', (event) => {
+    if (event && (event.data === 'skipWaiting' || (event.data && event.data.type === 'skipWaiting'))) {
+        self.skipWaiting();
+    }
 });
 
 self.addEventListener('activate', (event) => {
@@ -82,6 +93,22 @@ self.addEventListener('activate', (event) => {
                     .map((name) => caches.delete(name))
             );
             await self.clients.claim();
+
+            // Rattrapage d'une page qui aurait été servie par l'ANCIEN worker juste avant
+            // cette activation : son JavaScript est déjà en mémoire et ne change pas quand
+            // le contrôleur SW bascule. Les releases récentes retardaient justement
+            // l'enregistrement du worker tant qu'une salle/connexion était active ; on peut
+            // donc, après un délai de sécurité, recharger uniquement les fenêtres encore
+            // sur l'accueil (aucun ?room=...). Une salle, un lien d'invitation ou une partie
+            // en cours n'est jamais navigué automatiquement.
+            await new Promise(resolve => setTimeout(resolve, 15000));
+            const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+            await Promise.all(windows.map(async (client) => {
+                try {
+                    const url = new URL(client.url);
+                    if (!url.searchParams.has('room')) await client.navigate(client.url);
+                } catch (e) { /* client disparu entre-temps */ }
+            }));
         })()
     );
 });

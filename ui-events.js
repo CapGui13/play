@@ -98,7 +98,7 @@
             // Éléments générés dynamiquement par app.js.
             case 'randomize-avatar': return call('uiRandomizeAvatarColor', e, el.dataset.participantId || '');
             case 'rename-participant': return call('uiStartRenamingParticipant', e, el.dataset.participantId || '');
-            case 'toggle-seat-dropdown': return call('uiToggleSeatDropdown', e, el.dataset.seat || '');
+            case 'toggle-seat-dropdown': return call('uiToggleSeatDropdown', e, el.dataset.seat || ''); // compat ancien DOM uniquement
             case 'seat-select': {
                 // Le menu vit dans une .seat-box elle-même cliquable : arrêter ici la
                 // propagation empêche la sélection d'une option de rouvrir aussitôt le menu parent.
