@@ -11428,72 +11428,114 @@ function initMobileEdgeResistanceAndBoardSwipe() {
         }
 
         boardSwipeAnimating = true;
+        cancelInertialBounceWatch();
         const direction = dx < 0 ? -1 : 1;
         const reduced = prefersReducedMotion();
 
         if (reduced || !screen.animate) {
             resetGameSwipeVisual(false);
-            if (direction < 0) uiHostSkipNextBoard();
-            else uiHostSkipPrevBoard();
+            gotoBoard(boardIndex + (direction < 0 ? 1 : -1));
             boardSwipeAnimating = false;
             return;
         }
 
-        const currentTransform = screen.style.transform || 'translate3d(0, 0, 0)';
-        // Transition type "diapositive" : l'écran courant sort COMPLÈTEMENT du viewport.
-        // Aucun fondu n'est utilisé ; la continuité est uniquement spatiale.
-        const viewportTravel = Math.max(window.innerWidth, document.documentElement.clientWidth || 0) + 28;
-        const outX = direction * viewportTravel;
-        const out = screen.animate([
-            { transform: currentTransform },
-            { transform: `translate3d(${outX}px, 0, 0)` }
+        // Le drag a déjà déplacé #screen-game. On récupère son décalage horizontal réel
+        // afin de placer la future donne exactement contre son bord, sans aucune bande de
+        // tapis vert entre les deux panneaux.
+        let draggedX = 0;
+        try {
+            const matrix = new DOMMatrixReadOnly(getComputedStyle(screen).transform);
+            draggedX = Number.isFinite(matrix.m41) ? matrix.m41 : 0;
+        } catch (_) {
+            const match = String(screen.style.transform || '').match(/translate3d\(([-\d.]+)px/i);
+            if (match) draggedX = Number(match[1]) || 0;
+        }
+
+        const rect = screen.getBoundingClientRect();
+        const viewportWidth = Math.max(window.innerWidth, document.documentElement.clientWidth || 0);
+        const baseLeft = rect.left - draggedX;
+
+        // Copie figée de la donne qui sort. Elle vit juste le temps de la transition et
+        // n'intercepte aucun événement. Les IDs dupliqués sont sans conséquence ici :
+        // l'original reste avant la copie dans le DOM et la copie est supprimée ~300 ms
+        // plus tard ; conserver les IDs garantit en revanche un rendu CSS strictement
+        // identique à l'écran courant.
+        const outgoing = screen.cloneNode(true);
+        outgoing.setAttribute('aria-hidden', 'true');
+        outgoing.style.position = 'fixed';
+        outgoing.style.left = `${baseLeft + draggedX}px`;
+        outgoing.style.top = `${rect.top}px`;
+        outgoing.style.width = `${rect.width}px`;
+        outgoing.style.height = `${rect.height}px`;
+        outgoing.style.margin = '0';
+        outgoing.style.paddingTop = getComputedStyle(screen).paddingTop;
+        outgoing.style.pointerEvents = 'none';
+        outgoing.style.zIndex = '49';
+        outgoing.style.transform = 'translate3d(0, 0, 0)';
+        outgoing.style.transition = 'none';
+        outgoing.style.opacity = '1';
+        outgoing.style.willChange = 'transform';
+        document.body.appendChild(outgoing);
+
+        // Pendant que la copie conserve l'ancienne donne à l'écran, on remet l'original
+        // à sa géométrie normale et on le transforme immédiatement en donne suivante.
+        // gotoBoard diffuse également le nouvel index aux invités, comme les flèches.
+        clearGameSwipeSettleStyles();
+        screen.style.transition = 'none';
+        screen.style.transform = 'translate3d(0, 0, 0)';
+        screen.style.opacity = '1';
+        gotoBoard(boardIndex + (direction < 0 ? 1 : -1));
+
+        // La nouvelle donne commence exactement accolée à l'ancienne. Pour un swipe vers
+        // la gauche : ancienne à x=draggedX, nouvelle à x=draggedX+viewportWidth.
+        // Les deux parcourent ensuite la même distance avec la même courbe : aucune fente
+        // ne peut donc s'ouvrir entre elles pendant l'animation.
+        const incomingStartX = draggedX - direction * viewportWidth;
+        const outgoingTargetDelta = direction * viewportWidth - draggedX;
+        screen.style.transform = `translate3d(${incomingStartX}px, 0, 0)`;
+        screen.style.willChange = 'transform';
+        runGameSwipeSettleAnimation(direction);
+        void screen.offsetWidth;
+
+        const duration = 300;
+        const easing = 'cubic-bezier(.20,.76,.24,1)';
+        const outgoingAnim = outgoing.animate([
+            { transform: 'translate3d(0, 0, 0)' },
+            { transform: `translate3d(${outgoingTargetDelta}px, 0, 0)` }
         ], {
-            duration: 220,
-            easing: 'cubic-bezier(.34,.02,.66,.24)',
+            duration,
+            easing,
+            fill: 'forwards'
+        });
+        const incomingAnim = screen.animate([
+            { transform: `translate3d(${incomingStartX}px, 0, 0)` },
+            { transform: 'translate3d(0, 0, 0)' }
+        ], {
+            duration,
+            easing,
             fill: 'forwards'
         });
 
-        out.onfinish = () => {
-            // L'ancienne donne est maintenant entièrement hors écran : on peut remplacer
-            // son contenu sans que l'utilisateur voie le changement au milieu du viewport.
-            if (direction < 0) uiHostSkipNextBoard();
-            else uiHostSkipPrevBoard();
-
-            screen.style.transition = '';
-            screen.style.opacity = '1';
-            out.oncancel = null;
-            try { out.cancel(); } catch (_) {}
-
-            // La nouvelle donne arrive depuis le côté opposé, comme la diapositive suivante.
-            const inX = -direction * viewportTravel;
-            screen.style.transform = `translate3d(${inX}px, 0, 0)`;
-            clearGameSwipeSettleStyles();
-            runGameSwipeSettleAnimation(direction);
-            // Force un calcul de style afin que Safari iOS enregistre bien la position de départ
-            // avant de lancer l'animation d'entrée.
-            void screen.offsetWidth;
-            const enter = screen.animate([
-                { transform: `translate3d(${inX}px, 0, 0)` },
-                { transform: 'translate3d(0, 0, 0)' }
-            ], {
-                duration: 280,
-                easing: 'cubic-bezier(.18,.74,.24,1)',
-                fill: 'forwards'
-            });
-            const finish = () => {
-                boardSwipeAnimating = false;
-                screen.style.transition = '';
-                screen.style.transform = '';
-                screen.style.opacity = '';
-                clearGameSwipeSettleStyles();
-            };
-            enter.onfinish = finish;
-            enter.oncancel = finish;
-        };
-        out.oncancel = () => {
+        let cleaned = false;
+        const finish = () => {
+            if (cleaned) return;
+            cleaned = true;
             boardSwipeAnimating = false;
-            resetGameSwipeVisual(false);
+            try { outgoingAnim.cancel(); } catch (_) {}
+            try { incomingAnim.cancel(); } catch (_) {}
+            if (outgoing.isConnected) outgoing.remove();
+            screen.style.transition = '';
+            screen.style.transform = '';
+            screen.style.opacity = '';
+            screen.style.willChange = '';
+            clearGameSwipeSettleStyles();
         };
+        incomingAnim.onfinish = finish;
+        incomingAnim.oncancel = finish;
+        outgoingAnim.oncancel = () => {
+            if (!cleaned) finish();
+        };
+        window.setTimeout(finish, duration + 90);
     }
 
     document.addEventListener('touchstart', (event) => {
