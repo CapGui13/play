@@ -2524,7 +2524,7 @@ button.kibitz-chip {
     display: flex;
     align-items: stretch;
     justify-content: center;
-    gap: 4px;
+    gap: 3px;
     width: 100%;
     min-width: 0;
 }
@@ -2534,27 +2534,29 @@ button.kibitz-chip {
     flex: 1 1 0;
     min-width: 0;
     max-width: 44px;
-    height: 58px;
+    height: 60px;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 3px;
+    gap: 1px;
     border-radius: 8px;
-    background: linear-gradient(180deg, #252b34 0%, #1b2027 100%);
-    border: 1px solid rgba(255,255,255,0.08);
-    box-shadow: inset 0 1px 0 rgba(255,255,255,0.04), 0 2px 5px rgba(0,0,0,0.24);
+    background: linear-gradient(180deg, #ffffff 0%, #f6f7fa 100%);
+    border: 1px solid rgba(194, 201, 210, 0.92);
+    box-shadow:
+        inset 0 1px 0 rgba(255,255,255,0.96),
+        0 0 0 1px rgba(171, 180, 190, 0.26),
+        0 2px 5px rgba(74, 84, 96, 0.12);
 }
 
 #myHandsContainer .mini-bridge-card-suit-start {
-    margin-left: 8px;
+    margin-left: 6px;
 }
 
 #myHandsContainer .mini-bridge-card-rank {
     font-family: var(--font-mono);
-    font-size: 1.10rem;
+    font-size: 0.96rem;
     line-height: 1;
-    font-weight: 700;
-    color: #f7f4ea;
+    font-weight: 800;
 }
 
 #myHandsContainer .mini-bridge-card-suit {
@@ -2565,13 +2567,21 @@ button.kibitz-chip {
 }
 
 #myHandsContainer .mini-bridge-card-suit .suit-icon {
-    font-size: 1.02rem;
+    font-size: 1.18rem;
 }
 
-#myHandsContainer .mini-bridge-card-S .suit-icon { color: #f4f4f2; }
-#myHandsContainer .mini-bridge-card-H .suit-icon { color: #ef5350; }
-#myHandsContainer .mini-bridge-card-D .suit-icon { color: #ff9f1c; }
-#myHandsContainer .mini-bridge-card-C .suit-icon { color: #4c9cff; }
+#myHandsContainer .mini-bridge-card-S,
+#myHandsContainer .mini-bridge-card-S .mini-bridge-card-rank,
+#myHandsContainer .mini-bridge-card-S .suit-icon { color: #191e25; }
+#myHandsContainer .mini-bridge-card-H,
+#myHandsContainer .mini-bridge-card-H .mini-bridge-card-rank,
+#myHandsContainer .mini-bridge-card-H .suit-icon { color: #a22610; }
+#myHandsContainer .mini-bridge-card-D,
+#myHandsContainer .mini-bridge-card-D .mini-bridge-card-rank,
+#myHandsContainer .mini-bridge-card-D .suit-icon { color: #c66c1e; }
+#myHandsContainer .mini-bridge-card-C,
+#myHandsContainer .mini-bridge-card-C .mini-bridge-card-rank,
+#myHandsContainer .mini-bridge-card-C .suit-icon { color: #1d3f89; }
 
 .suit-symbol { display: flex; align-items: center; justify-content: center; }
 
@@ -3704,25 +3714,25 @@ table.dd-table td.dd-secondary-contract {
     }
 
     #myHandsContainer .strip-physical-cards {
-        gap: 2px;
+        gap: 1px;
     }
 
     #myHandsContainer .mini-bridge-card {
         max-width: none;
-        height: clamp(44px, 11vw, 54px);
+        height: clamp(44px, 11vw, 56px);
         border-radius: 6px;
     }
 
     #myHandsContainer .mini-bridge-card-suit-start {
-        margin-left: clamp(3px, 1.2vw, 6px);
+        margin-left: clamp(2px, 0.9vw, 4px);
     }
 
     #myHandsContainer .mini-bridge-card-rank {
-        font-size: clamp(0.82rem, 3.2vw, 1rem);
+        font-size: clamp(0.76rem, 2.9vw, 0.92rem);
     }
 
     #myHandsContainer .mini-bridge-card-suit .suit-icon {
-        font-size: clamp(0.80rem, 3vw, 0.96rem);
+        font-size: clamp(0.92rem, 3.3vw, 1.06rem);
     }
 }
 
