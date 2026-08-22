@@ -2064,11 +2064,11 @@ function showScreen(id) {
     document.querySelectorAll('.screen').forEach(el => el.style.display = 'none');
     // '' (et non 'block' en dur) : un style inline a une priorité absolue sur n'importe
     // quelle règle de styles.css, y compris #screen-game { display: flex; ... } posé par
-    // le layout plein écran mobile (voir @media max-width:760px) — le forcer à 'block'
+    // le layout plein écran mobile (voir @media max-width:1024px) — le forcer à 'block'
     // ici l'écrasait silencieusement et faisait s'effondrer tout le système de répartition
     // des hauteurs (mains/enchères/boîte fixée en bas), avec un retour au scroll de page
     // classique. Laisser vide restaure le display défini par la feuille de style (block
-    // par défaut pour un <section>, flex pour #screen-game sous 760px).
+    // par défaut pour un <section>, flex pour #screen-game sous 1024px).
     document.getElementById(id).style.display = '';
 
     // Seul l'écran de jeu élargit .app-container afin de conserver les trois colonnes
@@ -7544,7 +7544,7 @@ function syncHandsPanelMinHeight() {
 
     // Voir échange avec Guillaume (session du 23 juillet) : cette réservation de hauteur
     // n'a de sens qu'en desktop, où .game-body affiche les mains et le panneau d'enchères
-    // côte à côte (voir .game-body, breakpoint 760px) — aligner leurs hauteurs évite un
+    // côte à côte (voir .game-body, breakpoint 1024px) — aligner leurs hauteurs évite un
     // décalage visuel entre les deux colonnes. Sur mobile, game-body passe en une seule
     // colonne empilée : il n'y a plus rien à aligner, et cette hauteur réservée pour le
     // mode "4 mains" ne faisait que pousser la boîte d'enchères hors écran avec un grand
@@ -8176,7 +8176,7 @@ function setAuctionVisualMode(mode, { parCapable = false, ddTableHtml = '' } = {
     const biddingViewEl = document.getElementById('auctionBiddingView');
     if (!stack || !resultEl || !biddingViewEl) return;
 
-    const mobile = window.matchMedia && window.matchMedia('(max-width: 760px)').matches;
+    const mobile = window.matchMedia && window.matchMedia('(max-width: 1024px)').matches;
     const shouldStackMobile = mobile && (parCapable || mode === 'final');
     // Desktop, pendant l'enchère seulement : garder Enchères et PAR dans la même cellule
     // de grille, comme sur mobile. La vue masquée continue ainsi de réserver sa hauteur :
@@ -9339,7 +9339,7 @@ function renderBoardOverview() {
 // gaps réduits) ; cette passe ne réduit la police de la main que si une main donnée est
 // encore réellement trop large. On ne touche jamais au desktop ni aux colonnes contrat/PAR.
 function fitBoardOverviewMobileRows() {
-    if (!window.matchMedia || !window.matchMedia('(max-width: 760px)').matches) return;
+    if (!window.matchMedia || !window.matchMedia('(max-width: 1024px)').matches) return;
     const modal = document.getElementById('boardOverviewModal');
     if (!modal || modal.style.display === 'none') return;
 

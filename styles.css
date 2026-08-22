@@ -631,7 +631,7 @@ body:not(.on-landing-screen) #offlineBanner {
     margin-top: 30px;
 }
 
-@media (max-width: 700px) {
+@media (max-width: 1024px) {
     .landing-choices { grid-template-columns: 1fr; }
     .felt-hero h1 { font-size: 2.2rem; }
 }
@@ -722,7 +722,7 @@ a.btn {
 
 /* Libellé court/long (voir requestUndoBtn, resetAuctionBtn, hand-option-btn dans
    index.html) : le bouton complet par défaut, la version abrégée prend le relais sous
-   760px (voir le bloc mobile plus bas) — la place manque pour "Notation FR (R D V X)"
+   1024px (voir le bloc compact plus bas) — la place manque pour "Notation FR (R D V X)"
    à côté de 3 autres boutons similaires sur un écran de téléphone. */
 .btn-label-short { display: none; }
 
@@ -1203,7 +1203,7 @@ a.btn {
     font-size: 0.85rem;
 }
 
-@media (max-width: 700px) {
+@media (max-width: 1024px) {
     .deal-preview-hands { grid-template-columns: repeat(2, 1fr); }
 }
 
@@ -1536,7 +1536,7 @@ a.btn {
     text-align: left;
 }
 
-@media (max-width: 700px) {
+@media (max-width: 1024px) {
     .lobby-body { grid-template-columns: 1fr; }
 }
 
@@ -2040,7 +2040,7 @@ button.kibitz-chip {
    ligne... 2ème ligne... tu fais ça pour l'affichage desktop, pour le mobile je sais
    pas, ça risque de foutre le bordel") : les 2 groupes s'empilent en colonne (2 lignes
    distinctes) — flex-direction:column sur le conteneur, chaque groupe restant lui-même
-   en ligne horizontale. En mobile (media query 760px plus bas), ces 2 groupes
+   en ligne horizontale. En mobile (media query 1024px plus bas), ces 2 groupes
    redeviennent display:contents, désactivant cette mise en page pour retrouver
    exactement le flex-wrap plat d'origine, déjà éprouvé sur petit écran.
    Voir échange avec Guillaume ("sur la page du non hôte, le exporter la session est
@@ -3389,7 +3389,7 @@ table.dd-table td.dd-secondary-contract {
 /* ===== Optimisations téléphone =====
    Regroupées ici plutôt qu'éclatées dans chaque section, pour qu'on voie d'un coup d'œil
    tout ce qui change sur petit écran. */
-@media (max-width: 700px) {
+@media (max-width: 1024px) {
     /* Marges extérieures resserrées : sur un écran de ~360-390px de large, les paddings
        pensés pour desktop (20px de partout + 36px dans le salon, etc.) empilés les uns
        sur les autres finissaient par manger presque un tiers de la largeur utile. */
@@ -3504,8 +3504,8 @@ table.dd-table td.dd-secondary-contract {
    sont uniquement des ajustements indépendants de ce choix — libellés de boutons
    raccourcis, en-tête resserré, cibles tactiles conformes — qui restent utiles quelle que
    soit la façon dont le contenu est agencé verticalement. */
-@media (max-width: 760px) {
-    /* Sous ce seuil, la place manque pour les libellés complets des boutons d'en-tête et
+@media (max-width: 1024px) {
+    /* Sous ce seuil téléphone/tablette, la place manque pour les libellés complets des boutons d'en-tête et
        d'options des mains (voir .btn-label-full/.btn-label-short dans index.html) : on
        bascule sur leur version abrégée. */
     .btn-label-full { display: none; }
@@ -3753,7 +3753,7 @@ table.dd-table td.dd-secondary-contract {
 
 /* Desktop : conserver l'espace supérieur historique, mais ne pas afficher la barre de
    connexion. Le body garde son padding-top normal de 56px hors écran d'accueil. */
-@media (min-width: 701px) {
+@media (min-width: 1025px) {
     .connection-bar {
         display: none !important;
     }
@@ -3772,7 +3772,7 @@ table.dd-table td.dd-secondary-contract {
     min-width: 0;
 }
 
-@media (min-width: 761px) {
+@media (min-width: 1025px) {
     /* Desktop uniquement : pendant une enchère où le PAR est consultable, les deux vues
        occupent la même cellule. La plus haute fixe la hauteur de la pile : « Voir le PAR »
        et « Voir les enchères » sont donc rigoureusement au même emplacement vertical. */
@@ -3800,7 +3800,7 @@ table.dd-table td.dd-secondary-contract {
     }
 }
 
-@media (max-width: 760px) {
+@media (max-width: 1024px) {
     .auction-view-stack.is-mobile-stacked {
         display: grid;
     }
@@ -4048,11 +4048,11 @@ table.dd-table td.dd-secondary-contract {
 }
 
 /* MINI UPDATE 2026-08-21 — Salle/Hôte mobile
-   Sur mobile uniquement, retour au placement précédent : le bloc Salle/Hôte reprend
+   Sur téléphone/tablette uniquement, retour au placement précédent : le bloc Salle/Hôte reprend
    l'espace disponible avant 🔗/🏠/🐞 et son contenu reste centré dans cet espace. Le
    sizer historique introduit pour le desktop est neutralisé afin qu'il ne puisse plus
    provoquer le retour à la ligne du bouton 🐞. Le desktop conserve la nouvelle géométrie. */
-@media (max-width: 760px) {
+@media (max-width: 1024px) {
     .game-room-code-label {
         flex: 1 1 auto;
         position: static;
@@ -4115,7 +4115,7 @@ table.dd-table td.dd-secondary-contract {
    desktop et les autres affichages HCP restent inchangés. On récupère aussi la largeur
    actuellement perdue dans les marges/paddings du modal et on resserre l'espace entre
    les quatre couleurs. */
-@media (max-width: 760px) {
+@media (max-width: 1024px) {
     #boardOverviewModal {
         padding: 6px;
     }
@@ -4279,7 +4279,7 @@ table.dd-table td.dd-secondary-contract {
    rubber-band, ce qui produit un rebond plus naturel, y compris après un flick rapide
    avec le doigt déjà relâché. `contain` conserve l'effet local tout en limitant le
    chaînage/pull-to-refresh lorsque le navigateur le respecte. */
-@media (max-width: 760px) {
+@media (max-width: 1024px) {
     html,
     body {
         overscroll-behavior-y: contain;
