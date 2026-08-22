@@ -466,7 +466,27 @@ const __wasmUrl = (() => {
 })();
 
 root.PONS_WASM_RUNTIME_READY = (async () => {
-    await __wbg_init({ module_or_path: __wasmUrl });
+    // Un fetch WASM peut rester pendu très longtemps dans certains couples navigateur /
+    // Service Worker / GitHub Pages. Sans abort explicite, PLAY restait alors bloqué
+    // indéfiniment sur « Préparation du moteur PONS… » et le fallback embarqué n'était
+    // jamais atteint. On borne uniquement le chemin WASM brut ; app.js reprend ensuite
+    // automatiquement le bundle embarqué historique, avec exactement les mêmes octets.
+    const controller = typeof AbortController === 'function' ? new AbortController() : null;
+    const timeoutMs = 18000;
+    const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+    try {
+        const request = fetch(__wasmUrl, controller ? { signal: controller.signal, cache: 'no-cache' } : { cache: 'no-cache' });
+        await __wbg_init({ module_or_path: request });
+    } catch (err) {
+        if (controller && controller.signal.aborted) {
+            const timeoutErr = new Error(`Chargement WASM PONS interrompu après ${Math.round(timeoutMs / 1000)} s`);
+            timeoutErr.name = 'PonsWasmTimeoutError';
+            throw timeoutErr;
+        }
+        throw err;
+    } finally {
+        if (timer) clearTimeout(timer);
+    }
     root.PonsWasmModule = { pons_bid, pons_bid_v2, pons_diagnose, pons_engine, pons_infer_hulls, pons_probe, initSync, default: __wbg_init };
     root.PONS_WASM_EMBEDDED_READY = true; // compatibility flag used by older diagnostics
     console.info('[PONS v2.61(9)] WASM brut initialisé via streaming/fetch.');

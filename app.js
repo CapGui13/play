@@ -182,6 +182,36 @@ function prefetchPonsClientScripts() {
     return true;
 }
 
+function ponsTimeoutError(label, ms) {
+    const seconds = Math.max(1, Math.round(ms / 1000));
+    const err = new Error(`${label} n’a pas répondu après ${seconds} s`);
+    err.name = 'PonsTimeoutError';
+    return err;
+}
+
+async function fetchPonsWithTimeout(url, options = {}, timeoutMs = 25000, label = 'Ressource PONS') {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        return await fetch(url, { ...options, signal: controller.signal });
+    } catch (err) {
+        if (controller.signal.aborted) throw ponsTimeoutError(label, timeoutMs);
+        throw err;
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+function withPonsTimeout(promise, timeoutMs, label) {
+    let timer = null;
+    const timeout = new Promise((_, reject) => {
+        timer = setTimeout(() => reject(ponsTimeoutError(label, timeoutMs)), timeoutMs);
+    });
+    return Promise.race([Promise.resolve(promise), timeout]).finally(() => {
+        if (timer) clearTimeout(timer);
+    });
+}
+
 async function loadPonsCanonicalRules() {
     if (Array.isArray(window.BRIDGE_CANONICAL_RULES_V1) && window.BRIDGE_CANONICAL_RULES_V1.length) {
         return window.BRIDGE_CANONICAL_RULES_V1;
@@ -194,7 +224,12 @@ async function loadPonsCanonicalRules() {
             try {
                 setPonsLoadStage(attempt ? 'canonical-rules-retry' : 'canonical-rules');
                 const url = ponsAttemptUrl(PONS_CANONICAL_RULES_URL, attempt);
-                const response = await fetch(url, { cache: attempt ? 'reload' : 'default' });
+                const response = await fetchPonsWithTimeout(
+                    url,
+                    { cache: attempt ? 'reload' : 'default' },
+                    attempt ? 20000 : 25000,
+                    'Règles PONS'
+                );
                 if (!response.ok) throw new Error(`Règles PONS HTTP ${response.status}`);
                 const rules = await response.json();
                 if (!Array.isArray(rules) || rules.length < 1000) throw new Error('Règles PONS JSON invalides');
@@ -251,7 +286,8 @@ function loadPonsClientScriptOnce(src, attempt) {
         script.dataset.ponsLazySrc = src;
         script.dataset.ponsAttempt = String(attempt);
         let settled = false;
-        const timer = setTimeout(() => finish(false, new Error(`Délai de chargement PONS dépassé : ${src}`)), 120000);
+        const scriptTimeoutMs = src.includes('pons-wasm-embedded.js') || src.includes('canonical-rules-v1.js') ? 45000 : 25000;
+        const timer = setTimeout(() => finish(false, ponsTimeoutError(`Chargement de ${src.split('?')[0]}`, scriptTimeoutMs)), scriptTimeoutMs);
         const finish = (ok, err) => {
             if (settled) return;
             settled = true;
@@ -286,7 +322,7 @@ async function loadPonsClientScript(src) {
             // .wasm, compilé en streaming, avant de charger pons-engine.js.
             if (src.includes('pons-wasm-runtime.js')) {
                 if (!window.PONS_WASM_RUNTIME_READY) throw new Error('Promise WASM PONS absente');
-                await window.PONS_WASM_RUNTIME_READY;
+                await withPonsTimeout(window.PONS_WASM_RUNTIME_READY, 22000, 'Initialisation WASM PONS');
                 if (!window.PonsWasmModule) throw new Error('Module WASM PONS absent après initialisation');
                 recordPlayPerfMilestone('pons-wasm-ready');
             }
@@ -5111,7 +5147,7 @@ async function uiStartGameAsHost() {
     if (needsPonsAtLaunch) {
         showConnectingOverlay('Préparation du moteur PONS…');
         try {
-            await ensurePonsClientReady();
+            await withPonsTimeout(ensurePonsClientReady(), 110000, 'Préparation complète du moteur PONS');
             hidePonsFailureDiagnostic();
         } catch (err) {
             hideConnectingOverlay();
