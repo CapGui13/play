@@ -143,7 +143,7 @@ function setPonsClientLoadingStatus(text, kind = 'is-offline') {
 
 function isLikelyMobileDevice() {
     try {
-        if (window.matchMedia && window.matchMedia('(pointer: coarse)').matches && window.innerWidth <= 1024) return true;
+        if (window.matchMedia && window.matchMedia('(pointer: coarse)').matches && window.innerWidth <= 1366) return true;
     } catch (e) { /* fallback largeur */ }
     return typeof window !== 'undefined' && window.innerWidth <= 760;
 }
@@ -8176,7 +8176,7 @@ function setAuctionVisualMode(mode, { parCapable = false, ddTableHtml = '' } = {
     const biddingViewEl = document.getElementById('auctionBiddingView');
     if (!stack || !resultEl || !biddingViewEl) return;
 
-    const mobile = window.matchMedia && window.matchMedia('(max-width: 1024px)').matches;
+    const mobile = window.matchMedia && window.matchMedia('(max-width: 1024px), ((hover: none) and (pointer: coarse) and (max-width: 1366px))').matches;
     const shouldStackMobile = mobile && (parCapable || mode === 'final');
     // Desktop, pendant l'enchère seulement : garder Enchères et PAR dans la même cellule
     // de grille, comme sur mobile. La vue masquée continue ainsi de réserver sa hauteur :
@@ -9339,7 +9339,7 @@ function renderBoardOverview() {
 // gaps réduits) ; cette passe ne réduit la police de la main que si une main donnée est
 // encore réellement trop large. On ne touche jamais au desktop ni aux colonnes contrat/PAR.
 function fitBoardOverviewMobileRows() {
-    if (!window.matchMedia || !window.matchMedia('(max-width: 1024px)').matches) return;
+    if (!window.matchMedia || !window.matchMedia('(max-width: 1024px), ((hover: none) and (pointer: coarse) and (max-width: 1366px))').matches) return;
     const modal = document.getElementById('boardOverviewModal');
     if (!modal || modal.style.display === 'none') return;
 
