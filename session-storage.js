@@ -1,11 +1,11 @@
 // session-storage.js — Persistance cloud authentifiée de l'état de partie.
 //
-// Le code 4 chiffres reste un identifiant humain. L'accès cloud utilise en plus une clé
-// de capacité aléatoire propre à la salle, stockée localement sur chaque appareil ayant
-// réellement participé. La capacité de lecture/relais est reçue lors de la réservation
-// (hôte) ou via le P2P ciblé ('session-access') après autorisation par l'hôte. Le lien
-// de partage court ne transporte aucun secret. La capacité d'écriture complète du host
-// est distincte, reste locale à l'appareil hôte et n'est jamais envoyée aux invités.
+// Le code 4 chiffres reste l'identifiant humain de la salle. En mode LIVE, l'accès cloud
+// utilise en plus une capacité aléatoire propre à la salle, reçue lors de la réservation
+// (hôte) ou via le P2P ciblé ('session-access') après autorisation. En mode DIFFÉRÉ
+// explicite (siège « En attente d'un partenaire »), choix produit assumé : le code à
+// 4 chiffres suffit aussi pour la reprise cloud à froid. La capacité d'écriture complète
+// du host reste toujours distincte, aléatoire et locale à son appareil.
 
 const SESSION_API_BASE = 'https://api-gen-beta.vercel.app';
 const SESSION_PUSH_RETRIES = 2;
@@ -34,6 +34,113 @@ function makeLocalSessionRoomCode() {
 
 function normalizeSessionRoomCode(roomCode) {
     return String(roomCode || '').toUpperCase().trim();
+}
+
+
+// Mode différé "code seul" : choix produit assumé. Pour une salle qui contient un siège
+// "En attente d'un partenaire", le code à 4 chiffres devient volontairement la seule
+// information nécessaire pour relire/reprendre la session quand le créateur est hors ligne.
+// Ces valeurs sont donc DÉRIVABLES du code et ne constituent pas des secrets cryptographiques.
+// Le mode live normal conserve, lui, les capacités aléatoires fortes renvoyées par l'API.
+function deferredCodeOnlyAccessKey(roomCode) {
+    const code = normalizeSessionRoomCode(roomCode);
+    if (!/^\d{4}$/.test(code)) return null;
+    return `deferred_code_v1_${code.repeat(8)}`;
+}
+
+function deferredCodeOnlyParticipantCredential(roomCode) {
+    const code = normalizeSessionRoomCode(roomCode);
+    if (!/^\d{4}$/.test(code)) return null;
+    return {
+        participantId: 'p_' + (`dc${code}`).repeat(4),       // 24 caractères après p_
+        reconnectSecret: 's_' + (`dc${code}join`).repeat(4) // 40 caractères après s_
+    };
+}
+
+let deferredCodeOnlyEnablePromise = null;
+let deferredCodeOnlyEnableRoom = null;
+
+async function enableDeferredCodeOnlyRoomAccess(roomCode) {
+    if (isLocalFileSessionMode()) return true;
+    const code = normalizeSessionRoomCode(roomCode);
+    const desiredAccessKey = deferredCodeOnlyAccessKey(code);
+    const credential = deferredCodeOnlyParticipantCredential(code);
+    if (!code || !desiredAccessKey || !credential) return false;
+
+    if (deferredCodeOnlyEnablePromise && deferredCodeOnlyEnableRoom === code) {
+        return deferredCodeOnlyEnablePromise;
+    }
+
+    deferredCodeOnlyEnableRoom = code;
+    deferredCodeOnlyEnablePromise = (async () => {
+        const currentAccessKey = getSessionAccessKey(code);
+        const currentHostWriteKey = getSessionHostWriteKey(code);
+        if (!currentAccessKey || !currentHostWriteKey) return false;
+
+        // Pré-enregistrer d'abord l'identité dérivable du code. Si la rotation d'accès
+        // réussit ensuite, un partenaire ne connaissant que les 4 chiffres pourra à la fois
+        // lire le snapshot et écrire ses propres actions via cette credential.
+        const registered = await registerSessionParticipantCredential(
+            code, credential.participantId, credential.reconnectSecret
+        );
+        if (!registered) return false;
+
+        // Déjà convertie : ne surtout pas faire tourner la clé host à chaque rendu/clic.
+        if (currentAccessKey === desiredAccessKey) return true;
+
+        const newHostWriteKey = generateSessionCapabilityKey();
+        if (!newHostWriteKey) return false;
+        try {
+            const resp = await fetch(`${SESSION_API_BASE}/api/session`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Bridge-Session-Key': currentAccessKey,
+                    'X-Bridge-Host-Write-Key': currentHostWriteKey
+                },
+                body: JSON.stringify({
+                    action: 'rotate-room-capabilities', code,
+                    newAccessKey: desiredAccessKey,
+                    newHostWriteKey
+                }),
+                cache: 'no-store'
+            });
+            if (!resp.ok) return false;
+            rememberSessionAccessKey(code, desiredAccessKey);
+            rememberSessionHostWriteKey(code, newHostWriteKey);
+            return true;
+        } catch (e) {
+            return false;
+        }
+    })().finally(() => {
+        deferredCodeOnlyEnablePromise = null;
+        deferredCodeOnlyEnableRoom = null;
+    });
+
+    return deferredCodeOnlyEnablePromise;
+}
+
+// Tentative de reprise à froid avec le SEUL code à 4 chiffres. Elle ne réussit que pour
+// une salle que l'hôte a explicitement convertie au mode différé ci-dessus ; une salle live
+// garde une clé aléatoire et répondra donc 401/403, sans révéler son état.
+async function pullDeferredSessionStateByCode(roomCode) {
+    if (isLocalFileSessionMode()) return null;
+    const code = normalizeSessionRoomCode(roomCode);
+    const accessKey = deferredCodeOnlyAccessKey(code);
+    if (!code || !accessKey) return null;
+    try {
+        const resp = await fetch(sessionApiUrl(code), {
+            method: 'GET',
+            cache: 'no-store',
+            headers: { 'X-Bridge-Session-Key': accessKey }
+        });
+        if (resp.status === 401 || resp.status === 403 || resp.status === 404) return null;
+        if (!resp.ok) throw new Error(`pullDeferredSessionStateByCode: HTTP ${resp.status}`);
+        rememberSessionAccessKey(code, accessKey);
+        return resp.json();
+    } catch (e) {
+        return null;
+    }
 }
 
 function readSessionAccessKeyMap() {
@@ -406,6 +513,8 @@ if (typeof module !== 'undefined' && module.exports) {
         getSessionAccessKey, rememberSessionAccessKey, forgetSessionAccessKey,
         getSessionHostWriteKey, rememberSessionHostWriteKey, forgetSessionHostWriteKey,
         registerSessionParticipantCredential,
+        deferredCodeOnlyAccessKey, deferredCodeOnlyParticipantCredential,
+        enableDeferredCodeOnlyRoomAccess, pullDeferredSessionStateByCode,
         claimLegacySessionAccess, activateRoomAccess, rotateSessionCapabilities
     };
 }

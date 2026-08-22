@@ -738,12 +738,11 @@ function forgetGuestRoomCredential(roomCode) {
     }
 }
 
-// Invitation différée pré-autorisée : contrairement à un invité live, le futur partenaire
-// peut arriver alors que le créateur est complètement hors ligne. On prépare donc, tant
-// que le host est encore présent, UNE credential invitée et on l'enregistre côté serveur.
-// Elle voyage uniquement dans le fragment (#...) du lien différé, est capturée localement
-// par le destinataire puis immédiatement retirée de l'URL. Le code 4 chiffres seul ne
-// contient jamais ce secret.
+// Identité différée pré-autorisée : contrairement à un invité live, le futur partenaire
+// peut arriver alors que le créateur est complètement hors ligne. Dans le modèle actuel,
+// cette identité est dérivable du code à 4 chiffres et pré-enregistrée côté serveur par
+// l'hôte ; le code suffit donc à la reprise. La map ci-dessous reste seulement comme
+// fallback de compatibilité avec un ancien session-storage.js.
 const DEFERRED_INVITE_CREDENTIALS_KEY = 'bridgeBidDeferredInviteCredentialsV1';
 
 function readDeferredInviteCredentialMap() {
@@ -757,6 +756,19 @@ function readDeferredInviteCredentialMap() {
 function getOrCreateDeferredInviteCredential(roomCode) {
     const code = String(roomCode || '').trim();
     if (!/^\d{4}$/.test(code)) return null;
+
+    // Nouveau modèle différé : l'identité du futur partenaire est volontairement
+    // dérivable du code à 4 chiffres, afin que ce code suffise même si le créateur est
+    // complètement hors ligne. Ancien fallback aléatoire conservé uniquement si le
+    // helper de session-storage.js n'est pas disponible (compat déploiement partiel).
+    if (typeof deferredCodeOnlyParticipantCredential === 'function') {
+        const deterministic = deferredCodeOnlyParticipantCredential(code);
+        if (deterministic && isModernGuestParticipantId(deterministic.participantId)
+                && isValidReconnectSecret(deterministic.reconnectSecret)) {
+            return deterministic;
+        }
+    }
+
     const map = readDeferredInviteCredentialMap();
     const existing = map[code];
     if (existing && isModernGuestParticipantId(existing.participantId) && isValidReconnectSecret(existing.reconnectSecret)) {
@@ -774,15 +786,33 @@ async function ensureDeferredInviteCredentialRegistered(roomCode = currentRoomCo
     if (!SEATS.some(seat => seatAssignment[seat] === SEAT_PENDING) && !deferredRoomMode) return null;
     const credential = getOrCreateDeferredInviteCredential(roomCode);
     if (!credential) return null;
-    // Le host doit connaître le même secret si le partenaire arrive pendant qu'il est
-    // encore en ligne en P2P ; côté serveur, cette pré-inscription autorise ensuite les
-    // écritures du même partenaire s'il arrive seulement après fermeture du host.
+
+    // Le host doit connaître cette même identité si le partenaire arrive pendant qu'il
+    // est encore en ligne en P2P.
     registerHostGuestReconnectSecret(credential.participantId, credential.reconnectSecret);
+
+    // Nouveau mode produit : en différé, le code à 4 chiffres suffit. session-storage.js
+    // pré-enregistre cette credential puis remplace seulement la capacité DE LECTURE par
+    // une valeur dérivable du code ; la clé d'écriture complète de l'hôte reste aléatoire.
+    if (typeof enableDeferredCodeOnlyRoomAccess === 'function') {
+        try {
+            const ok = await enableDeferredCodeOnlyRoomAccess(roomCode);
+            if (!ok) pushDebugLog('Préparation du mode différé par code seul impossible pour le moment.');
+            return ok ? credential : null;
+        } catch (e) {
+            pushDebugLog('Préparation du mode différé par code seul impossible : ' + ((e && e.message) || e));
+            return null;
+        }
+    }
+
+    // Compat avec une version de session-storage.js plus ancienne.
     if (typeof registerSessionParticipantCredential === 'function') {
         try {
-            await registerSessionParticipantCredential(roomCode, credential.participantId, credential.reconnectSecret);
+            const ok = await registerSessionParticipantCredential(roomCode, credential.participantId, credential.reconnectSecret);
+            if (!ok) return null;
         } catch (e) {
             pushDebugLog('Pré-autorisation du partenaire différé impossible : ' + ((e && e.message) || e));
+            return null;
         }
     }
     return credential;
@@ -1917,6 +1947,13 @@ function canControlBoard() {
     return myRole === 'host' || (mySeats && mySeats.length > 0);
 }
 
+// En live, l'hôte reste le seul à déplacer la table entière. En différé, chaque joueur
+// assis navigue indépendamment entre les donnes : cette liberté faisait partie du mode
+// asynchrone stabilisé et ne doit pas dépendre du rôle technique P2P du moment.
+function canNavigateBoards() {
+    return myRole === 'host' || (deferredRoomMode && mySeats && mySeats.length > 0);
+}
+
 function escapeHtml(str) {
     const div = document.createElement('div');
     div.textContent = str == null ? '' : String(str);
@@ -2430,37 +2467,17 @@ function hideConnectingOverlay() {
     if (overlay) overlay.style.display = 'none';
 }
 
-// Le lien partagé reste court en mode live. En mode différé, le lien doit aussi permettre
-// l'arrivée du partenaire lorsque le créateur est hors ligne : on place alors les
-// capacités nécessaires dans le FRAGMENT (#...), jamais dans la requête HTTP. Elles sont
-// capturées puis effacées localement à l'ouverture (voir rememberRoomAccessFromUrl).
+// Le lien partagé reste désormais court dans TOUS les modes. En différé, le code à
+// 4 chiffres suffit lui-même à reprendre la salle ; aucun secret supplémentaire n'est
+// nécessaire dans l'URL. rememberRoomAccessFromUrl() reste présent pour accepter les
+// anciens liens différés contenant encore #access/#pid/#secret.
 function buildRoomShareUrl(roomCode) {
     const url = new URL(window.location.href);
     url.searchParams.set('room', roomCode);
     url.searchParams.delete('access');
+    url.searchParams.delete('pid');
+    url.searchParams.delete('secret');
     url.hash = '';
-
-    const hasPendingSeat = SEATS.some(seat => seatAssignment[seat] === SEAT_PENDING);
-    const isDeferredInvite = deferredRoomMode || hasPendingSeat;
-    const accessKey = isDeferredInvite && typeof getSessionAccessKey === 'function'
-        ? getSessionAccessKey(roomCode)
-        : null;
-    if (accessKey) {
-        const hashParams = new URLSearchParams();
-        hashParams.set('access', accessKey);
-        // Tant qu'un siège attend encore quelqu'un, le lien porte aussi une identité
-        // pré-autorisée à revendiquer ce siège et à écrire ensuite via le relais serveur.
-        // Une fois le siège revendiqué, on conserve seulement la capacité de lecture :
-        // un nouveau visiteur peut encore kibbitzer sans pouvoir usurper le partenaire.
-        if (hasPendingSeat) {
-            const invite = getOrCreateDeferredInviteCredential(roomCode);
-            if (invite) {
-                hashParams.set('pid', invite.participantId);
-                hashParams.set('secret', invite.reconnectSecret);
-            }
-        }
-        url.hash = hashParams.toString();
-    }
     return url;
 }
 
@@ -2631,6 +2648,28 @@ function buildHostHandlers(onOpenExtra) {
 
             let p = participants.find(x => x.id === token);
             const isReturning = !!p;
+
+            // En mode différé, la place PENDING possède UNE identité déterministe dérivée
+            // du code à 4 chiffres (pré-autorisée côté serveur). Il faut utiliser cette même
+            // identité même si le partenaire arrive pour la première fois pendant que
+            // l'hôte est encore en ligne ; sinon la place serait attribuée à une identité
+            // aléatoire P2P, puis impossible à retrouver plus tard depuis un nouvel appareil
+            // avec le seul code. On ne force ce credential que pour un NOUVEL arrivant qui
+            // s'apprête réellement à revendiquer la place PENDING ; les participants déjà
+            // connus/reconnectés ne sont jamais concernés.
+            if (!isReturning && currentRoomCode && SEATS.some(seat => seatAssignment[seat] === SEAT_PENDING)) {
+                const expectedDeferredCredential = getOrCreateDeferredInviteCredential(currentRoomCode);
+                if (expectedDeferredCredential
+                        && (token !== expectedDeferredCredential.participantId
+                            || reconnectSecret !== expectedDeferredCredential.reconnectSecret)) {
+                    rejectPeerProtocolMessage({ type: 'identity' }, guestIndex, 'credential différée requise pour la place en attente');
+                    peerConn.send({ type: 'identity-rejected', reason: 'deferred-credential-required' }, guestIndex);
+                    const badConn = peerConn.conns && peerConn.conns[guestIndex];
+                    setTimeout(() => { try { if (badConn) badConn.close(); } catch (e) {} }, 80);
+                    return;
+                }
+            }
+
             if (isReturning) {
                 const expectedSecret = guestReconnectSecretsByParticipantId[token];
                 if (!expectedSecret || expectedSecret !== reconnectSecret) {
@@ -2909,6 +2948,11 @@ function buildGuestHandlers() {
             // devenu obsolète ne doit surtout pas marquer l'entrée `host` comme déconnectée.
             if (myRole !== 'guest') return;
             setConnectionStatus(false);
+            // Pendant toute coupure P2P, le cloud devient immédiatement la voie de
+            // réception. En différé il reste également actif même après reconnexion afin de
+            // suivre les autres donnes, qui évoluent indépendamment de celle regardée par
+            // l'hôte.
+            startDeferredPolling();
             // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 4) : l'ancien planificateur de reprise automatique
             // a disparu d'ici (plus d'élection automatique d'un autre hôte) — seule reste la reconnexion
             // automatique en arrière-plan (voir scheduleGuestAutoReconnect), qui
@@ -2952,6 +2996,7 @@ function buildGuestHandlers() {
             // tardifs n'appartiennent plus au rôle courant.
             if (myRole !== 'guest') return;
             setConnectionStatus(false);
+            startDeferredPolling();
             scheduleGuestAutoReconnect();
             renderReconnectButton();
             const hostEntry = participants.find(p => p.id === 'host');
@@ -3879,10 +3924,19 @@ function uiCloseSeatDropdowns() {
     document.querySelectorAll('.seat-box.dropdown-open').forEach(b => { b.classList.remove('dropdown-open'); });
 }
 
-// Ferme tout menu de siège ouvert dès qu'on clique n'importe où ailleurs sur la page (voir
-// échange avec Guillaume) — posé une seule fois au chargement, pas à chaque rendu de la
-// grille (sinon les écouteurs s'empileraient à chaque re-rendu du salon).
-document.addEventListener('click', uiCloseSeatDropdowns);
+// Ferme les menus seulement lors d'un VRAI clic extérieur. Depuis la migration CSP vers
+// ui-events.js, le clic de la case est lui aussi délégué sur `document` : l'ancien listener
+// global s'exécutait donc AVANT le toggle et refermait le menu juste avant que le toggle ne
+// le rouvre. Résultat : ouvrir marchait, mais recliquer sur la même case ne pouvait plus le
+// fermer. Dans OLD, stopPropagation() était posé directement sur le bouton et empêchait ce
+// listener d'être atteint. On reproduit exactement cette sémantique sans inline onclick :
+// toute case de siège gère son propre toggle ; seul un clic réellement extérieur ferme.
+function uiCloseSeatDropdownsOnOutsideClick(event) {
+    const target = event && event.target instanceof Element ? event.target : null;
+    if (target && target.closest('.seat-box[data-ui-click="toggle-seat-dropdown"]')) return;
+    uiCloseSeatDropdowns();
+}
+document.addEventListener('click', uiCloseSeatDropdownsOnOutsideClick);
 
 function uiAssignSeat(seat, participantId) {
     if (myRole !== 'host') return;
@@ -5036,6 +5090,22 @@ async function uiStartGameAsHost() {
         hideConnectingOverlay();
     }
 
+    // En mode différé, le code à 4 chiffres doit suffire même si l'hôte ferme sa
+    // fenêtre juste après le lancement. On attend donc ici la conversion cloud AVANT de
+    // démarrer réellement la séance ; le clic dans le salon l'a déjà lancée en arrière-
+    // plan, mais cette garde rend le comportement déterministe même si l'utilisateur est
+    // très rapide.
+    const launchingDeferred = SEATS.some(seat => seatAssignment[seat] === SEAT_PENDING);
+    if (launchingDeferred && currentRoomCode) {
+        showConnectingOverlay('Préparation du mode différé…');
+        const ready = await ensureDeferredInviteCredentialRegistered(currentRoomCode);
+        hideConnectingOverlay();
+        if (!ready) {
+            setHostSetupMessage('Impossible de préparer la reprise différée par code. Vérifiez votre connexion puis réessayez.', false);
+            return;
+        }
+    }
+
     // Reçoit les donnes déjà dans l'ordre à utiliser pour jouer (mélangé ou non, voir
     // pendingOrderedDeals / refreshPendingOrderedDeals) — jamais l'ordre brut du fichier.
     const proceedWithDeals = (orderedDeals) => {
@@ -5260,8 +5330,10 @@ function handlePeerData(msg, guestIndex) {
         case 'identity-rejected': {
             if (myRole !== 'guest' || !currentRoomCode) break;
             const code = currentRoomCode;
-            pushDebugLog("Identité de reconnexion refusée par l'hôte — nouvelle identité locale pour rejoindre sans voler une ancienne place.");
-            forgetGuestRoomCredential(code);
+            const needsDeferredCredential = msg.reason === 'deferred-credential-required';
+            pushDebugLog(needsDeferredCredential
+                ? "Place différée détectée — reconnexion immédiate avec l'identité stable liée au code."
+                : "Identité de reconnexion refusée par l'hôte — nouvelle identité locale pour rejoindre sans voler une ancienne place.");
             if (identityRecoveryAttemptedRooms.has(code)) {
                 hideConnectingOverlay();
                 showLandingError('Impossible de valider votre identité de reconnexion. Rechargez PLAY puis rejoignez à nouveau la salle.');
@@ -5269,7 +5341,20 @@ function handlePeerData(msg, guestIndex) {
             }
             identityRecoveryAttemptedRooms.add(code);
             if (peerConn) peerConn.destroy();
-            setTimeout(() => connectAsGuest(code, null, savedNickname), 120);
+
+            if (needsDeferredCredential) {
+                const deferredCredential = getOrCreateDeferredInviteCredential(code);
+                if (!deferredCredential) {
+                    hideConnectingOverlay();
+                    showLandingError('Impossible de préparer l’identité de la place en attente.');
+                    break;
+                }
+                rememberGuestRoomCredential(code, deferredCredential);
+                setTimeout(() => connectAsGuest(code, null, savedNickname, deferredCredential), 120);
+            } else {
+                forgetGuestRoomCredential(code);
+                setTimeout(() => connectAsGuest(code, null, savedNickname), 120);
+            }
             break;
         }
 
@@ -5525,6 +5610,7 @@ function handlePeerData(msg, guestIndex) {
             // correctement l'hôte dans mes propres échanges avec le serveur.
             currentHostReconnectToken = msg.hostReconnectToken || null;
             deferredRoomMode = !!msg.deferredRoomMode;
+            if (deferredRoomMode) startDeferredPolling();
             if (msg.roomCreatorName) roomCreatorName = msg.roomCreatorName;
             // Ce message est aussi renvoyé quand la connectivité change en pleine partie
             // (quelqu'un se (re)connecte) : on ne bascule à l'écran du salon que si la
@@ -5601,6 +5687,8 @@ function handlePeerData(msg, guestIndex) {
             // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 4) : voir le commentaire
             // équivalent dans 'start-game' — l'ancien identifiant de relais a disparu.
             currentHostReconnectToken = msg.hostReconnectToken || null;
+            if (typeof msg.deferredRoomMode === 'boolean') deferredRoomMode = msg.deferredRoomMode;
+            if (deferredRoomMode) startDeferredPolling();
             if (msg.roomCreatorName) roomCreatorName = msg.roomCreatorName;
             hostPendingUndo = null;
             clearUndoUiState();
@@ -7546,8 +7634,11 @@ function uiMakeCall(call) {
     // serveur au lieu d'abandonner — voir pushCallViaServerFallback, qui relit l'état
     // serveur, rejoue cette annonce dessus et revalide avant de pousser (jamais un envoi
     // à l'aveugle sur la seule foi de ma copie locale, potentiellement périmée).
-    if (myRole === 'guest' && (!peerConn || !peerConn.isConnected())) {
-        pushCallViaServerFallback(turnSeat, call);
+    if (myRole === 'guest' && (deferredRoomMode || !peerConn || !peerConn.isConnected())) {
+        // En différé, même une connexion P2P vivante ne suffit pas : l'hôte peut regarder
+        // une autre donne et son handler live ignore volontairement les annonces d'un autre
+        // boardIndex. Le serveur est donc l'autorité de convergence pour chaque donne.
+        pushCallViaServerFallback(boardIndex, turnSeat, call);
         return;
     }
     peerConn.send({ type: 'call', boardIndex, seat: turnSeat, call });
@@ -8684,7 +8775,7 @@ function renderUndoControls() {
     // du mode différé pour cette annonce précise : personne à qui demander l'accord, donc
     // même repli sur la règle locale plutôt que d'attendre une réponse qui n'arrivera
     // jamais.
-    const isDeferredNonCreator = deals && (peerConn instanceof NullPeerConnection) && !isTrueOriginalHost();
+    const isDeferredNonCreator = deals && deferredRoomMode && !isTrueOriginalHost();
     const isDisconnectedGuest = deals && myRole === 'guest' && (!peerConn || !peerConn.isConnected());
     const appliesImmediately = myRole === 'host' || isDeferredNonCreator || isDisconnectedGuest;
     const myUndoTargetIndex = findUndoTargetIndex(myParticipantId, auctionHistory);
@@ -8887,14 +8978,14 @@ function uiRequestUndo() {
 
     if (myRole === 'host') {
         hostHandleUndoRequest(msg);
-    } else if (!peerConn || !peerConn.isConnected()) {
+    } else if (deferredRoomMode || !peerConn || !peerConn.isConnected()) {
         // Voir échange avec Guillaume ("l'hôte n'a pas reçu la demande d'undo pendant
         // qu'il était hors ligne, et elle a fini par disparaître") : peerConn.send()
         // échoue silencieusement contre une connexion fermée (voir
         // BridgePeerConnection.send) — sans ce repli, la demande partait dans le vide et
         // le minuteur de 20s ci-dessus finissait par afficher "Personne n'a répondu à
         // temps", ce qui n'était même pas vrai (personne n'avait rien REÇU du tout).
-        pushUndoViaServerFallback();
+        pushUndoViaServerFallback(msg.boardIndex);
     } else {
         peerConn.send(msg);
     }
@@ -8908,7 +8999,7 @@ function uiRequestUndo() {
 // optimiste préalable : on valide contre l'état serveur AVANT de toucher à quoi que ce
 // soit localement — une annulation est plus délicate à défaire proprement qu'une simple
 // enchère de trop si jamais elle s'avérait invalide entre-temps.
-async function pushUndoViaServerFallback() {
+async function pushUndoViaServerFallback(targetBoardIndex = boardIndex) {
     const done = () => { undoRequestPending = false; renderUndoControls(); };
 
     if (!currentRoomCode || typeof pullSessionState !== 'function' || typeof pushSessionState !== 'function') {
@@ -8933,7 +9024,7 @@ async function pushUndoViaServerFallback() {
 
         const baseState = pulled ? pulled.state : buildCloudStatePayload();
         const expectedVersion = pulled ? pulled.version : 0;
-        const idx = baseState.boardIndex;
+        const idx = Number.isInteger(targetBoardIndex) ? targetBoardIndex : boardIndex;
         const boardDeals = baseState.deals;
         if (!boardDeals || !boardDeals[idx]) {
             pushDebugLog(`Undo abandonné : donne ${idx} introuvable dans l'état serveur relu.`);
@@ -9225,12 +9316,17 @@ function gotoBoard(newIndex) {
     hostPendingUndo = null;
     clearUndoUiState();
     renderBoard();
-    peerConn.send({
-        type: 'goto-board',
-        boardIndex,
-        auctionHistory: cloneAuctionHistoryForWire(auctionHistory)
-    });
-    saveHostGameStateToStorage();
+    // Le boardIndex est une vue LOCALE en différé : deux partenaires peuvent travailler
+    // sur des donnes différentes. En live seulement, l'hôte continue de déplacer toute la
+    // table par P2P comme historiquement.
+    if (!deferredRoomMode && peerConn) {
+        peerConn.send({
+            type: 'goto-board',
+            boardIndex,
+            auctionHistory: cloneAuctionHistoryForWire(auctionHistory)
+        });
+    }
+    if (myRole === 'host') saveHostGameStateToStorage();
 }
 
 // Navigation depuis le bouton « Donne suivante → » du bloc final/PAR.
@@ -9272,7 +9368,7 @@ function positionNextBoardAfterParNavigation() {
 }
 
 function uiNextBoard() {
-    if (myRole !== 'host') return;
+    if (!canNavigateBoards()) return;
     if (boardIndex >= deals.length - 1) return;
     gotoBoard(boardIndex + 1);
     fadeBoardNavigationTargets();
@@ -9283,14 +9379,14 @@ function uiNextBoard() {
 // réservée à l'hôte, pour pouvoir sauter une donne sans attendre que l'enchère en cours
 // se termine.
 function uiHostSkipNextBoard() {
-    if (myRole !== 'host' || !deals) return;
+    if (!canNavigateBoards() || !deals) return;
     if (boardIndex >= deals.length - 1) return;
     gotoBoard(boardIndex + 1);
     fadeBoardNavigationTargets();
 }
 
 function uiHostSkipPrevBoard() {
-    if (myRole !== 'host' || !deals) return;
+    if (!canNavigateBoards() || !deals) return;
     if (boardIndex <= 0) return;
     gotoBoard(boardIndex - 1);
     fadeBoardNavigationTargets();
@@ -9526,7 +9622,7 @@ function uiJumpToBoardFromOverview(idx) {
     // Même règle que les flèches ◀▶ existantes : seul l'hôte pilote la navigation entre
     // donnes (voir renderBoardSkipControls) — un invité peut consulter la vue d'ensemble,
     // pas s'en servir pour déplacer tout le monde.
-    if (myRole !== 'host') return;
+    if (!canNavigateBoards()) return;
     if (idx === boardIndex) return;
     gotoBoard(idx);
 }
@@ -9540,7 +9636,7 @@ function uiJumpToBoardFromOverview(idx) {
 // donne n'aurait pas encore été touchée depuis un chargement antérieur à ce correctif.
 // Réservé à l'hôte, même règle que ◀▶ et la vue d'ensemble.
 function uiFastForwardToMyTurn() {
-    if (myRole !== 'host' || !deals) return;
+    if (!canNavigateBoards() || !deals) return;
     const n = deals.length;
     for (let offset = 1; offset <= n; offset++) {
         const idx = (boardIndex + offset) % n;
@@ -9569,17 +9665,17 @@ function renderBoardSkipControls() {
     const nextBtn = document.getElementById('skipNextBoardBtn');
     const fastForwardBtn = document.getElementById('fastForwardBoardBtn');
     if (!prevBtn || !nextBtn) return;
-    const isHost = myRole === 'host';
+    const canNavigate = canNavigateBoards();
     // Voir échange avec Guillaume ("Donne #... devrait être à la même place pour l'invité
     // que pour l'hôte, l'invité ne doit juste pas voir les 2 flèches") : visibility (pas
     // display:none) — sans ça, les flèches masquées disparaissaient du flux flex
     // (.board-nav-row), et #boardNumberLabel, leur voisin direct, se retrouvait décalé
     // vers la gauche pour un invité par rapport à l'hôte (même principe déjà utilisé pour
     // rotateBtn/seatReorgBtn, voir updateBoardControlVisibility).
-    prevBtn.style.visibility = isHost ? '' : 'hidden';
-    prevBtn.style.pointerEvents = isHost ? '' : 'none';
-    nextBtn.style.visibility = isHost ? '' : 'hidden';
-    nextBtn.style.pointerEvents = isHost ? '' : 'none';
+    prevBtn.style.visibility = canNavigate ? '' : 'hidden';
+    prevBtn.style.pointerEvents = canNavigate ? '' : 'none';
+    nextBtn.style.visibility = canNavigate ? '' : 'hidden';
+    nextBtn.style.pointerEvents = canNavigate ? '' : 'none';
     // Voir échange avec Guillaume ("la flèche avance rapide ne doit pas apparaître en cas
     // de jeu non différé") : "avance rapide" saute à la prochaine donne où c'est mon tour
     // AILLEURS — utile seulement en mode différé, où les donnes avancent indépendamment
@@ -9589,13 +9685,13 @@ function renderBoardSkipControls() {
     // l'hôte. Même repère que pollCloudForUpdates pour détecter le mode différé
     // (`peerConn instanceof NullPeerConnection`), fixé au lancement de la salle.
     const isDeferredRoom = deferredRoomMode;
-    const showFastForward = isHost && isDeferredRoom;
+    const showFastForward = canNavigate && isDeferredRoom;
     if (fastForwardBtn) {
         fastForwardBtn.style.display = showFastForward ? '' : 'none';
         fastForwardBtn.style.visibility = '';
         fastForwardBtn.style.pointerEvents = showFastForward ? '' : 'none';
     }
-    if (!isHost || !deals) return;
+    if (!canNavigate || !deals) return;
     prevBtn.disabled = boardIndex <= 0;
     nextBtn.disabled = boardIndex >= deals.length - 1;
 }
@@ -10100,12 +10196,22 @@ async function uiResumeHostSession(roomCode) {
     // ne se sont pas reconnectés eux-mêmes (voir onGuestConnected, qui les remettra
     // correctement à disconnected:false à ce moment-là).
     const resumedAt = Date.now();
-    participants.forEach(p => {
-        if (p.id !== 'host') {
-            p.disconnected = true;
-            p.disconnectedAt = resumedAt;
-        }
-    });
+    if (!deferredRoomMode) {
+        // Live : le nouveau Peer hôte n'a encore aucune DataConnection, donc les invités
+        // sont réellement non joignables jusqu'à leur reconnexion.
+        participants.forEach(p => {
+            if (p.id !== 'host') {
+                p.disconnected = true;
+                p.disconnectedAt = resumedAt;
+            }
+        });
+    } else {
+        // Différé : la présence commune vient du cloud. Ne jamais marquer tout le monde
+        // rouge simplement parce que CET onglet vient de rouvrir.
+        const myTokenForPresence = getReconnectToken();
+        const own = participants.find(p => p.id === 'host' || p.id === myTokenForPresence);
+        if (own) { own.disconnected = false; own.disconnectedAt = null; }
+    }
     autoPassSeats = saved.autoPassSeats || [];
     advanceRobotBidsOnAllBoards(boardIndex); // voir échange avec Guillaume — idempotent, couvre une sauvegarde antérieure à ce correctif
     // Voir échange avec Guillaume (session du 23 juillet — "sauve aussi le chat") :
@@ -10600,7 +10706,7 @@ function pushCloudGameState() {
 // (quelqu'un/quelque chose a changé la situation ailleurs entre-temps), on abandonne et on
 // resynchronise sur le vrai état serveur plutôt que de laisser mon affichage optimiste
 // erroné en place (voir applyCloudUpdate, réutilisé tel quel pour ce cas).
-async function pushCallViaServerFallback(seat, call, explanation) {
+async function pushCallViaServerFallback(targetBoardIndex, seat, call, explanation) {
     if (!currentRoomCode || typeof pullSessionState !== 'function' || typeof pushSessionState !== 'function') {
         pushDebugLog(`Annonce ${call} (${seat}) : impossible de tenter le relais serveur (currentRoomCode ou fonctions cloud manquantes).`);
         return;
@@ -10627,7 +10733,7 @@ async function pushCallViaServerFallback(seat, call, explanation) {
 
         const baseState = pulled ? pulled.state : buildCloudStatePayload();
         const expectedVersion = pulled ? pulled.version : 0;
-        const idx = baseState.boardIndex;
+        const idx = Number.isInteger(targetBoardIndex) ? targetBoardIndex : boardIndex;
         const boardDeals = baseState.deals;
         if (!boardDeals || !boardDeals[idx]) {
             pushDebugLog(`Annonce ${call} (${seat}) abandonnée : état serveur relu inattendu (donne ${idx} introuvable).`);
@@ -10747,9 +10853,21 @@ function startDeferredPolling() {
 //     retour supplémentaire — c'est le vrai gain de latence).
 //   - {version, updatedAt} seul : repli, on relit via GET comme avant (pollCloudForUpdates).
 // Même garde-fou que pollCloudForUpdates : ne fait rien tant qu'on est pleinement en P2P.
+function shouldConsumeCloudUpdates() {
+    if (!currentRoomCode || !deals) return false;
+    if (myRole === 'host') {
+        return deferredRoomMode || (peerConn instanceof NullPeerConnection) || hasDisconnectedOccupiedSeat();
+    }
+    if (myRole === 'guest') {
+        // En différé, le cloud reste la source de convergence entre donnes même quand le
+        // P2P fonctionne. En live il ne prend le relais que pendant une coupure P2P.
+        return deferredRoomMode || !peerConn || !peerConn.isConnected();
+    }
+    return false;
+}
+
 function onCloudPusherEvent(data) {
-    if (myRole !== 'host' || !currentRoomCode) return;
-    if (!deferredRoomMode && !(peerConn instanceof NullPeerConnection) && !hasDisconnectedOccupiedSeat()) return;
+    if (!shouldConsumeCloudUpdates()) return;
     if (!data || typeof data.version !== 'number' || data.version <= lastKnownCloudVersion) return;
     if (cloudPushInFlight || cloudPushQueued) return; // pas la peine de relire ce qu'on vient tout juste d'envoyer
 
@@ -10790,7 +10908,7 @@ function stopDeferredPolling() {
 }
 
 async function pollCloudForUpdates() {
-    if (myRole !== 'host' || !currentRoomCode) return;
+    if (!shouldConsumeCloudUpdates()) return;
     // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 3) : sonde toujours en mode différé pur
     // (NullPeerConnection, inchangé), et DÉSORMAIS AUSSI en mode live dès qu'au moins un
     // siège occupé n'est plus joignable en P2P (voir hasDisconnectedOccupiedSeat) — c'est
@@ -10799,7 +10917,7 @@ async function pollCloudForUpdates() {
     // connecté (voir applyCloudUpdate). Tant que tout le monde est en P2P, cette
     // condition est fausse et rien ne se passe ici — aucun coût réseau ajouté au cas
     // normal.
-    if (!deferredRoomMode && !(peerConn instanceof NullPeerConnection) && !hasDisconnectedOccupiedSeat()) return;
+    // La décision de consommer le cloud est centralisée dans shouldConsumeCloudUpdates().
     // Ne sonde pas pendant qu'on est nous-mêmes en train d'écrire (voir pushCloudGameState)
     // — pas la peine de relire ce qu'on vient tout juste d'envoyer.
     if (cloudPushInFlight || cloudPushQueued) return;
@@ -10852,7 +10970,17 @@ function applyCloudUpdate(result, options = {}) {
     // déconnectés de son point de vue. On corrige immédiatement pour ne pas s'afficher
     // soi-même comme "déconnecté".
     const myEntry = participants.find(p => p.id === myParticipantId);
-    if (myEntry) myEntry.disconnected = false;
+    if (myEntry) { myEntry.disconnected = false; myEntry.disconnectedAt = null; }
+    // L'état serveur ne peut pas deviner instantanément qu'un hôte P2P vient de disparaître.
+    // Tant que CET invité n'a réellement aucune DataConnection vers l'hôte, son affichage
+    // local garde donc l'hôte en rouge ; au succès P2P, onGuestConnected le remet à false.
+    if (myRole === 'guest' && (!peerConn || !peerConn.isConnected())) {
+        const hostEntry = participants.find(p => p.id === 'host');
+        if (hostEntry) {
+            hostEntry.disconnected = true;
+            if (!hostEntry.disconnectedAt) hostEntry.disconnectedAt = selfDisconnectedAt || Date.now();
+        }
+    }
     mySeats = SEATS.filter(seat => seatAssignment[seat] === myParticipantId);
     lastKnownCloudVersion = validated.version;
     cloudLastSyncedState = exactServerState;
@@ -10953,10 +11081,20 @@ function preserveLatestCloudStateBeforeSuspend(allowDirectKeepalive = true) {
 // visibilitychange arrive généralement avant pagehide : déclencher la file normale ici
 // donne au PUT sérialisé une chance de finir pendant que le document existe encore.
 document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState !== 'hidden') return;
-    preserveLatestCloudStateBeforeSuspend(false);
-    if (!cloudPushInFlight) pushCloudGameState();
-    else cloudPushQueued = true;
+    if (document.visibilityState === 'hidden') {
+        preserveLatestCloudStateBeforeSuspend(false);
+        if (!cloudPushInFlight) pushCloudGameState();
+        else cloudPushQueued = true;
+        return;
+    }
+    if (document.visibilityState === 'visible' && myRole === 'host' && deals) {
+        const me = participants.find(p => p.id === myParticipantId);
+        if (me && me.disconnected) {
+            me.disconnected = false;
+            me.disconnectedAt = null;
+        }
+        pushCloudGameState();
+    }
 });
 window.addEventListener('pagehide', () => preserveLatestCloudStateBeforeSuspend(true));
 
@@ -10969,19 +11107,44 @@ async function offerCloudResume(code) {
     if (typeof pullSessionState !== 'function') return false;
     // Voir échange avec Guillaume ("la ligne 'Reprise hôte' n'apparaît pas dans le
     // journal combiné") : même correctif que uiResumeHostSession — posé tôt pour que les
-    // lignes journalisées ici (dont l'erreur juste en dessous) remontent bien vers le
-    // journal partagé de la salle, pas seulement en local.
+    // lignes journalisées ici remontent bien vers le journal partagé de la salle.
     currentRoomCode = code;
     const cloudCtx = captureCloudSyncContext(code);
-    let result;
+    let result = null;
+    let normalPullError = null;
+
+    // 1) Chemin normal : capacité déjà mémorisée sur cet appareil (live ou différé).
     try {
         result = await pullSessionState(code);
         if (!isCloudSyncContextActive(cloudCtx)) return false;
     } catch (e) {
-        pushDebugLog('Reprise cloud : le serveur de session n\'a pas répondu (' + ((e && e.message) || e) + ').');
+        normalPullError = e;
+    }
+
+    // 2) Nouveau chemin "code seul" : si cet appareil ne connaît encore aucun secret,
+    // essayer la capacité déterministe réservée aux salles DIFFÉRÉES. Une salle live
+    // conserve sa clé aléatoire : cette tentative y échoue simplement avec 401/403.
+    if (!result && typeof pullDeferredSessionStateByCode === 'function') {
+        try {
+            result = await pullDeferredSessionStateByCode(code);
+            if (!isCloudSyncContextActive(cloudCtx)) return false;
+            if (result && typeof deferredCodeOnlyParticipantCredential === 'function') {
+                const credential = deferredCodeOnlyParticipantCredential(code);
+                if (credential) rememberGuestRoomCredential(code, credential);
+            }
+        } catch (e) {
+            // Même sémantique que l'ancien chemin : l'échec cloud ne doit pas produire un
+            // écran différent tant qu'on ne sait pas qu'une session existe réellement.
+        }
+    }
+
+    if (!result) {
+        if (normalPullError) {
+            pushDebugLog('Reprise cloud : aucune session accessible pour ce code (' + ((normalPullError && normalPullError.message) || normalPullError) + ').');
+        }
         return false;
     }
-    if (!result) return false; // rien en cloud pour ce code : comportement inchangé, laisse l'appelant afficher son erreur habituelle
+
     result = prepareCloudResumeCandidate(result, code);
     if (!result) return false;
 
@@ -10995,11 +11158,13 @@ async function offerCloudResume(code) {
 // le long commentaire en tête de section pour la logique de revendication de siège.
 function uiResumeFromCloud() {
     if (!cloudResumeCandidate) return;
-    const st = cloudResumeCandidate.state;
+    const candidate = cloudResumeCandidate;
+    const st = cloneCloudData(candidate.state);
     const codeToReclaim = st.roomCode || currentRoomCode;
     const hostToken = getReconnectToken();
     const creatorToken = st.roomCreatorToken || st.hostReconnectToken || null;
     const isCreatorResume = !!creatorToken && hostToken === creatorToken;
+
     const guestCredential = isCreatorResume ? null : getGuestRoomCredential(codeToReclaim, true);
     const myToken = isCreatorResume ? hostToken : (guestCredential ? guestCredential.participantId : null);
     if (!myToken || !isSafeParticipantId(myToken)) {
@@ -11008,140 +11173,108 @@ function uiResumeFromCloud() {
         return;
     }
 
-    // Cas 0 : je suis le créateur d'origine de la salle qui revient — ses sièges peuvent
-    // encore être étiquetés littéralement 'host', reliquat de sa session live d'origine
-    // (voir uiCreateRoom). Migration une fois pour toutes vers mon vrai jeton : après ça,
-    // plus jamais besoin de cette étiquette spéciale pour retrouver ma place. Repli sur
-    // hostReconnectToken pour une salle créée avant l'ajout de roomCreatorToken.
-    if (isCreatorResume) {
-        SEATS.filter(seat => st.seatAssignment[seat] === 'host')
-            .forEach(seat => { st.seatAssignment[seat] = myToken; });
-        const legacyHostParticipant = st.participants.find(p => p.id === 'host');
-        if (legacyHostParticipant) legacyHostParticipant.id = myToken;
+    if (!Array.isArray(st.participants)) st.participants = [];
+    if (!st.seatAssignment || typeof st.seatAssignment !== 'object') {
+        hideConnectingOverlay();
+        showLandingError('État de salle invalide : assignation des sièges absente.');
+        return;
     }
 
-    // Cas 1 : je retrouve mon propre siège (déjà joué ici auparavant, ou migré ci-dessus).
-    let claimedSeat = SEATS.find(seat => st.seatAssignment[seat] === myToken);
-
-    // Cas 2 : première fois — je revendique le premier siège encore en attente d'un
-    // partenaire (voir SEAT_PENDING). "N'importe qui peut claim" (voir échange avec
-    // Guillaume) : aucune vérification d'identité au-delà de "ce siège est encore libre".
-    if (!claimedSeat) {
-        claimedSeat = SEATS.find(seat => st.seatAssignment[seat] === SEAT_PENDING);
-        if (claimedSeat) {
-            st.seatAssignment[claimedSeat] = myToken;
-            if (!st.participants.some(p => p.id === myToken)) {
-                st.participants.push({ id: myToken, name: savedNickname || 'Joueur', ...(normalizeAvatarColor(savedAvatarColor) ? { avatarColor: normalizeAvatarColor(savedAvatarColor) } : {}) });
+    if (isCreatorResume) {
+        // Le créateur reprend la vraie identité réseau `host`. Les snapshots différés
+        // récents peuvent avoir mémorisé sa place sous son token persistant : normaliser
+        // les deux formes avant de recréer la salle P2P.
+        SEATS.forEach(seat => {
+            if (st.seatAssignment[seat] === myToken || st.seatAssignment[seat] === 'host') {
+                st.seatAssignment[seat] = 'host';
             }
+        });
+        const tokenEntry = st.participants.find(p => p && p.id === myToken);
+        const hostEntry = st.participants.find(p => p && p.id === 'host');
+        if (tokenEntry && hostEntry && tokenEntry !== hostEntry) {
+            Object.assign(hostEntry, tokenEntry, { id: 'host' });
+            st.participants = st.participants.filter(p => p !== tokenEntry);
+        } else if (tokenEntry) {
+            tokenEntry.id = 'host';
+        } else if (!hostEntry) {
+            st.participants.push({ id: 'host', name: savedNickname || st.roomCreatorName || 'Hôte' });
+        }
+    } else {
+        // Un participant reprend TOUJOURS son vrai rôle invité. C'était la grosse
+        // régression : la reprise cloud le promouvait en `host` + NullPeerConnection,
+        // coupant définitivement sa reconnexion P2P et mélangeant ses écritures avec les
+        // snapshots d'autorité hôte.
+        let claimedSeat = SEATS.find(seat => st.seatAssignment[seat] === myToken);
+        if (!claimedSeat) {
+            claimedSeat = SEATS.find(seat => st.seatAssignment[seat] === SEAT_PENDING);
+            if (claimedSeat) st.seatAssignment[claimedSeat] = myToken;
+        }
+        if (!st.participants.some(p => p && p.id === myToken)) {
+            st.participants.push({
+                id: myToken,
+                name: savedNickname || 'Joueur',
+                ...(normalizeAvatarColor(savedAvatarColor) ? { avatarColor: normalizeAvatarColor(savedAvatarColor) } : {})
+            });
         }
     }
 
-    // Voir échange avec Guillaume (session du 8 août — "j'essaye de m'incruster plus
-    // tard [...] il me dit un truc du genre 'tous les sièges sont occupés' mais on doit
-    // toujours pouvoir join en tant que kibbitz") : bug trouvé — sans siège à revendiquer
-    // (ni le mien déjà assigné, ni un SEAT_PENDING libre), cette fonction REJETAIT
-    // entièrement la connexion, alors qu'un kibbitz (personne sans siège) doit TOUJOURS
-    // pouvoir rejoindre, quel que soit l'état des 4 sièges (tous en bots, ou tous déjà
-    // occupés par d'autres humains). Corrigé : sans siège à revendiquer, on rejoint quand
-    // même, simplement sans siège (comme n'importe quel kibbitz) — seul un participant
-    // pas encore connu de cette salle a besoin d'être ajouté à `participants`.
-    if (!claimedSeat && !st.participants.some(p => p.id === myToken)) {
-        st.participants.push({ id: myToken, name: savedNickname || 'Joueur', ...(normalizeAvatarColor(savedAvatarColor) ? { avatarColor: normalizeAvatarColor(savedAvatarColor) } : {}) });
-    }
-
-    // Voir plus bas (après restauration complète de l'état) : la connexion — réelle ou
-    // NullPeerConnection — dépend de si je suis le vrai créateur ou non, donc posée après
-    // avoir déterminé myToken === creatorToken avec certitude et restauré tout l'état
-    // nécessaire (buildHostHandlers y fait référence).
-
-    // Restaure tout l'état en mémoire — même forme de payload que uiResumeHostSession(),
-    // juste une source différente (le cloud plutôt que le localStorage de CET appareil).
     deals = st.deals;
-    // Une reprise de session doit rouvrir la donne réellement active au moment de la
-    // dernière sauvegarde partagée. Revenir systématiquement à la donne 1 faisait perdre
-    // le contexte dès que les deux joueurs fermaient puis rouvraient PLAY. Le validateur
-    // cloud garantit déjà que boardIndex est un entier dans les bornes ; garde défensive
-    // supplémentaire pour les anciennes sauvegardes.
-    boardIndex = Number.isInteger(st.boardIndex) && st.boardIndex >= 0 && st.boardIndex < deals.length
-        ? st.boardIndex
-        : 0;
+    if (!Array.isArray(deals) || deals.length === 0) {
+        hideConnectingOverlay();
+        showLandingError('Cette session ne contient aucune donne exploitable.');
+        return;
+    }
+    boardIndex = Number.isInteger(st.boardIndex) && st.boardIndex >= 0 && st.boardIndex < deals.length ? st.boardIndex : 0;
     if (!deals[boardIndex].auctionHistory) deals[boardIndex].auctionHistory = [];
     auctionHistory = deals[boardIndex].auctionHistory;
     seatAssignment = st.seatAssignment;
-    participants = st.participants || [];
+    participants = st.participants;
     deferredRoomMode = st.deferredRoomMode === true || SEATS.some(seat => seatAssignment[seat] === SEAT_PENDING);
-    // Recalculé plutôt que de faire confiance à st.autoPassSeats (qui peut dater d'avant
-    // ma propre revendication de siège, cas 2 ci-dessus).
     autoPassSeats = SEATS.filter(seat => !seatAssignment[seat]);
-    advanceRobotBidsOnAllBoards(boardIndex); // voir échange avec Guillaume — prérequis d'"avance rapide"/"vue d'ensemble"
+    advanceRobotBidsOnAllBoards(boardIndex);
     chatMessages = st.chatMessages || [];
     roomCreatorName = st.roomCreatorName || (participants.find(p => p.id === 'host') || {}).name || 'Hôte';
-    roomCreatorToken = creatorToken || hostToken;
-
-    const disconnectedAt = Date.now();
-    participants.forEach(p => {
-        if (p.id !== myToken) { p.disconnected = true; p.disconnectedAt = disconnectedAt; }
-    });
-
-    // Voir échange avec Guillaume ("je ne veux pas de bascule d'hôte") : myParticipantId
-    // reste MON PROPRE jeton par défaut — jamais renommé en la chaîne littérale 'host' —
-    // sauf dans le cas précis ci-dessous (vrai créateur, vraie connexion P2P), où c'est au
-    // contraire indispensable (voir plus bas). myRole='host' ici sert dans tous les cas à
-    // m'accorder le contrôle local complet (navigation de donne, arbitrage d'undo — voir
-    // canControlBoard et consorts), pas une identité à endosser en soi.
-    myRole = 'host';
-    myParticipantId = myToken;
-    mySeats = SEATS.filter(seat => seatAssignment[seat] === myParticipantId);
+    roomCreatorToken = creatorToken || null;
+    currentHostReconnectToken = st.hostReconnectToken || creatorToken || null;
     currentRoomCode = codeToReclaim;
+    ensureCloudSyncContext(codeToReclaim);
+
+    // IMPORTANT : préserver l'état de présence partagé des AUTRES joueurs. Une reprise
+    // locale n'est pas une preuve qu'ils sont hors ligne. Seule ma propre entrée est
+    // réactivée ; les événements P2P et les mutations participant serveur feront évoluer
+    // le reste. L'ancien code marquait systématiquement "tout le monde sauf moi" rouge,
+    // puis republiait cette opinion comme vérité commune.
+    myRole = isCreatorResume ? 'host' : 'guest';
+    myParticipantId = isCreatorResume ? 'host' : myToken;
+    const me = participants.find(p => p && p.id === myParticipantId);
+    if (me) { me.disconnected = false; me.disconnectedAt = null; }
+    mySeats = SEATS.filter(seat => seatAssignment[seat] === myParticipantId);
+
     if (isCreatorResume) loadHostGuestReconnectSecrets(codeToReclaim);
     else guestReconnectSecretsByParticipantId = {};
 
-    // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 2, révisée après le test de Guillaume —
-    // "quand l'hôte revient, l'invité reste marqué déconnecté, et la donne suivante ne le
-    // fait pas bouger") : SEUL le vrai créateur original recrée une vraie salle P2P ici —
-    // n'importe quel AUTRE participant qui reprend une session différée garde
-    // NullPeerConnection, exactement comme avant (voir "n'importe qui peut claim" plus
-    // haut : plusieurs personnes pourraient reprendre au même moment depuis des appareils
-    // différents, une seule d'entre elles peut réellement détenir l'identifiant PeerJS de
-    // la salle). Pour le créateur, en revanche, aucune ambiguïté possible — c'est
-    // structurellement la seule et unique personne légitime à ce rôle, donc recréer un
-    // vrai P2P ici est sans risque, et indispensable : sans ça, un invité qui tentait de
-    // se reconnecter (voir attemptGuestAutoReconnect) ne trouvait plus jamais personne à
-    // qui parler après le retour du créateur — coincé sur le seul relais serveur pour
-    // toujours, y compris pour ce qui n'y passe volontairement jamais (changement de
-    // donne, voir "Ne touche jamais boardIndex ici" dans applyCloudUpdate).
+    // Installer la base de version AVANT toute écriture de présence/claim : le premier PUT
+    // participant doit partir du snapshot effectivement lu, pas d'une version 0 héritée
+    // d'un ancien contexte.
+    lastKnownCloudVersion = candidate.version;
+    cloudLastSyncedState = cloneCloudData(candidate._serverState || candidate.state);
+    cloudSyncRoomCode = String(codeToReclaim);
+    cloudResumeCandidate = null;
+
+    guestIndexByToken = {};
+    hostPendingUndo = null;
+    hostTransferInProgress = false;
+    prevSeatAssignmentSnapshot = null;
+    prevParticipantsDisconnectedSnapshot = null;
+
     if (peerConn) peerConn.destroy();
     if (isCreatorResume) {
-        // Voir échange avec Guillaume ("le wizz vise l'hôte mais rate — sa cible n'est
-        // pas 'host' littéralement") : remappage INVERSE de celui du "Cas 0" tout en
-        // haut de cette fonction — celui-ci migre volontairement 'host' vers myToken,
-        // pensé pour le modèle "hôte local" (NullPeerConnection, jamais de vrai réseau).
-        // Mais ICI, on rebascule ce même créateur sur une VRAIE salle P2P — et tout le
-        // reste du code (guestIndexByToken, la comparaison stricte
-        // `msg.targetId !== 'host'` dans le handler 'wizz', etc.) suppose que l'hôte
-        // P2P s'appelle littéralement 'host'. Sans ce remappage, l'hôte restait
-        // identifié par son jeton personnel aux yeux de tout le monde une fois
-        // reconnecté — un invité visant "la cloche de l'hôte" envoyait donc vers ce
-        // jeton, jamais reconnu comme étant 'host' à la réception (bug remonté :
-        // "relais abandonné, cible plus dans guestIndexByToken"). isTrueOriginalHost()
-        // reste correct sans y toucher : elle accepte déjà 'host' comme raccourci (voir
-        // sa définition), donc pas besoin non plus de modifier roomCreatorToken.
-        SEATS.forEach(seat => { if (seatAssignment[seat] === myToken) seatAssignment[seat] = 'host'; });
-        const meAsParticipant = participants.find(p => p.id === myToken);
-        if (meAsParticipant) meAsParticipant.id = 'host';
-        myParticipantId = 'host';
-        mySeats = SEATS.filter(seat => seatAssignment[seat] === 'host');
-
         const resumeOnOpenExtra = () => {
             renderReconnectButton();
             if (deals) renderBoard(); else renderLobby();
         };
         peerConn = new BridgePeerConnection(buildHostHandlers(resumeOnOpenExtra));
         peerConn.handlers.onError = (err) => {
-            // Filet de sécurité seulement — très improbable (plus d'élection de
-            // autre hôte automatique, donc plus personne d'autre ne peut légitimement détenir ce
-            // code), mais un délai de libération côté serveur de signalisation reste
-            // théoriquement possible juste après la fermeture de l'ancien Peer.
             if (err && err.type === 'unavailable-id') {
                 pushDebugLog('Impossible de recréer la salle hôte (code pas encore libéré côté serveur) — nouvel essai dans un instant.');
                 setTimeout(() => {
@@ -11156,41 +11289,36 @@ function uiResumeFromCloud() {
         };
         peerConn.createRoom(6, codeToReclaim);
     } else {
-        // Voir échange avec Guillaume ("on n'est plus obligé de passer par le P2P") :
-        // inchangé pour tout participant qui n'est pas le créateur — aucune connexion
-        // PeerJS n'est ouverte. Tous les appels peerConn.send(...)/etc. disséminés dans
-        // le reste du fichier (mode live, inchangé) continuent de s'exécuter tels quels ;
-        // ils ne font simplement plus rien, faute d'invité à qui parler.
-        peerConn = new NullPeerConnection();
+        // La partie est déjà active via le cloud : empêcher les callbacks d'une ancienne
+        // tentative de join de reprendre la main, puis reconstruire immédiatement une vraie
+        // connexion invitée en arrière-plan avec LA MÊME credential.
+        guestJoinAttemptToken++;
+        everConnectedAsGuest = true;
+        selfDisconnectedAt = selfDisconnectedAt || Date.now();
+        markGuestActiveRoom(codeToReclaim);
+        peerConn = null;
     }
-    startDeferredPolling();
-    guestIndexByToken = {};
-    hostPendingUndo = null;
-    hostTransferInProgress = false;
-    prevSeatAssignmentSnapshot = null;
-    prevParticipantsDisconnectedSnapshot = null;
-    // La version correspond à l'état SERVEUR exact, pas forcément au snapshot local déjà
-    // réconcilié (cas d'un marqueur de fermeture). Cette distinction est la base du
-    // prochain three-way merge et empêche une reprise locale de se faire passer pour un
-    // état déjà accepté par le serveur.
-    lastKnownCloudVersion = cloudResumeCandidate.version;
-    cloudLastSyncedState = cloneCloudData(cloudResumeCandidate._serverState || cloudResumeCandidate.state);
-    cloudSyncRoomCode = String(codeToReclaim);
-    cloudResumeCandidate = null;
 
+    startDeferredPolling();
     hideConnectingOverlay();
     enterGameScreen();
-    // Voir échange avec Guillaume ("si on ouvre une room et que toutes les enchères sont
-    // finies, il faut afficher la vue d'ensemble par défaut") : arriver sur la donne 1
-    // n'a aucun intérêt si elle (et toutes les autres) sont déjà terminées — rien à y
-    // jouer. La vue d'ensemble montre directement où chaque donne en est, plus utile
-    // qu'un premier tableau qui ne servira à rien.
+
+    if (isCreatorResume) {
+        saveHostGameStateToStorage();
+    } else {
+        // Ce PUT participant fait deux choses atomiquement côté serveur : revendique la
+        // place PENDING si nécessaire et remet MA présence à connected. Il n'a jamais le
+        // droit de réécrire la présence des autres participants.
+        pushCloudGameState();
+        attemptGuestAutoReconnect();
+    }
+
     if (deals.every(d => isAuctionOver(d.auctionHistory || []))) uiOpenBoardOverview();
     const missingDD = deals.filter(d => !d.par && !d.ddTable);
     if (missingDD.length > 0) kickOffBackgroundDD(missingDD);
     if (!chatPanelOpen) uiToggleChat(false);
-    saveHostGameStateToStorage();
 }
+
 
 
 // ===== Gestes tactiles mobile =====
