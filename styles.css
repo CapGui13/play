@@ -2546,11 +2546,8 @@ button.kibitz-chip {
     padding: 7px 0 0;
     border-radius: 10px;
     background: linear-gradient(180deg, #ffffff 0%, #f6f7fa 100%);
-    border: 1px solid rgba(198, 204, 214, 0.96);
-    box-shadow:
-        inset 0 1px 0 rgba(255,255,255,0.97),
-        0 0 0 1px rgba(171, 180, 190, 0.18),
-        0 1px 3px rgba(74, 84, 96, 0.10);
+    border: none;
+    box-shadow: none;
 }
 
 #myHandsContainer .mini-bridge-card-suit-start {
