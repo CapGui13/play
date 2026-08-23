@@ -7361,6 +7361,13 @@ function uiSendChatMessage() {
 
     const me = participants.find(p => p.id === myParticipantId);
     const msg = { type: 'chat', senderId: myParticipantId, senderName: me ? me.name : '?', text };
+    // R31 — mémoriser le préfixe AVANT l'ajout optimiste. Quand l'hôte est fermé, le
+    // message doit rester visible pendant la petite fenêtre où un poll cloud peut encore
+    // renvoyer le snapshot précédent. La garde est armée seulement pour le fallback
+    // cloud-only ; en P2P connecté, R30 reste strictement inchangé.
+    const chatBeforeLocalSend = (myRole === 'guest' && deferredRoomMode && (!peerConn || !peerConn.isConnected()))
+        ? cloneCloudData(chatMessages || [])
+        : null;
     addChatMessage(msg);
     // R30 — restaurer la symétrie du chat en différé. Tant que l'hôte est réellement
     // joignable en P2P, l'invité lui envoie son message directement, exactement comme
@@ -7371,7 +7378,10 @@ function uiSendChatMessage() {
     // différée réarmée) : c'est le cas "hôte fermé".
     if (myRole === 'guest' && deferredRoomMode) {
         if (peerConn && peerConn.isConnected()) peerConn.send(msg);
-        else pushChatViaServerFallback(msg);
+        else {
+            beginDeferredOptimisticChatGuard(chatBeforeLocalSend || [], msg);
+            pushChatViaServerFallback(msg);
+        }
         return;
     }
     // Live avec P2P coupé : conserve le fallback serveur historique.
@@ -8436,6 +8446,92 @@ function stabilizeDeferredOptimisticAuctionHistories(remoteDeals) {
     }
     return remoteDeals;
 }
+
+// R31 — stabilité visuelle du chat guest pendant le fallback cloud avec hôte fermé.
+//
+// Le message est affiché optimistiquement avant son PUT participant. Un poll qui a démarré
+// juste avant ce PUT peut revenir entre-temps avec l'ancien historique et ne doit pas
+// effacer visuellement le message pour le faire réapparaître au poll suivant. Contrairement
+// à une autorité métier, cette garde est strictement temporaire : elle ne protège que le
+// suffixe local issu du préfixe capturé au moment de l'envoi, accepte les messages
+// concurrents du serveur, puis disparaît dès que le cloud contient notre message.
+const DEFERRED_OPTIMISTIC_CHAT_GUARD_MAX_AGE_MS = 30000;
+const deferredOptimisticChatGuards = [];
+
+function beginDeferredOptimisticChatGuard(baseChat, msg) {
+    if (!deferredRoomMode || myRole !== 'guest' || !msg) return;
+    deferredOptimisticChatGuards.push({
+        baseChat: cloneCloudData(Array.isArray(baseChat) ? baseChat : []),
+        msg: cloneCloudData(msg),
+        startedAt: Date.now()
+    });
+    recordSyncTrace('chat.optimistic-guard.begin', {
+        baseLength: Array.isArray(baseChat) ? baseChat.length : 0,
+        senderId: msg.senderId || null
+    });
+}
+
+function clearDeferredOptimisticChatGuard(guard, reason = 'clear') {
+    const idx = deferredOptimisticChatGuards.indexOf(guard);
+    if (idx >= 0) deferredOptimisticChatGuards.splice(idx, 1);
+    recordSyncTrace('chat.optimistic-guard.end', { reason });
+}
+
+function resetDeferredOptimisticChatGuards() {
+    deferredOptimisticChatGuards.length = 0;
+}
+
+function stabilizeDeferredOptimisticChatMessages(remoteChat) {
+    if (!deferredRoomMode || myRole !== 'guest' || deferredOptimisticChatGuards.length === 0) return remoteChat;
+    let stabilized = cloneCloudData(Array.isArray(remoteChat) ? remoteChat : []);
+    const localNow = cloneCloudData(Array.isArray(chatMessages) ? chatMessages : []);
+    const now = Date.now();
+
+    for (const guard of Array.from(deferredOptimisticChatGuards)) {
+        if (!guard || now - Number(guard.startedAt || 0) > DEFERRED_OPTIMISTIC_CHAT_GUARD_MAX_AGE_MS) {
+            clearDeferredOptimisticChatGuard(guard, 'expired');
+            continue;
+        }
+        const base = Array.isArray(guard.baseChat) ? guard.baseChat : [];
+        const msg = guard.msg;
+        const localHasBase = arrayIsPrefix(base, localNow);
+        const localSuffix = localHasBase ? localNow.slice(base.length) : [];
+        const localStillHasMessage = localSuffix.some(entry => sameCloudData(entry, msg));
+        if (!localStillHasMessage) {
+            clearDeferredOptimisticChatGuard(guard, 'local-branch-changed');
+            continue;
+        }
+
+        // Si le cloud contient déjà ce message dans le suffixe postérieur au préfixe de
+        // départ, la confirmation est arrivée : ne plus protéger.
+        if (arrayIsPrefix(base, stabilized)
+            && stabilized.slice(base.length).some(entry => sameCloudData(entry, msg))) {
+            clearDeferredOptimisticChatGuard(guard, 'cloud-caught-up');
+            continue;
+        }
+
+        // Tant que le préfixe de départ est intact, fusionner le suffixe local optimiste
+        // au snapshot reçu. mergeChatThreeWay conserve aussi tout message concurrent déjà
+        // commité côté serveur, sans dupliquer une occurrence identique.
+        if (arrayIsPrefix(base, stabilized)) {
+            const merged = mergeChatThreeWay(base, localNow, stabilized);
+            if (!sameCloudData(merged, stabilized)) {
+                stabilized = merged;
+                recordSyncTrace('chat.optimistic-guard.preserve', {
+                    baseLength: base.length,
+                    remoteLength: Array.isArray(remoteChat) ? remoteChat.length : 0,
+                    stabilizedLength: stabilized.length
+                });
+            }
+            continue;
+        }
+
+        // Une réécriture réelle de l'historique chat ne doit jamais être masquée.
+        clearDeferredOptimisticChatGuard(guard, 'cloud-diverged');
+    }
+    return stabilized;
+}
+
 // Si le même navigateur contrôle plusieurs sièges, `myTurn` peut rester vrai après une
 // annonce alors que le joueur à la table a changé. On mémorise donc explicitement le siège
 // dont la boîte est affichée, afin de repartir du palier minimal légal à CHAQUE nouveau tour.
@@ -11624,6 +11720,7 @@ function resetCloudSyncContext(roomCode, version = 0, serverState = null) {
     // R22 — un verrou/watchdog d'une ancienne salle ne doit jamais survivre à un leave,
     // une création ou un join différent. Le token invalide aussi tout finally tardif.
     resetParticipantServerCallGuard();
+    resetDeferredOptimisticChatGuards();
     // Une salle quittée ne doit pas continuer à recevoir ses événements/polls dans la
     // nouvelle. stopDeferredPolling() désabonne aussi Pusher.
     if (typeof stopDeferredPolling === 'function') stopDeferredPolling();
@@ -12485,6 +12582,7 @@ function applyCloudUpdate(result, options = {}) {
     participants = st.participants || participants;
     deferredRoomMode = st.deferredRoomMode === true || deferredRoomMode || SEATS.some(seat => seatAssignment[seat] === SEAT_PENDING);
     autoPassSeats = SEATS.filter(seat => !seatAssignment[seat]);
+    st.chatMessages = stabilizeDeferredOptimisticChatMessages(st.chatMessages || []);
     chatMessages = st.chatMessages || [];
     // Voir échange avec Guillaume : la sauvegarde qu'on vient de lire reflète le point de
     // vue de la dernière personne à avoir écrit — elle nous marque, NOUS, comme
