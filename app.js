@@ -4536,7 +4536,12 @@ function broadcastLobbyState() {
         // simple invité ne connaît roomCreatorName que localement à l'hôte — jamais reçu,
         // il retomberait sur le participant technique 'host' du moment pour l'affichage
         // (voir renderGameHeader), ce qui recrée exactement le problème qu'on corrige.
-        roomCreatorName
+        roomCreatorName,
+        // Le mode différé est une propriété de la SESSION, pas de la connexion P2P du
+        // moment. Il doit donc accompagner chaque lobby-state, notamment après une
+        // reconnexion de l'hôte : sinon l'invité pouvait retomber en mode live et perdre
+        // ses flèches de navigation indépendante.
+        deferredRoomMode
     });
     // Voir échange avec Guillaume (session du 23 juillet — reprise via localStorage) :
     // couvre les sièges/participants/renommages, qui passent tous par cette fonction.
@@ -5766,7 +5771,11 @@ function handlePeerData(msg, guestIndex) {
             // diffusion (voir broadcastLobbyState), toujours utile pour identifier
             // correctement l'hôte dans mes propres échanges avec le serveur.
             currentHostReconnectToken = msg.hostReconnectToken || null;
-            deferredRoomMode = !!msg.deferredRoomMode;
+            // Un lobby-state ancien/partiel ne doit jamais effacer un mode différé déjà
+            // établi. Les nouveaux hôtes envoient toujours le booléen (voir
+            // broadcastLobbyState), mais cette garde rend la reconnexion compatible avec
+            // un message transitoire qui ne le porterait pas.
+            if (typeof msg.deferredRoomMode === 'boolean') deferredRoomMode = msg.deferredRoomMode;
             if (deferredRoomMode) startDeferredPolling();
             if (msg.roomCreatorName) roomCreatorName = msg.roomCreatorName;
             // Ce message est aussi renvoyé quand la connectivité change en pleine partie
@@ -5835,16 +5844,29 @@ function handlePeerData(msg, guestIndex) {
         // joueur exactement là où en est la table (donne, enchère, sièges), qu'il soit
         // nouveau ou de retour après une coupure.
         case 'resync': {
+            // En différé, `boardIndex` est une vue LOCALE. Une reconnexion P2P ne doit
+            // donc jamais recopier la donne affichée par l'hôte. Un NOUVEL arrivant part
+            // explicitement de la donne 1 ; un joueur déjà présent qui reconnecte garde
+            // sa propre donne si elle existe encore. En live seulement, le boardIndex de
+            // l'hôte reste l'autorité de table partagée.
+            const localBoardBeforeResync = Number.isInteger(boardIndex) ? boardIndex : 0;
+            const hadLocalGameBeforeResync = Array.isArray(deals) && deals.length > 0;
             deals = msg.deals;
             mySeats = msg.yourSeats;
             autoPassSeats = msg.botSeats || [];
-            boardIndex = msg.boardIndex;
-            auctionHistory = msg.auctionHistory || [];
-            deals[boardIndex].auctionHistory = auctionHistory; // voir gotoBoard : reste la référence partagée à partir de maintenant
+            if (typeof msg.deferredRoomMode === 'boolean') deferredRoomMode = msg.deferredRoomMode;
+            if (deferredRoomMode) {
+                boardIndex = msg.isNewJoiner || !hadLocalGameBeforeResync
+                    ? 0
+                    : (deals[localBoardBeforeResync] ? localBoardBeforeResync : 0);
+            } else {
+                boardIndex = Number.isInteger(msg.boardIndex) && deals[msg.boardIndex] ? msg.boardIndex : 0;
+            }
+            if (!deals[boardIndex].auctionHistory) deals[boardIndex].auctionHistory = [];
+            auctionHistory = deals[boardIndex].auctionHistory;
             // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 4) : voir le commentaire
             // équivalent dans 'start-game' — l'ancien identifiant de relais a disparu.
             currentHostReconnectToken = msg.hostReconnectToken || null;
-            if (typeof msg.deferredRoomMode === 'boolean') deferredRoomMode = msg.deferredRoomMode;
             if (deferredRoomMode) startDeferredPolling();
             if (msg.roomCreatorName) roomCreatorName = msg.roomCreatorName;
             hostPendingUndo = null;
@@ -11572,12 +11594,17 @@ function uiResumeFromCloud() {
         showLandingError('Cette session ne contient aucune donne exploitable.');
         return;
     }
-    boardIndex = Number.isInteger(st.boardIndex) && st.boardIndex >= 0 && st.boardIndex < deals.length ? st.boardIndex : 0;
-    if (!deals[boardIndex].auctionHistory) deals[boardIndex].auctionHistory = [];
-    auctionHistory = deals[boardIndex].auctionHistory;
     seatAssignment = st.seatAssignment;
     participants = st.participants;
     deferredRoomMode = st.deferredRoomMode === true || SEATS.some(seat => seatAssignment[seat] === SEAT_PENDING);
+    // Reprise par le créateur : on peut restaurer sa dernière donne mémorisée. Reprise
+    // par code d'un partenaire différé : l'entrée produit est toujours la donne 1, sans
+    // hériter du boardIndex partagé/mémorisé par l'hôte.
+    boardIndex = isCreatorResume && Number.isInteger(st.boardIndex) && st.boardIndex >= 0 && st.boardIndex < deals.length
+        ? st.boardIndex
+        : 0;
+    if (!deals[boardIndex].auctionHistory) deals[boardIndex].auctionHistory = [];
+    auctionHistory = deals[boardIndex].auctionHistory;
     autoPassSeats = SEATS.filter(seat => !seatAssignment[seat]);
     advanceRobotBidsOnAllBoards(boardIndex);
     chatMessages = st.chatMessages || [];
