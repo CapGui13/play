@@ -3677,13 +3677,14 @@ function uiRandomizeAvatarColor(event, participantId) {
     if (participantId === myParticipantId) saveStringPref('bridgeBidAvatarColor', p.avatarColor);
     if (myRole === 'host') {
         broadcastLobbyState();
-    } else if (participantId === myParticipantId && !deferredRoomMode && peerConn && peerConn.isConnected()) {
-        // En live connecté, conserve le chemin P2P historique.
+    } else if (participantId === myParticipantId && peerConn && peerConn.isConnected()) {
+        // Un invité n'a jamais le droit d'émettre un lobby-state complet. Il demande
+        // uniquement la mutation de SA couleur ; l'hôte lie l'identité à la connexion,
+        // valide la palette puis rediffuse son état public autoritaire.
         peerConn.send({ type: 'set-avatar-color', avatarColor: p.avatarColor });
     } else if (participantId === myParticipantId) {
-        // En différé, le cloud reste autoritaire même si le P2P est vivant : évite qu'une
-        // couleur appliquée optimistiquement soit perdue si la DataConnection tombe entre
-        // le test isConnected() et l'envoi sans ACK. Même repli en live déconnecté.
+        // Même mutation en mode différé / coupure P2P : l'API restreinte sait déjà
+        // autoriser le profil propre d'un participant authentifié.
         pushAvatarColorViaServerFallback(p.avatarColor);
     }
     renderLobby();
@@ -3900,13 +3901,17 @@ function buildSeatBoxesHtml(assignmentObj, onSelect, { enableDrag = false, withF
 
             const robotOptionClass = assignedId ? '' : ' is-current';
             const pendingOptionClass = isPending ? ' is-current' : '';
+            const canSelectPending = !deals || deferredRoomMode || isPending;
+            const pendingOptionHtml = canSelectPending ? `
+                <div class="seat-dropdown-option${pendingOptionClass}" data-seat-select="1" data-ui-seat-handler="${onSelect === 'uiStageSeatAssignment' ? 'stage' : 'assign'}" data-seat="${seat}" data-participant-id="${SEAT_PENDING}">
+                    <span class="mini-avatar mini-avatar-pending">⏳</span><span>En attente d'un partenaire</span>
+                </div>
+            ` : '';
             const optionsHtml = [`
                 <div class="seat-dropdown-option${robotOptionClass}" data-seat-select="1" data-ui-seat-handler="${onSelect === 'uiStageSeatAssignment' ? 'stage' : 'assign'}" data-seat="${seat}" data-participant-id="">
                     <span class="mini-avatar mini-avatar-robot">🤖</span><span>Robot</span>
                 </div>
-                <div class="seat-dropdown-option${pendingOptionClass}" data-seat-select="1" data-ui-seat-handler="${onSelect === 'uiStageSeatAssignment' ? 'stage' : 'assign'}" data-seat="${seat}" data-participant-id="${SEAT_PENDING}">
-                    <span class="mini-avatar mini-avatar-pending">⏳</span><span>En attente d'un partenaire</span>
-                </div>
+                ${pendingOptionHtml}
             `].concat(participants.map(p => {
                 const currentClass = p.id === assignedId ? ' is-current' : '';
                 return `
@@ -4093,15 +4098,42 @@ function uiCloseSeatDropdownsOnOutsideClick(event) {
 }
 document.addEventListener('click', uiCloseSeatDropdownsOnOutsideClick);
 
-function uiAssignSeat(seat, participantId) {
+async function uiAssignSeat(seat, participantId) {
     if (myRole !== 'host') return;
+    // R10 — convertir une salle live déjà lancée en différé est une transition de sécurité
+    // complète (rotation d'accessKey + pré-autorisation + changement d'autorité). L'ancien
+    // menu exposait PENDING en pleine partie sans exécuter cette transition. Fail-closed :
+    // le mode différé se choisit avant le lancement ; dans une partie déjà différée, PENDING
+    // reste utilisable pour réouvrir une place partenaire.
+    if (deals && !deferredRoomMode && participantId === SEAT_PENDING) {
+        flashPresenceToast('⏳ Le mode différé se choisit avant de lancer la partie', false);
+        return;
+    }
     // PAS de retrait automatique de l'ancien siège de cette personne (voir échange avec
     // Guillaume) : contrôler plusieurs sièges à la fois est une fonctionnalité voulue
     // depuis le début (mySeats est un tableau, pas une valeur unique — voir
     // renderMyHands, showActiveState) — un ancien correctif avait traité ça à tort comme
     // un bug de duplication, alors que c'est exactement ce que cette assignation doit
     // pouvoir faire.
+    const previousOccupant = seatAssignment[seat] || null;
     seatAssignment[seat] = participantId || null;
+    // Dans une partie différée déjà lancée, une nouvelle attribution humaine ne devient
+    // visible qu'après enregistrement de sa preuve serveur. Cela ferme la même fenêtre que
+    // le bug R8/R9, mais lors d'une réorganisation de sièges plutôt qu'au join initial.
+    if (deals && deferredRoomMode && participantId && participantId !== SEAT_PENDING && participantId !== 'host') {
+        const p = participants.find(x => x && x.id === participantId);
+        if (p && !p.disconnected && guestIndexForParticipant(participantId) != null) {
+            const ready = await sendSessionAccessToParticipant(participantId);
+            if (!ready) {
+                seatAssignment[seat] = previousOccupant;
+                autoPassSeats = SEATS.filter(s => !seatAssignment[s]);
+                flashPresenceToast('⚠️ Attribution annulée : accès serveur du joueur non prêt', false);
+                renderLobby();
+                if (deals) renderBoard();
+                return;
+            }
+        }
+    }
     // Prépare immédiatement l'identité secrète du futur partenaire tant que le host est
     // encore là. L'enregistrement HTTP tourne en arrière-plan ; le lien peut être copié
     // tout de suite et contient déjà la même credential.
@@ -4116,7 +4148,7 @@ function uiAssignSeat(seat, participantId) {
     // main ensuite. Recalculé ici avant la diffusion, sinon un siège tout juste rendu à
     // "Robot" restait un simple trou muet, personne (ni humain ni robot) pour y jouer.
     if (deals) autoPassSeats = SEATS.filter(s => !seatAssignment[s]);
-    grantSessionAccessToSeatedParticipants();
+    if (!deals || !deferredRoomMode) grantSessionAccessToSeatedParticipants();
     broadcastLobbyState();
     renderLobby();
     // Voir échange avec Guillaume ("ce qui n'est pas encore couvert" — changement de
@@ -4204,7 +4236,7 @@ function uiAllowDrop(event) {
     event.preventDefault(); // requis par l'API HTML5 drag-and-drop pour autoriser un drop ici
 }
 
-function uiDropOnSeat(event, targetSeat) {
+async function uiDropOnSeat(event, targetSeat) {
     event.preventDefault();
     if (myRole !== 'host' || !draggedParticipantId) return;
     const sourceSeat = draggedFromSeat;
@@ -4215,6 +4247,7 @@ function uiDropOnSeat(event, targetSeat) {
         return; // déposé sur sa propre case, rien à faire
     }
 
+    const previousSeatAssignment = { ...seatAssignment };
     const targetOccupant = seatAssignment[targetSeat];
     seatAssignment[targetSeat] = draggedParticipantId;
     if (sourceSeat) seatAssignment[sourceSeat] = targetOccupant || null; // échange ; sinon (venait du kibbitz) l'ancien occupant cible devient kibbitz de lui-même, rien à écrire
@@ -4224,7 +4257,19 @@ function uiDropOnSeat(event, targetSeat) {
     // Voir échange avec Guillaume (session du 23 juillet — voir uiAssignSeat) : même
     // recalcul, pour le glisser-déposer.
     if (deals) autoPassSeats = SEATS.filter(s => !seatAssignment[s]);
-    grantSessionAccessToSeatedParticipants();
+    if (deals && deferredRoomMode) {
+        const results = await grantSessionAccessToSeatedParticipants();
+        if (!sessionAccessGrantResultsReady(results)) {
+            seatAssignment = previousSeatAssignment;
+            autoPassSeats = SEATS.filter(s => !seatAssignment[s]);
+            flashPresenceToast('⚠️ Déplacement annulé : accès serveur d’un joueur non prêt', false);
+            renderLobby();
+            renderBoard();
+            return;
+        }
+    } else {
+        grantSessionAccessToSeatedParticipants();
+    }
     broadcastLobbyState();
     renderLobby();
     // Voir échange avec Guillaume ("changement de sièges via le relais serveur") : même
@@ -4434,16 +4479,17 @@ function primeDeferredGuestCloudAccess() {
         const credential = deferredCodeOnlyParticipantCredential(currentRoomCode);
         if (credential && isModernGuestParticipantId(credential.participantId)
                 && isValidReconnectSecret(credential.reconnectSecret)) {
-            // R10 — ne JAMAIS remplacer la credential d'un invité déjà identifié par la
-            // credential déterministe réservée au siège PENDING. Une salle peut devenir
-            // différée alors qu'un autre invité est déjà assis avec sa propre identité :
-            // l'écraser ici casserait ses prochains PUT cloud ET sa reconnexion P2P.
-            // Le nouvel invité code-seul, lui, possède déjà cette identité déterministe
-            // via welcome/offerCloudResume ; dans ce seul cas on peut la mémoriser.
-            if (!myParticipantId || credential.participantId === myParticipantId) {
+            // R10 — l'identité déterministe appartient UNIQUEMENT au partenaire qui
+            // revendique le siège PENDING. Une salle différée peut aussi contenir un autre
+            // invité déjà assis avec sa propre credential aléatoire. Écraser cette dernière
+            // par la credential code-only rendrait immédiatement ses PUT participant 403
+            // (participantCredentialForCloudWrite exige que participantId === myParticipantId).
+            // L'accessKey dérivable est bien commun à tous les invités de la salle ; la
+            // preuve participant, elle, reste strictement propre à chaque identité.
+            if (credential.participantId === myParticipantId) {
                 rememberGuestRoomCredential(currentRoomCode, credential);
-                primed = true;
             }
+            primed = true;
         }
     }
     return primed;
@@ -4481,13 +4527,29 @@ async function sendSessionAccessToParticipant(participantId) {
 function grantSessionAccessToSeatedParticipants() {
     if (myRole !== 'host') return Promise.resolve([]);
     const ids = new Set(SEATS.map(seat => seatAssignment[seat]).filter(id => id && id !== SEAT_PENDING && id !== 'host'));
-    return Promise.allSettled([...ids].map(id => sendSessionAccessToParticipant(id)));
+    // Une capacité ne peut être remise qu'à un peer actuellement joignable. Les joueurs
+    // absents récupéreront leur accès à leur vraie reconnexion (onGuestConnected). Les
+    // exclure ici permet d'utiliser le résultat comme vraie barrière de readiness pour les
+    // joueurs connectés, notamment juste avant un start-game différé.
+    const connectedIds = [...ids].filter(id => {
+        const p = participants.find(x => x && x.id === id);
+        return p && !p.disconnected && guestIndexForParticipant(id) != null;
+    });
+    return Promise.allSettled(connectedIds.map(id => sendSessionAccessToParticipant(id)));
+}
+
+function sessionAccessGrantResultsReady(results) {
+    return Array.isArray(results) && results.every(r => r && r.status === 'fulfilled' && r.value === true);
 }
 
 let capabilityRotationInFlight = false;
 
 function canRotateRoomCapabilities() {
-    return myRole === 'host' && !!currentRoomCode
+    // En mode différé, l'accessKey DOIT rester la valeur déterministe dérivée du code
+    // 4 chiffres. Une rotation manuelle vers une clé aléatoire casserait immédiatement
+    // la promesse produit « code seul, même hôte hors ligne ». La rotation reste disponible
+    // dans les salles live, où elle a précisément été conçue pour révoquer les anciens liens.
+    return myRole === 'host' && !deferredRoomMode && !!currentRoomCode
         && typeof getSessionAccessKey === 'function' && !!getSessionAccessKey(currentRoomCode)
         && typeof getSessionHostWriteKey === 'function' && !!getSessionHostWriteKey(currentRoomCode)
         && typeof rotateSessionCapabilities === 'function';
@@ -5141,13 +5203,17 @@ function uiOpenSeatReorgModal() {
 // n'a pas été cliqué (voir uiValidateSeatReorg).
 function uiStageSeatAssignment(seat, participantId) {
     if (!isTrueOriginalHost() || !seatReorgDraft) return;
+    if (deals && !deferredRoomMode && participantId === SEAT_PENDING) {
+        flashPresenceToast('⏳ Le mode différé se choisit avant de lancer la partie', false);
+        return;
+    }
     seatReorgDraft[seat] = participantId || null;
     renderSeatReorgModalGrid();
 }
 
 // Applique enfin le brouillon à l'assignation réelle (même logique que uiAssignSeat, mais
 // en un seul coup pour tous les sièges modifiés), diffuse, rafraîchit, puis ferme.
-function uiValidateSeatReorg() {
+async function uiValidateSeatReorg() {
     if (!isTrueOriginalHost() || !seatReorgDraft) return;
     // Si le nombre de mains contrôlées change, renderBoard() peut modifier fortement la
     // hauteur au-dessus de la boîte d'enchères. Mémoriser l'ancre AVANT toute mutation ;
@@ -5160,11 +5226,24 @@ function uiValidateSeatReorg() {
     // En vue enchères, réserver tout de suite la première ancre du frame afin que le
     // renderAuctionLedger() déclenché par renderBoard() ne la remplace pas après coup.
     if (!parViewActive) scheduleMobileLedgerViewportRestore(mobileViewportAnchor);
+    const previousSeatAssignment = { ...seatAssignment };
     seatAssignment = { ...seatReorgDraft };
     // Voir échange avec Guillaume (session du 23 juillet — voir uiAssignSeat) : même
     // recalcul du statut robot des sièges.
     if (deals) autoPassSeats = SEATS.filter(s => !seatAssignment[s]);
-    grantSessionAccessToSeatedParticipants();
+    if (deals && deferredRoomMode) {
+        const results = await grantSessionAccessToSeatedParticipants();
+        if (!sessionAccessGrantResultsReady(results)) {
+            seatAssignment = previousSeatAssignment;
+            autoPassSeats = SEATS.filter(s => !seatAssignment[s]);
+            flashPresenceToast('⚠️ Réorganisation annulée : accès serveur d’un joueur non prêt', false);
+            renderLobby();
+            renderBoard();
+            return;
+        }
+    } else {
+        grantSessionAccessToSeatedParticipants();
+    }
     broadcastLobbyState();
     renderLobby();
     // Voir échange avec Guillaume ("changement de sièges via le relais serveur") : même
@@ -5294,16 +5373,27 @@ async function uiStartGameAsHost() {
     if (launchingDeferred && currentRoomCode) {
         showConnectingOverlay('Préparation du mode différé…');
         const ready = await ensureDeferredInviteCredentialRegistered(currentRoomCode);
-        hideConnectingOverlay();
         if (!ready) {
+            hideConnectingOverlay();
             setHostSetupMessage('Impossible de préparer la reprise différée par code. Vérifiez votre connexion puis réessayez.', false);
+            return;
+        }
+        // R10 — une salle différée fait du serveur l'autorité des actions invitées. Tous
+        // les joueurs DÉJÀ connectés et assis doivent donc avoir leur preuve participant
+        // enregistrée AVANT de recevoir start-game. R9 lançait cet enregistrement en
+        // fire-and-forget après le premier paint : sur un backend froid, un invité pouvait
+        // enchérir pendant cette fenêtre puis prendre un 403 et perdre son action.
+        const accessGrants = await grantSessionAccessToSeatedParticipants();
+        hideConnectingOverlay();
+        if (!sessionAccessGrantResultsReady(accessGrants)) {
+            setHostSetupMessage('Impossible de préparer l’accès serveur d’un joueur connecté. Vérifiez la connexion puis réessayez.', false);
             return;
         }
     }
 
     // Reçoit les donnes déjà dans l'ordre à utiliser pour jouer (mélangé ou non, voir
     // pendingOrderedDeals / refreshPendingOrderedDeals) — jamais l'ordre brut du fichier.
-    const proceedWithDeals = (orderedDeals) => {
+    const proceedWithDeals = async (orderedDeals) => {
         if (!orderedDeals) return; // l'erreur est déjà affichée par readAndValidateDealFile/readAndValidateDealFromLibrary
 
         // Voir échange avec Guillaume ("nom de l'hôte doit être le nom quand l'hôte a
@@ -5345,9 +5435,23 @@ async function uiStartGameAsHost() {
         // le premier paint de la boîte d'enchères.
         mySeats = SEATS.filter(seat => seatAssignment[seat] === 'host');
 
-        // Affichage prioritaire : sur mobile c'est ce qui supprime la latence perceptible
-        // des boutons au lancement d'une nouvelle séance. On rend la première donne
-        // immédiatement, puis on laisse réellement un paint au navigateur.
+        // R13 — invariant restauré depuis OLD : AVANT que l'écran de jeu devienne
+        // utilisable, toutes les autres donnes doivent déjà avoir leur préfixe robot
+        // calculé jusqu'au premier siège humain. OLD appelait synchroniquement
+        // advanceRobotBidsOnAllBoards(boardIndex) ici, avant enterGameScreen/start-game.
+        // PONS étant désormais asynchrone, on attend explicitement la passe séquentielle.
+        // Ainsi, par exemple, avec Sud humain et Est donneur à la donne 6, l'annonce
+        // d'Est existe déjà lorsque la partie apparaît — ouvrir la donne 6 ou cliquer sur
+        // fast-forward ne doit jamais être ce qui déclenche cette première annonce.
+        if (autoPassSeats.length > 0) {
+            showConnectingOverlay('Préparation des enchères robots…');
+            try {
+                await resolveAllOtherRobotBoards(boardIndex, { quiet: true });
+            } finally {
+                hideConnectingOverlay();
+            }
+        }
+
         resetAuctionVisualModeForNewSession();
         enterGameScreen();
 
@@ -5362,7 +5466,9 @@ async function uiStartGameAsHost() {
             // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 2) : plus de branche "mode différé"
             // séparée ici — la salle garde TOUJOURS une vraie connexion P2P hôte, même
             // avec un siège encore SEAT_PENDING.
-            grantSessionAccessToSeatedParticipants();
+            // En différé, la barrière de readiness a déjà été attendue AVANT le lancement
+            // (voir uiStartGameAsHost). En live, conserver la remise best-effort historique.
+            if (!deferredRoomMode) grantSessionAccessToSeatedParticipants();
             participants.filter(p => p.id !== 'host' && !p.disconnected).forEach(p => {
                 const guestIndex = guestIndexForParticipant(p.id);
                 if (guestIndex == null) return;
@@ -5380,17 +5486,11 @@ async function uiStartGameAsHost() {
             // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 3) : polling de repli serveur.
             startDeferredPolling();
 
-            // PONS/WASM avait déjà son propre chemin asynchrone ; le legacy, lui, est
-            // désormais découpé donne par donne et ne bloque plus toutes les donnes dans
-            // une seule tâche. Dans les deux cas, goto-board transporte dorénavant aussi
-            // l'historique de la donne cible : même si l'hôte saute immédiatement vers une
-            // donne encore en cours de préparation, l'invité reçoit toujours le snapshot
-            // autoritaire exact de l'hôte.
-            if (window.PonsEngine) {
-                advanceRobotBidsOnAllBoards(boardIndex);
-            } else {
-                scheduleStartupLegacyRobotPrecalc(boardIndex);
-            }
+            // R13 : aucune pré-enchère de démarrage n'est déclenchée ici. Elles ont
+            // toutes été terminées AVANT enterGameScreen(), selon l'invariant historique
+            // de OLD. Le snapshot start-game ci-dessus contient donc déjà les historiques
+            // pré-calculés. Les résolveurs d'arrière-plan restent utilisés ensuite pour
+            // les continuations après une annonce humaine hors écran.
         };
 
         // Deux frames : la première applique le DOM du jeu, la seconde garantit qu'un
@@ -5414,7 +5514,7 @@ async function uiStartGameAsHost() {
     // (voir uiHandleDealFileChosen / uiHandleDealLibraryChosen / uiGenerateRandomDeals) —
     // pas besoin de la relire, le bandeau de statut est déjà à jour depuis ce moment-là.
     if (pendingParsedSource === activeSource) {
-        proceedWithDeals(pendingOrderedDeals);
+        await proceedWithDeals(pendingOrderedDeals);
         return;
     }
 
@@ -5428,7 +5528,11 @@ async function uiStartGameAsHost() {
         pendingParsedSource = activeSource;
         pendingParsedDeals = parsedDeals;
         refreshPendingOrderedDeals();
-        proceedWithDeals(pendingOrderedDeals);
+        proceedWithDeals(pendingOrderedDeals).catch(err => {
+            hideConnectingOverlay();
+            console.error('[PLAY/R13] lancement interrompu pendant le pré-calcul robot', err);
+            setHostSetupMessage('Impossible de préparer les enchères robots avant le lancement.', false);
+        });
     };
     if (file) {
         readAndValidateDealFile(file, onReloaded);
@@ -5927,7 +6031,15 @@ function handlePeerData(msg, guestIndex) {
         }
 
         case 'call': {
-            if (!deals || msg.boardIndex !== boardIndex) return;
+            if (!deals || !Number.isInteger(msg.boardIndex) || !deals[msg.boardIndex]) return;
+
+            // En live, toute la table partage encore une seule donne : une annonce d'un
+            // autre boardIndex reste invalide. En différé, chacun peut au contraire être
+            // sur une donne différente ; le P2P de secours doit donc mettre à jour LA
+            // DONNE PORTÉE PAR LE MESSAGE, sans déplacer la vue locale du destinataire.
+            const targetBoardIndex = msg.boardIndex;
+            if (!deferredRoomMode && targetBoardIndex !== boardIndex) return;
+
             if (myRole === 'host') {
                 const senderId = authenticatedGuestId(guestIndex);
                 if (!senderId || seatAssignment[msg.seat] !== senderId) {
@@ -5935,13 +6047,50 @@ function handlePeerData(msg, guestIndex) {
                     return;
                 }
             }
-            const deal = currentDeal();
-            const expectedSeat = currentTurnSeat(deal.dealer, auctionHistory);
-            if (msg.seat !== expectedSeat || !isCallLegal(auctionHistory, msg.call, msg.seat)) {
+
+            const targetDeal = deals[targetBoardIndex];
+            if (!targetDeal.auctionHistory) targetDeal.auctionHistory = [];
+            const targetHistory = targetDeal.auctionHistory;
+            const expectedSeat = currentTurnSeat(targetDeal.dealer, targetHistory);
+
+            // Si le cloud a gagné la course et a déjà apporté cette même annonce, le P2P
+            // peut arriver quelques millisecondes après. Ce n'est pas une erreur : ne pas
+            // la dupliquer et ne pas transformer une course normale en rejet protocolaire.
+            const lastEntry = targetHistory[targetHistory.length - 1];
+            const alreadyPresent = !!lastEntry
+                && lastEntry.seat === msg.seat
+                && String(lastEntry.call || '').toUpperCase() === String(msg.call || '').toUpperCase();
+            if (alreadyPresent) {
+                relayIfHost(msg, guestIndex);
+                break;
+            }
+
+            if (msg.seat !== expectedSeat || !isCallLegal(targetHistory, msg.call, msg.seat)) {
                 console.warn('Annonce reçue invalide, ignorée :', msg);
                 return;
             }
-            applyCall(msg.seat, msg.call, msg.explanation);
+
+            targetHistory.push(msg.explanation
+                ? { seat: msg.seat, call: msg.call, explanation: msg.explanation }
+                : { seat: msg.seat, call: msg.call });
+
+            if (targetBoardIndex === boardIndex) {
+                auctionHistory = targetHistory;
+                renderAfterNormalCall();
+                maybeRobotBid();
+            } else if (myRole === 'host') {
+                // R12 — en différé, l'hôte et le guest peuvent regarder deux donnes
+                // différentes. L'ancienne garde ne lançait le robot que sur `boardIndex`,
+                // donc un bot suivant une annonce guest restait muet jusqu'au retour de
+                // l'hôte sur cette donne. On poursuit désormais LA DONNE CIBLE en fond.
+                continueRobotBidsOnBoardInBackground(targetBoardIndex);
+            }
+
+            // Même hors de la donne actuellement regardée par l'hôte, la copie P2P est
+            // immédiatement durable. Le resolver R12 republiera ensuite le suffixe robot
+            // lorsqu'il sera calculé ; le chemin participant parallèle reste un filet de
+            // sécurité serveur et ne doit plus être l'unique déclencheur de PONS.
+            saveHostGameStateToStorage();
             relayIfHost(msg, guestIndex);
             break;
         }
@@ -6064,11 +6213,6 @@ function handlePeerData(msg, guestIndex) {
 
         case 'goto-board': {
             if (!deals) return;
-            // Défense de compatibilité : depuis le mode différé à navigation indépendante,
-            // aucun client ne doit pouvoir déplacer la vue locale d'un autre. Les builds
-            // récents n'émettent déjà plus goto-board en différé, mais ignorer ici un
-            // message provenant d'un ancien onglet/cache évite de réintroduire ce couplage.
-            if (deferredRoomMode) return;
             boardIndex = msg.boardIndex;
             // Depuis le pré-calcul progressif au lancement, goto-board transporte aussi
             // l'historique AUTORITAIRE de la donne cible. Ainsi un saut très rapide vers
@@ -6174,32 +6318,42 @@ function advanceRobotBidsOnBoard(idx) {
     }
 }
 
-// Quand les quatre sièges sont des robots, les donnes hors écran peuvent être résolues
-// rapidement avec exactement le même PONS que la donne visible. Cela remplace seulement
-// l'ancien pré-calcul synchrone, impossible avec le moteur WASM asynchrone.
-let fullBotBackgroundGeneration = 0;
-const fullBotBoardsResolving = new Set();
+// Avancement PONS hors écran, donne par donne.
+//
+// R12 — ce mécanisme n'est PLUS réservé aux tables 100 % robots. Sur une table mixte,
+// toute donne doit pouvoir avancer en arrière-plan tant que c'est le tour d'un robot,
+// puis s'arrêter exactement au premier siège humain (ou à la fin de l'enchère). C'est
+// indispensable à deux comportements produit :
+//   1. au lancement, les robots qui parlent avant les humains préparent TOUTES les donnes ;
+//   2. en différé, si un guest annonce sur une donne que l'hôte ne regarde pas, le robot
+//      suivant doit répondre sans attendre que l'hôte revienne sur cette donne.
+//
+// Un Set verrouille chaque donne pendant un calcul PONS asynchrone. La génération invalide
+// proprement les travaux d'une séance précédente/reprise et les contrôles après chaque await
+// empêchent un résultat calculé sur un ancien historique d'être appliqué après une mutation.
+let robotBackgroundGeneration = 0;
+const robotBoardsResolving = new Set();
 
-function isFullBotTable() {
-    return !!autoPassSeats && autoPassSeats.length === SEATS.length
-        && SEATS.every(seat => !seatAssignment[seat]);
-}
+async function resolveRobotBoardInBackground(idx, generation = robotBackgroundGeneration, options = {}) {
+    if (!deals || !deals[idx] || generation !== robotBackgroundGeneration) return;
+    if (!autoPassSeats || autoPassSeats.length === 0) return;
+    if (robotBoardsResolving.has(idx)) return;
 
-async function resolveFullBotBoardInBackground(idx, generation) {
-    if (!deals || !deals[idx] || generation !== fullBotBackgroundGeneration) return;
     const deal = deals[idx];
     if (!deal.auctionHistory) deal.auctionHistory = [];
     const hist = deal.auctionHistory;
     if (isAuctionOver(hist)) return;
+    const historyLengthAtStart = hist.length;
 
-    fullBotBoardsResolving.add(idx);
+    robotBoardsResolving.add(idx);
     try {
         let safety = 0;
         while (!isAuctionOver(hist) && safety < 60) {
-            if (generation !== fullBotBackgroundGeneration || !isFullBotTable()) return;
+            if (generation !== robotBackgroundGeneration || !deals || deals[idx] !== deal) return;
             const turnSeat = currentTurnSeat(deal.dealer, hist);
-            if (!autoPassSeats.includes(turnSeat)) return;
+            if (!autoPassSeats.includes(turnSeat)) return; // premier humain atteint
 
+            const historyLengthBeforeDecision = hist.length;
             let call, explanation;
             if (robotBiddingMode === 'passOnly') {
                 call = 'PASS';
@@ -6209,12 +6363,17 @@ async function resolveFullBotBoardInBackground(idx, generation) {
                     const pons = await ensurePonsClientReady();
                     ({ call, explanation } = await pons.decideRobotCallForApp(turnSeat, deal, hist, autoPassSeats));
                 } catch (err) {
-                    console.error('[PLAY/PONS strict] calcul arrière-plan arrêté : PONS indisponible', err);
+                    console.error('[PLAY/PONS strict] calcul robot arrière-plan arrêté : PONS indisponible', err);
                     return;
                 }
             }
 
-            if (generation !== fullBotBackgroundGeneration) return;
+            // Une annonce humaine, un undo ou une resynchronisation cloud a pu modifier
+            // l'historique pendant le calcul WASM : jeter ce résultat devenu obsolète.
+            if (generation !== robotBackgroundGeneration || !deals || deals[idx] !== deal) return;
+            if (hist.length !== historyLengthBeforeDecision) continue;
+            if (isAuctionOver(hist) || currentTurnSeat(deal.dealer, hist) !== turnSeat) continue;
+
             if (!isCallLegal(hist, call, turnSeat)) {
                 console.warn('[Robot PONS arrière-plan] annonce illégale reçue, repli Passe', call);
                 call = 'PASS';
@@ -6224,52 +6383,66 @@ async function resolveFullBotBoardInBackground(idx, generation) {
             safety++;
         }
     } finally {
-        fullBotBoardsResolving.delete(idx);
-        // Le pré-calcul PONS est déjà asynchrone. Depuis le lancement progressif, il doit
-        // toutefois diffuser lui aussi l'historique obtenu : sinon les invités resteraient
-        // avec le snapshot initial jusqu'au premier goto-board. Garde d'identité stricte :
-        // si une nouvelle séance a remplacé `deals` pendant l'await, l'ancien resolver ne
-        // doit surtout pas publier/rendre/sauvegarder la nouvelle donne par accident.
-        const stillSameDeal = deals && deals[idx] === deal && generation === fullBotBackgroundGeneration;
-        if (stillSameDeal) {
+        robotBoardsResolving.delete(idx);
+        const stillSameDeal = deals && deals[idx] === deal && generation === robotBackgroundGeneration;
+        const historyChanged = stillSameDeal && deal.auctionHistory.length !== historyLengthAtStart;
+        if (historyChanged && !options.quiet) {
+            // `precalc-board` est un snapshot monotone : il met à jour aussi le guest qui
+            // travaille sur cette donne sans déplacer la vue locale de l'hôte.
             broadcastPrecalculatedBoard(idx);
-            if (boardIndex === idx) renderBoard();
+            if (boardIndex === idx) {
+                auctionHistory = deal.auctionHistory;
+                renderBoard();
+            }
             saveHostGameStateToStorage();
         }
     }
 }
 
-async function resolveAllOtherFullBotBoards(excludeIdx) {
-    if (!deals || !isFullBotTable()) return;
-    const generation = ++fullBotBackgroundGeneration;
+async function ensureRobotPrefixReadyOnBoard(idx) {
+    if (!deals || !deals[idx] || !autoPassSeats || autoPassSeats.length === 0) return;
+    // Si le scheduler de lancement travaille déjà sur cette donne, attendre son résultat
+    // plutôt que de conclure trop tôt que la donne n'attend personne.
+    while (robotBoardsResolving.has(idx)) {
+        await new Promise(resolve => setTimeout(resolve, 16));
+        if (!deals || !deals[idx]) return;
+    }
+    await resolveRobotBoardInBackground(idx, robotBackgroundGeneration);
+}
+
+function continueRobotBidsOnBoardInBackground(idx) {
+    if (myRole !== 'host' || !deals || !deals[idx]) return;
+    const generation = robotBackgroundGeneration;
+    resolveRobotBoardInBackground(idx, generation).catch(err =>
+        console.warn(`[Robot PONS arrière-plan] donne ${idx + 1} interrompue`, err)
+    );
+}
+
+async function resolveAllOtherRobotBoards(excludeIdx, options = {}) {
+    if (!deals || !autoPassSeats || autoPassSeats.length === 0) return;
+    const generation = ++robotBackgroundGeneration;
     for (let idx = 0; idx < deals.length; idx++) {
-        if (generation !== fullBotBackgroundGeneration || !isFullBotTable()) return;
+        if (generation !== robotBackgroundGeneration || !deals) return;
         if (idx === excludeIdx || isAuctionOver(deals[idx].auctionHistory || [])) continue;
-        await resolveFullBotBoardInBackground(idx, generation);
+        await resolveRobotBoardInBackground(idx, generation, options);
     }
 }
 
-// Applique le pré-calcul aux autres donnes sans jamais mélanger PONS et le moteur legacy.
+// Prépare toutes les autres donnes jusqu'au prochain tour humain. En PONS/WASM, le calcul
+// est asynchrone et séquentiel pour ne pas lancer des dizaines d'inférences concurrentes.
+// En passOnly, le même resolver est immédiat mais on garde une seule sémantique commune.
 function advanceRobotBidsOnAllBoards(excludeIdx) {
+    if (myRole !== 'host') return;
     if (!deals || !autoPassSeats || autoPassSeats.length === 0) return;
-    if (window.PonsEngine) {
-        if (isFullBotTable()) {
-            resolveAllOtherFullBotBoards(excludeIdx).catch(err =>
-                console.warn('[Robot PONS arrière-plan] pré-calcul interrompu', err)
-            );
-        }
-        return;
-    }
-    if (robotBiddingMode !== 'passOnly') {
+    if (robotBiddingMode !== 'passOnly' && !window.PonsEngine) {
         ensurePonsClientReady()
             .then(() => advanceRobotBidsOnAllBoards(excludeIdx))
             .catch(err => console.warn('[Robot PONS arrière-plan] moteur indisponible', err));
         return;
     }
-    deals.forEach((_, idx) => {
-        if (idx === excludeIdx) return;
-        advanceRobotBidsOnBoard(idx);
-    });
+    resolveAllOtherRobotBoards(excludeIdx).catch(err =>
+        console.warn('[Robot PONS arrière-plan] pré-calcul interrompu', err)
+    );
 }
 
 // ===== Lancement fluide : pré-calcul legacy progressif =====
@@ -6367,7 +6540,7 @@ function scheduleStartupLegacyRobotPrecalc(excludeIdx) {
 function maybeRobotBid() {
     if (allPassInProgress) return;
     if (myRole !== 'host') return;
-    if (fullBotBoardsResolving.has(boardIndex)) return;
+    if (robotBoardsResolving.has(boardIndex)) return;
     if (!autoPassSeats || autoPassSeats.length === 0) return;
     if (!deals || isAuctionOver(auctionHistory)) return;
 
@@ -6911,7 +7084,7 @@ function uiChatInputKeydown(event) {
 
 function uiSendChatMessage() {
     const input = document.getElementById('chatInput');
-    if (!input) return;
+    if (!input || !peerConn) return;
     // Voir échange avec Guillaume (session du 24 juillet — "je ne suis plus dedans si je
     // clique 2x") : remis AVANT la vérification du texte, pas après — sinon un clic sur
     // "Envoyer" avec un champ déjà vide (ex. un second clic accidentel juste après le
@@ -6930,18 +7103,15 @@ function uiSendChatMessage() {
     // silence contre une connexion fermée, voir BridgePeerConnection.send) — bascule sur
     // le même principe que pushCallViaServerFallback : pousse directement au serveur au
     // lieu d'attendre un relais qui n'arrivera jamais dans ce cas.
-    if (myRole === 'guest' && (deferredRoomMode || !peerConn || !peerConn.isConnected())) {
-        // En différé, le cloud est l'autorité de convergence même si le P2P paraît encore
-        // ouvert. BridgePeerConnection.send() n'a pas d'accusé de réception : une coupure
-        // entre isConnected() et send() pouvait laisser le message seulement en local,
-        // puis le prochain snapshot cloud le faisait disparaître.
+    if (myRole === 'guest' && (!peerConn || !peerConn.isConnected())) {
         pushChatViaServerFallback(msg);
         return;
     }
-    // En live, on garde le chemin P2P historique. Un hôte temporairement sans connexion
-    // a déjà persisté le message via addChatMessage -> saveHostGameStateToStorage ; il n'y
-    // a simplement personne à qui le diffuser en direct à cet instant.
-    if (peerConn) peerConn.send(msg);
+    // Même appel pour l'hôte (diffuse directement à tous les invités) et pour un invité
+    // (envoie à l'hôte, qui relaiera) : send() sans guestIndex explicite diffuse déjà à
+    // toutes les connexions actives de ce peer, qui n'en a qu'une seule (l'hôte) côté
+    // invité — voir peer-connection.js.
+    peerConn.send(msg);
 }
 
 // Synchronisation de la couleur propre quand l'invité n'a plus de P2P. Le snapshot
@@ -7763,6 +7933,8 @@ function renderAuctionLedger() {
 // ne concerne que l'interface. Elle est remise à zéro dès qu'une annonce est jouée,
 // lorsque le tour change, ou à la fin de l'enchère.
 let selectedBiddingLevel = null;
+// R10 — une action participant envoyée au serveur reste unique jusqu'à confirmation.
+let participantServerCallInFlight = false;
 // Si le même navigateur contrôle plusieurs sièges, `myTurn` peut rester vrai après une
 // annonce alors que le joueur à la table a changé. On mémorise donc explicitement le siège
 // dont la boîte est affichée, afin de repartir du palier minimal légal à CHAQUE nouveau tour.
@@ -7830,7 +8002,7 @@ function renderBiddingBox() {
     const turnSeat = currentTurnSeat(deal.dealer, auctionHistory);
     // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 3) : ne gèle plus la boîte d'enchères
     // pour un invité déconnecté de l'hôte — uiMakeCall peut utiliser le relais serveur.
-    const myTurn = mySeats && mySeats.includes(turnSeat);
+    const myTurn = mySeats && mySeats.includes(turnSeat) && !participantServerCallInFlight;
 
     // Nouveau joueur à l'enchère = nouvelle sélection. C'est important même si le même
     // utilisateur contrôle deux sièges consécutifs : `myTurn` resterait vrai, mais le palier
@@ -7932,22 +8104,45 @@ function uiMakeCall(call) {
     if (!mySeats || !mySeats.includes(turnSeat)) return;
     if (!isCallLegal(auctionHistory, call, turnSeat)) return;
 
+    const p2pConnected = !!(peerConn && peerConn.isConnected());
+    const usesServerAuthority = myRole === 'guest' && (deferredRoomMode || !p2pConnected);
     selectedBiddingLevel = null;
-    applyCall(turnSeat, call);
 
-    // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 3) : jusqu'ici, un invité déconnecté de
-    // l'hôte ne pouvait tout simplement pas annoncer (voir renderBiddingBox, même règle
-    // — les boutons étaient déjà grisés dans ce cas). Bascule désormais sur le relais
-    // serveur au lieu d'abandonner — voir pushCallViaServerFallback, qui relit l'état
-    // serveur, rejoue cette annonce dessus et revalide avant de pousser (jamais un envoi
-    // à l'aveugle sur la seule foi de ma copie locale, potentiellement périmée).
-    if (myRole === 'guest' && (deferredRoomMode || !peerConn || !peerConn.isConnected())) {
-        // En différé, même une connexion P2P vivante ne suffit pas : l'hôte peut regarder
-        // une autre donne et son handler live ignore volontairement les annonces d'un autre
-        // boardIndex. Le serveur est donc l'autorité de convergence pour chaque donne.
-        pushCallViaServerFallback(boardIndex, turnSeat, call);
+    if (usesServerAuthority) {
+        if (participantServerCallInFlight) return;
+        participantServerCallInFlight = true;
+
+        // R11 — en différé, le serveur reste l'autorité de convergence/PONS, MAIS une
+        // DataConnection P2P déjà ouverte n'est plus jetée à la poubelle. C'était le trou
+        // de R9/R10 : le premier clic de B dépendait à 100 % d'un PUT participant et d'un
+        // retour cloud, alors qu'A était souvent joignable directement au même instant.
+        //
+        // On utilise donc DEUX chemins complémentaires quand ils existent :
+        //   1. chemin P2P immédiat : affichage local + message à l'hôte ; l'hôte valide et
+        //      persiste avec son autorité host ;
+        //   2. chemin serveur participant : conserve l'autorité différée, les conflits CAS
+        //      et surtout l'avancement PONS de la bonne donne si chacun navigue séparément.
+        //
+        // Le serveur et le handler P2P sont idempotents vis-à-vis du même préfixe : si l'un
+        // a déjà commité l'annonce, l'autre absorbe simplement l'état plus récent sans la
+        // dupliquer. Ainsi une panne d'un seul transport ne fait plus disparaître l'annonce.
+        if (deferredRoomMode && p2pConnected) {
+            applyCall(turnSeat, call);
+            peerConn.send({ type: 'call', boardIndex, seat: turnSeat, call });
+        } else {
+            // Live sans P2P : pas d'affichage optimiste, le relais serveur est le seul
+            // chemin disponible et doit confirmer avant de modifier l'écran.
+            renderBiddingBox();
+        }
+
+        Promise.resolve(pushCallViaServerFallback(boardIndex, turnSeat, call)).finally(() => {
+            participantServerCallInFlight = false;
+            if (deals) renderBoard();
+        });
         return;
     }
+
+    applyCall(turnSeat, call);
     peerConn.send({ type: 'call', boardIndex, seat: turnSeat, call });
 }
 
@@ -8977,11 +9172,10 @@ function checkAuctionEnd(renderOptions = {}) {
     }
 
     const isLastBoard = boardIndex >= deals.length - 1;
-    // En live, seul l'hôte pilote la donne commune. En différé, chaque joueur assis a sa
-    // propre navigation locale : le bouton final doit suivre exactement la même règle que
-    // les flèches ◀▶ et la vue d'ensemble, sinon un guest différé se retrouve bloqué ici
-    // malgré des flèches parfaitement autorisées ailleurs.
-    const iCanNavigate = canNavigateBoards();
+    // Voir échange avec Guillaume (session du 23 juillet) : réservé à l'HÔTE désormais,
+    // pas à n'importe quel joueur actif (canControlBoard()) — un simple joueur, ou un
+    // kibitz, ne doit pas pouvoir faire avancer la table pour tout le monde.
+    const iCanNavigate = myRole === 'host';
 
     if (isLastBoard) {
         resultEl.innerHTML += '<div class="info-text">Dernière donne du fichier chargé.</div>';
@@ -9997,12 +10191,15 @@ function uiJumpToBoardFromOverview(idx) {
 // n'attend. Avance les robots au passage (voir advanceRobotBidsOnBoard), au cas où une
 // donne n'aurait pas encore été touchée depuis un chargement antérieur à ce correctif.
 // Réservé à l'hôte, même règle que ◀▶ et la vue d'ensemble.
-function uiFastForwardToMyTurn() {
+async function uiFastForwardToMyTurn() {
     if (!canNavigateBoards() || !deals) return;
     const n = deals.length;
     for (let offset = 1; offset <= n; offset++) {
         const idx = (boardIndex + offset) % n;
-        advanceRobotBidsOnBoard(idx);
+        // R12 — le pré-calcul de lancement est volontairement asynchrone. Si l'utilisateur
+        // clique très vite sur avance rapide, attendre/terminer le préfixe robot de cette
+        // donne avant de décider si elle attend réellement une annonce humaine.
+        await ensureRobotPrefixReadyOnBoard(idx);
         const hist = deals[idx].auctionHistory || [];
         if (isAuctionOver(hist)) continue;
         const turnSeat = currentTurnSeat(deals[idx].dealer, hist);
@@ -10572,11 +10769,11 @@ async function uiResumeHostSession(roomCode) {
         if (own) { own.disconnected = false; own.disconnectedAt = null; }
     }
     autoPassSeats = saved.autoPassSeats || [];
-    advanceRobotBidsOnAllBoards(boardIndex); // voir échange avec Guillaume — idempotent, couvre une sauvegarde antérieure à ce correctif
     // Voir échange avec Guillaume (session du 23 juillet — "sauve aussi le chat") :
     // restaure la conversation telle qu'elle était juste avant la fermeture de l'onglet.
     chatMessages = saved.chatMessages || [];
     myRole = 'host';
+    advanceRobotBidsOnAllBoards(boardIndex); // R12 : seulement après restauration explicite de l'autorité host
     // Voir échange avec Guillaume ("je réouvre en A, kibbitz") : depuis la séparation
     // live/différé, une salle DIFFÉRÉE n'utilise plus jamais la chaîne littérale 'host'
     // dans seatAssignment (remplacée par mon vrai jeton dès le lancement, voir
@@ -11069,6 +11266,61 @@ function pushCloudGameState() {
 // (quelqu'un/quelque chose a changé la situation ailleurs entre-temps), on abandonne et on
 // resynchronise sur le vrai état serveur plutôt que de laisser mon affichage optimiste
 // erroné en place (voir applyCloudUpdate, réutilisé tel quel pour ce cas).
+async function nudgeDeferredRobotContinuationViaServer(authoritative, targetBoardIndex, cloudCtx) {
+    if (!deferredRoomMode || !authoritative || !authoritative.state) return false;
+    const state = authoritative.state;
+    const idx = Number(targetBoardIndex);
+    if (!Number.isInteger(idx) || !state.deals || !state.deals[idx]) return false;
+    const deal = state.deals[idx];
+    const hist = Array.isArray(deal.auctionHistory) ? deal.auctionHistory : [];
+    if (isAuctionOver(hist)) return false;
+    const expectedSeat = currentTurnSeat(deal.dealer, hist);
+    // Dans PLAY, un robot est précisément un siège sans participant assigné (null/undefined).
+    // SEAT_PENDING est une chaîne non vide et ne doit donc jamais être pris pour un robot.
+    if (!expectedSeat || (state.seatAssignment && state.seatAssignment[expectedSeat])) return false;
+
+    // Le serveur R7 utilise `proposed.boardIndex` comme HINT en mode différé, sans recopier
+    // cette navigation dans l'état partagé. Un participant assis peut donc demander à PONS
+    // d'avancer cette donne sans prendre aucune autorité sur la valeur de l'annonce robot.
+    const hintedState = cloneCloudData(state);
+    hintedState.boardIndex = idx;
+    hintedState.savedAt = Date.now();
+    let conflictCurrent = null;
+    const result = await pushSessionState(cloudCtx.roomCode, hintedState, authoritative.version, {
+        participantCredential: participantCredentialForCloudWrite(),
+        onConflict: (current) => {
+            if (!isCloudSyncContextActive(cloudCtx)) return;
+            const validCurrent = current && validateCloudSnapshot(current, cloudCtx.roomCode);
+            if (validCurrent) conflictCurrent = validCurrent;
+        }
+    });
+    if (!isCloudSyncContextActive(cloudCtx)) return false;
+    if (!result) {
+        if (conflictCurrent) {
+            lastKnownCloudVersion = conflictCurrent.version;
+            cloudLastSyncedState = cloneCloudData(conflictCurrent.state);
+            applyCloudUpdate(conflictCurrent, { expectedRoomCode: cloudCtx.roomCode });
+        }
+        return false;
+    }
+
+    lastKnownCloudVersion = result.version;
+    if (result.state) {
+        const restricted = validateCloudSnapshot({
+            version: result.version,
+            updatedAt: result.updatedAt,
+            state: result.state
+        }, cloudCtx.roomCode);
+        if (restricted) {
+            cloudLastSyncedState = cloneCloudData(restricted.state);
+            applyCloudUpdate(restricted, { expectedRoomCode: cloudCtx.roomCode });
+        }
+    }
+    recordSyncTrace('call.cloud-fallback.robot-nudge', { targetBoardIndex: idx, version: result.version });
+    pushDebugLog(`Continuation robot donne ${idx + 1} déclenchée côté serveur (version ${result.version}).`);
+    return true;
+}
+
 async function pushCallViaServerFallback(targetBoardIndex, seat, call, explanation) {
     if (!currentRoomCode || typeof pullSessionState !== 'function' || typeof pushSessionState !== 'function') {
         pushDebugLog(`Annonce ${call} (${seat}) : impossible de tenter le relais serveur (currentRoomCode ou fonctions cloud manquantes).`);
@@ -11133,6 +11385,22 @@ async function pushCallViaServerFallback(targetBoardIndex, seat, call, explanati
             }
             if (!boardDeals[idx].auctionHistory) boardDeals[idx].auctionHistory = [];
             const hist = boardDeals[idx].auctionHistory;
+
+            // R12 — course R11 : le miroir P2P peut permettre à l'hôte de committer
+            // l'annonce AVANT le PUT participant. Si ce snapshot hôte laisse maintenant
+            // un robot au tour, ne pas abandonner simplement parce que l'annonce humaine
+            // est déjà là : envoyer un PUT participant identique avec `boardIndex` en hint
+            // afin que l'autorité PONS serveur fasse immédiatement jouer ce robot.
+            const serverTurnSeat = currentTurnSeat(boardDeals[idx].dealer, hist);
+            const serverTurnIsRobot = !!serverTurnSeat
+                && (!baseState.seatAssignment || !baseState.seatAssignment[serverTurnSeat]);
+            if (deferredRoomMode && serverTurnIsRobot) {
+                const nudged = await nudgeDeferredRobotContinuationViaServer(
+                    { version: expectedVersion, state: baseState }, idx, cloudCtx
+                );
+                if (nudged) return;
+                if (!isCloudSyncContextActive(cloudCtx)) return;
+            }
 
             // Idempotence : un timeout réseau peut avoir laissé croire que le PUT a échoué
             // alors que le serveur l'a commité puis a déjà ajouté un ou plusieurs appels
@@ -11681,7 +11949,6 @@ function uiResumeFromCloud() {
     if (!deals[boardIndex].auctionHistory) deals[boardIndex].auctionHistory = [];
     auctionHistory = deals[boardIndex].auctionHistory;
     autoPassSeats = SEATS.filter(seat => !seatAssignment[seat]);
-    advanceRobotBidsOnAllBoards(boardIndex);
     chatMessages = st.chatMessages || [];
     roomCreatorName = st.roomCreatorName || (participants.find(p => p.id === 'host') || {}).name || 'Hôte';
     roomCreatorToken = creatorToken || null;
@@ -11696,6 +11963,7 @@ function uiResumeFromCloud() {
     // puis republiait cette opinion comme vérité commune.
     myRole = isCreatorResume ? 'host' : 'guest';
     myParticipantId = isCreatorResume ? 'host' : myToken;
+    if (myRole === 'host') advanceRobotBidsOnAllBoards(boardIndex);
     recordSyncTrace('resume.cloud.role-resolved', { creatorResume: isCreatorResume, version: candidate.version, participantId: myParticipantId });
     const me = participants.find(p => p && p.id === myParticipantId);
     if (me) { me.disconnected = false; me.disconnectedAt = null; }
