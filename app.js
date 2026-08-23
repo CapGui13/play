@@ -7463,6 +7463,25 @@ async function pushChatViaServerFallback(msg) {
     if (!currentRoomCode || typeof pullSessionState !== 'function' || typeof pushSessionState !== 'function') return;
     const cloudCtx = captureCloudSyncContext(currentRoomCode);
 
+    // R29 — même garantie de continuité que les enchères différées. Après plusieurs
+    // fermetures/reprises, la credential participant locale peut manquer alors que la
+    // preuve déterministe dérivée du code 4 chiffres reste valide côté serveur. Le chat
+    // utilisait encore participantCredentialForCloudWrite() directement : son PUT partait
+    // alors sans credential et était refusé, puis le prochain snapshot cloud effaçait le
+    // message affiché optimistiquement. En différé guest, récupérer/réarmer la preuve AVANT
+    // toute lecture/écriture, exactement comme pushCallViaServerFallback().
+    let chatWriteCredential = participantCredentialForCloudWrite();
+    if (deferredRoomMode && myRole === 'guest') {
+        chatWriteCredential = ensureDeferredGuestCloudWriteCredential();
+        if (!chatWriteCredential) {
+            recordSyncTrace('chat.cloud-fallback.no-participant-credential', {
+                participantId: myParticipantId || null
+            });
+            pushDebugLog('Message de chat : credential participant différée indisponible.');
+            return;
+        }
+    }
+
     let pulled;
     try {
         pulled = await pullSessionState(cloudCtx.roomCode);
@@ -7512,7 +7531,7 @@ async function pushChatViaServerFallback(msg) {
             const stateToPush = { ...baseState, savedAt: Date.now() };
             let conflictCurrent = null;
             const result = await pushSessionState(cloudCtx.roomCode, stateToPush, authoritative.version, {
-                participantCredential: participantCredentialForCloudWrite(),
+                participantCredential: chatWriteCredential,
                 onConflict: (current) => {
                     if (!isCloudSyncContextActive(cloudCtx)) return;
                     const validCurrent = current && validateCloudSnapshot(current, cloudCtx.roomCode);
