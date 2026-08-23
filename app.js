@@ -7959,6 +7959,120 @@ function renderAuctionLedger() {
 let selectedBiddingLevel = null;
 // R10 — une action participant envoyée au serveur reste unique jusqu'à confirmation.
 let participantServerCallInFlight = false;
+
+// R15 — stabilité visuelle des annonces optimistes en différé.
+//
+// R11 affiche immédiatement l'annonce d'un guest lorsque le P2P est ouvert, pendant que
+// la même intention est confirmée en parallèle par le serveur. Entre les deux, Pusher peut
+// livrer un snapshot de version plus récente pour une AUTRE mutation, mais dont cette donne
+// est encore un simple préfixe ancien. applyCloudUpdate remplaçait alors l'historique local
+// entier : annonce guest + réponse robot disparaissaient, puis revenaient au snapshot suivant.
+//
+// On ne protège ici QUE la branche monotone née d'une annonce guest différée réellement
+// envoyée. Une divergence de cartes d'enchère libère immédiatement la garde et le serveur
+// redevient autoritaire ; un vrai Undo n'est donc jamais masqué durablement.
+const DEFERRED_OPTIMISTIC_AUCTION_GUARD_MAX_AGE_MS = 30000;
+const deferredOptimisticAuctionGuards = new Map();
+
+function sameAuctionCallForOptimisticGuard(a, b) {
+    return !!a && !!b
+        && a.seat === b.seat
+        && String(a.call || '').toUpperCase() === String(b.call || '').toUpperCase();
+}
+
+function auctionCallPrefixForOptimisticGuard(prefix, full) {
+    if (!Array.isArray(prefix) || !Array.isArray(full) || prefix.length > full.length) return false;
+    for (let i = 0; i < prefix.length; i++) {
+        if (!sameAuctionCallForOptimisticGuard(prefix[i], full[i])) return false;
+    }
+    return true;
+}
+
+function beginDeferredOptimisticAuctionGuard(targetBoardIndex, baseHistory, seat, call) {
+    if (!deferredRoomMode || myRole !== 'guest') return;
+    const idx = Number(targetBoardIndex);
+    if (!Number.isInteger(idx) || idx < 0) return;
+    deferredOptimisticAuctionGuards.set(idx, {
+        baseHistory: cloneCloudData(Array.isArray(baseHistory) ? baseHistory : []),
+        seat,
+        call: String(call || '').toUpperCase(),
+        startedAt: Date.now()
+    });
+    recordSyncTrace('call.optimistic-guard.begin', { targetBoardIndex: idx, seat, call });
+}
+
+function clearDeferredOptimisticAuctionGuard(targetBoardIndex, seat = null, call = null, reason = 'clear') {
+    const idx = Number(targetBoardIndex);
+    const guard = deferredOptimisticAuctionGuards.get(idx);
+    if (!guard) return;
+    if (seat != null && guard.seat !== seat) return;
+    if (call != null && guard.call !== String(call || '').toUpperCase()) return;
+    deferredOptimisticAuctionGuards.delete(idx);
+    recordSyncTrace('call.optimistic-guard.end', { targetBoardIndex: idx, reason });
+}
+
+function stabilizeDeferredOptimisticAuctionHistories(remoteDeals) {
+    if (!deferredRoomMode || myRole !== 'guest' || !Array.isArray(remoteDeals)
+        || !Array.isArray(deals) || deferredOptimisticAuctionGuards.size === 0) return remoteDeals;
+
+    const now = Date.now();
+    for (const [idx, guard] of Array.from(deferredOptimisticAuctionGuards.entries())) {
+        if (!guard || now - Number(guard.startedAt || 0) > DEFERRED_OPTIMISTIC_AUCTION_GUARD_MAX_AGE_MS) {
+            clearDeferredOptimisticAuctionGuard(idx, null, null, 'expired');
+            continue;
+        }
+        const localDeal = deals[idx];
+        const remoteDeal = remoteDeals[idx];
+        if (!localDeal || !remoteDeal) {
+            clearDeferredOptimisticAuctionGuard(idx, null, null, 'board-missing');
+            continue;
+        }
+        const localHistory = Array.isArray(localDeal.auctionHistory) ? localDeal.auctionHistory : [];
+        const remoteHistory = Array.isArray(remoteDeal.auctionHistory) ? remoteDeal.auctionHistory : [];
+        const baseHistory = Array.isArray(guard.baseHistory) ? guard.baseHistory : [];
+
+        // La branche locale doit toujours contenir exactement l'annonce optimiste qui a
+        // créé la garde, à la position suivant le préfixe de départ. Sinon elle a déjà été
+        // annulée/remplacée localement : ne rien protéger.
+        const guardedEntry = localHistory[baseHistory.length];
+        const branchStillOurs = auctionCallPrefixForOptimisticGuard(baseHistory, localHistory)
+            && guardedEntry
+            && guardedEntry.seat === guard.seat
+            && String(guardedEntry.call || '').toUpperCase() === guard.call;
+        if (!branchStillOurs) {
+            clearDeferredOptimisticAuctionGuard(idx, null, null, 'local-branch-changed');
+            continue;
+        }
+
+        // Snapshot cloud en retard mais compatible : garder l'histoire locale visible.
+        // Cela couvre aussi une réponse robot P2P déjà reçue alors que le cloud ne contient
+        // encore que l'annonce humaine. Les explications peuvent différer : l'identité
+        // métier d'une carte est siège + call, pas le texte d'explication.
+        if (auctionCallPrefixForOptimisticGuard(remoteHistory, localHistory)) {
+            if (remoteHistory.length < localHistory.length) {
+                remoteDeal.auctionHistory = cloneCloudData(localHistory);
+                recordSyncTrace('call.optimistic-guard.preserve', {
+                    targetBoardIndex: idx,
+                    remoteLength: remoteHistory.length,
+                    localLength: localHistory.length
+                });
+            } else {
+                clearDeferredOptimisticAuctionGuard(idx, null, null, 'cloud-caught-up');
+            }
+            continue;
+        }
+
+        // Le cloud a rattrapé puis prolongé notre branche : il est désormais pleinement
+        // autoritaire. Toute autre divergence est également acceptée immédiatement ; elle
+        // représente un vrai conflit de même donne, pas un simple snapshot en retard.
+        if (auctionCallPrefixForOptimisticGuard(localHistory, remoteHistory)) {
+            clearDeferredOptimisticAuctionGuard(idx, null, null, 'cloud-extended');
+        } else {
+            clearDeferredOptimisticAuctionGuard(idx, null, null, 'cloud-diverged');
+        }
+    }
+    return remoteDeals;
+}
 // Si le même navigateur contrôle plusieurs sièges, `myTurn` peut rester vrai après une
 // annonce alors que le joueur à la table a changé. On mémorise donc explicitement le siège
 // dont la boîte est affichée, afin de repartir du palier minimal légal à CHAQUE nouveau tour.
@@ -8151,6 +8265,7 @@ function uiMakeCall(call) {
         // a déjà commité l'annonce, l'autre absorbe simplement l'état plus récent sans la
         // dupliquer. Ainsi une panne d'un seul transport ne fait plus disparaître l'annonce.
         if (deferredRoomMode && p2pConnected) {
+            beginDeferredOptimisticAuctionGuard(boardIndex, auctionHistory, turnSeat, call);
             applyCall(turnSeat, call);
             peerConn.send({ type: 'call', boardIndex, seat: turnSeat, call });
         } else {
@@ -11450,6 +11565,7 @@ async function pushCallViaServerFallback(targetBoardIndex, seat, call, explanati
             // être rejoué sans perdre l'action utilisateur. En revanche, si la même donne a
             // changé, la décision métier n'est plus forcément valable : fail-closed + resync.
             if (!sameCloudData(hist, initialServerHistory)) {
+                clearDeferredOptimisticAuctionGuard(idx, seat, call, 'same-board-conflict');
                 recordSyncTrace('call.cloud-fallback.same-board-conflict', { targetBoardIndex: idx, seat, call, currentVersion: authoritative && authoritative.version });
                 pushDebugLog(`Annonce ${call} (${seat}) abandonnée : la donne ${idx} a changé pendant le conflit — resynchronisation sans réécriture.`);
                 if (authoritative) applyCloudUpdate(authoritative, { expectedRoomCode: cloudCtx.roomCode });
@@ -11458,6 +11574,7 @@ async function pushCallViaServerFallback(targetBoardIndex, seat, call, explanati
 
             const expectedSeat = currentTurnSeat(boardDeals[idx].dealer, hist);
             if (seat !== expectedSeat || !isCallLegal(hist, call, seat)) {
+                clearDeferredOptimisticAuctionGuard(idx, seat, call, 'server-rejected-call');
                 pushDebugLog(`Annonce ${call} (${seat}) abandonnée : plus valide par rapport à l'état serveur relu (tour attendu : ${expectedSeat}) — resynchronisation.`);
                 if (authoritative) applyCloudUpdate(authoritative, { expectedRoomCode: cloudCtx.roomCode });
                 return;
@@ -11516,6 +11633,7 @@ async function pushCallViaServerFallback(targetBoardIndex, seat, call, explanati
             }
 
             if (conflictCurrent) {
+                clearDeferredOptimisticAuctionGuard(idx, seat, call, 'too-many-conflicts');
                 pushDebugLog(`Annonce ${call} (${seat}) : trop de conflits successifs ; resynchronisation sans forcer l'écriture.`);
                 applyCloudUpdate(conflictCurrent, { expectedRoomCode: cloudCtx.roomCode });
             } else {
@@ -11693,6 +11811,10 @@ function applyCloudUpdate(result, options = {}) {
     const oldChatLengthForRelay = chatMessages ? chatMessages.length : 0;
     const oldSeatAssignmentJsonForRelay = JSON.stringify(seatAssignment);
 
+    // R15 — ne jamais laisser un snapshot cloud seulement EN RETARD sur l'annonce
+    // optimiste courante raccourcir visuellement la séquence. exactServerState ci-dessus
+    // reste, lui, byte-for-byte l'état autoritaire utilisé comme base de CAS/merge.
+    st.deals = stabilizeDeferredOptimisticAuctionHistories(st.deals);
     deals = st.deals;
     seatAssignment = st.seatAssignment || seatAssignment;
     participants = st.participants || participants;
