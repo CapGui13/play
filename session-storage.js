@@ -16,6 +16,14 @@ const SESSION_ACCESS_KEY_MAX_AGE_MS = 70 * 24 * 60 * 60 * 1000;
 let fallbackSessionAccessKeys = {};
 let fallbackSessionHostWriteKeys = {};
 
+function sessionTrace(eventName, detail = {}) {
+    try {
+        if (typeof window !== 'undefined' && typeof window.recordSyncTrace === 'function') {
+            window.recordSyncTrace(eventName, detail);
+        }
+    } catch (e) { /* diagnostic uniquement */ }
+}
+
 // Mode de développement par ouverture directe du fichier index.html (file://).
 // Dans ce contexte le navigateur ne possède pas une origine HTTP normale pour les appels
 // CORS vers l'API de session. La table P2P/PeerJS reste parfaitement utilisable : on
@@ -62,6 +70,7 @@ let deferredCodeOnlyEnableRoom = null;
 
 async function enableDeferredCodeOnlyRoomAccess(roomCode) {
     if (isLocalFileSessionMode()) return true;
+    sessionTrace('deferred.enable.begin', { roomCode: normalizeSessionRoomCode(roomCode) });
     const code = normalizeSessionRoomCode(roomCode);
     const desiredAccessKey = deferredCodeOnlyAccessKey(code);
     const credential = deferredCodeOnlyParticipantCredential(code);
@@ -83,7 +92,10 @@ async function enableDeferredCodeOnlyRoomAccess(roomCode) {
         const registered = await registerSessionParticipantCredential(
             code, credential.participantId, credential.reconnectSecret
         );
-        if (!registered) return false;
+        if (!registered) {
+            sessionTrace('deferred.enable.register-failed', { roomCode: code });
+            return false;
+        }
 
         // Déjà convertie : ne surtout pas faire tourner la clé host à chaque rendu/clic.
         if (currentAccessKey === desiredAccessKey) return true;
@@ -108,8 +120,10 @@ async function enableDeferredCodeOnlyRoomAccess(roomCode) {
             if (!resp.ok) return false;
             rememberSessionAccessKey(code, desiredAccessKey);
             rememberSessionHostWriteKey(code, newHostWriteKey);
+            sessionTrace('deferred.enable.success', { roomCode: code });
             return true;
         } catch (e) {
+            sessionTrace('deferred.enable.error', { roomCode: code, message: (e && e.message) || String(e) });
             return false;
         }
     })().finally(() => {
@@ -125,6 +139,7 @@ async function enableDeferredCodeOnlyRoomAccess(roomCode) {
 // garde une clé aléatoire et répondra donc 401/403, sans révéler son état.
 async function pullDeferredSessionStateByCode(roomCode) {
     if (isLocalFileSessionMode()) return null;
+    sessionTrace('cloud.cold-pull.begin', { roomCode: normalizeSessionRoomCode(roomCode) });
     const code = normalizeSessionRoomCode(roomCode);
     const accessKey = deferredCodeOnlyAccessKey(code);
     if (!code || !accessKey) return null;
@@ -137,8 +152,11 @@ async function pullDeferredSessionStateByCode(roomCode) {
         if (resp.status === 401 || resp.status === 403 || resp.status === 404) return null;
         if (!resp.ok) throw new Error(`pullDeferredSessionStateByCode: HTTP ${resp.status}`);
         rememberSessionAccessKey(code, accessKey);
-        return resp.json();
+        const body = await resp.json();
+        sessionTrace('cloud.cold-pull.success', { roomCode: code, version: body && body.version });
+        return body;
     } catch (e) {
+        sessionTrace('cloud.cold-pull.error', { roomCode: code, message: (e && e.message) || String(e) });
         return null;
     }
 }
@@ -291,6 +309,7 @@ async function reserveFreshRoomCode() {
 
     let resp;
     perf('reserve-start');
+    sessionTrace('room.reserve.begin');
     resp = await requestLight(`${SESSION_API_BASE}/api/reserve-code`);
     if (resp.status === 404 || resp.status === 405) {
         // Compat uniquement avec un backend réellement ancien. Une erreur RÉSEAU du petit
@@ -301,10 +320,15 @@ async function reserveFreshRoomCode() {
     }
 
     perf('reserve-response', { status: resp.status });
+    sessionTrace('room.reserve.response', { status: resp.status });
     if (!resp.ok) throw new Error(`reserveFreshRoomCode: HTTP ${resp.status}`);
     const body = await resp.json();
     const code = body && String(body.code || '').trim();
-    if (!/^\d{4}$/.test(code)) throw new Error('reserveFreshRoomCode: réponse serveur invalide');
+    if (!/^\d{4}$/.test(code)) {
+        sessionTrace('room.reserve.invalid-code', { receivedLength: code.length });
+        throw new Error('reserveFreshRoomCode: réponse serveur invalide');
+    }
+    sessionTrace('room.reserve.success', { roomCode: code });
     if (body && typeof body.accessKey === 'string') rememberSessionAccessKey(code, body.accessKey);
     if (body && typeof body.hostWriteKey === 'string') rememberSessionHostWriteKey(code, body.hostWriteKey);
     return code;
@@ -441,23 +465,37 @@ async function registerSessionParticipantCredential(roomCode, participantId, rec
 
 async function pullSessionState(roomCode) {
     if (isLocalFileSessionMode()) return null;
-    const resp = await fetchWithSessionCapability(roomCode, sessionApiUrl(roomCode), { method: 'GET', cache: 'no-store' });
+    const code = normalizeSessionRoomCode(roomCode);
+    const resp = await fetchWithSessionCapability(code, sessionApiUrl(code), { method: 'GET', cache: 'no-store' });
     if (resp.status === 404) return null;
-    if (!resp.ok) throw new Error(`pullSessionState: HTTP ${resp.status}`);
-    return resp.json();
+    if (!resp.ok) {
+        sessionTrace('cloud.pull.error', { roomCode: code, status: resp.status });
+        throw new Error(`pullSessionState: HTTP ${resp.status}`);
+    }
+    const body = await resp.json();
+    sessionTrace('cloud.pull.success', { roomCode: code, version: body && body.version });
+    return body;
 }
 
 async function pushSessionState(roomCode, state, expectedVersion, { onConflict, retriesLeft = SESSION_PUSH_RETRIES, participantCredential = null } = {}) {
     if (isLocalFileSessionMode()) return null;
     try {
         const code = normalizeSessionRoomCode(roomCode);
+        sessionTrace('cloud.push.begin', { roomCode: code, expectedVersion, participantWrite: !!participantCredential, retriesLeft });
         const headers = { 'Content-Type': 'application/json' };
+        // R19 — une écriture explicitement participant doit RESTER participant, même si
+        // ce navigateur possède aussi une clé hôte dans localStorage (deux onglets du même
+        // profil partagent ce stockage). L'ancien ordre donnait priorité à hostWriteKey et
+        // pouvait transformer silencieusement un PUT restreint en PUT hôte complet.
+        const hasExplicitParticipantCredential = !!(participantCredential
+            && participantCredential.participantId
+            && participantCredential.reconnectSecret);
         const hostWriteKey = getSessionHostWriteKey(code);
-        if (hostWriteKey) {
-            headers['X-Bridge-Host-Write-Key'] = hostWriteKey;
-        } else if (participantCredential && participantCredential.participantId && participantCredential.reconnectSecret) {
+        if (hasExplicitParticipantCredential) {
             headers['X-Bridge-Participant-Id'] = participantCredential.participantId;
             headers['X-Bridge-Reconnect-Secret'] = participantCredential.reconnectSecret;
+        } else if (hostWriteKey) {
+            headers['X-Bridge-Host-Write-Key'] = hostWriteKey;
         }
         const resp = await fetchWithSessionCapability(roomCode, sessionApiUrl(roomCode), {
             method: 'PUT',
@@ -467,16 +505,21 @@ async function pushSessionState(roomCode, state, expectedVersion, { onConflict, 
         });
         if (resp.status === 409) {
             const body = await resp.json().catch(() => null);
+            sessionTrace('cloud.push.conflict', { roomCode: code, expectedVersion, currentVersion: body && body.current && body.current.version });
             if (onConflict) onConflict(body && body.current);
             return null;
         }
         if (!resp.ok) throw new Error(`pushSessionState: HTTP ${resp.status}`);
-        return resp.json();
+        const body = await resp.json();
+        sessionTrace('cloud.push.success', { roomCode: code, version: body && body.version, participantWrite: !!participantCredential });
+        return body;
     } catch (err) {
         if (retriesLeft > 0) {
+            sessionTrace('cloud.push.retry', { roomCode: normalizeSessionRoomCode(roomCode), retriesLeft, message: (err && err.message) || String(err) });
             await new Promise(r => setTimeout(r, SESSION_PUSH_RETRY_DELAY_MS));
             return pushSessionState(roomCode, state, expectedVersion, { onConflict, retriesLeft: retriesLeft - 1, participantCredential });
         }
+        sessionTrace('cloud.push.failed', { roomCode: normalizeSessionRoomCode(roomCode), message: (err && err.message) || String(err) });
         console.warn('[session-storage] push cloud échoué (partie continue localement) :', err);
         return null;
     }

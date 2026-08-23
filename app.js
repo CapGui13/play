@@ -4461,10 +4461,24 @@ function flashSeatsRotatedToast() {
 
 function participantCredentialForCloudWrite() {
     if (!currentRoomCode || myParticipantId === 'host') return null;
-    if (typeof getSessionHostWriteKey === 'function' && getSessionHostWriteKey(currentRoomCode)) return null;
+    // R19 — ne PAS déduire mon autorité de la présence d'une hostWriteKey dans
+    // localStorage : deux onglets/fenêtres du même profil la voient tous les deux.
+    // L'identité produit (myParticipantId + preuve privée) décide de la voie participant ;
+    // pushSessionState garantit ensuite qu'une credential explicitement fournie prime sur
+    // toute clé hôte résiduelle du navigateur.
     const credential = getGuestRoomCredential(currentRoomCode, false);
     if (!credential || credential.participantId !== myParticipantId || !isValidReconnectSecret(credential.reconnectSecret)) return null;
     return credential;
+}
+
+function currentClientHasHostCloudWriteAuthority() {
+    return isTrueOriginalHost()
+        && typeof getSessionHostWriteKey === 'function'
+        && !!getSessionHostWriteKey(currentRoomCode);
+}
+
+function currentClientParticipantCredentialForCloudWrite() {
+    return isTrueOriginalHost() ? null : participantCredentialForCloudWrite();
 }
 
 // R9 — le mode différé par code seul ne doit jamais dépendre de l'ordre d'arrivée du
@@ -6185,6 +6199,11 @@ function handlePeerData(msg, guestIndex) {
                     return incoming && entry.seat === incoming.seat && entry.call === incoming.call;
                 });
             if (!localIsPrefix) break;
+            // R18 — ce snapshot P2P peut être plus frais que le cloud. Armer la garde
+            // monotone AVANT le remplacement, avec l'ancien préfixe comme base. Sans cela,
+            // le cas réel Nord→Est puis Sud→Ouest pouvait afficher Ouest, recevoir ensuite
+            // un cloud encore arrêté à Sud, masquer Ouest, puis le réafficher plus tard.
+            beginDeferredSnapshotAuctionGuard(idx, localHistory, msg.auctionHistory);
             deals[idx].auctionHistory = msg.auctionHistory;
             if (idx === boardIndex) {
                 auctionHistory = deals[idx].auctionHistory;
@@ -8052,6 +8071,32 @@ function beginDeferredOptimisticAuctionGuard(targetBoardIndex, baseHistory, seat
     recordSyncTrace('call.optimistic-guard.begin', { targetBoardIndex: idx, seat, call });
 }
 
+// R18 — `precalc-board` est désormais un véhicule de convergence de premier rang en
+// différé (R17). Lorsqu'il apporte un suffixe P2P plus long, ce suffixe est tout aussi
+// frais qu'une `call` reçue directement : le prochain snapshot cloud peut encore être en
+// retard d'une ou plusieurs cartes. Armer la même garde AVANT de remplacer l'historique
+// local empêche ce snapshot retardataire de faire clignoter le suffixe reçu.
+function beginDeferredSnapshotAuctionGuard(targetBoardIndex, localHistory, incomingHistory) {
+    if (!deferredRoomMode || myRole !== 'guest') return false;
+    if (!Array.isArray(localHistory) || !Array.isArray(incomingHistory)) return false;
+    if (incomingHistory.length <= localHistory.length) return false;
+    if (!auctionCallPrefixForOptimisticGuard(localHistory, incomingHistory)) return false;
+    const firstFreshEntry = incomingHistory[localHistory.length];
+    if (!firstFreshEntry || !firstFreshEntry.seat || !firstFreshEntry.call) return false;
+    beginDeferredOptimisticAuctionGuard(
+        targetBoardIndex,
+        localHistory,
+        firstFreshEntry.seat,
+        firstFreshEntry.call
+    );
+    recordSyncTrace('call.snapshot-guard.begin', {
+        targetBoardIndex: Number(targetBoardIndex),
+        fromLength: localHistory.length,
+        toLength: incomingHistory.length
+    });
+    return true;
+}
+
 function clearDeferredOptimisticAuctionGuard(targetBoardIndex, seat = null, call = null, reason = 'clear') {
     const idx = Number(targetBoardIndex);
     const guard = deferredOptimisticAuctionGuards.get(idx);
@@ -8818,9 +8863,9 @@ function downloadPbnContent(content, filename) {
 function cloudPbnExportCredentials() {
     const accessKey = (typeof getSessionAccessKey === 'function' && currentRoomCode)
         ? getSessionAccessKey(currentRoomCode) : null;
-    const hostWriteKey = (typeof getSessionHostWriteKey === 'function' && currentRoomCode)
+    const hostWriteKey = currentClientHasHostCloudWriteAuthority()
         ? getSessionHostWriteKey(currentRoomCode) : null;
-    const participantCredential = hostWriteKey ? null : participantCredentialForCloudWrite();
+    const participantCredential = hostWriteKey ? null : currentClientParticipantCredentialForCloudWrite();
     if (!currentRoomCode || !accessKey || (!hostWriteKey && !participantCredential)) return null;
 
     const headers = {
@@ -11283,6 +11328,27 @@ function mergeCloudStatesThreeWay(baseState, localState, remoteState) {
     return out;
 }
 
+// R19 — un PUT réussi accuse réception de l'état QUI A ÉTÉ ENVOYÉ ; ce n'est pas
+// une photographie magique du navigateur au moment où la réponse revient. Si le local a
+// avancé pendant l'aller-retour (cas typique : Sud est envoyé, puis Ouest robot est ajouté),
+// réappliquer aveuglément la réponse ferait reculer 4→3 et pourrait être relayé comme un
+// faux Undo. On fusionne donc la réponse serveur avec les changements locaux POSTÉRIEURS
+// au payload envoyé, en prenant précisément ce payload comme base trois-voies.
+function reconcileSuccessfulCloudPush(sentState, localNow, serverState) {
+    const sent = cloneCloudData(sentState || {});
+    const local = cloneCloudData(localNow || sentState || {});
+    const server = cloneCloudData(serverState || sentState || {});
+    if (sameCloudData(local, sent)) {
+        return { exactServerState: server, viewState: server, localAdvanced: false };
+    }
+    const merged = mergeCloudStatesThreeWay(sent, local, server);
+    return {
+        exactServerState: server,
+        viewState: merged,
+        localAdvanced: !sameCloudData(merged, server)
+    };
+}
+
 function readCloudExitRecoveryMap() {
     try {
         const parsed = JSON.parse(localStorage.getItem(CLOUD_EXIT_RECOVERY_KEY) || '{}');
@@ -11383,8 +11449,8 @@ function pushCloudGameState() {
     const payload = buildCloudStatePayload();
     const expectedVersion = lastKnownCloudVersion;
     const baseStateAtStart = cloneCloudData(cloudLastSyncedState);
-    const participantCredential = participantCredentialForCloudWrite();
-    const hasHostWriteAuthority = typeof getSessionHostWriteKey === 'function' && !!getSessionHostWriteKey(ctx.roomCode);
+    const participantCredential = currentClientParticipantCredentialForCloudWrite();
+    const hasHostWriteAuthority = currentClientHasHostCloudWriteAuthority();
     if (!hasHostWriteAuthority && !participantCredential) {
         pushDebugLog('Push cloud refusé localement : aucune autorité d’écriture host ni preuve participant disponible.');
         return;
@@ -11425,15 +11491,48 @@ function pushCloudGameState() {
     }).then(result => {
         if (!isCloudSyncContextActive(ctx)) return;
         if (result && Number.isInteger(result.version)) {
-            lastKnownCloudVersion = result.version;
+            // Une réponse d'un PUT plus ancien peut arriver APRÈS qu'un poll/Pusher ait
+            // déjà installé une version supérieure. Un ACK n'a jamais le droit de faire
+            // redescendre le numéro de version ni la baseline serveur.
+            if (result.version < lastKnownCloudVersion) {
+                cloudPushQueued = true;
+                recordSyncTrace('cloud.push.stale-success-ignored', {
+                    ackVersion: result.version,
+                    currentVersion: lastKnownCloudVersion
+                });
+                pushDebugLog(`ACK cloud v${result.version} ignoré : le client connaît déjà v${lastKnownCloudVersion}.`);
+                return;
+            }
+
             if (result.state) {
                 const restricted = validateCloudSnapshot({ version: result.version, updatedAt: result.updatedAt, state: result.state }, ctx.roomCode);
                 if (restricted) {
-                    cloudLastSyncedState = cloneCloudData(restricted.state);
-                    applyCloudUpdate(restricted, { expectedRoomCode: ctx.roomCode });
+                    const localNow = buildCloudStatePayload();
+                    const reconciled = reconcileSuccessfulCloudPush(payload, localNow, restricted.state);
+                    lastKnownCloudVersion = result.version;
+                    cloudLastSyncedState = cloneCloudData(reconciled.exactServerState);
+
+                    if (reconciled.localAdvanced) {
+                        // Le local a avancé pendant le PUT : conserver cette vue et pousser
+                        // immédiatement ensuite contre la nouvelle version serveur. Surtout
+                        // ne jamais appliquer `restricted` seul, qui créerait le faux 4→3.
+                        applyCloudUpdate(
+                            { version: result.version, updatedAt: result.updatedAt, state: reconciled.viewState },
+                            { serverState: reconciled.exactServerState, expectedRoomCode: ctx.roomCode }
+                        );
+                        cloudPushQueued = true;
+                        recordSyncTrace('cloud.push.success-rebased-local', { version: result.version });
+                        pushDebugLog(`ACK cloud v${result.version} reçu sur un état déjà dépassé localement : local conservé, push suivant planifié.`);
+                    } else {
+                        applyCloudUpdate(restricted, { expectedRoomCode: ctx.roomCode });
+                    }
                 }
             } else {
+                lastKnownCloudVersion = result.version;
                 cloudLastSyncedState = cloneCloudData(payload);
+                // Sans état renvoyé, le payload est seulement acquitté ; s'il a été dépassé
+                // localement, la sauvegarde déjà mise en file doit partir ensuite.
+                if (!sameCloudData(buildCloudStatePayload(), payload)) cloudPushQueued = true;
             }
             clearCloudExitRecovery(ctx.roomCode);
         }
@@ -12005,7 +12104,10 @@ function preserveLatestCloudStateBeforeSuspend(allowDirectKeepalive = true) {
     // envoyer un second snapshot avec le même expectedVersion (409 garanti) ni deviner
     // expectedVersion+1 (qui pourrait écraser une écriture concurrente distante).
     if (allowDirectKeepalive && !cloudPushInFlight) {
-        pushSessionState(ctx.roomCode, payload, lastKnownCloudVersion);
+        const participantCredential = currentClientParticipantCredentialForCloudWrite();
+        if (currentClientHasHostCloudWriteAuthority() || participantCredential) {
+            pushSessionState(ctx.roomCode, payload, lastKnownCloudVersion, { participantCredential });
+        }
     }
 }
 
