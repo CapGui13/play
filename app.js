@@ -6457,20 +6457,38 @@ function handlePeerData(msg, guestIndex) {
         }
 
         case 'undo-apply': {
-            if (!deals || msg.boardIndex !== boardIndex) return;
-            // R16 — idem pour un Undo explicitement reçu en P2P : il prime immédiatement
-            // sur la protection anti-clignotement créée par une call fraîche.
-            clearDeferredOptimisticAuctionGuard(boardIndex, null, null, 'peer-undo');
+            if (!deals) return;
+            const targetBoardIndex = Number(msg.boardIndex);
+            if (!Number.isInteger(targetBoardIndex) || targetBoardIndex < 0 || targetBoardIndex >= deals.length || !deals[targetBoardIndex]) return;
+            if (!deferredRoomMode && targetBoardIndex !== boardIndex) return;
+
+            // R28 — un Undo P2P porte sur SA donne, sans déplacer la navigation locale du
+            // destinataire. Cela permet à Nord d'annuler sur la donne 3 pendant que Sud
+            // regarde la 7, et garde aussi les autres invités cohérents hors écran.
+            const targetDeal = deals[targetBoardIndex];
+            if (!Array.isArray(targetDeal.auctionHistory)) targetDeal.auctionHistory = [];
+            const targetHistory = targetDeal.auctionHistory;
+
+            // R16 — un Undo explicitement reçu prime immédiatement sur les protections
+            // anti-clignotement/snapshot de cette donne, y compris hors écran.
+            clearDeferredOptimisticAuctionGuard(targetBoardIndex, null, null, 'peer-undo');
             if (typeof msg.newLength === 'number') {
-                auctionHistory.length = Math.max(0, Math.min(msg.newLength, auctionHistory.length));
-            } else if (auctionHistory.length > 0) {
-                auctionHistory.pop(); // compat, ne devrait plus arriver
+                targetHistory.length = Math.max(0, Math.min(msg.newLength, targetHistory.length));
+            } else if (targetHistory.length > 0) {
+                targetHistory.pop(); // compat, ne devrait plus arriver
             }
-            renderAuctionLedger();
-            renderBiddingBox();
-            renderMyHands();
-            checkAuctionEnd();
-            clearUndoUiState();
+
+            if (targetBoardIndex === boardIndex) {
+                auctionHistory = targetHistory;
+                renderAuctionLedger();
+                renderBiddingBox();
+                renderMyHands();
+                checkAuctionEnd();
+                clearUndoUiState();
+            } else {
+                const overview = document.getElementById('boardOverviewModal');
+                if (overview && overview.style.display !== 'none') renderBoardOverview();
+            }
             break;
         }
 
@@ -9975,19 +9993,40 @@ function uiRequestUndo() {
 
     if (myRole === 'host') {
         hostHandleUndoRequest(msg);
-    } else if (deferredRoomMode || !peerConn || !peerConn.isConnected()) {
-        // Voir échange avec Guillaume ("l'hôte n'a pas reçu la demande d'undo pendant
-        // qu'il était hors ligne, et elle a fini par disparaître") : peerConn.send()
-        // échoue silencieusement contre une connexion fermée (voir
-        // BridgePeerConnection.send) — sans ce repli, la demande partait dans le vide et
-        // le minuteur de 20s ci-dessus finissait par afficher "Personne n'a répondu à
-        // temps", ce qui n'était même pas vrai (personne n'avait rien REÇU du tout).
-        // R26 : passer aussi l'identité de l'annonce visée pour sérialiser proprement
-        // l'Undo derrière un éventuel PUT d'enchère encore en vol.
-        pushUndoViaServerFallback(msg.boardIndex, requestedUndoTarget);
     } else {
-        peerConn.send(msg);
+        // R28 — en différé, le cloud n'est qu'un REPLI. Tant que l'hôte P2P est réellement
+        // joignable, l'Undo suit le même chemin court que les annonces : guest -> hôte.
+        // On sérialise néanmoins derrière un éventuel PUT participant de la dernière
+        // annonce (R26), sinon ce PUT pourrait encore courir après l'Undo et recréer
+        // artificiellement l'annonce supprimée côté serveur.
+        dispatchGuestUndoRequest(msg, requestedUndoTarget);
     }
+}
+
+async function dispatchGuestUndoRequest(msg, requestedUndoTarget = null) {
+    if (deferredRoomMode && participantServerCallInFlight) {
+        const cloudCtx = currentRoomCode ? captureCloudSyncContext(currentRoomCode) : null;
+        const callSettled = await waitForParticipantServerCallBeforeUndo(cloudCtx);
+        if (!callSettled || (cloudCtx && !isCloudSyncContextActive(cloudCtx))) {
+            pushDebugLog("Undo : la transaction d\'enchère précédente n\'a pas pu être stabilisée avant la demande.");
+            clearUndoUiState();
+            return;
+        }
+    }
+
+    if (peerConn && peerConn.isConnected()) {
+        recordSyncTrace('undo.route.peer-host', { boardIndex: msg.boardIndex, requesterId: msg.requesterId });
+        try {
+            peerConn.send(msg);
+            return;
+        } catch (e) {
+            pushDebugLog('Undo : envoi P2P impossible, bascule vers le relais serveur (' + ((e && e.message) || e) + ').');
+        }
+    }
+
+    // Hôte réellement absent / P2P indisponible : conserver le chemin autonome R26/R27.
+    recordSyncTrace('undo.route.cloud-fallback', { boardIndex: msg.boardIndex, requesterId: msg.requesterId });
+    await pushUndoViaServerFallback(msg.boardIndex, requestedUndoTarget);
 }
 
 // Voir échange avec Guillaume ("l'hôte n'a pas reçu la demande d'undo pendant qu'il était
@@ -10215,38 +10254,53 @@ function hostHandleUndoRequest(msg) {
         deliverToParticipant(msg.requesterId, { type: 'undo-rejected', boardIndex: msg.boardIndex, requesterId: msg.requesterId, reason: 'busy' });
         return;
     }
-    if (msg.boardIndex !== boardIndex) {
+
+    const targetBoardIndex = Number(msg.boardIndex);
+    if (!deals || !Number.isInteger(targetBoardIndex) || targetBoardIndex < 0 || targetBoardIndex >= deals.length || !deals[targetBoardIndex]) {
         deliverToParticipant(msg.requesterId, { type: 'undo-rejected', boardIndex: msg.boardIndex, requesterId: msg.requesterId, reason: 'stale' });
         return;
     }
+
+    // R28 — le mode différé est BOARD-LOCAL. L'hôte peut regarder la donne 7 pendant que
+    // Nord travaille sur la donne 3 : la demande porte sur deals[msg.boardIndex] et ne doit
+    // jamais être rejetée au seul motif que boardIndex (vue locale hôte) est différent.
+    // En live, au contraire, la donne reste partagée et l'ancienne garde est conservée.
+    const isDeferredPersonalUndo = deferredRoomMode === true;
+    if (!isDeferredPersonalUndo && targetBoardIndex !== boardIndex) {
+        deliverToParticipant(msg.requesterId, { type: 'undo-rejected', boardIndex: msg.boardIndex, requesterId: msg.requesterId, reason: 'stale' });
+        return;
+    }
+
+    const targetDeal = deals[targetBoardIndex];
+    if (!Array.isArray(targetDeal.auctionHistory)) targetDeal.auctionHistory = [];
+    const targetHistory = isDeferredPersonalUndo ? targetDeal.auctionHistory : auctionHistory;
 
     // R25 — en différé, la longueur brute de l'historique n'est PAS un critère de
     // validité. Entre le clic du joueur et le traitement de l'Undo, un adversaire/robot
     // peut parfaitement avoir annoncé. La seule règle métier est : ma dernière annonce
     // existe encore et mon partenaire n'a rien annoncé après elle.
-    const isDeferredPersonalUndo = deferredRoomMode === true;
-    if (!isDeferredPersonalUndo && msg.historyLengthAtRequest !== auctionHistory.length) {
+    if (!isDeferredPersonalUndo && msg.historyLengthAtRequest !== targetHistory.length) {
         deliverToParticipant(msg.requesterId, { type: 'undo-rejected', boardIndex: msg.boardIndex, requesterId: msg.requesterId, reason: 'stale' });
         return;
     }
 
     const isHostDirectUndo = msg.requesterId === 'host' || msg.requesterId === roomCreatorToken;
     const targetIndex = isDeferredPersonalUndo
-        ? findUndoTargetIndex(msg.requesterId, auctionHistory)
-        : (isHostDirectUndo ? findHostUndoTargetIndex(auctionHistory) : findUndoTargetIndex(msg.requesterId, auctionHistory));
+        ? findUndoTargetIndex(msg.requesterId, targetHistory)
+        : (isHostDirectUndo ? findHostUndoTargetIndex(targetHistory) : findUndoTargetIndex(msg.requesterId, targetHistory));
     if (targetIndex < 0) {
         deliverToParticipant(msg.requesterId, { type: 'undo-rejected', boardIndex: msg.boardIndex, requesterId: msg.requesterId, reason: 'nothing' });
         return;
     }
 
     if (isDeferredPersonalUndo) {
-        const partnerIdx = findPartnerLastCallIndex(msg.requesterId, auctionHistory);
+        const partnerIdx = findPartnerLastCallIndex(msg.requesterId, targetHistory);
         if (targetIndex <= partnerIdx) {
             deliverToParticipant(msg.requesterId, { type: 'undo-rejected', boardIndex: msg.boardIndex, requesterId: msg.requesterId, reason: 'partner-since' });
             return;
         }
         applyUndoAsHost({
-            boardIndex: msg.boardIndex,
+            boardIndex: targetBoardIndex,
             requesterId: msg.requesterId,
             historyLengthAtRequest: msg.historyLengthAtRequest,
             targetIndex,
@@ -10258,34 +10312,34 @@ function hostHandleUndoRequest(msg) {
     // Mode live : comportement historique conservé. L'hôte peut annuler directement la
     // dernière annonce humaine ; un autre joueur demande l'arbitrage de l'hôte.
     if (isHostDirectUndo) {
-        applyUndoAsHost({ boardIndex: msg.boardIndex, requesterId: msg.requesterId, historyLengthAtRequest: msg.historyLengthAtRequest, targetIndex });
+        applyUndoAsHost({ boardIndex: targetBoardIndex, requesterId: msg.requesterId, historyLengthAtRequest: msg.historyLengthAtRequest, targetIndex });
         return;
     }
 
     // Repli historique NullPeerConnection hors différé : règle personnelle locale.
     if (peerConn instanceof NullPeerConnection) {
-        const partnerIdx = findPartnerLastCallIndex(msg.requesterId, auctionHistory);
+        const partnerIdx = findPartnerLastCallIndex(msg.requesterId, targetHistory);
         if (targetIndex <= partnerIdx) {
             deliverToParticipant(msg.requesterId, { type: 'undo-rejected', boardIndex: msg.boardIndex, requesterId: msg.requesterId, reason: 'partner-since' });
             return;
         }
-        applyUndoAsHost({ boardIndex: msg.boardIndex, requesterId: msg.requesterId, historyLengthAtRequest: msg.historyLengthAtRequest, targetIndex });
+        applyUndoAsHost({ boardIndex: targetBoardIndex, requesterId: msg.requesterId, historyLengthAtRequest: msg.historyLengthAtRequest, targetIndex });
         return;
     }
 
-    pendingUndoAsk = { requesterId: msg.requesterId, boardIndex: msg.boardIndex, historyLengthAtRequest: msg.historyLengthAtRequest };
-    hostPendingUndo = { requesterId: msg.requesterId, boardIndex: msg.boardIndex, historyLengthAtRequest: msg.historyLengthAtRequest, targetIndex };
+    pendingUndoAsk = { requesterId: msg.requesterId, boardIndex: targetBoardIndex, historyLengthAtRequest: msg.historyLengthAtRequest };
+    hostPendingUndo = { requesterId: msg.requesterId, boardIndex: targetBoardIndex, historyLengthAtRequest: msg.historyLengthAtRequest, targetIndex };
     renderUndoAskBanner();
 
     setTimeout(() => {
         if (hostPendingUndo &&
             hostPendingUndo.requesterId === msg.requesterId &&
-            hostPendingUndo.boardIndex === msg.boardIndex &&
+            hostPendingUndo.boardIndex === targetBoardIndex &&
             hostPendingUndo.historyLengthAtRequest === msg.historyLengthAtRequest) {
             hostPendingUndo = null;
             pendingUndoAsk = null;
             renderUndoAskBanner();
-            deliverToParticipant(msg.requesterId, { type: 'undo-rejected', boardIndex: msg.boardIndex, requesterId: msg.requesterId, reason: 'timeout' });
+            deliverToParticipant(msg.requesterId, { type: 'undo-rejected', boardIndex: targetBoardIndex, requesterId: msg.requesterId, reason: 'timeout' });
         }
     }, 20000);
 }
@@ -10308,43 +10362,64 @@ function hostReceiveUndoAnswer(msg) {
 
 // (Hôte) Applique effectivement l'annulation et la diffuse à tout le monde.
 function applyUndoAsHost(pending) {
-    if (pending.boardIndex !== boardIndex) {
+    const targetBoardIndex = Number(pending.boardIndex);
+    if (!deals || !Number.isInteger(targetBoardIndex) || targetBoardIndex < 0 || targetBoardIndex >= deals.length || !deals[targetBoardIndex]) {
         deliverToParticipant(pending.requesterId, { type: 'undo-rejected', boardIndex: pending.boardIndex, requesterId: pending.requesterId, reason: 'stale' });
         return;
     }
 
+    const isDeferredBoardLocalUndo = pending.deferredPersonalUndo || deferredRoomMode === true;
+    if (!isDeferredBoardLocalUndo && targetBoardIndex !== boardIndex) {
+        deliverToParticipant(pending.requesterId, { type: 'undo-rejected', boardIndex: pending.boardIndex, requesterId: pending.requesterId, reason: 'stale' });
+        return;
+    }
+
+    const targetDeal = deals[targetBoardIndex];
+    if (!Array.isArray(targetDeal.auctionHistory)) targetDeal.auctionHistory = [];
+    const targetHistory = isDeferredBoardLocalUndo ? targetDeal.auctionHistory : auctionHistory;
+
     let targetIndex = pending.targetIndex;
-    if (pending.deferredPersonalUndo || deferredRoomMode === true) {
-        // R25 — revalide au DERNIER moment contre l'historique courant. Si un robot ou un
-        // adversaire a parlé pendant l'aller-retour de la demande, l'Undo reste valide ;
-        // si le partenaire a parlé, il devient immédiatement interdit.
-        targetIndex = findUndoTargetIndex(pending.requesterId, auctionHistory);
-        const partnerIdx = findPartnerLastCallIndex(pending.requesterId, auctionHistory);
+    if (isDeferredBoardLocalUndo) {
+        // R25 + R28 — revalide au DERNIER moment sur la DONNE CIBLE, pas sur la vue de
+        // l'hôte. Un robot/adversaire intercalé reste autorisé ; le partenaire bloque.
+        targetIndex = findUndoTargetIndex(pending.requesterId, targetHistory);
+        const partnerIdx = findPartnerLastCallIndex(pending.requesterId, targetHistory);
         if (targetIndex < 0) {
-            deliverToParticipant(pending.requesterId, { type: 'undo-rejected', boardIndex: pending.boardIndex, requesterId: pending.requesterId, reason: 'nothing' });
+            deliverToParticipant(pending.requesterId, { type: 'undo-rejected', boardIndex: targetBoardIndex, requesterId: pending.requesterId, reason: 'nothing' });
             return;
         }
         if (targetIndex <= partnerIdx) {
-            deliverToParticipant(pending.requesterId, { type: 'undo-rejected', boardIndex: pending.boardIndex, requesterId: pending.requesterId, reason: 'partner-since' });
+            deliverToParticipant(pending.requesterId, { type: 'undo-rejected', boardIndex: targetBoardIndex, requesterId: pending.requesterId, reason: 'partner-since' });
             return;
         }
-    } else if (pending.historyLengthAtRequest !== auctionHistory.length) {
-        deliverToParticipant(pending.requesterId, { type: 'undo-rejected', boardIndex: pending.boardIndex, requesterId: pending.requesterId, reason: 'stale' });
+    } else if (pending.historyLengthAtRequest !== targetHistory.length) {
+        deliverToParticipant(pending.requesterId, { type: 'undo-rejected', boardIndex: targetBoardIndex, requesterId: pending.requesterId, reason: 'stale' });
         return;
     }
 
     // Retire l'annonce ciblée et TOUT le suffixe qui l'a suivie. En différé ce suffixe
     // peut contenir des annonces adverses/robots : c'est volontaire, puisque l'enchère
     // corrigée change le contexte dans lequel elles avaient été produites.
-    auctionHistory.length = targetIndex;
-    renderAuctionLedger();
-    renderBiddingBox();
-    renderMyHands();
-    checkAuctionEnd();
-    clearUndoUiState();
-    peerConn.send({ type: 'undo-apply', boardIndex: pending.boardIndex, newLength: targetIndex });
+    targetHistory.length = targetIndex;
+
+    // Ne jamais déplacer/rerendre la donne que l'hôte est en train de regarder. Si l'Undo
+    // concerne sa donne courante, la globale auctionHistory reste la même référence et on
+    // met l'UI à jour ; sinon seule la donnée hors-écran est modifiée.
+    if (targetBoardIndex === boardIndex) {
+        auctionHistory = targetHistory;
+        renderAuctionLedger();
+        renderBiddingBox();
+        renderMyHands();
+        checkAuctionEnd();
+        if (pending.requesterId === myParticipantId || !deferredRoomMode) clearUndoUiState();
+        maybeRobotBid();
+    } else {
+        const overview = document.getElementById('boardOverviewModal');
+        if (overview && overview.style.display !== 'none') renderBoardOverview();
+    }
+
+    peerConn.send({ type: 'undo-apply', boardIndex: targetBoardIndex, newLength: targetIndex });
     saveHostGameStateToStorage();
-    maybeRobotBid();
 }
 
 // Réponse de l'utilisateur au bandeau "on me demande d'annuler".
