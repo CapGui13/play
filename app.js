@@ -1991,6 +1991,29 @@ function canNavigateBoards() {
     return myRole === 'host' || (deferredRoomMode && mySeats && mySeats.length > 0);
 }
 
+// R24 — reprise différée : un joueur qui rouvre la salle doit être amené à la PREMIÈRE
+// donne, dans l'ordre 1, 2, 3..., qui attend réellement une de ses annonces. Cette règle
+// est volontairement différente du fast-forward manuel, qui continue à chercher à partir
+// de la donne courante et boucle ensuite. Ici on repart toujours du début de la séance.
+//
+// Fonction pure : ne change ni boardIndex ni les historiques. Elle sert aux deux chemins
+// de reprise (cloud normal et repli local du créateur) et laisse le live inchangé.
+function findFirstBoardWaitingForSeats(targetSeats, boardList = deals) {
+    if (!Array.isArray(boardList) || boardList.length === 0) return -1;
+    const mine = new Set(Array.isArray(targetSeats) ? targetSeats.filter(Boolean) : []);
+    if (mine.size === 0) return -1;
+
+    for (let idx = 0; idx < boardList.length; idx++) {
+        const deal = boardList[idx];
+        if (!deal) continue;
+        const hist = Array.isArray(deal.auctionHistory) ? deal.auctionHistory : [];
+        if (isAuctionOver(hist)) continue;
+        const turnSeat = currentTurnSeat(deal.dealer, hist);
+        if (mine.has(turnSeat)) return idx;
+    }
+    return -1;
+}
+
 function escapeHtml(str) {
     const div = document.createElement('div');
     div.textContent = str == null ? '' : String(str);
@@ -11153,7 +11176,10 @@ async function uiResumeHostSession(roomCode) {
     }
 
     deals = saved.deals;
-    boardIndex = saved.boardIndex || 0;
+    const localResumeFallbackBoardIndex = Number.isInteger(saved.boardIndex) && saved.boardIndex >= 0 && saved.boardIndex < deals.length
+        ? saved.boardIndex
+        : 0;
+    boardIndex = localResumeFallbackBoardIndex;
     if (!deals[boardIndex].auctionHistory) deals[boardIndex].auctionHistory = [];
     auctionHistory = deals[boardIndex].auctionHistory;
     const resumedParticipants = normalizePublicParticipantList(saved.participants || [{ id: 'host', name: savedNickname || 'Hôte' }]);
@@ -11215,6 +11241,12 @@ async function uiResumeHostSession(roomCode) {
     const isLegacyHostRoom = SEATS.some(seat => seatAssignment[seat] === 'host') || participants.some(p => p.id === 'host');
     myParticipantId = isLegacyHostRoom ? 'host' : myToken;
     mySeats = SEATS.filter(seat => seatAssignment[seat] === myParticipantId);
+    if (deferredRoomMode) {
+        const firstWaitingBoard = findFirstBoardWaitingForSeats(mySeats, deals);
+        boardIndex = firstWaitingBoard >= 0 ? firstWaitingBoard : localResumeFallbackBoardIndex;
+        if (!deals[boardIndex].auctionHistory) deals[boardIndex].auctionHistory = [];
+        auctionHistory = deals[boardIndex].auctionHistory;
+    }
     currentRoomCode = saved.roomCode;
     guestIndexByToken = {};
     hostPendingUndo = null;
@@ -12554,12 +12586,13 @@ function uiResumeFromCloud() {
     seatAssignment = st.seatAssignment;
     participants = st.participants;
     deferredRoomMode = st.deferredRoomMode === true || SEATS.some(seat => seatAssignment[seat] === SEAT_PENDING);
-    // Reprise par le créateur : on peut restaurer sa dernière donne mémorisée. Reprise
-    // par code d'un partenaire différé : l'entrée produit est toujours la donne 1, sans
-    // hériter du boardIndex partagé/mémorisé par l'hôte.
-    boardIndex = isCreatorResume && Number.isInteger(st.boardIndex) && st.boardIndex >= 0 && st.boardIndex < deals.length
+    // Fallback seulement. En différé, la vraie donne d'arrivée est choisie un peu plus bas,
+    // APRÈS restauration de mon identité et de mes sièges : première donne 1→N qui attend
+    // effectivement une de mes annonces. En live, le créateur conserve sa dernière donne.
+    const resumeFallbackBoardIndex = isCreatorResume && Number.isInteger(st.boardIndex) && st.boardIndex >= 0 && st.boardIndex < deals.length
         ? st.boardIndex
         : 0;
+    boardIndex = resumeFallbackBoardIndex;
     if (!deals[boardIndex].auctionHistory) deals[boardIndex].auctionHistory = [];
     auctionHistory = deals[boardIndex].auctionHistory;
     autoPassSeats = SEATS.filter(seat => !seatAssignment[seat]);
@@ -12582,6 +12615,18 @@ function uiResumeFromCloud() {
     const me = participants.find(p => p && p.id === myParticipantId);
     if (me) { me.disconnected = false; me.disconnectedAt = null; }
     mySeats = SEATS.filter(seat => seatAssignment[seat] === myParticipantId);
+
+    // R24 — une fermeture/réouverture n'est pas une navigation volontaire : en différé,
+    // remettre le joueur directement sur son premier travail restant, dans l'ordre des
+    // donnes. Si aucune donne ne l'attend actuellement, conserver le fallback historique
+    // (dernière donne du créateur, donne 1 du partenaire) plutôt que d'inventer un saut.
+    if (deferredRoomMode) {
+        const firstWaitingBoard = findFirstBoardWaitingForSeats(mySeats, deals);
+        if (firstWaitingBoard >= 0) boardIndex = firstWaitingBoard;
+        else boardIndex = resumeFallbackBoardIndex;
+        if (!deals[boardIndex].auctionHistory) deals[boardIndex].auctionHistory = [];
+        auctionHistory = deals[boardIndex].auctionHistory;
+    }
 
     if (isCreatorResume) loadHostGuestReconnectSecrets(codeToReclaim);
     else guestReconnectSecretsByParticipantId = {};
