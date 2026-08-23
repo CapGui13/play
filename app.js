@@ -3677,14 +3677,13 @@ function uiRandomizeAvatarColor(event, participantId) {
     if (participantId === myParticipantId) saveStringPref('bridgeBidAvatarColor', p.avatarColor);
     if (myRole === 'host') {
         broadcastLobbyState();
-    } else if (participantId === myParticipantId && peerConn && peerConn.isConnected()) {
-        // Un invité n'a jamais le droit d'émettre un lobby-state complet. Il demande
-        // uniquement la mutation de SA couleur ; l'hôte lie l'identité à la connexion,
-        // valide la palette puis rediffuse son état public autoritaire.
+    } else if (participantId === myParticipantId && !deferredRoomMode && peerConn && peerConn.isConnected()) {
+        // En live connecté, conserve le chemin P2P historique.
         peerConn.send({ type: 'set-avatar-color', avatarColor: p.avatarColor });
     } else if (participantId === myParticipantId) {
-        // Même mutation en mode différé / coupure P2P : l'API restreinte sait déjà
-        // autoriser le profil propre d'un participant authentifié.
+        // En différé, le cloud reste autoritaire même si le P2P est vivant : évite qu'une
+        // couleur appliquée optimistiquement soit perdue si la DataConnection tombe entre
+        // le test isConnected() et l'envoi sans ACK. Même repli en live déconnecté.
         pushAvatarColorViaServerFallback(p.avatarColor);
     }
     renderLobby();
@@ -4435,11 +4434,16 @@ function primeDeferredGuestCloudAccess() {
         const credential = deferredCodeOnlyParticipantCredential(currentRoomCode);
         if (credential && isModernGuestParticipantId(credential.participantId)
                 && isValidReconnectSecret(credential.reconnectSecret)) {
-            rememberGuestRoomCredential(currentRoomCode, credential);
-            // `welcome` a déjà fixé myParticipantId sur cette même identité dans le chemin
-            // P2P différé. Sur une reprise cloud, uiResumeFromCloud utilise également cette
-            // credential déterministe. On ne réécrit jamais l'identité courante ici.
-            primed = true;
+            // R10 — ne JAMAIS remplacer la credential d'un invité déjà identifié par la
+            // credential déterministe réservée au siège PENDING. Une salle peut devenir
+            // différée alors qu'un autre invité est déjà assis avec sa propre identité :
+            // l'écraser ici casserait ses prochains PUT cloud ET sa reconnexion P2P.
+            // Le nouvel invité code-seul, lui, possède déjà cette identité déterministe
+            // via welcome/offerCloudResume ; dans ce seul cas on peut la mémoriser.
+            if (!myParticipantId || credential.participantId === myParticipantId) {
+                rememberGuestRoomCredential(currentRoomCode, credential);
+                primed = true;
+            }
         }
     }
     return primed;
@@ -6060,6 +6064,11 @@ function handlePeerData(msg, guestIndex) {
 
         case 'goto-board': {
             if (!deals) return;
+            // Défense de compatibilité : depuis le mode différé à navigation indépendante,
+            // aucun client ne doit pouvoir déplacer la vue locale d'un autre. Les builds
+            // récents n'émettent déjà plus goto-board en différé, mais ignorer ici un
+            // message provenant d'un ancien onglet/cache évite de réintroduire ce couplage.
+            if (deferredRoomMode) return;
             boardIndex = msg.boardIndex;
             // Depuis le pré-calcul progressif au lancement, goto-board transporte aussi
             // l'historique AUTORITAIRE de la donne cible. Ainsi un saut très rapide vers
@@ -6902,7 +6911,7 @@ function uiChatInputKeydown(event) {
 
 function uiSendChatMessage() {
     const input = document.getElementById('chatInput');
-    if (!input || !peerConn) return;
+    if (!input) return;
     // Voir échange avec Guillaume (session du 24 juillet — "je ne suis plus dedans si je
     // clique 2x") : remis AVANT la vérification du texte, pas après — sinon un clic sur
     // "Envoyer" avec un champ déjà vide (ex. un second clic accidentel juste après le
@@ -6921,15 +6930,18 @@ function uiSendChatMessage() {
     // silence contre une connexion fermée, voir BridgePeerConnection.send) — bascule sur
     // le même principe que pushCallViaServerFallback : pousse directement au serveur au
     // lieu d'attendre un relais qui n'arrivera jamais dans ce cas.
-    if (myRole === 'guest' && (!peerConn || !peerConn.isConnected())) {
+    if (myRole === 'guest' && (deferredRoomMode || !peerConn || !peerConn.isConnected())) {
+        // En différé, le cloud est l'autorité de convergence même si le P2P paraît encore
+        // ouvert. BridgePeerConnection.send() n'a pas d'accusé de réception : une coupure
+        // entre isConnected() et send() pouvait laisser le message seulement en local,
+        // puis le prochain snapshot cloud le faisait disparaître.
         pushChatViaServerFallback(msg);
         return;
     }
-    // Même appel pour l'hôte (diffuse directement à tous les invités) et pour un invité
-    // (envoie à l'hôte, qui relaiera) : send() sans guestIndex explicite diffuse déjà à
-    // toutes les connexions actives de ce peer, qui n'en a qu'une seule (l'hôte) côté
-    // invité — voir peer-connection.js.
-    peerConn.send(msg);
+    // En live, on garde le chemin P2P historique. Un hôte temporairement sans connexion
+    // a déjà persisté le message via addChatMessage -> saveHostGameStateToStorage ; il n'y
+    // a simplement personne à qui le diffuser en direct à cet instant.
+    if (peerConn) peerConn.send(msg);
 }
 
 // Synchronisation de la couleur propre quand l'invité n'a plus de P2P. Le snapshot
@@ -8965,10 +8977,11 @@ function checkAuctionEnd(renderOptions = {}) {
     }
 
     const isLastBoard = boardIndex >= deals.length - 1;
-    // Voir échange avec Guillaume (session du 23 juillet) : réservé à l'HÔTE désormais,
-    // pas à n'importe quel joueur actif (canControlBoard()) — un simple joueur, ou un
-    // kibitz, ne doit pas pouvoir faire avancer la table pour tout le monde.
-    const iCanNavigate = myRole === 'host';
+    // En live, seul l'hôte pilote la donne commune. En différé, chaque joueur assis a sa
+    // propre navigation locale : le bouton final doit suivre exactement la même règle que
+    // les flèches ◀▶ et la vue d'ensemble, sinon un guest différé se retrouve bloqué ici
+    // malgré des flèches parfaitement autorisées ailleurs.
+    const iCanNavigate = canNavigateBoards();
 
     if (isLastBoard) {
         resultEl.innerHTML += '<div class="info-text">Dernière donne du fichier chargé.</div>';
