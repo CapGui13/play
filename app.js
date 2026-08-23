@@ -6077,6 +6077,13 @@ function handlePeerData(msg, guestIndex) {
                 return;
             }
 
+            // R16 — le même filet que pour l'annonce optimiste locale doit couvrir une
+            // annonce fraîche REÇUE par P2P côté guest différé. Exemple réel : Sud arrive,
+            // puis Ouest robot arrive par P2P ; un snapshot cloud intermédiaire ne contenant
+            // encore que Sud ne doit pas faire disparaître Ouest avant la version suivante.
+            // begin... clone le préfixe AVANT l'ajout ; côté host/live la fonction est no-op.
+            beginDeferredOptimisticAuctionGuard(targetBoardIndex, targetHistory, msg.seat, msg.call);
+
             targetHistory.push(msg.explanation
                 ? { seat: msg.seat, call: msg.call, explanation: msg.explanation }
                 : { seat: msg.seat, call: msg.call });
@@ -6204,6 +6211,9 @@ function handlePeerData(msg, guestIndex) {
 
         case 'reset-auction': {
             if (!deals || msg.boardIndex !== boardIndex) return;
+            // R16 — un reset P2P explicite est une réduction autoritaire, pas un snapshot
+            // cloud retardataire : aucune garde de fraîcheur d'annonce ne doit la masquer.
+            clearDeferredOptimisticAuctionGuard(boardIndex, null, null, 'peer-reset');
             auctionHistory = [];
             deals[boardIndex].auctionHistory = auctionHistory; // reste la référence partagée
             hostPendingUndo = null;
@@ -6289,6 +6299,9 @@ function handlePeerData(msg, guestIndex) {
 
         case 'undo-apply': {
             if (!deals || msg.boardIndex !== boardIndex) return;
+            // R16 — idem pour un Undo explicitement reçu en P2P : il prime immédiatement
+            // sur la protection anti-clignotement créée par une call fraîche.
+            clearDeferredOptimisticAuctionGuard(boardIndex, null, null, 'peer-undo');
             if (typeof msg.newLength === 'number') {
                 auctionHistory.length = Math.max(0, Math.min(msg.newLength, auctionHistory.length));
             } else if (auctionHistory.length > 0) {
@@ -7960,17 +7973,19 @@ let selectedBiddingLevel = null;
 // R10 — une action participant envoyée au serveur reste unique jusqu'à confirmation.
 let participantServerCallInFlight = false;
 
-// R15 — stabilité visuelle des annonces optimistes en différé.
+// R16 — stabilité visuelle des annonces fraîches en différé.
 //
-// R11 affiche immédiatement l'annonce d'un guest lorsque le P2P est ouvert, pendant que
-// la même intention est confirmée en parallèle par le serveur. Entre les deux, Pusher peut
-// livrer un snapshot de version plus récente pour une AUTRE mutation, mais dont cette donne
-// est encore un simple préfixe ancien. applyCloudUpdate remplaçait alors l'historique local
-// entier : annonce guest + réponse robot disparaissaient, puis revenaient au snapshot suivant.
+// R15 protégeait l'annonce optimiste d'un guest pendant sa confirmation serveur. La recette
+// réelle a montré le cas symétrique : un guest peut recevoir très vite par P2P l'annonce de
+// l'hôte puis la réponse robot, alors qu'un snapshot cloud intermédiaire ne contient encore
+// que la première carte. Sans garde, applyCloudUpdate raccourcit alors momentanément la
+// séquence (le robot disparaît), puis la rallonge au snapshot suivant.
 //
-// On ne protège ici QUE la branche monotone née d'une annonce guest différée réellement
-// envoyée. Une divergence de cartes d'enchère libère immédiatement la garde et le serveur
-// redevient autoritaire ; un vrai Undo n'est donc jamais masqué durablement.
+// La même protection monotone couvre donc désormais DEUX origines fraîches :
+// - annonce guest locale envoyée en double chemin ;
+// - annonce reçue en P2P par un guest différé.
+// Une divergence de cartes d'enchère libère immédiatement la garde et le serveur redevient
+// autoritaire ; on ne transforme pas ce filet visuel en seconde autorité métier.
 const DEFERRED_OPTIMISTIC_AUCTION_GUARD_MAX_AGE_MS = 30000;
 const deferredOptimisticAuctionGuards = new Map();
 
@@ -11811,8 +11826,8 @@ function applyCloudUpdate(result, options = {}) {
     const oldChatLengthForRelay = chatMessages ? chatMessages.length : 0;
     const oldSeatAssignmentJsonForRelay = JSON.stringify(seatAssignment);
 
-    // R15 — ne jamais laisser un snapshot cloud seulement EN RETARD sur l'annonce
-    // optimiste courante raccourcir visuellement la séquence. exactServerState ci-dessus
+    // R16 — ne jamais laisser un snapshot cloud seulement EN RETARD sur une annonce
+    // fraîche locale/P2P raccourcir visuellement la séquence. exactServerState ci-dessus
     // reste, lui, byte-for-byte l'état autoritaire utilisé comme base de CAS/merge.
     st.deals = stabilizeDeferredOptimisticAuctionHistories(st.deals);
     deals = st.deals;
