@@ -8232,6 +8232,28 @@ function resetParticipantServerCallGuard() {
     }
 }
 
+// R26 — un Undo participant ne doit jamais relire le cloud pendant que sa propre
+// enchère est encore en cours de commit. Sinon le pull peut voir l'état juste AVANT
+// cette enchère et conclure à tort « rien à annuler ». On sérialise donc l'Undo derrière
+// le PUT d'annonce en cours. Le watchdog R22 borne déjà ce verrou à 12 s ; cette attente
+// n'ajoute aucune nouvelle autorité ni aucun nouveau transport.
+async function waitForParticipantServerCallBeforeUndo(cloudCtx) {
+    if (!participantServerCallInFlight) return true;
+    const tokenAtStart = participantServerCallToken;
+    const deadline = Date.now() + PARTICIPANT_SERVER_CALL_WATCHDOG_MS + 1000;
+    recordSyncTrace('undo.wait-call.begin', { token: tokenAtStart, roomCode: cloudCtx && cloudCtx.roomCode });
+    while (participantServerCallInFlight && tokenAtStart === participantServerCallToken && Date.now() < deadline) {
+        if (cloudCtx && !isCloudSyncContextActive(cloudCtx)) return false;
+        await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    recordSyncTrace('undo.wait-call.end', {
+        token: tokenAtStart,
+        stillInFlight: participantServerCallInFlight,
+        roomCode: cloudCtx && cloudCtx.roomCode
+    });
+    return !participantServerCallInFlight;
+}
+
 // R16 — stabilité visuelle des annonces fraîches en différé.
 //
 // R15 protégeait l'annonce optimiste d'un guest pendant sa confirmation serveur. La recette
@@ -9919,6 +9941,18 @@ function uiRequestUndo() {
     if (!canControlBoard() || !deals || auctionHistory.length === 0) return;
     if (undoRequestPending || pendingUndoAsk) return;
 
+    // R26 — mémoriser l'annonce EXACTE visée au moment du clic. Si le cloud se met à
+    // jour pendant l'attente (robot/adversaire, ACK de notre call, etc.), l'Undo doit
+    // toujours viser cette annonce-là, jamais une éventuelle annonce ultérieure du même
+    // participant.
+    const requestedTargetIndex = findUndoTargetIndex(myParticipantId, auctionHistory);
+    const requestedTargetEntry = requestedTargetIndex >= 0 ? auctionHistory[requestedTargetIndex] : null;
+    const requestedUndoTarget = requestedTargetEntry ? {
+        index: requestedTargetIndex,
+        seat: requestedTargetEntry.seat,
+        call: String(requestedTargetEntry.call || '').toUpperCase()
+    } : null;
+
     const msg = {
         type: 'undo-request',
         boardIndex,
@@ -9948,7 +9982,9 @@ function uiRequestUndo() {
         // BridgePeerConnection.send) — sans ce repli, la demande partait dans le vide et
         // le minuteur de 20s ci-dessus finissait par afficher "Personne n'a répondu à
         // temps", ce qui n'était même pas vrai (personne n'avait rien REÇU du tout).
-        pushUndoViaServerFallback(msg.boardIndex);
+        // R26 : passer aussi l'identité de l'annonce visée pour sérialiser proprement
+        // l'Undo derrière un éventuel PUT d'enchère encore en vol.
+        pushUndoViaServerFallback(msg.boardIndex, requestedUndoTarget);
     } else {
         peerConn.send(msg);
     }
@@ -9962,7 +9998,7 @@ function uiRequestUndo() {
 // optimiste préalable : on valide contre l'état serveur AVANT de toucher à quoi que ce
 // soit localement — une annulation est plus délicate à défaire proprement qu'une simple
 // enchère de trop si jamais elle s'avérait invalide entre-temps.
-async function pushUndoViaServerFallback(targetBoardIndex = boardIndex) {
+async function pushUndoViaServerFallback(targetBoardIndex = boardIndex, requestedUndoTarget = null) {
     const done = () => { undoRequestPending = false; renderUndoControls(); };
 
     if (!currentRoomCode || typeof pullSessionState !== 'function' || typeof pushSessionState !== 'function') {
@@ -9974,6 +10010,20 @@ async function pushUndoViaServerFallback(targetBoardIndex = boardIndex) {
     const cloudCtx = captureCloudSyncContext(currentRoomCode);
 
     try {
+        // R26 — cause racine des Undos invités intermittents : uiMakeCall lance le PUT
+        // participant de l'enchère de façon asynchrone. Un clic Undo juste après la
+        // réponse robot pouvait donc exécuter ce pull AVANT le commit de notre propre
+        // annonce et obtenir un snapshot où elle n'existait pas encore. Attendre la fin
+        // du guard rend call -> undo strictement séquentiel côté participant.
+        if (deferredRoomMode && myRole === 'guest' && participantServerCallInFlight) {
+            const callSettled = await waitForParticipantServerCallBeforeUndo(cloudCtx);
+            if (!callSettled || !isCloudSyncContextActive(cloudCtx)) {
+                pushDebugLog('Undo : attente de confirmation de l\'enchère interrompue ; resynchronisation nécessaire.');
+                done();
+                return;
+            }
+        }
+
         let pulled;
         try {
             pulled = await pullSessionState(cloudCtx.roomCode);
@@ -9993,12 +10043,47 @@ async function pushUndoViaServerFallback(targetBoardIndex = boardIndex) {
             done();
             return;
         }
-        const initialHistory = cloneCloudData(initialDeals[idx].auctionHistory || []);
-        const targetIndex = findUndoTargetIndex(myParticipantId, initialHistory);
-        const partnerIndex = findPartnerLastCallIndex(myParticipantId, initialHistory);
-        if (targetIndex < 0 || targetIndex <= partnerIndex) {
-            pushDebugLog('Undo abandonné : plus valide par rapport à l\'état serveur relu (rien à moi à annuler, ou mon partenaire a annoncé depuis) — resynchronisation.');
-            setUndoStatus(undoRejectReasonText(targetIndex < 0 ? 'nothing' : 'partner-since'));
+        let initialHistory = cloneCloudData(initialDeals[idx].auctionHistory || []);
+        let targetIndex = findUndoTargetIndex(myParticipantId, initialHistory);
+        let partnerIndex = findPartnerLastCallIndex(myParticipantId, initialHistory);
+
+        const requestedTargetMatches = () => {
+            if (!requestedUndoTarget) return targetIndex >= 0;
+            if (targetIndex !== requestedUndoTarget.index || targetIndex < 0) return false;
+            const entry = initialHistory[targetIndex];
+            return !!entry
+                && entry.seat === requestedUndoTarget.seat
+                && String(entry.call || '').toUpperCase() === requestedUndoTarget.call;
+        };
+
+        // R26 — filet de convergence : même après la fin du guard, un fetch/Pusher déjà
+        // lancé peut nous remettre une vue très légèrement antérieure. Ne jamais conclure
+        // « rien à annuler » au PREMIER pull si l'annonce visée existe encore localement.
+        // On effectue au maximum trois relectures courtes ; aucune écriture n'est faite
+        // pendant cette attente.
+        if (requestedUndoTarget && !requestedTargetMatches()) {
+            for (let retry = 0; retry < 3 && isCloudSyncContextActive(cloudCtx); retry++) {
+                await new Promise(resolve => setTimeout(resolve, 120 * (retry + 1)));
+                let refreshed = null;
+                try {
+                    refreshed = await pullSessionState(cloudCtx.roomCode);
+                    if (refreshed) refreshed = validateCloudSnapshot(refreshed, cloudCtx.roomCode);
+                } catch (_) {}
+                if (!refreshed) continue;
+                pulled = refreshed;
+                const refreshedDeals = pulled.state && pulled.state.deals;
+                if (!refreshedDeals || !refreshedDeals[idx]) continue;
+                initialHistory = cloneCloudData(refreshedDeals[idx].auctionHistory || []);
+                targetIndex = findUndoTargetIndex(myParticipantId, initialHistory);
+                partnerIndex = findPartnerLastCallIndex(myParticipantId, initialHistory);
+                if (requestedTargetMatches()) break;
+            }
+        }
+
+        if (targetIndex < 0 || targetIndex <= partnerIndex || !requestedTargetMatches()) {
+            const reason = targetIndex >= 0 && targetIndex <= partnerIndex ? 'partner-since' : 'nothing';
+            pushDebugLog('Undo abandonné : plus valide par rapport à l\'état serveur relu (annonce visée absente, ou partenaire ayant annoncé depuis) — resynchronisation.');
+            setUndoStatus(undoRejectReasonText(reason));
             applyCloudUpdate(pulled, { expectedRoomCode: cloudCtx.roomCode });
             done();
             return;
@@ -10031,6 +10116,10 @@ async function pushUndoViaServerFallback(targetBoardIndex = boardIndex) {
             if (currentIsAtLeastAsUndone) {
                 lastKnownCloudVersion = authoritative.version;
                 cloudLastSyncedState = cloneCloudData(authoritative.state);
+                // R26 — un Undo explicite doit primer sur la garde anti-clignotement R15.
+                // Sinon la garde de la dernière call optimiste peut conserver localement
+                // le suffixe que le serveur vient précisément d'annuler.
+                clearDeferredOptimisticAuctionGuard(idx, null, null, 'server-undo-already-committed');
                 applyCloudUpdate(authoritative, { expectedRoomCode: cloudCtx.roomCode });
                 recordSyncTrace('undo.cloud-fallback.already-committed', { targetBoardIndex: idx, version: authoritative.version });
                 done();
@@ -10080,7 +10169,13 @@ async function pushUndoViaServerFallback(targetBoardIndex = boardIndex) {
                 cloudLastSyncedState = cloneCloudData(result.state || stateToPush);
                 if (result.state) {
                     const restricted = validateCloudSnapshot({ version: result.version, updatedAt: result.updatedAt, state: result.state }, cloudCtx.roomCode);
-                    if (restricted) applyCloudUpdate(restricted, { expectedRoomCode: cloudCtx.roomCode });
+                    if (restricted) {
+                        // R26 — même règle que pour `undo-apply` P2P : une réduction
+                        // explicitement demandée ne doit JAMAIS être neutralisée par la
+                        // garde optimiste d'une ancienne call.
+                        clearDeferredOptimisticAuctionGuard(idx, null, null, 'server-undo-success');
+                        applyCloudUpdate(restricted, { expectedRoomCode: cloudCtx.roomCode });
+                    }
                 } else if (idx === boardIndex) {
                     auctionHistory.length = targetIndex;
                     renderAuctionLedger();
