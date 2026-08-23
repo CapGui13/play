@@ -3677,14 +3677,21 @@ function uiRandomizeAvatarColor(event, participantId) {
     if (participantId === myParticipantId) saveStringPref('bridgeBidAvatarColor', p.avatarColor);
     if (myRole === 'host') {
         broadcastLobbyState();
+    } else if (participantId === myParticipantId && deferredRoomMode) {
+        // R14 — en différé, le cloud est l'autorité de convergence même si le P2P est
+        // actuellement ouvert. Contrairement aux annonces (R11), une couleur d'avatar
+        // n'a pas besoin d'un double chemin : l'UI locale est déjà mise à jour ci-dessus
+        // et la mutation serveur est idempotente. Éviter le P2P ici supprime une course
+        // où un message considéré "envoyé" pouvait se perdre silencieusement avant la
+        // persistance par l'hôte.
+        pushAvatarColorViaServerFallback(p.avatarColor);
     } else if (participantId === myParticipantId && peerConn && peerConn.isConnected()) {
-        // Un invité n'a jamais le droit d'émettre un lobby-state complet. Il demande
-        // uniquement la mutation de SA couleur ; l'hôte lie l'identité à la connexion,
-        // valide la palette puis rediffuse son état public autoritaire.
+        // Live connecté : chemin P2P historique. Un invité n'a jamais le droit d'émettre
+        // un lobby-state complet ; l'hôte lie l'identité à la connexion, valide la palette
+        // puis rediffuse son état public autoritaire.
         peerConn.send({ type: 'set-avatar-color', avatarColor: p.avatarColor });
     } else if (participantId === myParticipantId) {
-        // Même mutation en mode différé / coupure P2P : l'API restreinte sait déjà
-        // autoriser le profil propre d'un participant authentifié.
+        // Live avec coupure P2P : l'API restreinte autorise la mutation du profil propre.
         pushAvatarColorViaServerFallback(p.avatarColor);
     }
     renderLobby();
@@ -6213,7 +6220,21 @@ function handlePeerData(msg, guestIndex) {
 
         case 'goto-board': {
             if (!deals) return;
-            boardIndex = msg.boardIndex;
+            // R14 — en différé, boardIndex est strictement local. Un ancien onglet ou un
+            // ancien Service Worker peut encore faire émettre un goto-board par l'hôte :
+            // le RECEIVER doit donc lui aussi être fail-closed, pas seulement l'émetteur
+            // moderne dans gotoBoard(). C'est volontairement un simple ignore : l'état
+            // des enchères converge déjà par cloud/precalc/call indépendamment de la vue.
+            if (deferredRoomMode) {
+                recordSyncTrace('peer.goto-board.ignored-deferred', { requestedBoardIndex: msg.boardIndex });
+                break;
+            }
+            const targetBoardIndex = Number(msg.boardIndex);
+            if (!Number.isInteger(targetBoardIndex) || targetBoardIndex < 0 || targetBoardIndex >= deals.length) {
+                rejectPeerProtocolMessage(msg, guestIndex, 'index de donne invalide');
+                break;
+            }
+            boardIndex = targetBoardIndex;
             // Depuis le pré-calcul progressif au lancement, goto-board transporte aussi
             // l'historique AUTORITAIRE de la donne cible. Ainsi un saut très rapide vers
             // une donne encore non diffusée par precalc-board ne peut jamais laisser un
@@ -7084,7 +7105,9 @@ function uiChatInputKeydown(event) {
 
 function uiSendChatMessage() {
     const input = document.getElementById('chatInput');
-    if (!input || !peerConn) return;
+    // En différé, le chat doit rester utilisable même pendant une reconnexion P2P : le
+    // relais cloud ne dépend pas de peerConn. Le live conserve plus bas son chemin P2P.
+    if (!input) return;
     // Voir échange avec Guillaume (session du 24 juillet — "je ne suis plus dedans si je
     // clique 2x") : remis AVANT la vérification du texte, pas après — sinon un clic sur
     // "Envoyer" avec un champ déjà vide (ex. un second clic accidentel juste après le
@@ -7098,20 +7121,21 @@ function uiSendChatMessage() {
     const me = participants.find(p => p.id === myParticipantId);
     const msg = { type: 'chat', senderId: myParticipantId, senderName: me ? me.name : '?', text };
     addChatMessage(msg);
-    // Voir échange avec Guillaume ("chat via le relais serveur") : un invité déconnecté
-    // de l'hôte ne peut de toute façon pas passer par peerConn.send (qui échoue en
-    // silence contre une connexion fermée, voir BridgePeerConnection.send) — bascule sur
-    // le même principe que pushCallViaServerFallback : pousse directement au serveur au
-    // lieu d'attendre un relais qui n'arrivera jamais dans ce cas.
+    // R14 — en différé, un message guest passe TOUJOURS par l'autorité cloud, même si
+    // le P2P paraît connecté. L'affichage local a déjà été fait par addChatMessage(), donc
+    // il n'y a aucune pénalité UX ; et utiliser un seul chemin autoritaire évite à la fois
+    // le message P2P silencieusement perdu et les doublons d'un double envoi P2P+cloud.
+    if (myRole === 'guest' && deferredRoomMode) {
+        pushChatViaServerFallback(msg);
+        return;
+    }
+    // Live avec P2P coupé : conserve le fallback serveur historique.
     if (myRole === 'guest' && (!peerConn || !peerConn.isConnected())) {
         pushChatViaServerFallback(msg);
         return;
     }
-    // Même appel pour l'hôte (diffuse directement à tous les invités) et pour un invité
-    // (envoie à l'hôte, qui relaiera) : send() sans guestIndex explicite diffuse déjà à
-    // toutes les connexions actives de ce peer, qui n'en a qu'une seule (l'hôte) côté
-    // invité — voir peer-connection.js.
-    peerConn.send(msg);
+    // Live connecté / hôte : chemin P2P historique.
+    if (peerConn) peerConn.send(msg);
 }
 
 // Synchronisation de la couleur propre quand l'invité n'a plus de P2P. Le snapshot
@@ -9172,10 +9196,11 @@ function checkAuctionEnd(renderOptions = {}) {
     }
 
     const isLastBoard = boardIndex >= deals.length - 1;
-    // Voir échange avec Guillaume (session du 23 juillet) : réservé à l'HÔTE désormais,
-    // pas à n'importe quel joueur actif (canControlBoard()) — un simple joueur, ou un
-    // kibitz, ne doit pas pouvoir faire avancer la table pour tout le monde.
-    const iCanNavigate = myRole === 'host';
+    // R14 — même règle que les flèches et le fast-forward : en live, seul l'hôte
+    // déplace la table ; en différé, chaque joueur ASSIS navigue localement. Un kibbitz
+    // reste exclu. gotoBoard() n'émet aucun goto-board en différé, donc ce bouton ne peut
+    // jamais déplacer la vue du partenaire.
+    const iCanNavigate = canNavigateBoards();
 
     if (isLastBoard) {
         resultEl.innerHTML += '<div class="info-text">Dernière donne du fichier chargé.</div>';
@@ -9932,8 +9957,7 @@ function uiNextBoard() {
 }
 
 // Navigation libre entre les donnes (avancer ou reculer, y compris en pleine enchère) :
-// réservée à l'hôte, pour pouvoir sauter une donne sans attendre que l'enchère en cours
-// se termine.
+// live = hôte seul ; différé = navigation locale de chaque joueur assis.
 function uiHostSkipNextBoard() {
     if (!canNavigateBoards() || !deals) return;
     if (boardIndex >= deals.length - 1) return;
@@ -9950,9 +9974,8 @@ function uiHostSkipPrevBoard() {
 
 // Voir échange avec Guillaume (session asynchrone à deux — "écran récapitulatif de toutes
 // les donnes") : statut de chaque donne en un coup d'œil, sans avoir à les parcourir une
-// par une. Accessible à tout le monde (lecture), mais seul l'hôte peut s'en servir pour
-// sauter directement à une donne (voir uiJumpToBoardFromOverview) — même règle que les
-// flèches ◀▶ existantes, réservées à l'hôte.
+// par une. Accessible à tout le monde en lecture ; la navigation suit canNavigateBoards()
+// (live = hôte seul, différé = joueur assis en local).
 // Voir échange avec Guillaume (session du 8 août — nouvelle vue d'ensemble) : quel siège
 // afficher pour un joueur qui n'occupe qu'UNE place normalement — mais qui peut en
 // occuper deux (ex. un robot remplacé temporairement). Dans ce cas, celui qui doit
@@ -10175,9 +10198,8 @@ function uiCloseBoardOverviewOnBackdrop(evt) {
 
 function uiJumpToBoardFromOverview(idx) {
     uiCloseBoardOverview();
-    // Même règle que les flèches ◀▶ existantes : seul l'hôte pilote la navigation entre
-    // donnes (voir renderBoardSkipControls) — un invité peut consulter la vue d'ensemble,
-    // pas s'en servir pour déplacer tout le monde.
+    // Même règle que les flèches ◀▶ existantes : live = hôte seul ; différé = chaque
+    // joueur assis navigue localement, sans déplacer le partenaire.
     if (!canNavigateBoards()) return;
     if (idx === boardIndex) return;
     gotoBoard(idx);
@@ -10190,7 +10212,7 @@ function uiJumpToBoardFromOverview(idx) {
 // une donne plus tôt (ex. la 2), qu'on ne retrouve qu'en bouclant si rien de plus proche
 // n'attend. Avance les robots au passage (voir advanceRobotBidsOnBoard), au cas où une
 // donne n'aurait pas encore été touchée depuis un chargement antérieur à ce correctif.
-// Réservé à l'hôte, même règle que ◀▶ et la vue d'ensemble.
+// Live : hôte seul. Différé : chaque joueur assis peut l'utiliser pour sa vue locale.
 async function uiFastForwardToMyTurn() {
     if (!canNavigateBoards() || !deals) return;
     const n = deals.length;
@@ -11734,10 +11756,12 @@ function applyCloudUpdate(result, options = {}) {
         pushDebugLog(`Annulation apprise via le cloud (historique ramené à ${auctionHistory.length} annonce(s)), relayée en P2P.`);
     }
 
-    // Messages de chat (voir échange avec Guillaume) : même logique, chaque nouveau
-    // message relayé individuellement — addChatMessage (côté récepteur) l'ajoute et
-    // rafraîchit l'affichage, exactement comme un message reçu en direct.
-    if (canRelay && chatMessages.length > oldChatLengthForRelay) {
+    // Messages de chat : en LIVE seulement, un message appris via le cloud peut être
+    // relayé vers les pairs qui ne consomment pas nécessairement le cloud. En DIFFÉRÉ,
+    // tous les clients consomment déjà le cloud en permanence ; un relais P2P supplémentaire
+    // ferait notamment revenir au sender son propre message déjà affiché localement et
+    // créerait un doublon. R14 garde donc une seule voie de convergence pour le chat différé.
+    if (canRelay && !deferredRoomMode && chatMessages.length > oldChatLengthForRelay) {
         for (let i = oldChatLengthForRelay; i < chatMessages.length; i++) {
             peerConn.send(chatMessages[i]);
         }
