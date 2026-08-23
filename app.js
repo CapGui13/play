@@ -3901,13 +3901,17 @@ function buildSeatBoxesHtml(assignmentObj, onSelect, { enableDrag = false, withF
 
             const robotOptionClass = assignedId ? '' : ' is-current';
             const pendingOptionClass = isPending ? ' is-current' : '';
+            const canSelectPending = !deals || deferredRoomMode || isPending;
+            const pendingOptionHtml = canSelectPending ? `
+                <div class="seat-dropdown-option${pendingOptionClass}" data-seat-select="1" data-ui-seat-handler="${onSelect === 'uiStageSeatAssignment' ? 'stage' : 'assign'}" data-seat="${seat}" data-participant-id="${SEAT_PENDING}">
+                    <span class="mini-avatar mini-avatar-pending">⏳</span><span>En attente d'un partenaire</span>
+                </div>
+            ` : '';
             const optionsHtml = [`
                 <div class="seat-dropdown-option${robotOptionClass}" data-seat-select="1" data-ui-seat-handler="${onSelect === 'uiStageSeatAssignment' ? 'stage' : 'assign'}" data-seat="${seat}" data-participant-id="">
                     <span class="mini-avatar mini-avatar-robot">🤖</span><span>Robot</span>
                 </div>
-                <div class="seat-dropdown-option${pendingOptionClass}" data-seat-select="1" data-ui-seat-handler="${onSelect === 'uiStageSeatAssignment' ? 'stage' : 'assign'}" data-seat="${seat}" data-participant-id="${SEAT_PENDING}">
-                    <span class="mini-avatar mini-avatar-pending">⏳</span><span>En attente d'un partenaire</span>
-                </div>
+                ${pendingOptionHtml}
             `].concat(participants.map(p => {
                 const currentClass = p.id === assignedId ? ' is-current' : '';
                 return `
@@ -4094,15 +4098,42 @@ function uiCloseSeatDropdownsOnOutsideClick(event) {
 }
 document.addEventListener('click', uiCloseSeatDropdownsOnOutsideClick);
 
-function uiAssignSeat(seat, participantId) {
+async function uiAssignSeat(seat, participantId) {
     if (myRole !== 'host') return;
+    // R10 — convertir une salle live déjà lancée en différé est une transition de sécurité
+    // complète (rotation d'accessKey + pré-autorisation + changement d'autorité). L'ancien
+    // menu exposait PENDING en pleine partie sans exécuter cette transition. Fail-closed :
+    // le mode différé se choisit avant le lancement ; dans une partie déjà différée, PENDING
+    // reste utilisable pour réouvrir une place partenaire.
+    if (deals && !deferredRoomMode && participantId === SEAT_PENDING) {
+        flashPresenceToast('⏳ Le mode différé se choisit avant de lancer la partie', false);
+        return;
+    }
     // PAS de retrait automatique de l'ancien siège de cette personne (voir échange avec
     // Guillaume) : contrôler plusieurs sièges à la fois est une fonctionnalité voulue
     // depuis le début (mySeats est un tableau, pas une valeur unique — voir
     // renderMyHands, showActiveState) — un ancien correctif avait traité ça à tort comme
     // un bug de duplication, alors que c'est exactement ce que cette assignation doit
     // pouvoir faire.
+    const previousOccupant = seatAssignment[seat] || null;
     seatAssignment[seat] = participantId || null;
+    // Dans une partie différée déjà lancée, une nouvelle attribution humaine ne devient
+    // visible qu'après enregistrement de sa preuve serveur. Cela ferme la même fenêtre que
+    // le bug R8/R9, mais lors d'une réorganisation de sièges plutôt qu'au join initial.
+    if (deals && deferredRoomMode && participantId && participantId !== SEAT_PENDING && participantId !== 'host') {
+        const p = participants.find(x => x && x.id === participantId);
+        if (p && !p.disconnected && guestIndexForParticipant(participantId) != null) {
+            const ready = await sendSessionAccessToParticipant(participantId);
+            if (!ready) {
+                seatAssignment[seat] = previousOccupant;
+                autoPassSeats = SEATS.filter(s => !seatAssignment[s]);
+                flashPresenceToast('⚠️ Attribution annulée : accès serveur du joueur non prêt', false);
+                renderLobby();
+                if (deals) renderBoard();
+                return;
+            }
+        }
+    }
     // Prépare immédiatement l'identité secrète du futur partenaire tant que le host est
     // encore là. L'enregistrement HTTP tourne en arrière-plan ; le lien peut être copié
     // tout de suite et contient déjà la même credential.
@@ -4117,7 +4148,7 @@ function uiAssignSeat(seat, participantId) {
     // main ensuite. Recalculé ici avant la diffusion, sinon un siège tout juste rendu à
     // "Robot" restait un simple trou muet, personne (ni humain ni robot) pour y jouer.
     if (deals) autoPassSeats = SEATS.filter(s => !seatAssignment[s]);
-    grantSessionAccessToSeatedParticipants();
+    if (!deals || !deferredRoomMode) grantSessionAccessToSeatedParticipants();
     broadcastLobbyState();
     renderLobby();
     // Voir échange avec Guillaume ("ce qui n'est pas encore couvert" — changement de
@@ -4205,7 +4236,7 @@ function uiAllowDrop(event) {
     event.preventDefault(); // requis par l'API HTML5 drag-and-drop pour autoriser un drop ici
 }
 
-function uiDropOnSeat(event, targetSeat) {
+async function uiDropOnSeat(event, targetSeat) {
     event.preventDefault();
     if (myRole !== 'host' || !draggedParticipantId) return;
     const sourceSeat = draggedFromSeat;
@@ -4216,6 +4247,7 @@ function uiDropOnSeat(event, targetSeat) {
         return; // déposé sur sa propre case, rien à faire
     }
 
+    const previousSeatAssignment = { ...seatAssignment };
     const targetOccupant = seatAssignment[targetSeat];
     seatAssignment[targetSeat] = draggedParticipantId;
     if (sourceSeat) seatAssignment[sourceSeat] = targetOccupant || null; // échange ; sinon (venait du kibbitz) l'ancien occupant cible devient kibbitz de lui-même, rien à écrire
@@ -4225,7 +4257,19 @@ function uiDropOnSeat(event, targetSeat) {
     // Voir échange avec Guillaume (session du 23 juillet — voir uiAssignSeat) : même
     // recalcul, pour le glisser-déposer.
     if (deals) autoPassSeats = SEATS.filter(s => !seatAssignment[s]);
-    grantSessionAccessToSeatedParticipants();
+    if (deals && deferredRoomMode) {
+        const results = await grantSessionAccessToSeatedParticipants();
+        if (!sessionAccessGrantResultsReady(results)) {
+            seatAssignment = previousSeatAssignment;
+            autoPassSeats = SEATS.filter(s => !seatAssignment[s]);
+            flashPresenceToast('⚠️ Déplacement annulé : accès serveur d’un joueur non prêt', false);
+            renderLobby();
+            renderBoard();
+            return;
+        }
+    } else {
+        grantSessionAccessToSeatedParticipants();
+    }
     broadcastLobbyState();
     renderLobby();
     // Voir échange avec Guillaume ("changement de sièges via le relais serveur") : même
@@ -4435,10 +4479,16 @@ function primeDeferredGuestCloudAccess() {
         const credential = deferredCodeOnlyParticipantCredential(currentRoomCode);
         if (credential && isModernGuestParticipantId(credential.participantId)
                 && isValidReconnectSecret(credential.reconnectSecret)) {
-            rememberGuestRoomCredential(currentRoomCode, credential);
-            // `welcome` a déjà fixé myParticipantId sur cette même identité dans le chemin
-            // P2P différé. Sur une reprise cloud, uiResumeFromCloud utilise également cette
-            // credential déterministe. On ne réécrit jamais l'identité courante ici.
+            // R10 — l'identité déterministe appartient UNIQUEMENT au partenaire qui
+            // revendique le siège PENDING. Une salle différée peut aussi contenir un autre
+            // invité déjà assis avec sa propre credential aléatoire. Écraser cette dernière
+            // par la credential code-only rendrait immédiatement ses PUT participant 403
+            // (participantCredentialForCloudWrite exige que participantId === myParticipantId).
+            // L'accessKey dérivable est bien commun à tous les invités de la salle ; la
+            // preuve participant, elle, reste strictement propre à chaque identité.
+            if (credential.participantId === myParticipantId) {
+                rememberGuestRoomCredential(currentRoomCode, credential);
+            }
             primed = true;
         }
     }
@@ -4477,13 +4527,29 @@ async function sendSessionAccessToParticipant(participantId) {
 function grantSessionAccessToSeatedParticipants() {
     if (myRole !== 'host') return Promise.resolve([]);
     const ids = new Set(SEATS.map(seat => seatAssignment[seat]).filter(id => id && id !== SEAT_PENDING && id !== 'host'));
-    return Promise.allSettled([...ids].map(id => sendSessionAccessToParticipant(id)));
+    // Une capacité ne peut être remise qu'à un peer actuellement joignable. Les joueurs
+    // absents récupéreront leur accès à leur vraie reconnexion (onGuestConnected). Les
+    // exclure ici permet d'utiliser le résultat comme vraie barrière de readiness pour les
+    // joueurs connectés, notamment juste avant un start-game différé.
+    const connectedIds = [...ids].filter(id => {
+        const p = participants.find(x => x && x.id === id);
+        return p && !p.disconnected && guestIndexForParticipant(id) != null;
+    });
+    return Promise.allSettled(connectedIds.map(id => sendSessionAccessToParticipant(id)));
+}
+
+function sessionAccessGrantResultsReady(results) {
+    return Array.isArray(results) && results.every(r => r && r.status === 'fulfilled' && r.value === true);
 }
 
 let capabilityRotationInFlight = false;
 
 function canRotateRoomCapabilities() {
-    return myRole === 'host' && !!currentRoomCode
+    // En mode différé, l'accessKey DOIT rester la valeur déterministe dérivée du code
+    // 4 chiffres. Une rotation manuelle vers une clé aléatoire casserait immédiatement
+    // la promesse produit « code seul, même hôte hors ligne ». La rotation reste disponible
+    // dans les salles live, où elle a précisément été conçue pour révoquer les anciens liens.
+    return myRole === 'host' && !deferredRoomMode && !!currentRoomCode
         && typeof getSessionAccessKey === 'function' && !!getSessionAccessKey(currentRoomCode)
         && typeof getSessionHostWriteKey === 'function' && !!getSessionHostWriteKey(currentRoomCode)
         && typeof rotateSessionCapabilities === 'function';
@@ -5137,13 +5203,17 @@ function uiOpenSeatReorgModal() {
 // n'a pas été cliqué (voir uiValidateSeatReorg).
 function uiStageSeatAssignment(seat, participantId) {
     if (!isTrueOriginalHost() || !seatReorgDraft) return;
+    if (deals && !deferredRoomMode && participantId === SEAT_PENDING) {
+        flashPresenceToast('⏳ Le mode différé se choisit avant de lancer la partie', false);
+        return;
+    }
     seatReorgDraft[seat] = participantId || null;
     renderSeatReorgModalGrid();
 }
 
 // Applique enfin le brouillon à l'assignation réelle (même logique que uiAssignSeat, mais
 // en un seul coup pour tous les sièges modifiés), diffuse, rafraîchit, puis ferme.
-function uiValidateSeatReorg() {
+async function uiValidateSeatReorg() {
     if (!isTrueOriginalHost() || !seatReorgDraft) return;
     // Si le nombre de mains contrôlées change, renderBoard() peut modifier fortement la
     // hauteur au-dessus de la boîte d'enchères. Mémoriser l'ancre AVANT toute mutation ;
@@ -5156,11 +5226,24 @@ function uiValidateSeatReorg() {
     // En vue enchères, réserver tout de suite la première ancre du frame afin que le
     // renderAuctionLedger() déclenché par renderBoard() ne la remplace pas après coup.
     if (!parViewActive) scheduleMobileLedgerViewportRestore(mobileViewportAnchor);
+    const previousSeatAssignment = { ...seatAssignment };
     seatAssignment = { ...seatReorgDraft };
     // Voir échange avec Guillaume (session du 23 juillet — voir uiAssignSeat) : même
     // recalcul du statut robot des sièges.
     if (deals) autoPassSeats = SEATS.filter(s => !seatAssignment[s]);
-    grantSessionAccessToSeatedParticipants();
+    if (deals && deferredRoomMode) {
+        const results = await grantSessionAccessToSeatedParticipants();
+        if (!sessionAccessGrantResultsReady(results)) {
+            seatAssignment = previousSeatAssignment;
+            autoPassSeats = SEATS.filter(s => !seatAssignment[s]);
+            flashPresenceToast('⚠️ Réorganisation annulée : accès serveur d’un joueur non prêt', false);
+            renderLobby();
+            renderBoard();
+            return;
+        }
+    } else {
+        grantSessionAccessToSeatedParticipants();
+    }
     broadcastLobbyState();
     renderLobby();
     // Voir échange avec Guillaume ("changement de sièges via le relais serveur") : même
@@ -5290,9 +5373,20 @@ async function uiStartGameAsHost() {
     if (launchingDeferred && currentRoomCode) {
         showConnectingOverlay('Préparation du mode différé…');
         const ready = await ensureDeferredInviteCredentialRegistered(currentRoomCode);
-        hideConnectingOverlay();
         if (!ready) {
+            hideConnectingOverlay();
             setHostSetupMessage('Impossible de préparer la reprise différée par code. Vérifiez votre connexion puis réessayez.', false);
+            return;
+        }
+        // R10 — une salle différée fait du serveur l'autorité des actions invitées. Tous
+        // les joueurs DÉJÀ connectés et assis doivent donc avoir leur preuve participant
+        // enregistrée AVANT de recevoir start-game. R9 lançait cet enregistrement en
+        // fire-and-forget après le premier paint : sur un backend froid, un invité pouvait
+        // enchérir pendant cette fenêtre puis prendre un 403 et perdre son action.
+        const accessGrants = await grantSessionAccessToSeatedParticipants();
+        hideConnectingOverlay();
+        if (!sessionAccessGrantResultsReady(accessGrants)) {
+            setHostSetupMessage('Impossible de préparer l’accès serveur d’un joueur connecté. Vérifiez la connexion puis réessayez.', false);
             return;
         }
     }
@@ -5358,7 +5452,9 @@ async function uiStartGameAsHost() {
             // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 2) : plus de branche "mode différé"
             // séparée ici — la salle garde TOUJOURS une vraie connexion P2P hôte, même
             // avec un siège encore SEAT_PENDING.
-            grantSessionAccessToSeatedParticipants();
+            // En différé, la barrière de readiness a déjà été attendue AVANT le lancement
+            // (voir uiStartGameAsHost). En live, conserver la remise best-effort historique.
+            if (!deferredRoomMode) grantSessionAccessToSeatedParticipants();
             participants.filter(p => p.id !== 'host' && !p.disconnected).forEach(p => {
                 const guestIndex = guestIndexForParticipant(p.id);
                 if (guestIndex == null) return;
@@ -7751,6 +7847,8 @@ function renderAuctionLedger() {
 // ne concerne que l'interface. Elle est remise à zéro dès qu'une annonce est jouée,
 // lorsque le tour change, ou à la fin de l'enchère.
 let selectedBiddingLevel = null;
+// R10 — une action participant envoyée au serveur reste unique jusqu'à confirmation.
+let participantServerCallInFlight = false;
 // Si le même navigateur contrôle plusieurs sièges, `myTurn` peut rester vrai après une
 // annonce alors que le joueur à la table a changé. On mémorise donc explicitement le siège
 // dont la boîte est affichée, afin de repartir du palier minimal légal à CHAQUE nouveau tour.
@@ -7818,7 +7916,7 @@ function renderBiddingBox() {
     const turnSeat = currentTurnSeat(deal.dealer, auctionHistory);
     // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 3) : ne gèle plus la boîte d'enchères
     // pour un invité déconnecté de l'hôte — uiMakeCall peut utiliser le relais serveur.
-    const myTurn = mySeats && mySeats.includes(turnSeat);
+    const myTurn = mySeats && mySeats.includes(turnSeat) && !participantServerCallInFlight;
 
     // Nouveau joueur à l'enchère = nouvelle sélection. C'est important même si le même
     // utilisateur contrôle deux sièges consécutifs : `myTurn` resterait vrai, mais le palier
@@ -7920,22 +8018,28 @@ function uiMakeCall(call) {
     if (!mySeats || !mySeats.includes(turnSeat)) return;
     if (!isCallLegal(auctionHistory, call, turnSeat)) return;
 
+    const usesServerAuthority = myRole === 'guest' && (deferredRoomMode || !peerConn || !peerConn.isConnected());
     selectedBiddingLevel = null;
-    applyCall(turnSeat, call);
 
-    // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 3) : jusqu'ici, un invité déconnecté de
-    // l'hôte ne pouvait tout simplement pas annoncer (voir renderBiddingBox, même règle
-    // — les boutons étaient déjà grisés dans ce cas). Bascule désormais sur le relais
-    // serveur au lieu d'abandonner — voir pushCallViaServerFallback, qui relit l'état
-    // serveur, rejoue cette annonce dessus et revalide avant de pousser (jamais un envoi
-    // à l'aveugle sur la seule foi de ma copie locale, potentiellement périmée).
-    if (myRole === 'guest' && (deferredRoomMode || !peerConn || !peerConn.isConnected())) {
-        // En différé, même une connexion P2P vivante ne suffit pas : l'hôte peut regarder
-        // une autre donne et son handler live ignore volontairement les annonces d'un autre
-        // boardIndex. Le serveur est donc l'autorité de convergence pour chaque donne.
-        pushCallViaServerFallback(boardIndex, turnSeat, call);
+    if (usesServerAuthority) {
+        // R10 — ne plus afficher une annonce différée avant qu'elle existe réellement sur
+        // l'autorité cloud. R8/R9 appliquaient d'abord localement puis écrivaient en
+        // arrière-plan : une erreur d'auth/réseau donnait exactement « l'annonce apparaît,
+        // n'arrive jamais chez l'hôte, puis disparaît au resync ». Désormais le bouton est
+        // verrouillé pendant UN PUT et l'état local ne change qu'avec le snapshot serveur.
+        if (participantServerCallInFlight) return;
+        participantServerCallInFlight = true;
+        renderBiddingBox();
+        Promise.resolve(pushCallViaServerFallback(boardIndex, turnSeat, call)).finally(() => {
+            participantServerCallInFlight = false;
+            // La réussite applique déjà le snapshot cloud ; l'échec doit simplement rendre
+            // la main à l'utilisateur sans fabriquer d'annonce locale fantôme.
+            if (deals) renderBoard();
+        });
         return;
     }
+
+    applyCall(turnSeat, call);
     peerConn.send({ type: 'call', boardIndex, seat: turnSeat, call });
 }
 
