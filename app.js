@@ -7362,12 +7362,16 @@ function uiSendChatMessage() {
     const me = participants.find(p => p.id === myParticipantId);
     const msg = { type: 'chat', senderId: myParticipantId, senderName: me ? me.name : '?', text };
     addChatMessage(msg);
-    // R14 — en différé, un message guest passe TOUJOURS par l'autorité cloud, même si
-    // le P2P paraît connecté. L'affichage local a déjà été fait par addChatMessage(), donc
-    // il n'y a aucune pénalité UX ; et utiliser un seul chemin autoritaire évite à la fois
-    // le message P2P silencieusement perdu et les doublons d'un double envoi P2P+cloud.
+    // R30 — restaurer la symétrie du chat en différé. Tant que l'hôte est réellement
+    // joignable en P2P, l'invité lui envoie son message directement, exactement comme
+    // l'hôte envoie déjà ses propres messages vers l'invité. Côté hôte, addChatMessage()
+    // déclenche saveHostGameStateToStorage(), donc ce message devient aussi durable dans
+    // le cloud sans seconde écriture concurrente du participant.
+    // Si le P2P est réellement absent, conserver le fallback cloud R29 (credential
+    // différée réarmée) : c'est le cas "hôte fermé".
     if (myRole === 'guest' && deferredRoomMode) {
-        pushChatViaServerFallback(msg);
+        if (peerConn && peerConn.isConnected()) peerConn.send(msg);
+        else pushChatViaServerFallback(msg);
         return;
     }
     // Live avec P2P coupé : conserve le fallback serveur historique.
