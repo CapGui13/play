@@ -6019,7 +6019,15 @@ function handlePeerData(msg, guestIndex) {
         }
 
         case 'call': {
-            if (!deals || msg.boardIndex !== boardIndex) return;
+            if (!deals || !Number.isInteger(msg.boardIndex) || !deals[msg.boardIndex]) return;
+
+            // En live, toute la table partage encore une seule donne : une annonce d'un
+            // autre boardIndex reste invalide. En différé, chacun peut au contraire être
+            // sur une donne différente ; le P2P de secours doit donc mettre à jour LA
+            // DONNE PORTÉE PAR LE MESSAGE, sans déplacer la vue locale du destinataire.
+            const targetBoardIndex = msg.boardIndex;
+            if (!deferredRoomMode && targetBoardIndex !== boardIndex) return;
+
             if (myRole === 'host') {
                 const senderId = authenticatedGuestId(guestIndex);
                 if (!senderId || seatAssignment[msg.seat] !== senderId) {
@@ -6027,13 +6035,44 @@ function handlePeerData(msg, guestIndex) {
                     return;
                 }
             }
-            const deal = currentDeal();
-            const expectedSeat = currentTurnSeat(deal.dealer, auctionHistory);
-            if (msg.seat !== expectedSeat || !isCallLegal(auctionHistory, msg.call, msg.seat)) {
+
+            const targetDeal = deals[targetBoardIndex];
+            if (!targetDeal.auctionHistory) targetDeal.auctionHistory = [];
+            const targetHistory = targetDeal.auctionHistory;
+            const expectedSeat = currentTurnSeat(targetDeal.dealer, targetHistory);
+
+            // Si le cloud a gagné la course et a déjà apporté cette même annonce, le P2P
+            // peut arriver quelques millisecondes après. Ce n'est pas une erreur : ne pas
+            // la dupliquer et ne pas transformer une course normale en rejet protocolaire.
+            const lastEntry = targetHistory[targetHistory.length - 1];
+            const alreadyPresent = !!lastEntry
+                && lastEntry.seat === msg.seat
+                && String(lastEntry.call || '').toUpperCase() === String(msg.call || '').toUpperCase();
+            if (alreadyPresent) {
+                relayIfHost(msg, guestIndex);
+                break;
+            }
+
+            if (msg.seat !== expectedSeat || !isCallLegal(targetHistory, msg.call, msg.seat)) {
                 console.warn('Annonce reçue invalide, ignorée :', msg);
                 return;
             }
-            applyCall(msg.seat, msg.call, msg.explanation);
+
+            targetHistory.push(msg.explanation
+                ? { seat: msg.seat, call: msg.call, explanation: msg.explanation }
+                : { seat: msg.seat, call: msg.call });
+
+            if (targetBoardIndex === boardIndex) {
+                auctionHistory = targetHistory;
+                renderAfterNormalCall();
+                maybeRobotBid();
+            }
+
+            // Même hors de la donne actuellement regardée par l'hôte, la copie P2P est
+            // immédiatement durable : saveHostGameStateToStorage pousse le snapshot avec
+            // l'autorité host. Le chemin participant parallèle reste celui qui déclenche
+            // PONS serveur pour une donne différée non affichée par l'hôte.
+            saveHostGameStateToStorage();
             relayIfHost(msg, guestIndex);
             break;
         }
@@ -8018,22 +8057,39 @@ function uiMakeCall(call) {
     if (!mySeats || !mySeats.includes(turnSeat)) return;
     if (!isCallLegal(auctionHistory, call, turnSeat)) return;
 
-    const usesServerAuthority = myRole === 'guest' && (deferredRoomMode || !peerConn || !peerConn.isConnected());
+    const p2pConnected = !!(peerConn && peerConn.isConnected());
+    const usesServerAuthority = myRole === 'guest' && (deferredRoomMode || !p2pConnected);
     selectedBiddingLevel = null;
 
     if (usesServerAuthority) {
-        // R10 — ne plus afficher une annonce différée avant qu'elle existe réellement sur
-        // l'autorité cloud. R8/R9 appliquaient d'abord localement puis écrivaient en
-        // arrière-plan : une erreur d'auth/réseau donnait exactement « l'annonce apparaît,
-        // n'arrive jamais chez l'hôte, puis disparaît au resync ». Désormais le bouton est
-        // verrouillé pendant UN PUT et l'état local ne change qu'avec le snapshot serveur.
         if (participantServerCallInFlight) return;
         participantServerCallInFlight = true;
-        renderBiddingBox();
+
+        // R11 — en différé, le serveur reste l'autorité de convergence/PONS, MAIS une
+        // DataConnection P2P déjà ouverte n'est plus jetée à la poubelle. C'était le trou
+        // de R9/R10 : le premier clic de B dépendait à 100 % d'un PUT participant et d'un
+        // retour cloud, alors qu'A était souvent joignable directement au même instant.
+        //
+        // On utilise donc DEUX chemins complémentaires quand ils existent :
+        //   1. chemin P2P immédiat : affichage local + message à l'hôte ; l'hôte valide et
+        //      persiste avec son autorité host ;
+        //   2. chemin serveur participant : conserve l'autorité différée, les conflits CAS
+        //      et surtout l'avancement PONS de la bonne donne si chacun navigue séparément.
+        //
+        // Le serveur et le handler P2P sont idempotents vis-à-vis du même préfixe : si l'un
+        // a déjà commité l'annonce, l'autre absorbe simplement l'état plus récent sans la
+        // dupliquer. Ainsi une panne d'un seul transport ne fait plus disparaître l'annonce.
+        if (deferredRoomMode && p2pConnected) {
+            applyCall(turnSeat, call);
+            peerConn.send({ type: 'call', boardIndex, seat: turnSeat, call });
+        } else {
+            // Live sans P2P : pas d'affichage optimiste, le relais serveur est le seul
+            // chemin disponible et doit confirmer avant de modifier l'écran.
+            renderBiddingBox();
+        }
+
         Promise.resolve(pushCallViaServerFallback(boardIndex, turnSeat, call)).finally(() => {
             participantServerCallInFlight = false;
-            // La réussite applique déjà le snapshot cloud ; l'échec doit simplement rendre
-            // la main à l'utilisateur sans fabriquer d'annonce locale fantôme.
             if (deals) renderBoard();
         });
         return;
