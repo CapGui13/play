@@ -11610,6 +11610,17 @@ function mergeAuctionHistoryThreeWay(base, local, remote, dealer) {
         return cloneCloudData(local.length <= remote.length ? local : remote);
     }
 
+    // R27 — un raccourcissement SERVEUR par rapport à la baseline connue est un vrai Undo
+    // externe, pas un simple snapshot en retard. Il doit gagner contre une extension locale
+    // devenue obsolète, sinon l'hôte peut ressusciter l'annonce annulée lors de son prochain
+    // PUT. Ce test vient volontairement APRÈS le cas `remote === base` ci-dessus : un simple
+    // ACK ancien (cas R19 : base=3, local=4, remote=3) doit toujours conserver l'avancée
+    // locale. Il vient aussi APRÈS les deux Undo concurrents : si les deux côtés raccourcissent
+    // la même baseline, la plus courte reste gagnante.
+    if (remote.length < base.length && arrayIsPrefix(remote, base)) {
+        return cloneCloudData(remote);
+    }
+
     if (arrayIsPrefix(local, remote)) return cloneCloudData(remote);
     if (arrayIsPrefix(remote, local)) return cloneCloudData(local);
 
