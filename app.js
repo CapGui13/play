@@ -3074,8 +3074,9 @@ function buildGuestHandlers() {
             // Pendant toute coupure P2P, le cloud devient immédiatement la voie de
             // réception. En différé il reste également actif même après reconnexion afin de
             // suivre les autres donnes, qui évoluent indépendamment de celle regardée par
-            // l'hôte.
-            startDeferredPolling();
+            // l'hôte. R22 : réarme aussi immédiatement l'accès/credential cloud.
+            if (deferredRoomMode) enterDeferredGuestCloudContinuityAfterPeerLoss('peer-disconnected');
+            else startDeferredPolling();
             // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 4) : l'ancien planificateur de reprise automatique
             // a disparu d'ici (plus d'élection automatique d'un autre hôte) — seule reste la reconnexion
             // automatique en arrière-plan (voir scheduleGuestAutoReconnect), qui
@@ -3120,7 +3121,8 @@ function buildGuestHandlers() {
             // tardifs n'appartiennent plus au rôle courant.
             if (myRole !== 'guest') return;
             setConnectionStatus(false);
-            startDeferredPolling();
+            if (deferredRoomMode) enterDeferredGuestCloudContinuityAfterPeerLoss('signaling-disconnected');
+            else startDeferredPolling();
             scheduleGuestAutoReconnect();
             renderReconnectButton();
             const hostEntry = participants.find(p => p.id === 'host');
@@ -4479,6 +4481,48 @@ function currentClientHasHostCloudWriteAuthority() {
 
 function currentClientParticipantCredentialForCloudWrite() {
     return isTrueOriginalHost() ? null : participantCredentialForCloudWrite();
+}
+
+// R22 — continuité d'un partenaire différé quand l'hôte disparaît.
+//
+// Le partenaire PENDING est volontairement pré-enregistré sous une identité déterministe
+// dérivée du code. Après plusieurs cycles fermeture/reprise, la map locale de credential
+// peut néanmoins être absente/ancienne alors que `myParticipantId` est toujours cette
+// identité correcte. Dans ce cas, reconstruire uniquement SA preuve locale depuis le code
+// est sûr : on ne change ni de participantId, ni de siège, ni les droits côté serveur.
+function ensureDeferredGuestCloudWriteCredential() {
+    if (myRole !== 'guest' || !deferredRoomMode || !currentRoomCode) {
+        return participantCredentialForCloudWrite();
+    }
+
+    primeDeferredGuestCloudAccess();
+    let credential = participantCredentialForCloudWrite();
+    if (credential) return credential;
+
+    if (typeof deferredCodeOnlyParticipantCredential !== 'function') return null;
+    const deterministic = deferredCodeOnlyParticipantCredential(currentRoomCode);
+    if (!deterministic || deterministic.participantId !== myParticipantId
+            || !isValidReconnectSecret(deterministic.reconnectSecret)) return null;
+
+    rememberGuestRoomCredential(currentRoomCode, deterministic);
+    credential = participantCredentialForCloudWrite();
+    if (credential) {
+        recordSyncTrace('deferred.guest.credential-recovered-from-code', {
+            roomCode: currentRoomCode, participantId: myParticipantId
+        });
+    }
+    return credential;
+}
+
+function enterDeferredGuestCloudContinuityAfterPeerLoss(source) {
+    if (myRole !== 'guest' || !deferredRoomMode || !currentRoomCode) return;
+    primeDeferredGuestCloudAccess();
+    ensureDeferredGuestCloudWriteCredential();
+    startDeferredPolling();
+    recordSyncTrace('deferred.guest.cloud-continuity', { source });
+    // Le polling périodique est à 20 s : lors d'une vraie fermeture de l'hôte on relit
+    // immédiatement pour partir de la dernière version cloud avant le prochain clic.
+    Promise.resolve(pollCloudForUpdates()).catch(() => {});
 }
 
 // R9 — le mode différé par code seul ne doit jamais dépendre de l'ordre d'arrivée du
@@ -8057,7 +8101,55 @@ let selectedBiddingLevel = null;
 // dans auctionHistory, qui est synchronisé par P2P/cloud.
 let pendingLatestCallFlash = false;
 // R10 — une action participant envoyée au serveur reste unique jusqu'à confirmation.
+// R22 — ce verrou ne doit plus pouvoir condamner l'invité jusqu'au reload si un fetch
+// reste suspendu pendant la disparition/recréation du Peer hôte. Chaque tentative reçoit
+// un token + watchdog : une réponse tardive d'une ancienne tentative ne peut pas libérer
+// (ni écraser) le verrou d'une tentative plus récente.
 let participantServerCallInFlight = false;
+let participantServerCallToken = 0;
+let participantServerCallWatchdogTimer = null;
+const PARTICIPANT_SERVER_CALL_WATCHDOG_MS = 12000;
+
+function beginParticipantServerCallGuard() {
+    if (participantServerCallInFlight) return null;
+    participantServerCallInFlight = true;
+    const token = ++participantServerCallToken;
+    if (participantServerCallWatchdogTimer) clearTimeout(participantServerCallWatchdogTimer);
+    participantServerCallWatchdogTimer = setTimeout(() => {
+        if (!participantServerCallInFlight || token !== participantServerCallToken) return;
+        participantServerCallInFlight = false;
+        participantServerCallWatchdogTimer = null;
+        recordSyncTrace('call.cloud-fallback.watchdog-release', { token, roomCode: currentRoomCode || null });
+        // Ne jamais fabriquer d'état local au timeout : relire simplement le cloud. Si le
+        // PUT ancien a finalement été commité, cette lecture le récupérera ; sinon le garde
+        // optimiste expirera normalement et l'état serveur reprendra la main.
+        if (deferredRoomMode && myRole === 'guest') {
+            startDeferredPolling();
+            Promise.resolve(pollCloudForUpdates()).catch(() => {});
+        }
+        if (deals) renderBiddingBox();
+    }, PARTICIPANT_SERVER_CALL_WATCHDOG_MS);
+    return token;
+}
+
+function endParticipantServerCallGuard(token) {
+    if (token == null || token !== participantServerCallToken) return false;
+    participantServerCallInFlight = false;
+    if (participantServerCallWatchdogTimer) {
+        clearTimeout(participantServerCallWatchdogTimer);
+        participantServerCallWatchdogTimer = null;
+    }
+    return true;
+}
+
+function resetParticipantServerCallGuard() {
+    participantServerCallInFlight = false;
+    participantServerCallToken++;
+    if (participantServerCallWatchdogTimer) {
+        clearTimeout(participantServerCallWatchdogTimer);
+        participantServerCallWatchdogTimer = null;
+    }
+}
 
 // R16 — stabilité visuelle des annonces fraîches en différé.
 //
@@ -8374,8 +8466,8 @@ function uiMakeCall(call) {
     selectedBiddingLevel = null;
 
     if (usesServerAuthority) {
-        if (participantServerCallInFlight) return;
-        participantServerCallInFlight = true;
+        const participantCallToken = beginParticipantServerCallGuard();
+        if (participantCallToken == null) return;
 
         // R11 — en différé, le serveur reste l'autorité de convergence/PONS, MAIS une
         // DataConnection P2P déjà ouverte n'est plus jetée à la poubelle. C'était le trou
@@ -8391,10 +8483,16 @@ function uiMakeCall(call) {
         // Le serveur et le handler P2P sont idempotents vis-à-vis du même préfixe : si l'un
         // a déjà commité l'annonce, l'autre absorbe simplement l'état plus récent sans la
         // dupliquer. Ainsi une panne d'un seul transport ne fait plus disparaître l'annonce.
-        if (deferredRoomMode && p2pConnected) {
+        if (deferredRoomMode) {
+            // R22 — le mode différé doit conserver exactement la même UX lorsque l'hôte
+            // vient de fermer : l'annonce est appliquée localement tout de suite, puis le
+            // serveur la confirme. Auparavant cette branche optimiste était réservée au cas
+            // P2P encore connecté ; dès la coupure, un clic ne modifiait plus l'écran avant
+            // le retour HTTP et paraissait donc "ne pas rester".
+            ensureDeferredGuestCloudWriteCredential();
             beginDeferredOptimisticAuctionGuard(boardIndex, auctionHistory, turnSeat, call);
             applyCall(turnSeat, call);
-            peerConn.send({ type: 'call', boardIndex, seat: turnSeat, call });
+            if (p2pConnected) peerConn.send({ type: 'call', boardIndex, seat: turnSeat, call });
         } else {
             // Live sans P2P : pas d'affichage optimiste, le relais serveur est le seul
             // chemin disponible et doit confirmer avant de modifier l'écran.
@@ -8402,8 +8500,7 @@ function uiMakeCall(call) {
         }
 
         Promise.resolve(pushCallViaServerFallback(boardIndex, turnSeat, call)).finally(() => {
-            participantServerCallInFlight = false;
-            if (deals) renderBoard();
+            if (endParticipantServerCallGuard(participantCallToken) && deals) renderBoard();
         });
         return;
     }
@@ -11211,6 +11308,9 @@ function resetCloudSyncContext(roomCode, version = 0, serverState = null) {
     cloudPushInFlight = false;
     cloudPushQueued = false;
     cloudResumeCandidate = null;
+    // R22 — un verrou/watchdog d'une ancienne salle ne doit jamais survivre à un leave,
+    // une création ou un join différent. Le token invalide aussi tout finally tardif.
+    resetParticipantServerCallGuard();
     // Une salle quittée ne doit pas continuer à recevoir ses événements/polls dans la
     // nouvelle. stopDeferredPolling() désabonne aussi Pusher.
     if (typeof stopDeferredPolling === 'function') stopDeferredPolling();
@@ -11644,7 +11744,7 @@ async function nudgeDeferredRobotContinuationViaServer(authoritative, targetBoar
     hintedState.savedAt = Date.now();
     let conflictCurrent = null;
     const result = await pushSessionState(cloudCtx.roomCode, hintedState, authoritative.version, {
-        participantCredential: participantCredentialForCloudWrite(),
+        participantCredential: ensureDeferredGuestCloudWriteCredential(),
         onConflict: (current) => {
             if (!isCloudSyncContextActive(cloudCtx)) return;
             const validCurrent = current && validateCloudSnapshot(current, cloudCtx.roomCode);
@@ -11686,6 +11786,13 @@ async function pushCallViaServerFallback(targetBoardIndex, seat, call, explanati
     pushDebugLog(`Annonce ${call} (${seat}) : tentative de remontée au serveur (déconnecté de l'hôte).`);
     recordSyncTrace('call.cloud-fallback.begin', { targetBoardIndex, seat, call });
     const cloudCtx = captureCloudSyncContext(currentRoomCode);
+    if (deferredRoomMode && myRole === 'guest' && !ensureDeferredGuestCloudWriteCredential()) {
+        recordSyncTrace('call.cloud-fallback.no-participant-credential', {
+            targetBoardIndex, seat, call, participantId: myParticipantId || null
+        });
+        pushDebugLog(`Annonce ${call} (${seat}) : credential participant différée indisponible.`);
+        return;
+    }
     try {
         let pulled;
         let normalPullError = null;
@@ -11804,7 +11911,7 @@ async function pushCallViaServerFallback(targetBoardIndex, seat, call, explanati
             const stateToPush = { ...baseState, savedAt: Date.now() };
             let conflictCurrent = null;
             const result = await pushSessionState(cloudCtx.roomCode, stateToPush, expectedVersion, {
-                participantCredential: participantCredentialForCloudWrite(),
+                participantCredential: ensureDeferredGuestCloudWriteCredential(),
                 onConflict: (current) => {
                     if (!isCloudSyncContextActive(cloudCtx)) return;
                     const validCurrent = current && validateCloudSnapshot(current, cloudCtx.roomCode);
