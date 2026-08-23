@@ -6203,7 +6203,10 @@ function handlePeerData(msg, guestIndex) {
             // la propagation. Quand `call` a déjà installé EXACTEMENT le même historique,
             // le snapshot redondant ne doit surtout pas reconstruire tout le plateau :
             // c'était une source directe de petits clignotements sans changement d'état.
-            if (sameCloudData(localHistory, msg.auctionHistory)) {
+            if (sameCloudData(
+                cloneAuctionHistoryForWire(localHistory),
+                cloneAuctionHistoryForWire(msg.auctionHistory)
+            )) {
                 recordSyncTrace('peer.precalc-board.duplicate-skip-render', { boardIndex: idx, length: localHistory.length });
                 break;
             }
@@ -6523,7 +6526,22 @@ let startupLegacyPrecalcHandle = null;
 let startupLegacyPrecalcHandleKind = null;
 
 function cloneAuctionHistoryForWire(hist) {
-    return (hist || []).map(entry => ({ ...entry }));
+    // R21 — ne jamais laisser un détail purement UI voyager avec l'état métier.
+    // `_flashed` était autrefois posé directement sur l'entrée d'enchère par
+    // renderAuctionLedger(); le cloud le normalise/supprime, ce qui faisait croire à
+    // R20 qu'une confirmation identique était une mutation et réarmait le flash.
+    return (hist || []).map(entry => {
+        const clean = { seat: entry.seat, call: entry.call };
+        if (entry.explanation != null) clean.explanation = entry.explanation;
+        return clean;
+    });
+}
+
+function cloneDealsForCloudPayload(sourceDeals) {
+    return (sourceDeals || []).map(deal => ({
+        ...deal,
+        auctionHistory: cloneAuctionHistoryForWire((deal && deal.auctionHistory) || [])
+    }));
 }
 
 function broadcastPrecalculatedBoard(idx) {
@@ -7991,17 +8009,14 @@ function renderAuctionLedger() {
     auctionHistory.forEach(entry => slots.push(formatCallCellHtml(entry)));
     // Index de la toute dernière enchère jouée (pas juste la dernière case du tableau,
     // qui peut être vide en fin de ligne) : sert à lui appliquer un bref flash visuel à
-    // chaque nouvelle annonce, pour la repérer d'un coup d'œil sans avoir à la chercher
-    // dans la grille (voir .is-latest-call plus bas / styles.css).
+    // chaque NOUVELLE annonce.
     const lastIndex = auctionHistory.length > 0 ? slots.length - 1 : -1;
-    // Ne flashe QUE si cette annonce n'a encore jamais été flashée (voir échange avec
-    // Guillaume) : sans ce marqueur posé directement sur l'entrée elle-même (qui survit
-    // à la navigation entre donnes, voir gotoBoard), revenir sur une donne déjà terminée
-    // rejouerait l'animation sur le dernier passe à chaque re-rendu, alors que ce n'est
-    // pas une nouvelle annonce.
     const lastEntry = auctionHistory.length > 0 ? auctionHistory[auctionHistory.length - 1] : null;
-    const shouldFlashLatest = !!(lastEntry && !lastEntry._flashed);
-    if (shouldFlashLatest) lastEntry._flashed = true;
+    // R21 — le droit de flasher est une transaction de rendu, jamais une propriété de
+    // l'objet métier. Ainsi un snapshot cloud/P2P identique ne peut plus supprimer un
+    // `_flashed` local puis rejouer artificiellement l'animation.
+    const shouldFlashLatest = !!(lastEntry && pendingLatestCallFlash);
+    pendingLatestCallFlash = false;
 
     const rows = [];
     for (let i = 0; i < slots.length || rows.length === 0; i += 4) {
@@ -8037,6 +8052,10 @@ function renderAuctionLedger() {
 // ne concerne que l'interface. Elle est remise à zéro dès qu'une annonce est jouée,
 // lorsque le tour change, ou à la fin de l'enchère.
 let selectedBiddingLevel = null;
+// R21 — état UI éphémère : renderAfterNormalCall arme UNE seule animation de dernière
+// enchère et renderAuctionLedger la consomme immédiatement. Ne jamais stocker ce marqueur
+// dans auctionHistory, qui est synchronisé par P2P/cloud.
+let pendingLatestCallFlash = false;
 // R10 — une action participant envoyée au serveur reste unique jusqu'à confirmation.
 let participantServerCallInFlight = false;
 
@@ -8411,6 +8430,9 @@ function uiMakeCall(call) {
 // mise à jour de l'état mais AVANT toute écriture DOM. Cela évite de forcer une mesure de
 // layout après renderAuctionLedger/renderBiddingBox.
 function renderAfterNormalCall() {
+    // Une vraie extension visible mérite exactement UN flash. Tout rerendu structurel ou
+    // toute confirmation réseau ultérieure doit rester neutre.
+    pendingLatestCallFlash = true;
     const auctionEndsNow = isAuctionOver(auctionHistory);
     const endDiagram = auctionEndsNow ? document.getElementById('allHandsDiagram') : null;
     const preCapturedMobileAuctionEndAnchor = auctionEndsNow
@@ -11454,7 +11476,9 @@ function prepareCloudResumeCandidate(result, roomCode) {
 function buildCloudStatePayload() {
     return {
         roomCode: currentRoomCode,
-        deals, boardIndex, seatAssignment, participants, autoPassSeats, chatMessages,
+        // R21 — sérialisation canonique : aucun marqueur UI local ne doit entrer dans
+        // Redis/Pusher ni influencer les comparaisons de synchro.
+        deals: cloneDealsForCloudPayload(deals), boardIndex, seatAssignment, participants, autoPassSeats, chatMessages,
         roomCreatorName, deferredRoomMode,
         // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 3) : roomCreatorToken n'est jamais
         // renseigné localement côté invité (variable réservée à l'hôte) — l'utiliser
