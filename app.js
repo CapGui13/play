@@ -9721,11 +9721,9 @@ function renderUndoControls() {
     if (!btn) return;
     const visible = canControlBoard();
     btn.style.display = visible ? '' : 'none';
-    // Voir échange avec Guillaume ("undo en mode différé") : même règle que côté
-    // hostHandleUndoRequest — un simple joueur (pas le vrai créateur) en mode différé ne
-    // peut annuler SA PROPRE dernière annonce que tant que son partenaire n'a rien annoncé
-    // depuis. Le vrai créateur n'est jamais concerné (son undo cible la dernière annonce
-    // humaine de toute la table, pas seulement la sienne — voir findHostUndoTargetIndex).
+    // R25 — en mode différé, règle strictement symétrique pour les deux joueurs : chacun
+    // peut annuler SA PROPRE dernière annonce tant que son partenaire n'a rien annoncé
+    // depuis. Une annonce adverse/robot intercalée ne couvre jamais l'annonce du joueur.
     //
     // Voir ARCHITECTURE-P2P-SERVEUR.md ("l'hôte n'a pas reçu la demande d'undo pendant
     // qu'il était hors ligne, et elle a fini par disparaître") : même règle étendue à un
@@ -9734,19 +9732,25 @@ function renderUndoControls() {
     // du mode différé pour cette annonce précise : personne à qui demander l'accord, donc
     // même repli sur la règle locale plutôt que d'attendre une réponse qui n'arrivera
     // jamais.
-    const isDeferredNonCreator = deals && deferredRoomMode && !isTrueOriginalHost();
+    // Les annonces adverses/robots intercalées seront retirées avec le suffixe lors de
+    // l'annulation, puisque leur décision dépendait de l'annonce corrigée.
+    const isDeferredPersonalUndo = deals && deferredRoomMode;
     const isDisconnectedGuest = deals && myRole === 'guest' && (!peerConn || !peerConn.isConnected());
-    const appliesImmediately = myRole === 'host' || isDeferredNonCreator || isDisconnectedGuest;
+    const appliesImmediately = myRole === 'host' || isDeferredPersonalUndo || isDisconnectedGuest;
     const myUndoTargetIndex = findUndoTargetIndex(myParticipantId, auctionHistory);
-    const blockedByPartnerSince = (isDeferredNonCreator || isDisconnectedGuest)
-        && myUndoTargetIndex <= findPartnerLastCallIndex(myParticipantId, auctionHistory);
+    const partnerLastCallIndex = findPartnerLastCallIndex(myParticipantId, auctionHistory);
+    const blockedByPartnerSince = (isDeferredPersonalUndo || isDisconnectedGuest)
+        && myUndoTargetIndex >= 0 && myUndoTargetIndex <= partnerLastCallIndex;
     // Un invité ne peut demander l'annulation que s'il a réellement produit au moins
     // une annonce sur CETTE donne. Auparavant, la simple présence d'une annonce dans
     // l'historique (hôte/robot/autre joueur) suffisait à activer le bouton, puis la
     // demande était rejetée plus tard avec "rien à annuler". L'hôte conserve son droit
     // historique d'annuler la dernière annonce humaine de la table.
-    const guestHasOwnUndoTarget = myRole !== 'guest' || myUndoTargetIndex >= 0;
-    btn.disabled = !visible || !deals || auctionHistory.length === 0 || !guestHasOwnUndoTarget
+    // En différé, même le créateur suit la règle personnelle : pas d'Undo tant qu'il
+    // n'a lui-même rien annoncé sur cette donne. En live, on conserve le privilège
+    // historique de l'hôte (dernière annonce humaine de la table).
+    const hasRequiredUndoTarget = isDeferredPersonalUndo ? myUndoTargetIndex >= 0 : (myRole !== 'guest' || myUndoTargetIndex >= 0);
+    btn.disabled = !visible || !deals || auctionHistory.length === 0 || !hasRequiredUndoTarget
         || undoRequestPending || !!pendingUndoAsk || blockedByPartnerSince;
     // Deux <span> (voir index.html) plutôt qu'un textContent direct : .btn-label-full/
     // .btn-label-short sont affichés en alternance en CSS selon la largeur d'écran
@@ -10000,6 +10004,10 @@ async function pushUndoViaServerFallback(targetBoardIndex = boardIndex) {
             return;
         }
         const desiredHistory = cloneCloudData(initialHistory.slice(0, targetIndex));
+        // Identité de l'enchère que l'utilisateur a demandé à annuler. Les conflits CAS
+        // pourront ajouter des annonces adverses/robots APRÈS cette entrée, mais ne doivent
+        // ni réécrire le préfixe ni faire apparaître une nouvelle annonce du demandeur.
+        const targetPrefix = cloneCloudData(initialHistory.slice(0, targetIndex + 1));
         let authoritative = pulled;
         const maxConflictRebases = 3;
 
@@ -10029,12 +10037,21 @@ async function pushUndoViaServerFallback(targetBoardIndex = boardIndex) {
                 return;
             }
 
-            // Un conflit causé par une autre donne/chat/présence laisse CET historique
-            // strictement identique : on peut rebaser l'undo. Si cette donne a changé,
-            // l'intention est devenue stale ; resync sans réécriture.
-            if (!sameCloudData(hist, initialHistory)) {
-                recordSyncTrace('undo.cloud-fallback.same-board-conflict', { targetBoardIndex: idx, version: authoritative.version });
-                pushDebugLog(`Undo abandonné : la donne ${idx} a changé pendant le conflit — resynchronisation sans réécriture.`);
+            // R25 — un conflit sur CETTE donne n'est plus automatiquement stale. On
+            // accepte toute extension qui conserve exactement le préfixe jusqu'à MA
+            // dernière annonce et dans laquelle mon partenaire n'a toujours pas parlé
+            // depuis. Cela couvre précisément une réponse robot/adverse arrivée pendant
+            // le PUT. En revanche partenaire, nouvelle annonce du demandeur ou réécriture
+            // du préfixe => fail-closed.
+            const currentTargetIndex = findUndoTargetIndex(myParticipantId, hist);
+            const currentPartnerIndex = findPartnerLastCallIndex(myParticipantId, hist);
+            const sameTargetPrefix = hist.length >= targetPrefix.length
+                && sameCloudData(hist.slice(0, targetPrefix.length), targetPrefix);
+            if (currentTargetIndex !== targetIndex || currentPartnerIndex >= targetIndex || !sameTargetPrefix) {
+                const reason = currentTargetIndex >= 0 && currentPartnerIndex >= currentTargetIndex ? 'partner-since' : 'stale';
+                recordSyncTrace('undo.cloud-fallback.same-board-conflict', { targetBoardIndex: idx, version: authoritative.version, reason });
+                pushDebugLog(`Undo abandonné : la donne ${idx} a changé de façon incompatible (${reason}) — resynchronisation sans réécriture.`);
+                if (reason === 'partner-since') setUndoStatus(undoRejectReasonText('partner-since'));
                 applyCloudUpdate(authoritative, { expectedRoomCode: cloudCtx.roomCode });
                 done();
                 return;
@@ -10103,51 +10120,54 @@ function hostHandleUndoRequest(msg) {
         deliverToParticipant(msg.requesterId, { type: 'undo-rejected', boardIndex: msg.boardIndex, requesterId: msg.requesterId, reason: 'busy' });
         return;
     }
-    if (msg.boardIndex !== boardIndex || msg.historyLengthAtRequest !== auctionHistory.length) {
+    if (msg.boardIndex !== boardIndex) {
         deliverToParticipant(msg.requesterId, { type: 'undo-rejected', boardIndex: msg.boardIndex, requesterId: msg.requesterId, reason: 'stale' });
         return;
     }
 
-    // Voir échange avec Guillaume (session du 8 août — "faire un undo par l'hôte devrait
-    // annuler la dernière enchère produite (si elle a été faite par un humain ; si c'est
-    // un bot, annuler la dernière enchère produite par un humain)") : l'undo DIRECT de
-    // l'hôte (requesterId==='host' ou roomCreatorToken, voir plus bas) cible la dernière
-    // annonce HUMAINE de tout l'historique (findHostUndoTargetIndex), pas SA PROPRE
-    // dernière annonce (findUndoTargetIndex, qui reste utilisée pour un simple joueur
-    // assis demandant l'accord de l'hôte — celui-là ne peut annuler que la sienne).
+    // R25 — en différé, la longueur brute de l'historique n'est PAS un critère de
+    // validité. Entre le clic du joueur et le traitement de l'Undo, un adversaire/robot
+    // peut parfaitement avoir annoncé. La seule règle métier est : ma dernière annonce
+    // existe encore et mon partenaire n'a rien annoncé après elle.
+    const isDeferredPersonalUndo = deferredRoomMode === true;
+    if (!isDeferredPersonalUndo && msg.historyLengthAtRequest !== auctionHistory.length) {
+        deliverToParticipant(msg.requesterId, { type: 'undo-rejected', boardIndex: msg.boardIndex, requesterId: msg.requesterId, reason: 'stale' });
+        return;
+    }
+
     const isHostDirectUndo = msg.requesterId === 'host' || msg.requesterId === roomCreatorToken;
-    const targetIndex = isHostDirectUndo
-        ? findHostUndoTargetIndex(auctionHistory)
-        : findUndoTargetIndex(msg.requesterId, auctionHistory);
+    const targetIndex = isDeferredPersonalUndo
+        ? findUndoTargetIndex(msg.requesterId, auctionHistory)
+        : (isHostDirectUndo ? findHostUndoTargetIndex(auctionHistory) : findUndoTargetIndex(msg.requesterId, auctionHistory));
     if (targetIndex < 0) {
         deliverToParticipant(msg.requesterId, { type: 'undo-rejected', boardIndex: msg.boardIndex, requesterId: msg.requesterId, reason: 'nothing' });
         return;
     }
 
-    // L'hôte peut annuler unilatéralement, sans validation de personne (voir échange avec
-    // Guillaume) — l'hôte arbitre déjà toute la table ; un simple joueur assis, lui,
-    // reste soumis à l'accord de l'hôte (voir plus bas, ex-humanOpponentsFor).
-    //
-    // Voir échange avec Guillaume ("2 modes : live / différé") : en mode différé,
-    // myParticipantId (et donc requesterId ici) n'est JAMAIS la chaîne littérale 'host' —
-    // c'est le vrai jeton du créateur (voir roomCreatorToken, figé à la création/au
-    // lancement, jamais réécrit). Sans ce second cas, un créateur en mode différé perdait
-    // son droit d'arbitrage unilatéral.
+    if (isDeferredPersonalUndo) {
+        const partnerIdx = findPartnerLastCallIndex(msg.requesterId, auctionHistory);
+        if (targetIndex <= partnerIdx) {
+            deliverToParticipant(msg.requesterId, { type: 'undo-rejected', boardIndex: msg.boardIndex, requesterId: msg.requesterId, reason: 'partner-since' });
+            return;
+        }
+        applyUndoAsHost({
+            boardIndex: msg.boardIndex,
+            requesterId: msg.requesterId,
+            historyLengthAtRequest: msg.historyLengthAtRequest,
+            targetIndex,
+            deferredPersonalUndo: true
+        });
+        return;
+    }
+
+    // Mode live : comportement historique conservé. L'hôte peut annuler directement la
+    // dernière annonce humaine ; un autre joueur demande l'arbitrage de l'hôte.
     if (isHostDirectUndo) {
         applyUndoAsHost({ boardIndex: msg.boardIndex, requesterId: msg.requesterId, historyLengthAtRequest: msg.historyLengthAtRequest, targetIndex });
         return;
     }
 
-    // Voir échange avec Guillaume ("undo en mode différé") : pas d'adversaire humain EN
-    // LIGNE à qui demander l'accord en mode différé (NullPeerConnection) — la bannière
-    // accepter/refuser ci-dessous ne serait jamais vue par personne d'autre que le
-    // demandeur lui-même (qui jouerait alors sa propre demande à sa place), et le délai de
-    // 20s ci-dessous finirait toujours par rejeter pour rien. Remplacé par une règle
-    // locale, sans validation d'autrui : ce simple joueur peut annuler SA PROPRE dernière
-    // annonce (targetIndex, déjà calculé ci-dessus via findUndoTargetIndex) tant que son
-    // PARTENAIRE n'a rien annoncé depuis (sinon la correction toucherait une décision déjà
-    // prise par le partenaire sur la base de cette annonce) — même règle appliquée à
-    // l'activation/désactivation du bouton, voir renderUndoControls.
+    // Repli historique NullPeerConnection hors différé : règle personnelle locale.
     if (peerConn instanceof NullPeerConnection) {
         const partnerIdx = findPartnerLastCallIndex(msg.requesterId, auctionHistory);
         if (targetIndex <= partnerIdx) {
@@ -10158,17 +10178,6 @@ function hostHandleUndoRequest(msg) {
         return;
     }
 
-    // Voir échange avec Guillaume ("si demande d'undo, il faut validation de l'host, pas
-    // que ça marche automatiquement") : ce n'est plus l'ADVERSAIRE humain qui est
-    // sollicité pour approuver la demande d'un simple joueur assis — c'est l'HÔTE
-    // lui-même, seul arbitre de la table. humanOpponentsFor n'est donc plus utilisé ici
-    // (son ancien rôle, demander l'accord du camp d'en face, est abandonné).
-    //
-    // Puisque cette fonction tourne déjà côté hôte, pas besoin d'aller-retour réseau : on
-    // réutilise directement le mécanisme générique pendingUndoAsk/renderUndoAskBanner/
-    // uiAnswerUndo (déjà prévu pour fonctionner en local quand myRole==='host', voir
-    // hostReceiveUndoAnswer plus bas) — la même bannière "accepter/refuser" s'affiche
-    // simplement sur l'écran de l'hôte au lieu d'être envoyée à un adversaire distant.
     pendingUndoAsk = { requesterId: msg.requesterId, boardIndex: msg.boardIndex, historyLengthAtRequest: msg.historyLengthAtRequest };
     hostPendingUndo = { requesterId: msg.requesterId, boardIndex: msg.boardIndex, historyLengthAtRequest: msg.historyLengthAtRequest, targetIndex };
     renderUndoAskBanner();
@@ -10204,26 +10213,43 @@ function hostReceiveUndoAnswer(msg) {
 
 // (Hôte) Applique effectivement l'annulation et la diffuse à tout le monde.
 function applyUndoAsHost(pending) {
-    if (pending.boardIndex !== boardIndex || pending.historyLengthAtRequest !== auctionHistory.length) {
+    if (pending.boardIndex !== boardIndex) {
         deliverToParticipant(pending.requesterId, { type: 'undo-rejected', boardIndex: pending.boardIndex, requesterId: pending.requesterId, reason: 'stale' });
         return;
     }
-    // On retire l'annonce ciblée (la dernière de CE joueur — voir findUndoTargetIndex) et
-    // tout ce qui l'a suivie (uniquement des passes robot dans ce cas, voir plus haut),
-    // plutôt qu'un simple pop() de la toute dernière case du tableau.
-    auctionHistory.length = pending.targetIndex;
+
+    let targetIndex = pending.targetIndex;
+    if (pending.deferredPersonalUndo || deferredRoomMode === true) {
+        // R25 — revalide au DERNIER moment contre l'historique courant. Si un robot ou un
+        // adversaire a parlé pendant l'aller-retour de la demande, l'Undo reste valide ;
+        // si le partenaire a parlé, il devient immédiatement interdit.
+        targetIndex = findUndoTargetIndex(pending.requesterId, auctionHistory);
+        const partnerIdx = findPartnerLastCallIndex(pending.requesterId, auctionHistory);
+        if (targetIndex < 0) {
+            deliverToParticipant(pending.requesterId, { type: 'undo-rejected', boardIndex: pending.boardIndex, requesterId: pending.requesterId, reason: 'nothing' });
+            return;
+        }
+        if (targetIndex <= partnerIdx) {
+            deliverToParticipant(pending.requesterId, { type: 'undo-rejected', boardIndex: pending.boardIndex, requesterId: pending.requesterId, reason: 'partner-since' });
+            return;
+        }
+    } else if (pending.historyLengthAtRequest !== auctionHistory.length) {
+        deliverToParticipant(pending.requesterId, { type: 'undo-rejected', boardIndex: pending.boardIndex, requesterId: pending.requesterId, reason: 'stale' });
+        return;
+    }
+
+    // Retire l'annonce ciblée et TOUT le suffixe qui l'a suivie. En différé ce suffixe
+    // peut contenir des annonces adverses/robots : c'est volontaire, puisque l'enchère
+    // corrigée change le contexte dans lequel elles avaient été produites.
+    auctionHistory.length = targetIndex;
     renderAuctionLedger();
     renderBiddingBox();
     renderMyHands();
     checkAuctionEnd();
     clearUndoUiState();
-    peerConn.send({ type: 'undo-apply', boardIndex: pending.boardIndex, newLength: pending.targetIndex });
-    // Voir échange avec Guillaume ("vérifie s'il n'y a pas des problèmes de même ordre") :
-    // manquait entièrement ici — sans ça, un invité en repli serveur ne voyait jamais
-    // qu'une annulation avait eu lieu, sa propre relecture périodique retombant sur un
-    // historique jamais mis à jour côté cloud.
+    peerConn.send({ type: 'undo-apply', boardIndex: pending.boardIndex, newLength: targetIndex });
     saveHostGameStateToStorage();
-    maybeRobotBid(); // si l'annulation redonne la main à un siège robot, il doit rejouer
+    maybeRobotBid();
 }
 
 // Réponse de l'utilisateur au bandeau "on me demande d'annuler".
