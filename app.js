@@ -4416,6 +4416,35 @@ function participantCredentialForCloudWrite() {
     return credential;
 }
 
+// R9 — le mode différé par code seul ne doit jamais dépendre de l'ordre d'arrivée du
+// message P2P `session-access`. Lors d'un join/rejoin, le host enregistre la preuve
+// participant puis envoie la capacité de salle de façon asynchrone ; le `resync` peut
+// donc arriver quelques millisecondes AVANT. Comme l'accès différé est volontairement
+// dérivable du code à 4 chiffres, on peut l'installer immédiatement et sans élargir les
+// droits : une salle live n'appelle jamais ce helper.
+function primeDeferredGuestCloudAccess() {
+    if (myRole !== 'guest' || !deferredRoomMode || !currentRoomCode) return false;
+    let primed = false;
+
+    if (typeof deferredCodeOnlyAccessKey === 'function' && typeof rememberSessionAccessKey === 'function') {
+        const accessKey = deferredCodeOnlyAccessKey(currentRoomCode);
+        if (accessKey) primed = rememberSessionAccessKey(currentRoomCode, accessKey) || primed;
+    }
+
+    if (typeof deferredCodeOnlyParticipantCredential === 'function') {
+        const credential = deferredCodeOnlyParticipantCredential(currentRoomCode);
+        if (credential && isModernGuestParticipantId(credential.participantId)
+                && isValidReconnectSecret(credential.reconnectSecret)) {
+            rememberGuestRoomCredential(currentRoomCode, credential);
+            // `welcome` a déjà fixé myParticipantId sur cette même identité dans le chemin
+            // P2P différé. Sur une reprise cloud, uiResumeFromCloud utilise également cette
+            // credential déterministe. On ne réécrit jamais l'identité courante ici.
+            primed = true;
+        }
+    }
+    return primed;
+}
+
 async function sendSessionAccessToParticipant(participantId) {
     if (myRole !== 'host' || !participantId || participantId === 'host') return false;
     if (typeof getSessionAccessKey !== 'function') return false;
@@ -5776,7 +5805,10 @@ function handlePeerData(msg, guestIndex) {
             // broadcastLobbyState), mais cette garde rend la reconnexion compatible avec
             // un message transitoire qui ne le porterait pas.
             if (typeof msg.deferredRoomMode === 'boolean') deferredRoomMode = msg.deferredRoomMode;
-            if (deferredRoomMode) startDeferredPolling();
+            if (deferredRoomMode) {
+                primeDeferredGuestCloudAccess();
+                startDeferredPolling();
+            }
             if (msg.roomCreatorName) roomCreatorName = msg.roomCreatorName;
             // Ce message est aussi renvoyé quand la connectivité change en pleine partie
             // (quelqu'un se (re)connecte) : on ne bascule à l'écran du salon que si la
@@ -5832,6 +5864,10 @@ function handlePeerData(msg, guestIndex) {
             // le lancement (voir uiStartGameAsHost, qui l'inclut dans ce message).
             currentHostReconnectToken = msg.hostReconnectToken || null;
             deferredRoomMode = !!msg.deferredRoomMode;
+            if (deferredRoomMode) {
+                primeDeferredGuestCloudAccess();
+                startDeferredPolling();
+            }
             if (msg.roomCreatorName) roomCreatorName = msg.roomCreatorName;
             hostPendingUndo = null;
             clearUndoUiState();
@@ -5867,7 +5903,10 @@ function handlePeerData(msg, guestIndex) {
             // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 4) : voir le commentaire
             // équivalent dans 'start-game' — l'ancien identifiant de relais a disparu.
             currentHostReconnectToken = msg.hostReconnectToken || null;
-            if (deferredRoomMode) startDeferredPolling();
+            if (deferredRoomMode) {
+                primeDeferredGuestCloudAccess();
+                startDeferredPolling();
+            }
             if (msg.roomCreatorName) roomCreatorName = msg.roomCreatorName;
             hostPendingUndo = null;
             clearUndoUiState();
@@ -11027,12 +11066,35 @@ async function pushCallViaServerFallback(targetBoardIndex, seat, call, explanati
     const cloudCtx = captureCloudSyncContext(currentRoomCode);
     try {
         let pulled;
+        let normalPullError = null;
         try {
             pulled = await pullSessionState(cloudCtx.roomCode);
             if (!isCloudSyncContextActive(cloudCtx)) return;
             if (pulled) pulled = validateCloudSnapshot(pulled, cloudCtx.roomCode);
         } catch (e) {
-            pushDebugLog('Remontée serveur de l\'annonce impossible (lecture) : ' + ((e && e.message) || e));
+            normalPullError = e;
+        }
+
+        // R9 : le `resync` P2P peut précéder de très peu le message `session-access`.
+        // En différé, cela ne doit JAMAIS faire perdre la première annonce : le code à
+        // 4 chiffres est précisément la capacité de lecture prévue par le produit.
+        // On prime donc la credential locale puis on tente la lecture code-seul. Ce
+        // repli ne s'exécute jamais en live et ne change pas les droits d'écriture : le
+        // serveur exige toujours la preuve participant pré-enregistrée.
+        if (!pulled && deferredRoomMode && typeof pullDeferredSessionStateByCode === 'function') {
+            primeDeferredGuestCloudAccess();
+            try {
+                pulled = await pullDeferredSessionStateByCode(cloudCtx.roomCode);
+                if (!isCloudSyncContextActive(cloudCtx)) return;
+                if (pulled) pulled = validateCloudSnapshot(pulled, cloudCtx.roomCode);
+            } catch (e) {
+                // pullDeferredSessionStateByCode est normalement fail-soft ; garder le
+                // dernier diagnostic seulement si cette implémentation remonte une erreur.
+                if (!normalPullError) normalPullError = e;
+            }
+        }
+        if (!pulled) {
+            pushDebugLog('Remontée serveur de l\'annonce impossible (lecture) : ' + ((normalPullError && normalPullError.message) || normalPullError || 'session différée inaccessible'));
             return;
         }
 
