@@ -2923,23 +2923,13 @@ function buildHostHandlers(onOpenExtra) {
             renderReconnectButton();
             const token = tokenForGuestIndex(guestIndex);
             recordSyncTrace('p2p.host.guest-disconnected', { guestIndex, participantId: token || null });
+            let presenceChanged = false;
             if (token) {
                 delete guestIndexByToken[token];
-                // On NE supprime pas le participant ni son siège : ils restent réservés, en
-                // attente qu'il se reconnecte. Son siège n'est PAS remplacé par un robot —
-                // l'enchère patiente simplement ; le tour-indicateur conserve l'état de
-                // déconnexion et un toast ponctuel signale la coupure.
-                const p = participants.find(x => x.id === token);
-                if (p) {
-                    p.disconnected = true;
-                    p.disconnectedAt = Date.now();
-                    // Voir échange avec Guillaume (session du 23 juillet) : n'intéresse
-                    // que les joueurs ASSIS (un kibitz déconnecté ne bloque rien pour
-                    // personne — même restriction que l'ancienne bannière "waiting").
-                    if (SEATS.some(s => seatAssignment[s] === p.id)) {
-                        flashPresenceToast(`🔌 ${presenceLabelFor(p)} s'est déconnecté`, false);
-                    }
-                }
+                // R23 — même mutation que le signal explicite `presence-leaving`, mais
+                // ce callback reste indispensable pour une vraie perte réseau / fermeture
+                // brutale où aucun dernier message n'a pu partir.
+                presenceChanged = markHostParticipantDisconnected(token, 'peer-close');
             }
             hostPendingUndo = null; // un invité qui part au milieu d'un arbitrage : on ne reste pas bloqué
             // Voir audit : si le participant qui vient de partir était justement la cible
@@ -2955,7 +2945,12 @@ function buildHostHandlers(onOpenExtra) {
             }
             broadcastLobbyState();
             renderLobby();
-            if (deals) renderBoard();
+            if (deals) {
+                renderBoard();
+                // Une coupure brutale n'est pas passée par `presence-leaving` : persister
+                // alors la présence ici pour que le cloud et les autres clients convergent.
+                if (presenceChanged) saveHostGameStateToStorage();
+            }
         },
         onSlowConnection: () => {},
         onTimeout: () => {},
@@ -3051,12 +3046,19 @@ function buildGuestHandlers() {
             // l'host") : toast vert AVANT de réinitialiser selfDisconnectedAt — il faut
             // encore savoir qu'on ÉTAIT déconnecté pour décider d'afficher ce toast (pas
             // au tout premier succès de connexion, où il n'y a rien à "reconnecter").
-            if (deals && selfDisconnectedAt) flashPresenceToast('✅ Reconnecté à la partie', true);
+            const hostEntry = participants.find(p => p.id === 'host');
+            if (deals && selfDisconnectedAt) {
+                if (deferredRoomMode) {
+                    const label = hostEntry ? presenceLabelFor(hostEntry) : (roomCreatorName || 'L’autre joueur');
+                    flashPresenceToast(`✅ ${label} s'est reconnecté`, true);
+                } else {
+                    flashPresenceToast('✅ Reconnecté à la partie', true);
+                }
+            }
             selfDisconnectedAt = null;
             // Voir échange avec Guillaume ("l'hôte devrait être affiché comme
             // déconnecté dans le chat") : levé ici — 'resync' ne renvoie jamais
             // `participants`, donc rien d'autre ne le remettrait à false tout seul.
-            const hostEntry = participants.find(p => p.id === 'host');
             if (hostEntry) hostEntry.disconnected = false;
             // Dégèle la boîte d'enchères tout de suite (voir renderBiddingBox) — sans
             // ça, il faudrait attendre le prochain événement de jeu pour que ça se voie.
@@ -3070,7 +3072,10 @@ function buildGuestHandlers() {
             // À ce moment-là les globals ont déjà basculé vers le rôle hôte : ce handler
             // devenu obsolète ne doit surtout pas marquer l'entrée `host` comme déconnectée.
             if (myRole !== 'guest') return;
-            setConnectionStatus(false);
+            // R23 — en différé, perdre le lien direct avec l'autre joueur ne signifie
+            // pas perdre la salle : le cloud reste la voie normale de continuité. Ne pas
+            // afficher un faux état global « Déconnecté » dans ce mode.
+            setConnectionStatus(deferredRoomMode ? true : false);
             // Pendant toute coupure P2P, le cloud devient immédiatement la voie de
             // réception. En différé il reste également actif même après reconnexion afin de
             // suivre les autres donnes, qui évoluent indépendamment de celle regardée par
@@ -3098,7 +3103,14 @@ function buildGuestHandlers() {
             // déconnecté.
             if (!selfDisconnectedAt) {
                 selfDisconnectedAt = Date.now();
-                if (deals) flashPresenceToast("🔌 Connexion à l'hôte perdue", false);
+                if (deals) {
+                    if (deferredRoomMode) {
+                        const label = hostEntry ? presenceLabelFor(hostEntry) : (roomCreatorName || 'L’autre joueur');
+                        flashPresenceToast(`🔌 ${label} s'est déconnecté`, false);
+                    } else {
+                        flashPresenceToast("🔌 Connexion à l'hôte perdue", false);
+                    }
+                }
             }
             // Gèle la boîte d'enchères tout de suite (voir renderBiddingBox), pas
             // seulement au prochain événement de jeu.
@@ -3120,16 +3132,23 @@ function buildGuestHandlers() {
             // l'ancienne connexion invitée est volontairement détruite et ses callbacks
             // tardifs n'appartiennent plus au rôle courant.
             if (myRole !== 'guest') return;
-            setConnectionStatus(false);
+            setConnectionStatus(deferredRoomMode ? true : false);
             if (deferredRoomMode) enterDeferredGuestCloudContinuityAfterPeerLoss('signaling-disconnected');
             else startDeferredPolling();
             scheduleGuestAutoReconnect();
             renderReconnectButton();
-            const hostEntry = participants.find(p => p.id === 'host');
-            if (hostEntry) hostEntry.disconnected = true;
-            if (!selfDisconnectedAt) {
-                selfDisconnectedAt = Date.now();
-                if (deals) flashPresenceToast("🔌 Connexion à l'hôte perdue", false);
+            // R23 — une coupure du serveur de signalisation n'implique pas que la
+            // DataConnection WebRTC vers l'autre joueur soit tombée. En différé, ne pas
+            // inventer une déconnexion de présence ici : `onPeerDisconnected` est le
+            // signal réel, et le cloud assure déjà la continuité. Le live conserve son
+            // comportement historique.
+            if (!deferredRoomMode) {
+                const hostEntry = participants.find(p => p.id === 'host');
+                if (hostEntry) hostEntry.disconnected = true;
+                if (!selfDisconnectedAt) {
+                    selfDisconnectedAt = Date.now();
+                    if (deals) flashPresenceToast("🔌 Connexion à l'hôte perdue", false);
+                }
             }
             if (deals) renderBoard();
             if (chatPanelOpen) { renderRoomBoard(); renderChat(); }
@@ -5620,6 +5639,7 @@ async function uiStartGameAsHost() {
 const PEER_TYPES_FROM_GUEST = new Set([
     'set-name',
     'set-avatar-color',
+    'presence-leaving',
     'call',
     'chat',
     'wizz',
@@ -5668,6 +5688,24 @@ function isPeerTypeAllowedFromCurrentRemote(type) {
 function authenticatedGuestId(guestIndex) {
     if (myRole !== 'host') return null;
     return tokenForGuestIndex(guestIndex);
+}
+
+// R23 — présence différée : une fermeture volontaire de l'invité peut être signalée
+// avant même que PeerJS/WebRTC n'émette son callback `close`. Centraliser ici la mutation
+// évite les doubles toasts lorsque le message explicite est suivi quelques ms plus tard
+// par le vrai `onPeerDisconnected`.
+function markHostParticipantDisconnected(participantId, source = 'p2p-close') {
+    if (myRole !== 'host' || !participantId) return false;
+    const p = participants.find(x => x.id === participantId);
+    if (!p) return false;
+    const wasDisconnected = !!p.disconnected;
+    p.disconnected = true;
+    if (!p.disconnectedAt) p.disconnectedAt = Date.now();
+    if (!wasDisconnected && deals && SEATS.some(s => seatAssignment[s] === p.id)) {
+        flashPresenceToast(`🔌 ${presenceLabelFor(p)} s'est déconnecté`, false);
+    }
+    recordSyncTrace('presence.host.participant-disconnected', { participantId, source, wasDisconnected });
+    return !wasDisconnected;
 }
 
 function handlePeerData(msg, guestIndex) {
@@ -5888,6 +5926,26 @@ function handlePeerData(msg, guestIndex) {
             const inheritedCredential = getGuestRoomCredential(currentRoomCode, false);
             if (inheritedCredential) rememberGuestRoomCredential(newRoomCode, inheritedCredential);
             connectAsGuest(newRoomCode, null, savedNickname, inheritedCredential);
+            break;
+        }
+
+        case 'presence-leaving': {
+            // R23 — fermeture volontaire d'un onglet invité. L'identité vient uniquement
+            // de la DataConnection authentifiée ; le message ne peut jamais désigner un
+            // autre participant. Le `close` WebRTC qui suit est idempotent grâce au helper.
+            if (myRole !== 'host') break;
+            const pid = authenticatedGuestId(guestIndex);
+            if (!pid) {
+                rejectPeerProtocolMessage(msg, guestIndex, 'présence sans identité invitée authentifiée');
+                break;
+            }
+            const changed = markHostParticipantDisconnected(pid, 'guest-pagehide');
+            if (changed) {
+                broadcastLobbyState();
+                renderLobby();
+                if (deals) renderBoard();
+                saveHostGameStateToStorage();
+            }
             break;
         }
 
@@ -8373,14 +8431,18 @@ function renderBiddingBox() {
     const turnOwner = turnOwnerId ? participants.find(p => p.id === turnOwnerId) : null;
     const ownerDisconnected = !!(turnOwner && turnOwner.disconnected);
 
+    const showBlockingDisconnectedTurn = ownerDisconnected && !deferredRoomMode;
     if (myTurn) {
         turnPanel.textContent = `À vous d'enchérir (${seatFullName(turnSeat)})`;
-    } else if (ownerDisconnected) {
+    } else if (showBlockingDisconnectedTurn) {
         turnPanel.textContent = `🔌 En attente que ${turnOwner.name} se reconnecte (${seatFullName(turnSeat)})...`;
     } else {
+        // R23 — en différé la présence P2P n'est pas une condition de fonctionnement :
+        // chacun peut continuer via le cloud. La déconnexion est signalée ponctuellement
+        // par le toast de présence, pas transformée en message d'erreur persistant ici.
         turnPanel.textContent = `En attente de ${seatFullName(turnSeat)}...`;
     }
-    turnPanel.className = 'turn-indicator ' + (ownerDisconnected ? 'disconnected-turn' : (myTurn ? 'my-turn' : 'their-turn'));
+    turnPanel.className = 'turn-indicator ' + (showBlockingDisconnectedTurn ? 'disconnected-turn' : (myTurn ? 'my-turn' : 'their-turn'));
     box.classList.toggle('my-turn', myTurn);
 
     // Une sélection de palier ne doit jamais survivre au passage du tour à un autre joueur.
@@ -12323,6 +12385,23 @@ function preserveLatestCloudStateBeforeSuspend(allowDirectKeepalive = true) {
     }
 }
 
+// R23 — fermeture volontaire d'un client invité : prévenir l'hôte pendant que
+// la DataChannel est encore vivante. `pagehide.persisted` (BFCache) n'est PAS une vraie
+// sortie et ne doit pas faire clignoter la présence. Une perte réseau brutale reste couverte
+// par `onPeerDisconnected` côté hôte.
+function notifyHostGuestLeavingBeforePageHide(event) {
+    if (event && event.persisted) return false;
+    if (myRole !== 'guest' || !peerConn || typeof peerConn.isConnected !== 'function' || !peerConn.isConnected()) return false;
+    try {
+        peerConn.send({ type: 'presence-leaving' });
+        recordSyncTrace('presence.guest.pagehide-sent');
+        return true;
+    } catch (e) {
+        recordSyncTrace('presence.guest.pagehide-send-failed', { message: (e && e.message) || String(e) });
+        return false;
+    }
+}
+
 // visibilitychange arrive généralement avant pagehide : déclencher la file normale ici
 // donne au PUT sérialisé une chance de finir pendant que le document existe encore.
 document.addEventListener('visibilitychange', () => {
@@ -12341,7 +12420,10 @@ document.addEventListener('visibilitychange', () => {
         pushCloudGameState();
     }
 });
-window.addEventListener('pagehide', () => preserveLatestCloudStateBeforeSuspend(true));
+window.addEventListener('pagehide', (event) => {
+    notifyHostGuestLeavingBeforePageHide(event);
+    preserveLatestCloudStateBeforeSuspend(true);
+});
 
 // Interroge le cloud pour ce code de salon et, si un état y est trouvé, reprend
 // directement la partie (voir échange avec Guillaume : "reprendre automatiquement, sans
