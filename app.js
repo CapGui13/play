@@ -6504,6 +6504,42 @@ function broadcastPrecalculatedBoard(idx) {
     });
 }
 
+// R17 — en différé, un simple message `call` ne doit jamais être l'unique véhicule d'une
+// réponse robot. La recette réelle a montré un cas où Nord avait bien sa propre annonce,
+// Est avait déjà joué côté hôte, mais le petit paquet P2P de l'annonce d'Est n'avait pas
+// encore produit d'état visible chez Nord ; la séquence ne réapparaissait qu'à l'écriture
+// suivante de Sud. On réutilise donc `precalc-board` comme snapshot monotone de la DONNE :
+// il peut uniquement étendre l'historique côté guest et ne déplace jamais sa navigation.
+//
+// Ce helper couvre l'autre moitié du problème : si le robot a été calculé par l'autorité
+// serveur (et non localement par l'hôte), applyCloudUpdate doit republier toute donne dont
+// l'historique vient de s'allonger, y compris une donne hors écran de l'hôte.
+function sameAuctionCallForDeferredSnapshot(a, b) {
+    return !!a && !!b
+        && a.seat === b.seat
+        && String(a.call || '').toUpperCase() === String(b.call || '').toUpperCase();
+}
+
+function auctionCallsArePrefixForDeferredSnapshot(prefix, full) {
+    if (!Array.isArray(prefix) || !Array.isArray(full) || prefix.length > full.length) return false;
+    return prefix.every((entry, i) => sameAuctionCallForDeferredSnapshot(entry, full[i]));
+}
+
+function broadcastDeferredExtendedBoardSnapshots(previousAuctionHistories) {
+    if (myRole !== 'host' || !deferredRoomMode || !peerConn || !deals) return 0;
+    const previous = Array.isArray(previousAuctionHistories) ? previousAuctionHistories : [];
+    let sent = 0;
+    for (let idx = 0; idx < deals.length; idx++) {
+        const before = Array.isArray(previous[idx]) ? previous[idx] : [];
+        const after = Array.isArray(deals[idx] && deals[idx].auctionHistory) ? deals[idx].auctionHistory : [];
+        if (after.length <= before.length) continue;
+        if (!auctionCallsArePrefixForDeferredSnapshot(before, after)) continue;
+        broadcastPrecalculatedBoard(idx);
+        sent++;
+    }
+    return sent;
+}
+
 function cancelStartupLegacyRobotPrecalc() {
     startupLegacyPrecalcGeneration++;
     if (startupLegacyPrecalcHandle != null) {
@@ -8351,6 +8387,11 @@ function applyCall(seat, call, explanation) {
     // sans effet si on n'est pas hôte ou si la partie n'est pas lancée (voir la garde à
     // l'intérieur de la fonction elle-même).
     saveHostGameStateToStorage();
+    // R17 — redondance volontaire en différé : après CHAQUE annonce appliquée par l'hôte
+    // (humaine ou robot), pousser aussi l'historique complet de cette donne. Le message
+    // `call` reste le chemin ultra-court ; `precalc-board` garantit qu'un guest ne dépend
+    // jamais du prochain geste humain pour voir un robot déjà calculé.
+    if (myRole === 'host' && deferredRoomMode) broadcastPrecalculatedBoard(boardIndex);
 }
 
 // Construit le HTML des 4 mains, affiché dans #allHandsDiagram (voir
@@ -11825,6 +11866,13 @@ function applyCloudUpdate(result, options = {}) {
     // étendu au-delà des seules annonces.
     const oldChatLengthForRelay = chatMessages ? chatMessages.length : 0;
     const oldSeatAssignmentJsonForRelay = JSON.stringify(seatAssignment);
+    // R17 — contrairement à l'ancien relais qui ne regardait que `boardIndex`, mémoriser
+    // l'historique de TOUTES les donnes avant le remplacement cloud. Un robot serveur peut
+    // avancer une donne que l'hôte ne regarde pas ; ses invités doivent tout de même recevoir
+    // immédiatement ce suffixe en P2P.
+    const oldAuctionHistoriesForDeferredRelay = Array.isArray(deals)
+        ? deals.map(deal => cloneAuctionHistoryForWire((deal && deal.auctionHistory) || []))
+        : [];
 
     // R16 — ne jamais laisser un snapshot cloud seulement EN RETARD sur une annonce
     // fraîche locale/P2P raccourcir visuellement la séquence. exactServerState ci-dessus
@@ -11871,6 +11919,15 @@ function applyCloudUpdate(result, options = {}) {
     // hôte, avec une vraie connexion P2P (pas NullPeerConnection — rien à relayer en pur
     // mode différé).
     const canRelay = myRole === 'host' && peerConn && !(peerConn instanceof NullPeerConnection);
+
+    // R17 — source de convergence différée : republier en snapshot monotone CHAQUE donne
+    // que ce nouvel état cloud vient d'étendre. Cela couvre notamment un robot calculé par
+    // api/session.js après une annonce participant, même si le petit événement `call` P2P
+    // correspondant n'est jamais celui qui fait évoluer l'écran du guest.
+    if (canRelay && deferredRoomMode) {
+        const relayedBoards = broadcastDeferredExtendedBoardSnapshots(oldAuctionHistoriesForDeferredRelay);
+        if (relayedBoards > 0) pushDebugLog(`${relayedBoards} donne(s) étendue(s) via le cloud, republiée(s) en snapshot P2P différé.`);
+    }
 
     // Annonces : seulement si on est resté sur la MÊME donne (jamais question de relayer
     // un changement de donne par ce canal, seulement des annonces).
