@@ -6199,6 +6199,14 @@ function handlePeerData(msg, guestIndex) {
                     return incoming && entry.seat === incoming.seat && entry.call === incoming.call;
                 });
             if (!localIsPrefix) break;
+            // R20 — R17 envoie volontairement `call` + `precalc-board` pour fiabiliser
+            // la propagation. Quand `call` a déjà installé EXACTEMENT le même historique,
+            // le snapshot redondant ne doit surtout pas reconstruire tout le plateau :
+            // c'était une source directe de petits clignotements sans changement d'état.
+            if (sameCloudData(localHistory, msg.auctionHistory)) {
+                recordSyncTrace('peer.precalc-board.duplicate-skip-render', { boardIndex: idx, length: localHistory.length });
+                break;
+            }
             // R18 — ce snapshot P2P peut être plus frais que le cloud. Armer la garde
             // monotone AVANT le remplacement, avec l'ancien préfixe comme base. Sans cela,
             // le cas réel Nord→Est puis Sud→Ouest pouvait afficher Ouest, recevoir ensuite
@@ -6207,7 +6215,11 @@ function handlePeerData(msg, guestIndex) {
             deals[idx].auctionHistory = msg.auctionHistory;
             if (idx === boardIndex) {
                 auctionHistory = deals[idx].auctionHistory;
-                renderBoard();
+                // R20 — une extension d'enchère reçue par snapshot se rend comme une
+                // annonce normale. `renderBoard()` était beaucoup trop lourd ici : il
+                // reconstruisait notamment les mains alors que seules enchère/tour/undo
+                // ont changé, d'où le flash visible sur certains appareils.
+                renderAfterNormalCall();
             } else {
                 const overview = document.getElementById('boardOverviewModal');
                 if (overview && overview.style.display !== 'none') renderBoardOverview();
@@ -11140,6 +11152,35 @@ function sameCloudData(a, b) {
     catch (e) { return false; }
 }
 
+// R20 — empreinte de tout ce qui exige un rendu COMPLET du plateau, hors historique
+// d'enchères. Les confirmations cloud changent très souvent seulement `savedAt`, la
+// version ou des données d'une AUTRE donne : ces mutations ne doivent pas reconstruire
+// les mains/contrôles de la donne actuellement affichée.
+function currentBoardNonAuctionRenderSignature() {
+    const deal = Array.isArray(deals) && deals[boardIndex] ? deals[boardIndex] : null;
+    let dealWithoutAuction = null;
+    if (deal) {
+        dealWithoutAuction = { ...deal };
+        delete dealWithoutAuction.auctionHistory;
+    }
+    const visibleParticipants = (participants || []).map(p => ({
+        id: p.id,
+        name: p.name,
+        disconnected: !!p.disconnected,
+        avatarColor: p.avatarColor || null
+    }));
+    return JSON.stringify({
+        boardIndex: Number.isInteger(boardIndex) ? boardIndex : null,
+        deal: dealWithoutAuction,
+        seatAssignment: seatAssignment || null,
+        participants: visibleParticipants,
+        deferredRoomMode: !!deferredRoomMode,
+        mySeats: Array.isArray(mySeats) ? mySeats : [],
+        autoPassSeats: Array.isArray(autoPassSeats) ? autoPassSeats : [],
+        roomCreatorName: roomCreatorName || null
+    });
+}
+
 function resetCloudSyncContext(roomCode, version = 0, serverState = null) {
     cloudSyncGeneration++;
     cloudSyncRoomCode = roomCode || null;
@@ -11972,6 +12013,13 @@ function applyCloudUpdate(result, options = {}) {
     const oldAuctionHistoriesForDeferredRelay = Array.isArray(deals)
         ? deals.map(deal => cloneAuctionHistoryForWire((deal && deal.auctionHistory) || []))
         : [];
+    // R20 — distinguer une vraie mutation visible d'une simple confirmation réseau.
+    // On capture AVANT le remplacement cloud l'enchère courante, la structure visible
+    // hors enchères, et le chat. Cela permet de choisir ensuite entre zéro rendu,
+    // rendu léger d'enchère, ou rendu complet.
+    const oldCurrentAuctionForRender = cloneAuctionHistoryForWire(oldAuctionForRelay);
+    const oldNonAuctionRenderSignature = currentBoardNonAuctionRenderSignature();
+    const oldChatForRender = cloneCloudData(chatMessages || []);
 
     // R16 — ne jamais laisser un snapshot cloud seulement EN RETARD sur une annonce
     // fraîche locale/P2P raccourcir visuellement la séquence. exactServerState ci-dessus
@@ -12070,10 +12118,43 @@ function applyCloudUpdate(result, options = {}) {
         pushDebugLog('Changement de sièges appris via le cloud, relayé en P2P.');
     }
 
-    renderBoard();
-    if (chatPanelOpen) {
+    // R20 — ne plus reconstruire systématiquement tout le plateau à chaque ACK/poll.
+    // 1) changement structurel visible (sièges, présence, DD/PAR, donne...) => rendu complet ;
+    // 2) simple extension monotone de l'enchère => même rendu léger qu'un `call` normal ;
+    // 3) confirmation réseau sans changement visible => aucun rendu du plateau.
+    const newNonAuctionRenderSignature = currentBoardNonAuctionRenderSignature();
+    const currentAuctionChanged = !sameCloudData(oldCurrentAuctionForRender, auctionHistory);
+    const currentAuctionExtended = currentAuctionChanged
+        && oldCurrentAuctionForRender.length < auctionHistory.length
+        && auctionCallsArePrefixForDeferredSnapshot(oldCurrentAuctionForRender, auctionHistory);
+    const nonAuctionVisibleChanged = oldNonAuctionRenderSignature !== newNonAuctionRenderSignature;
+    const chatVisibleChanged = !sameCloudData(oldChatForRender, chatMessages || []);
+
+    if (nonAuctionVisibleChanged || (currentAuctionChanged && !currentAuctionExtended)) {
+        renderBoard();
+        recordSyncTrace('cloud.apply.render-full', { version: lastKnownCloudVersion, auctionChanged: currentAuctionChanged, structuralChanged: nonAuctionVisibleChanged });
+    } else if (currentAuctionExtended) {
+        renderAfterNormalCall();
+        recordSyncTrace('cloud.apply.render-auction-only', { version: lastKnownCloudVersion, fromLength: oldCurrentAuctionForRender.length, toLength: auctionHistory.length });
+    } else {
+        recordSyncTrace('cloud.apply.render-skipped-identical', { version: lastKnownCloudVersion, auctionLength: auctionHistory.length });
+    }
+
+    // Si renderBoard() a été exécuté, il a déjà rafraîchi chat/roomBoard lorsque le
+    // panneau est ouvert. Sinon, un changement de chat seul doit tout de même apparaître.
+    if (chatPanelOpen && chatVisibleChanged && !nonAuctionVisibleChanged && !(currentAuctionChanged && !currentAuctionExtended)) {
         renderRoomBoard();
         renderChat();
+    }
+
+    // La vue d'ensemble peut être ouverte pendant qu'une AUTRE donne progresse. Le rendu
+    // principal reste alors intact, mais la miniature/liste doit suivre cette progression.
+    const overview = document.getElementById('boardOverviewModal');
+    if (overview && overview.style.display !== 'none') {
+        const newAuctionHistoriesForOverview = Array.isArray(deals)
+            ? deals.map(deal => cloneAuctionHistoryForWire((deal && deal.auctionHistory) || []))
+            : [];
+        if (!sameCloudData(oldAuctionHistoriesForDeferredRelay, newAuctionHistoriesForOverview)) renderBoardOverview();
     }
     recordSyncTrace('cloud.apply.end', { version: lastKnownCloudVersion, localBoard: boardIndex, preservedBoard: boardIndex === traceLocalBoard });
     return true;
