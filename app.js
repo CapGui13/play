@@ -7361,27 +7361,28 @@ function uiSendChatMessage() {
 
     const me = participants.find(p => p.id === myParticipantId);
     const msg = { type: 'chat', senderId: myParticipantId, senderName: me ? me.name : '?', text };
-    // R31 — mémoriser le préfixe AVANT l'ajout optimiste. Quand l'hôte est fermé, le
-    // message doit rester visible pendant la petite fenêtre où un poll cloud peut encore
-    // renvoyer le snapshot précédent. La garde est armée seulement pour le fallback
-    // cloud-only ; en P2P connecté, R30 reste strictement inchangé.
-    const chatBeforeLocalSend = (myRole === 'guest' && deferredRoomMode && (!peerConn || !peerConn.isConnected()))
+    // R32 — capturer TOUJOURS le préfixe avant l'ajout optimiste pour un invité en
+    // différé. `peerConn.isConnected()` peut rester vrai pendant la courte fenêtre qui
+    // suit la fermeture réelle de l'hôte ; conditionner la garde R31 à ce booléen laissait
+    // précisément un snapshot cloud ancien faire disparaître le message avant que le
+    // callback de fermeture WebRTC arrive.
+    const isDeferredGuestChat = myRole === 'guest' && deferredRoomMode;
+    const chatBeforeLocalSend = isDeferredGuestChat
         ? cloneCloudData(chatMessages || [])
         : null;
     addChatMessage(msg);
-    // R30 — restaurer la symétrie du chat en différé. Tant que l'hôte est réellement
-    // joignable en P2P, l'invité lui envoie son message directement, exactement comme
-    // l'hôte envoie déjà ses propres messages vers l'invité. Côté hôte, addChatMessage()
-    // déclenche saveHostGameStateToStorage(), donc ce message devient aussi durable dans
-    // le cloud sans seconde écriture concurrente du participant.
-    // Si le P2P est réellement absent, conserver le fallback cloud R29 (credential
-    // différée réarmée) : c'est le cas "hôte fermé".
-    if (myRole === 'guest' && deferredRoomMode) {
+    // R32 — en différé, le P2P reste le chemin temps-réel quand l'hôte est joignable, mais
+    // il n'est plus l'unique garantie de livraison. La persistance participant/cloud est
+    // lancée en parallèle avec le préfixe exact capturé AVANT ce message. Ainsi :
+    //   - hôte réellement présent : il voit le P2P immédiatement ; le fallback cloud
+    //     constate son éventuel commit et devient idempotent ;
+    //   - hôte venant juste de fermer mais P2P encore marqué `open` : le message est quand
+    //     même durable, sans attendre la détection tardive de `close` ;
+    //   - un snapshot cloud en retard ne peut pas l'effacer visuellement grâce à la garde.
+    if (isDeferredGuestChat) {
+        beginDeferredOptimisticChatGuard(chatBeforeLocalSend || [], msg);
         if (peerConn && peerConn.isConnected()) peerConn.send(msg);
-        else {
-            beginDeferredOptimisticChatGuard(chatBeforeLocalSend || [], msg);
-            pushChatViaServerFallback(msg);
-        }
+        pushChatViaServerFallback(msg, { expectedBaseChat: chatBeforeLocalSend || [] });
         return;
     }
     // Live avec P2P coupé : conserve le fallback serveur historique.
@@ -7473,7 +7474,7 @@ async function pushAvatarColorViaServerFallback(avatarColor) {
 // puis repousse avec le verrou de version. Pas de "légalité" à revalider ici
 // (contrairement à une annonce) : un message de chat n'a pas de tour, il s'ajoute
 // simplement à la suite.
-async function pushChatViaServerFallback(msg) {
+async function pushChatViaServerFallback(msg, options = {}) {
     if (!currentRoomCode || typeof pullSessionState !== 'function' || typeof pushSessionState !== 'function') return;
     const cloudCtx = captureCloudSyncContext(currentRoomCode);
 
@@ -7508,6 +7509,14 @@ async function pushChatViaServerFallback(msg) {
     if (!pulled) return;
 
     const initialChat = cloneCloudData((pulled.state && pulled.state.chatMessages) || []);
+    // R32 — quand le même message part aussi en P2P, l'hôte peut le commiter entre notre
+    // clic et ce GET (ou pendant notre PUT). Le préfixe d'intention capturé AVANT l'ajout
+    // local permet de reconnaître ce commit comme LE NÔTRE et d'éviter tout doublon.
+    // Sans option (anciens appels/live), conserver exactement le comportement historique
+    // fondé sur l'état lu au début du fallback.
+    const intentBaseChat = Array.isArray(options.expectedBaseChat)
+        ? cloneCloudData(options.expectedBaseChat)
+        : initialChat;
     let authoritative = pulled;
     const maxConflictRebases = 3;
 
@@ -7521,19 +7530,21 @@ async function pushChatViaServerFallback(msg) {
             // action hôte exceptionnelle, on ne tente pas de reconstruire l'intention sur
             // une histoire différente. Sinon on peut rebaser sans risque après un conflit
             // causé par une enchère, une présence ou une autre donne.
-            const prefixStillIntact = serverChat.length >= initialChat.length
-                && sameCloudData(serverChat.slice(0, initialChat.length), initialChat);
+            const prefixStillIntact = serverChat.length >= intentBaseChat.length
+                && sameCloudData(serverChat.slice(0, intentBaseChat.length), intentBaseChat);
             if (!prefixStillIntact) {
                 pushDebugLog('Message de chat : historique serveur réécrit pendant le conflit, resynchronisation sans réinsertion.');
                 applyCloudUpdate(authoritative, { expectedRoomCode: cloudCtx.roomCode });
                 return;
             }
 
-            // Idempotence après réponse perdue : le premier message qui suit exactement le
-            // préfixe initial est notre position de commit. S'il est déjà identique, ne pas
-            // ajouter un doublon.
-            const committed = serverChat[initialChat.length];
-            if (committed && sameCloudData(committed, msg)) {
+            // R32 — idempotence dual-path. Le commit peut avoir été effectué par l'hôte
+            // après réception P2P AVANT notre GET, ou pendant notre PUT (409/rebase). Un
+            // autre message peut aussi avoir été commité entre-temps : chercher donc notre
+            // message dans TOUT le suffixe postérieur au préfixe d'intention, pas seulement
+            // à l'index suivant.
+            const committed = serverChat.slice(intentBaseChat.length).some(entry => sameCloudData(entry, msg));
+            if (committed) {
                 lastKnownCloudVersion = authoritative.version;
                 cloudLastSyncedState = cloneCloudData(authoritative.state);
                 applyCloudUpdate(authoritative, { expectedRoomCode: cloudCtx.roomCode });
