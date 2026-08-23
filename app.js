@@ -735,20 +735,41 @@ function readGuestRoomIdentityMap() {
     return map;
 }
 
-function rememberGuestRoomCredential(roomCode, credential) {
+function rememberGuestRoomCredential(roomCode, credential, displayName = null) {
     const code = String(roomCode || '').trim();
     if (!/^\d{4}$/.test(code) || !credential
             || !isModernGuestParticipantId(credential.participantId)
             || !isValidReconnectSecret(credential.reconnectSecret)) return false;
     const map = readGuestRoomIdentityMap();
+    const previous = map[code] && map[code].participantId === credential.participantId ? map[code] : null;
+    const cleanName = typeof displayName === 'string' ? displayName.trim().slice(0, 40) : '';
+    const previousName = previous && typeof previous.name === 'string' ? previous.name.trim().slice(0, 40) : '';
     map[code] = {
         participantId: credential.participantId,
         reconnectSecret: credential.reconnectSecret,
+        ...(cleanName || previousName ? { name: cleanName || previousName } : {}),
         savedAt: Date.now()
     };
     try { localStorage.setItem(GUEST_ROOM_IDENTITY_STORAGE_KEY, JSON.stringify(map)); }
     catch (e) { return false; }
     return true;
+}
+
+function guestRoomDisplayName(roomCode, participantId) {
+    const code = String(roomCode || '').trim();
+    if (!/^\d{4}$/.test(code) || !isModernGuestParticipantId(participantId)) return '';
+    const item = readGuestRoomIdentityMap()[code];
+    if (!item || item.participantId !== participantId || typeof item.name !== 'string') return '';
+    return item.name.trim().slice(0, 40);
+}
+
+function rememberGuestRoomDisplayName(roomCode, participantId, name) {
+    const code = String(roomCode || '').trim();
+    const cleanName = typeof name === 'string' ? name.trim().slice(0, 40) : '';
+    if (!/^\d{4}$/.test(code) || !isModernGuestParticipantId(participantId) || !cleanName) return false;
+    const credential = getGuestRoomCredential(code, false);
+    if (!credential || credential.participantId !== participantId) return false;
+    return rememberGuestRoomCredential(code, credential, cleanName);
 }
 
 function getGuestRoomCredential(roomCode, createIfMissing = true) {
@@ -906,7 +927,8 @@ function registerHostGuestReconnectSecret(participantId, reconnectSecret) {
 function guestConnectionMetadata(roomCode, nickname, credentialOverride = null) {
     const credential = credentialOverride || getGuestRoomCredential(roomCode, true);
     if (!credential) throw new Error('Identité invitée indisponible.');
-    if (credentialOverride) rememberGuestRoomCredential(roomCode, credentialOverride);
+    if (credentialOverride) rememberGuestRoomCredential(roomCode, credentialOverride, nickname);
+    else rememberGuestRoomCredential(roomCode, credential, nickname);
     return {
         participantId: credential.participantId,
         reconnectSecret: credential.reconnectSecret,
@@ -4070,6 +4092,7 @@ function uiUpdateMyName() {
         if (me) me.name = trimmed;
         saveStringPref('bridgeBidNickname', trimmed);
         savedNickname = trimmed;
+        if (myRole === 'guest' && myParticipantId) rememberGuestRoomDisplayName(currentRoomCode, myParticipantId, trimmed);
 
         if (myRole === 'host') {
             broadcastLobbyState();
@@ -12599,8 +12622,22 @@ function applyCloudUpdate(result, options = {}) {
     // vue de la dernière personne à avoir écrit — elle nous marque, NOUS, comme
     // déconnectés de son point de vue. On corrige immédiatement pour ne pas s'afficher
     // soi-même comme "déconnecté".
-    const myEntry = participants.find(p => p.id === myParticipantId);
-    if (myEntry) { myEntry.disconnected = false; myEntry.disconnectedAt = null; }
+    let myEntry = participants.find(p => p.id === myParticipantId);
+    if (!myEntry && myRole === 'guest' && isModernGuestParticipantId(myParticipantId)) {
+        const recoveredName = guestRoomDisplayName(currentRoomCode, myParticipantId) || savedNickname || defaultParticipantName(myParticipantId);
+        myEntry = { id: myParticipantId, name: recoveredName, disconnected: false, disconnectedAt: null };
+        participants.push(myEntry);
+        st.participants = participants;
+        rememberGuestRoomDisplayName(currentRoomCode, myParticipantId, recoveredName);
+        recordSyncTrace('cloud.apply.guest-profile-recovered', { participantId: myParticipantId, name: recoveredName });
+    }
+    if (myEntry) {
+        myEntry.disconnected = false;
+        myEntry.disconnectedAt = null;
+        if (myRole === 'guest' && isModernGuestParticipantId(myParticipantId)) {
+            rememberGuestRoomDisplayName(currentRoomCode, myParticipantId, myEntry.name);
+        }
+    }
     // L'état serveur ne peut pas deviner instantanément qu'un hôte P2P vient de disparaître.
     // Tant que CET invité n'a réellement aucune DataConnection vers l'hôte, son affichage
     // local garde donc l'hôte en rouge ; au succès P2P, onGuestConnected le remet à false.
@@ -12907,12 +12944,18 @@ function uiResumeFromCloud() {
             claimedSeat = SEATS.find(seat => st.seatAssignment[seat] === SEAT_PENDING);
             if (claimedSeat) st.seatAssignment[claimedSeat] = myToken;
         }
-        if (!st.participants.some(p => p && p.id === myToken)) {
+        const resumedGuestEntry = st.participants.find(p => p && p.id === myToken);
+        if (!resumedGuestEntry) {
+            const recoveredName = guestRoomDisplayName(codeToReclaim, myToken) || savedNickname || defaultParticipantName(myToken);
             st.participants.push({
                 id: myToken,
-                name: savedNickname || 'Joueur',
+                name: recoveredName,
                 ...(normalizeAvatarColor(savedAvatarColor) ? { avatarColor: normalizeAvatarColor(savedAvatarColor) } : {})
             });
+            rememberGuestRoomDisplayName(codeToReclaim, myToken, recoveredName);
+            recordSyncTrace('resume.cloud.guest-profile-recovered', { participantId: myToken, name: recoveredName });
+        } else {
+            rememberGuestRoomDisplayName(codeToReclaim, myToken, resumedGuestEntry.name);
         }
     }
 
