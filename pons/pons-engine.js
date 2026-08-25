@@ -211,6 +211,41 @@
     return typeof root.isCallLegal !== 'function' || root.isCallLegal(history || [], call, seat);
   }
 
+
+  function partnershipKey(seat){
+    const s=String(seat||'').toUpperCase();
+    return (s==='N'||s==='S') ? 'NS' : (s==='E'||s==='W') ? 'EW' : '';
+  }
+  function isContractCall(call){
+    return /^([1-7])(C|D|H|S|NT)$/.test(String(call||'').toUpperCase());
+  }
+  function firstContractEntry(history){
+    return (history||[]).find(e=>isContractCall(typeof e==='string'?e:e?.call)) || null;
+  }
+  function isOpeningTurn(history){
+    return !firstContractEntry(history);
+  }
+  function isBalancedForShortNT(deal,seat){
+    const L=lensOfHand(deal,seat);
+    const vals=[L.S,L.H,L.D,L.C].sort((a,b)=>b-a);
+    const shape=vals.join('-');
+    return shape==='4-3-3-3' || shape==='4-4-3-2' || shape==='5-3-3-2';
+  }
+  function naturalOpeningAfterShortNT(deal,seat){
+    const L=lensOfHand(deal,seat);
+    if(L.S>=5 || L.H>=5){
+      if(L.S>=5 && L.S>=L.H) return '1S';
+      if(L.H>=5) return '1H';
+    }
+    if(L.D===3 && L.C===3) return '1C';
+    return L.D>=L.C ? '1D' : '1C';
+  }
+  function isShortNTOpeningPartnershipTurn(seat,history){
+    const first=firstContractEntry(history);
+    if(!first || String(first.call||'').toUpperCase()!=='1NT' || !first.seat) return false;
+    return partnershipKey(first.seat)===partnershipKey(seat);
+  }
+
   function fallbackDecision(seat, deal, history, reason){
     if(typeof localFallback === 'function'){
       const fallback = localFallback(seat, deal, history) || {call:'PASS'};
@@ -222,17 +257,56 @@
     return {call:'PASS', explanation:`Passe de sécurité · PONS indisponible (${reason})`};
   }
 
-  async function decideRobotCallForApp(seat, deal, history, _robotSeats){
+  async function decideRobotCallForApp(seat, deal, history, _robotSeats, options={}){
     try {
       const mod = moduleApi || await readyPromise;
       if(!mod || typeof mod.pons_bid !== 'function'){
         throw loadError || new Error('module Pons non chargé');
       }
+      const shortNT = !!options.shortNT;
+      const actualHcp = hcpOfHand(deal, seat);
+      const balancedShortNT = isBalancedForShortNT(deal, seat);
+
+      // Variante 1SA faible : seule la vraie ouverture régulière 12-14 est forcée à 1SA.
+      // Aucune autre famille d'ouverture n'est recalculée par cette surcouche.
+      if(shortNT && isOpeningTurn(history) && balancedShortNT && actualHcp>=12 && actualHcp<=14){
+        if(isLegal(history,'1NT',seat)){
+          return {
+            call:'1NT',
+            explanation:`Mode 1SA faible 12–14H — ouverture de 1SA avec ${actualHcp} H.`
+          };
+        }
+      }
+
+      // Une fois une vraie ouverture 1SA faible présente, seul SON camp utilise les
+      // seuils décalés. Les adversaires gardent exactement PONS (Multi-Landy, X, etc.).
+      if(shortNT && isShortNTOpeningPartnershipTurn(seat,history) && typeof root.decideRobotCallShortNT==='function'){
+        const shifted=root.decideRobotCallShortNT(seat,deal,history);
+        const standard=typeof localFallback==='function' ? localFallback(seat,deal,history) : null;
+        // Ne remplacer PONS que si le décalage de 3 points change effectivement la
+        // décision du moteur canonique. Si les deux évaluations donnent le même carton,
+        // PONS reste seul maître de la décision : aucune dérive hors seuil n'est introduite.
+        if(shifted && shifted.call && (!standard || shifted.call!==standard.call) && isLegal(history,shifted.call,seat)) return shifted;
+      }
+
       const hand = handToPons(deal, seat);
       const auction = auctionToPons(history);
       const started = performance.now();
       const parsed = parsePonsResult(engineBid(mod, hand, auction, deal));
       const elapsed = performance.now() - started;
+
+      // Dans le système 12-14, une main régulière 15-17 ne doit plus retomber sur
+      // l'ouverture standard PONS de 1SA. Si PONS proposait 1SA, on remplace UNIQUEMENT
+      // ce carton par l'ouverture naturelle de la majeure 5e / meilleure mineure.
+      if(shortNT && isOpeningTurn(history) && balancedShortNT && actualHcp>=15 && actualHcp<=17 && parsed.call==='1NT'){
+        const natural=naturalOpeningAfterShortNT(deal,seat);
+        if(isLegal(history,natural,seat)){
+          return {
+            call:natural,
+            explanation:`Mode 1SA faible 12–14H — ${actualHcp} H réguliers sont hors fourchette 1SA ; ouverture naturelle ${prettyCall(natural)}.`
+          };
+        }
+      }
 
       if(!isLegal(history, parsed.call, seat)){
         return fallbackDecision(seat, deal, history, `annonce ${parsed.call} illégale rejetée par PLAY`);

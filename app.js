@@ -99,11 +99,11 @@ const PONS_CANONICAL_RULES_LEGACY_URL = 'pons/canonical-rules-v1.js?v=20260821-m
 const PONS_WASM_EMBEDDED_FALLBACK_URL = 'pons/pons-wasm-embedded.js?v=20260821-mobile-fallback';
 const PONS_CLIENT_SCRIPT_URLS = [
     'pons/bridge-engine-v1-browser.js',
-    'pons/fiches-engine-v1-app.js?v=20260810-006',
+    'pons/fiches-engine-v1-app.js?v=20260825-shortnt',
     'pons/pons-semantic.js?v=20260812-semantic05-v216',
     'pons/pons-critic.js?v=20260815-v251-realworld-p0',
     'pons/pons-wasm-runtime.js?v=20260821-mobile-memory',
-    'pons/pons-engine.js?v=20260817-v2619-portable-strict'
+    'pons/pons-engine.js?v=20260825-shortnt'
 ];
 let ponsClientLoadPromise = null;
 let ponsCanonicalRulesPromise = null;
@@ -954,6 +954,10 @@ let deferredRoomMode = false;
 // voir loadBoolPref/saveBoolPref, la case du salon reprend cette valeur au chargement
 // (voir enterLobbyScreen).
 let robotBiddingMode = loadBoolPref('bridgeBidRobotPassOnly', false) ? 'passOnly' : 'smart';
+// Variante système optionnelle : les robots actifs jouent une ouverture de 1SA faible
+// (12-14H au lieu de 15-17H). Seule la branche issue d'une vraie ouverture de 1SA est
+// adaptée ; toutes les autres enchères continuent d'être décidées par PONS inchangé.
+let robotShortNtMode = loadBoolPref('bridgeBidRobotShortNT', false);
 
 // Plus de statut kibbitz suivi séparément (source de bug : oublié pour un joueur qui
 // rejoint après le lancement de la partie, resté "spectateur" sans les mains) — un
@@ -3673,6 +3677,7 @@ function enterLobbyScreen() {
     // (voir index.html), donc sa visibilité host-only doit être pilotée séparément ici,
     // avec la même condition.
     document.getElementById('hostRobotModeGroup').style.display = myRole === 'host' ? 'flex' : 'none';
+    document.getElementById('hostShortNtModeGroup').style.display = myRole === 'host' ? 'flex' : 'none';
     document.getElementById('guestWaitingNote').style.display = myRole === 'host' ? 'none' : 'block';
 
     // Voir échange avec Guillaume : reprend la préférence persistée (voir
@@ -3681,6 +3686,11 @@ function enterLobbyScreen() {
     if (myRole === 'host') {
         const robotModeCheckbox = document.getElementById('robotBiddingModeCheckbox');
         if (robotModeCheckbox) robotModeCheckbox.checked = robotBiddingMode === 'passOnly';
+        const shortNtCheckbox = document.getElementById('robotShortNtModeCheckbox');
+        if (shortNtCheckbox) {
+            shortNtCheckbox.checked = !!robotShortNtMode;
+            shortNtCheckbox.disabled = robotBiddingMode === 'passOnly';
+        }
     }
 
     const nameInput = document.getElementById('myNameInput');
@@ -4486,6 +4496,17 @@ function uiSetRobotBiddingMode(passOnly) {
     if (myRole !== 'host') return;
     robotBiddingMode = passOnly ? 'passOnly' : 'smart';
     saveBoolPref('bridgeBidRobotPassOnly', passOnly);
+    const shortNtCheckbox = document.getElementById('robotShortNtModeCheckbox');
+    if (shortNtCheckbox) shortNtCheckbox.disabled = passOnly;
+}
+
+// Active/désactive la variante 1SA faible. Le réglage est volontairement indépendant
+// de « Robots inactifs » : s'il est mémorisé puis que les robots sont réactivés, le
+// système 12-14H reprend immédiatement sans devoir être recoché.
+function uiSetRobotShortNtMode(enabled) {
+    if (myRole !== 'host') return;
+    robotShortNtMode = !!enabled;
+    saveBoolPref('bridgeBidRobotShortNT', robotShortNtMode);
 }
 
 function uiRotateSeatsClockwise() {
@@ -6595,7 +6616,7 @@ async function resolveRobotBoardInBackground(idx, generation = robotBackgroundGe
             } else {
                 try {
                     const pons = await ensurePonsClientReady();
-                    ({ call, explanation } = await pons.decideRobotCallForApp(turnSeat, deal, hist, autoPassSeats));
+                    ({ call, explanation } = await pons.decideRobotCallForApp(turnSeat, deal, hist, autoPassSeats, { shortNT: robotShortNtMode }));
                 } catch (err) {
                     console.error('[PLAY/PONS strict] calcul robot arrière-plan arrêté : PONS indisponible', err);
                     return;
@@ -6865,7 +6886,7 @@ function maybeRobotBid() {
         } else {
             try {
                 const pons = await ensurePonsClientReady();
-                ({ call, explanation } = await pons.decideRobotCallForApp(turnSeat, currentDeal(), auctionHistory, autoPassSeats));
+                ({ call, explanation } = await pons.decideRobotCallForApp(turnSeat, currentDeal(), auctionHistory, autoPassSeats, { shortNT: robotShortNtMode }));
             } catch (err) {
                 console.error("[PLAY/PONS strict] robot bloqué : PONS v2.61 n'est pas disponible", err);
                 return;

@@ -814,3 +814,8 @@ aucun workflow GitHub Actions n'est requis par ce paquet.
   objets/frames interdits. Les événements UI passent par `ui-events.js`.
 - Le zoom navigateur n'est plus désactivé : le viewport laisse l'utilisateur agrandir
   l'interface selon ses besoins.
+
+## Mode robot 1SA faible (12–14H)
+
+Dans le salon, l’hôte peut activer **🤖 1SA faible (12–14H)**. Dans ce mode, les robots actifs ouvrent de 1SA avec une main régulière de 12 à 14H au lieu de 15 à 17H. Les seuils de points du camp de l’ouvreur dans la branche issue de cette ouverture sont décalés de 3 points vers le bas ; les interventions adverses et toutes les enchères hors de cette branche restent inchangées. Le réglage est mémorisé localement et est sans effet lorsque **Robots inactifs** est activé.
+

@@ -144,6 +144,7 @@
     function routeChange(el) {
         switch (el.dataset.uiChange) {
             case 'robot-mode': return call('uiSetRobotBiddingMode', !!el.checked);
+            case 'robot-short-nt': return call('uiSetRobotShortNtMode', !!el.checked);
             case 'randomize-deals': return call('uiToggleRandomizeDeals');
             case 'deal-library': return call('uiHandleDealLibraryChosen');
             case 'constraints-stale': return call('uiCheckConstraintsStale');

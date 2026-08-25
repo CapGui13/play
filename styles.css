@@ -842,6 +842,23 @@ a.btn {
     gap: 8px;
 }
 
+.host-robot-options-row {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    flex-wrap: wrap;
+}
+
+.host-robot-options-row .form-group-checkbox {
+    margin-top: 8px;
+    margin-bottom: 0;
+}
+
+.host-short-nt-label {
+    font-style: italic;
+    white-space: nowrap;
+}
+
 .transfer-menu {
     position: absolute;
     top: 100%;
