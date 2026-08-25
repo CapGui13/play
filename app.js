@@ -3685,7 +3685,7 @@ function enterLobbyScreen() {
     // défaut au rechargement, même si l'hôte l'avait activée la dernière fois.
     if (myRole === 'host') {
         const robotModeCheckbox = document.getElementById('robotBiddingModeCheckbox');
-        if (robotModeCheckbox) robotModeCheckbox.checked = robotBiddingMode === 'passOnly';
+        if (robotModeCheckbox) robotModeCheckbox.checked = robotBiddingMode === 'smart';
         const shortNtCheckbox = document.getElementById('robotShortNtModeCheckbox');
         if (shortNtCheckbox) {
             shortNtCheckbox.checked = !!robotShortNtMode;
@@ -4490,19 +4490,22 @@ function rotatedSeatAssignment(current) {
 // localement, recalcule mySeats/autoPassSeats en conséquence, diffuse le nouvel état à
 // tout le monde, puis rafraîchit l'écran actuellement affiché (jeu ou salon selon le
 // moment).
-// Voir échange avec Guillaume : bascule le mode d'enchère des robots. Purement local à
-// l'hôte (voir robotBiddingMode) — pas de diffusion réseau nécessaire.
-function uiSetRobotBiddingMode(passOnly) {
+// Voir échange avec Guillaume : l'interrupteur est désormais formulé positivement :
+// barre à droite / case cochée = robots ACTIFS. Purement local à l'hôte
+// (voir robotBiddingMode) — pas de diffusion réseau nécessaire. La préférence persistée
+// reste volontairement l'ancienne clé « passOnly » pour conserver la compatibilité avec
+// les réglages déjà enregistrés : on sauvegarde donc son inverse.
+function uiSetRobotBiddingMode(robotsActive) {
     if (myRole !== 'host') return;
-    robotBiddingMode = passOnly ? 'passOnly' : 'smart';
-    saveBoolPref('bridgeBidRobotPassOnly', passOnly);
+    robotBiddingMode = robotsActive ? 'smart' : 'passOnly';
+    saveBoolPref('bridgeBidRobotPassOnly', !robotsActive);
     const shortNtCheckbox = document.getElementById('robotShortNtModeCheckbox');
-    if (shortNtCheckbox) shortNtCheckbox.disabled = passOnly;
+    if (shortNtCheckbox) shortNtCheckbox.disabled = !robotsActive;
 }
 
 // Active/désactive la variante 1SA faible. Le réglage est volontairement indépendant
-// de « Robots inactifs » : s'il est mémorisé puis que les robots sont réactivés, le
-// système 12-14H reprend immédiatement sans devoir être recoché.
+// de « Robots actifs » : s'il est mémorisé pendant que les robots sont coupés, le
+// système 12-14H reprend immédiatement dès qu'ils sont réactivés.
 function uiSetRobotShortNtMode(enabled) {
     if (myRole !== 'host') return;
     robotShortNtMode = !!enabled;

@@ -815,6 +815,7 @@ a.btn {
 
 .host-transfer-widget {
     position: relative;
+    align-self: center;
 }
 
 /* Voir échange avec Guillaume ("Votre pseudo devrait être centré... pour l'hôte aussi") :
@@ -838,15 +839,18 @@ a.btn {
 .host-controls-column {
     display: flex;
     flex-direction: column;
-    align-items: flex-start;
+    align-items: center;
     gap: 8px;
+    width: 100%;
 }
 
 .host-robot-options-row {
     display: flex;
     align-items: center;
+    justify-content: center;
     gap: 18px;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
+    width: 100%;
 }
 
 .host-robot-options-row .form-group-checkbox {
@@ -857,6 +861,41 @@ a.btn {
 .host-short-nt-label {
     font-style: italic;
     white-space: nowrap;
+}
+
+/* Les deux réglages robots doivent rester sur UNE seule ligne sur mobile. On compacte
+   légèrement les espacements et l'interrupteur sans changer leur fonction ni leur ordre. */
+@media (max-width: 520px) {
+    .host-robot-options-row {
+        gap: 7px;
+    }
+
+    .host-robot-options-row .ios-switch-label,
+    .host-robot-options-row .checkbox-label {
+        gap: 6px;
+        font-size: 0.74rem;
+        white-space: nowrap;
+    }
+
+    .host-robot-options-row .ios-switch {
+        width: 38px;
+        height: 22px;
+    }
+
+    .host-robot-options-row .ios-switch-thumb {
+        width: 16px;
+        height: 16px;
+    }
+
+    .host-robot-options-row .ios-switch input:checked + .ios-switch-track .ios-switch-thumb {
+        transform: translateX(16px);
+    }
+
+    .host-robot-options-row .checkbox-label input[type="checkbox"] {
+        width: 14px;
+        height: 14px;
+        flex: 0 0 auto;
+    }
 }
 
 .transfer-menu {
