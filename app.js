@@ -2785,8 +2785,10 @@ function buildHostHandlers(onOpenExtra) {
                 // renvoyer au salon, alors que rien n'avait été perdu (deals intact).
                 renderBoard();
             } else {
+                // enterLobbyScreen() initialise désormais elle-même les contrôles
+                // host-only, dont la bibliothèque de donnes. Cela couvre aussi le cas
+                // d'un hôte acquis par transfert et évite deux chemins divergents.
                 enterLobbyScreen();
-                initDealLibrary();
                 recordPlayPerfMilestone('create-lobby-ready', { roomCode });
             }
         },
@@ -3684,6 +3686,14 @@ function enterLobbyScreen() {
     // robotBiddingMode/loadBoolPref) — sans ça, la case reviendrait toujours décochée par
     // défaut au rechargement, même si l'hôte l'avait activée la dernière fois.
     if (myRole === 'host') {
+        // La bibliothèque est un privilège d'hôte, mais le rôle peut être acquis APRÈS
+        // l'entrée initiale dans l'application (transfert d'hôte). L'ancien code ne
+        // l'initialisait que dans buildHostHandlers() lors de la création d'une salle :
+        // un invité promu hôte gardait donc dealLibraryGroup masqué pour toute la durée
+        // du salon. Appeler ici rend l'initialisation liée au RÔLE affiché, quelle que
+        // soit la manière dont il a été obtenu. initDealLibrary() est idempotente.
+        initDealLibrary();
+
         const robotModeCheckbox = document.getElementById('robotBiddingModeCheckbox');
         if (robotModeCheckbox) robotModeCheckbox.checked = robotBiddingMode === 'smart';
         const shortNtCheckbox = document.getElementById('robotShortNtModeCheckbox');
