@@ -1437,6 +1437,248 @@ let pendingParsedSource = null;
 // sont conservés tels quels dans le fichier — seul l'ordre de passage est mélangé.
 let pendingOrderedDeals = null;
 
+// État de préparation du salon à transmettre lors d'un transfert manuel d'hôte. Les
+// donnes déjà parsées sont sérialisables (objets JS simples), contrairement à l'objet
+// File natif du navigateur : on transfère donc les donnes elles-mêmes + une description
+// de leur provenance, jamais le File. Cela permet au nouvel hôte de lancer exactement la
+// préparation en cours sans demander à l'ancien hôte de recharger quoi que ce soit.
+const RANDOM_DEAL_TRANSFER_FIELD_IDS = [
+    'randomDealCount',
+    'rdc-N-hcpMin', 'rdc-N-hcpMax', 'rdc-N-suit', 'rdc-N-suitLen',
+    'rdc-E-hcpMin', 'rdc-E-hcpMax', 'rdc-E-suit', 'rdc-E-suitLen',
+    'rdc-S-hcpMin', 'rdc-S-hcpMax', 'rdc-S-suit', 'rdc-S-suitLen',
+    'rdc-W-hcpMin', 'rdc-W-hcpMax', 'rdc-W-suit', 'rdc-W-suitLen',
+    'rdc-NS-hcpMin', 'rdc-NS-hcpMax', 'rdc-EW-hcpMin', 'rdc-EW-hcpMax'
+];
+
+function capturePregameFieldValues() {
+    const values = {};
+    for (const id of RANDOM_DEAL_TRANSFER_FIELD_IDS) {
+        const el = document.getElementById(id);
+        if (el) values[id] = String(el.value ?? '');
+    }
+    return values;
+}
+
+function restorePregameFieldValues(values) {
+    if (!values || typeof values !== 'object' || Array.isArray(values)) return;
+    for (const id of RANDOM_DEAL_TRANSFER_FIELD_IDS) {
+        if (!Object.prototype.hasOwnProperty.call(values, id)) continue;
+        const el = document.getElementById(id);
+        if (el) el.value = String(values[id] ?? '');
+    }
+}
+
+function resetPregameDealPreparationState() {
+    pendingParsedDeals = null;
+    pendingParsedSource = null;
+    pendingOrderedDeals = null;
+    lastGeneratedConstraintsJSON = undefined;
+
+    const fileInput = document.getElementById('dealFileInput');
+    if (fileInput) fileInput.value = '';
+    updateDealFileNameDisplay();
+
+    const librarySelect = document.getElementById('dealLibrarySelect');
+    if (librarySelect) librarySelect.value = '';
+
+    const randomize = document.getElementById('randomizeDealsToggle');
+    if (randomize) randomize.checked = false;
+
+    const countInput = document.getElementById('randomDealCount');
+    if (countInput) countInput.value = '8';
+    for (const id of RANDOM_DEAL_TRANSFER_FIELD_IDS) {
+        if (id === 'randomDealCount') continue;
+        const el = document.getElementById(id);
+        if (el) el.value = '';
+    }
+
+    const constraintsPanel = document.getElementById('randomDealConstraintsPanel');
+    if (constraintsPanel) constraintsPanel.style.display = 'none';
+    const constraintsBtn = document.getElementById('randomDealConstraintsToggle');
+    if (constraintsBtn) {
+        constraintsBtn.classList.remove('is-active');
+        constraintsBtn.setAttribute('aria-expanded', 'false');
+    }
+
+    clearHostSetupMessage();
+    setDealStatusEmpty();
+}
+
+function describePendingDealSourceForTransfer() {
+    if (!pendingParsedDeals) return null;
+    if (pendingParsedSource === 'random') return { kind: 'random' };
+    if (typeof pendingParsedSource === 'string' && pendingParsedSource.startsWith('library:')) {
+        return { kind: 'library', filename: pendingParsedSource.slice('library:'.length) };
+    }
+    if (pendingParsedSource && typeof pendingParsedSource === 'object' && typeof pendingParsedSource.name === 'string') {
+        return { kind: 'file', filename: pendingParsedSource.name };
+    }
+    if (typeof pendingParsedSource === 'string' && pendingParsedSource.startsWith('transferred:')) {
+        const [, kind, ...rest] = pendingParsedSource.split(':');
+        return { kind: kind || 'file', filename: rest.join(':') || '' };
+    }
+    return { kind: 'file', filename: '' };
+}
+
+function buildPregameTransferSetup() {
+    const randomize = document.getElementById('randomizeDealsToggle');
+    const constraintsPanel = document.getElementById('randomDealConstraintsPanel');
+    return {
+        version: 1,
+        robotBiddingMode: robotBiddingMode === 'passOnly' ? 'passOnly' : 'smart',
+        robotShortNtMode: !!robotShortNtMode,
+        randomizeDeals: !!(randomize && randomize.checked),
+        randomDealFields: capturePregameFieldValues(),
+        randomConstraintsOpen: !!(constraintsPanel && constraintsPanel.style.display !== 'none'),
+        lastGeneratedConstraintsJSON: typeof lastGeneratedConstraintsJSON === 'string' ? lastGeneratedConstraintsJSON : null,
+        source: describePendingDealSourceForTransfer(),
+        parsedDeals: pendingParsedDeals,
+        // Ne pas envoyer une deuxième copie complète des donnes juste pour mémoriser leur
+        // ordre : pendingOrderedDeals est toujours une permutation (mêmes objets) de
+        // pendingParsedDeals. Une liste d'indices suffit et réduit fortement le message
+        // de transfert, particulièrement utile sur mobile / gros fichiers PBN.
+        orderedDealIndexes: pendingParsedDeals && pendingOrderedDeals
+            ? pendingOrderedDeals.map(deal => pendingParsedDeals.indexOf(deal))
+            : null
+    };
+}
+
+function validateTransferredDealArray(arr) {
+    if (arr == null) return null;
+    if (!Array.isArray(arr)) return false;
+    try {
+        if (typeof validateDealSemantics === 'function') {
+            arr.forEach((deal, idx) => validateDealSemantics(deal, `Transfert d'hôte, donne ${idx + 1}`));
+        }
+        return arr;
+    } catch (e) {
+        console.warn('[PLAY] Donnes de préparation transférées invalides', e);
+        return false;
+    }
+}
+
+function normalizePregameTransferSetup(raw) {
+    if (raw == null) return null;
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return false;
+
+    const parsedDeals = validateTransferredDealArray(raw.parsedDeals);
+    if (parsedDeals === false) return false;
+
+    let orderedDealIndexes = null;
+    if (raw.orderedDealIndexes != null) {
+        if (!Array.isArray(raw.orderedDealIndexes) || !parsedDeals) return false;
+        if (raw.orderedDealIndexes.length !== parsedDeals.length) return false;
+        const seen = new Set();
+        for (const value of raw.orderedDealIndexes) {
+            if (!Number.isInteger(value) || value < 0 || value >= parsedDeals.length || seen.has(value)) return false;
+            seen.add(value);
+        }
+        orderedDealIndexes = raw.orderedDealIndexes.slice();
+    } else if (parsedDeals) {
+        // Compatibilité défensive : un snapshot avec des donnes mais sans ordre explicite
+        // retombe simplement sur l'ordre brut, jamais sur un mélange inventé au transfert.
+        orderedDealIndexes = parsedDeals.map((_, idx) => idx);
+    }
+
+    let source = null;
+    if (raw.source != null) {
+        if (!raw.source || typeof raw.source !== 'object' || Array.isArray(raw.source)) return false;
+        const kind = raw.source.kind;
+        if (!['random', 'library', 'file'].includes(kind)) return false;
+        const filename = typeof raw.source.filename === 'string' ? raw.source.filename.slice(0, 300) : '';
+        source = { kind, filename };
+    }
+    if (!!parsedDeals !== !!source) return false;
+
+    const randomDealFields = {};
+    if (raw.randomDealFields && typeof raw.randomDealFields === 'object' && !Array.isArray(raw.randomDealFields)) {
+        for (const id of RANDOM_DEAL_TRANSFER_FIELD_IDS) {
+            if (Object.prototype.hasOwnProperty.call(raw.randomDealFields, id)) {
+                randomDealFields[id] = String(raw.randomDealFields[id] ?? '').slice(0, 32);
+            }
+        }
+    }
+
+    return {
+        robotBiddingMode: raw.robotBiddingMode === 'passOnly' ? 'passOnly' : 'smart',
+        robotShortNtMode: !!raw.robotShortNtMode,
+        randomizeDeals: !!raw.randomizeDeals,
+        randomDealFields,
+        randomConstraintsOpen: !!raw.randomConstraintsOpen,
+        lastGeneratedConstraintsJSON: typeof raw.lastGeneratedConstraintsJSON === 'string'
+            ? raw.lastGeneratedConstraintsJSON.slice(0, 20000)
+            : null,
+        source,
+        parsedDeals,
+        orderedDealIndexes
+    };
+}
+
+function applyPregameTransferSetup(setup) {
+    resetPregameDealPreparationState();
+    if (!setup) return;
+
+    robotBiddingMode = setup.robotBiddingMode;
+    robotShortNtMode = !!setup.robotShortNtMode;
+
+    const randomize = document.getElementById('randomizeDealsToggle');
+    if (randomize) randomize.checked = !!setup.randomizeDeals;
+    restorePregameFieldValues(setup.randomDealFields);
+    lastGeneratedConstraintsJSON = setup.lastGeneratedConstraintsJSON == null
+        ? undefined
+        : setup.lastGeneratedConstraintsJSON;
+
+    const constraintsPanel = document.getElementById('randomDealConstraintsPanel');
+    if (constraintsPanel) constraintsPanel.style.display = setup.randomConstraintsOpen ? 'block' : 'none';
+    const constraintsBtn = document.getElementById('randomDealConstraintsToggle');
+    if (constraintsBtn) {
+        constraintsBtn.classList.toggle('is-active', !!setup.randomConstraintsOpen);
+        constraintsBtn.setAttribute('aria-expanded', setup.randomConstraintsOpen ? 'true' : 'false');
+    }
+
+    if (!setup.parsedDeals || !setup.source) return;
+    pendingParsedDeals = setup.parsedDeals;
+    pendingOrderedDeals = setup.orderedDealIndexes
+        ? setup.orderedDealIndexes.map(idx => pendingParsedDeals[idx])
+        : setup.parsedDeals;
+
+    const n = pendingParsedDeals.length;
+    const plural = n > 1;
+    if (setup.source.kind === 'random') {
+        pendingParsedSource = 'random';
+        setDealStatusReady(`✅ ${n} donne${plural ? 's' : ''} aléatoire${plural ? 's' : ''} transférée${plural ? 's' : ''}`, false);
+        kickOffBackgroundDD(pendingParsedDeals);
+    } else if (setup.source.kind === 'library') {
+        const filename = setup.source.filename || '';
+        pendingParsedSource = `transferred:library:${filename}`;
+        initDealLibrary().then(() => {
+            if (pendingParsedSource !== `transferred:library:${filename}`) return;
+            const select = document.getElementById('dealLibrarySelect');
+            if (select && Array.from(select.options).some(o => o.value === filename)) select.value = filename;
+        });
+        setDealStatusReady(`✅ ${n} donne${plural ? 's' : ''} transférée${plural ? 's' : ''}${filename ? ` · ${filename}` : ''}`);
+    } else {
+        const filename = setup.source.filename || 'fichier local';
+        pendingParsedSource = `transferred:file:${filename}`;
+        const display = document.getElementById('dealFileNameDisplay');
+        if (display) {
+            display.textContent = `${filename} (transféré)`;
+            display.classList.add('has-file');
+        }
+        setDealStatusReady(`✅ ${n} donne${plural ? 's' : ''} transférée${plural ? 's' : ''} · ${filename}`);
+    }
+
+    schedulePonsClientPreload();
+}
+
+function hasTransferredPreparedDeals() {
+    return typeof pendingParsedSource === 'string'
+        && pendingParsedSource.startsWith('transferred:')
+        && Array.isArray(pendingParsedDeals)
+        && pendingParsedDeals.length > 0;
+}
+
 // Mélange de Fisher-Yates (Math.random() suffit ici : besoin d'aléatoire simple pour
 // varier l'ordre d'entraînement, pas de garanties cryptographiques).
 function shuffleDealsArray(arr) {
@@ -3469,6 +3711,13 @@ function connectAsGuest(code, token, nickname, credentialOverride = null) {
     prevParticipantsDisconnectedSnapshot = null;
     lobbyChatAutoOpened = false;
 
+    // Un participant qui rejoint une salle comme invité ne doit jamais emporter avec lui
+    // la préparation host-only d'une salle précédente. C'était invisible tant qu'il
+    // restait invité, puis réapparaissait s'il recevait plus tard l'hôte (ancien fichier,
+    // bibliothèque ou donnes aléatoires encore en mémoire). Le nouvel hôte recevra, lui,
+    // la préparation légitime de la salle courante via prepare-become-host.
+    resetPregameDealPreparationState();
+
     // Important lors d'un transfert d'hôte : le rôle global vient de passer de host à
     // guest, mais l'écran du salon contient encore les contrôles rendus pour l'ancien
     // rôle (chargement des donnes, robots, transfert d'hôte, menus de sièges...). Ne pas
@@ -4995,7 +5244,12 @@ function uiTransferHost(targetId) {
         type: 'prepare-become-host',
         participants: newParticipants,
         seatAssignment: newSeatAssignment,
-        reconnectSecrets: inheritedReconnectSecrets
+        reconnectSecrets: inheritedReconnectSecrets,
+        // La configuration du salon appartient à la SESSION, pas à l'appareil qui devient
+        // hôte : transmettre robots/1SA faible/ordre aléatoire et surtout les donnes déjà
+        // préparées évite que le nouvel hôte récupère ses préférences locales ou un ancien
+        // fichier sans rapport avec cette salle.
+        pregameSetup: buildPregameTransferSetup()
     }, guestIndex);
 
     // Filet de sécurité : au cas où ni 'become-host-ready' ni 'become-host-failed' ni même
@@ -5502,8 +5756,12 @@ async function uiStartGameAsHost() {
     // refaire, contrairement aux deux autres), donc toujours "à jour" tant que
     // pendingParsedSource vaut 'random'.
     const hasRandomDeals = pendingParsedSource === 'random' && !!pendingParsedDeals;
+    // Un fichier local ne peut pas être réinjecté dans <input type=file> sur l'appareil
+    // du nouvel hôte. Lors d'un transfert, les donnes déjà parsées restent donc une source
+    // valide en mémoire (voir applyPregameTransferSetup), même si aucun File n'est présent.
+    const hasTransferredDeals = hasTransferredPreparedDeals();
 
-    if (!file && !libraryFilename && !hasRandomDeals) {
+    if (!file && !libraryFilename && !hasRandomDeals && !hasTransferredDeals) {
         setHostSetupMessage('Choisissez un fichier .pbn ou .lin, une donne dans la bibliothèque, ou générez des donnes aléatoires.', false);
         return;
     }
@@ -5672,7 +5930,9 @@ async function uiStartGameAsHost() {
     // chaque choix, mais on tranche explicitement plutôt que de laisser un cas ambigu) ;
     // "random", lui, ne peut être actif que si aucun des deux ne l'est (voir
     // uiGenerateRandomDeals, qui les désélectionne tous les deux).
-    const activeSource = hasRandomDeals ? 'random' : (file || `library:${libraryFilename}`);
+    const activeSource = hasRandomDeals
+        ? 'random'
+        : (hasTransferredDeals ? pendingParsedSource : (file || `library:${libraryFilename}`));
 
     // Cas normal : la source a déjà été lue et parsée au moment où elle a été choisie
     // (voir uiHandleDealFileChosen / uiHandleDealLibraryChosen / uiGenerateRandomDeals) —
@@ -5869,6 +6129,11 @@ function handlePeerData(msg, guestIndex) {
                 rejectPeerProtocolMessage(msg, guestIndex, 'état de transfert invalide');
                 break;
             }
+            const inheritedPregameSetup = normalizePregameTransferSetup(msg.pregameSetup);
+            if (msg.pregameSetup != null && inheritedPregameSetup === false) {
+                rejectPeerProtocolMessage(msg, guestIndex, 'préparation du salon transférée invalide');
+                break;
+            }
             const inheritedReconnectSecrets = {};
             if (msg.reconnectSecrets && typeof msg.reconnectSecrets === 'object' && !Array.isArray(msg.reconnectSecrets)) {
                 for (const [id, secret] of Object.entries(msg.reconnectSecrets)) {
@@ -5916,6 +6181,13 @@ function handlePeerData(msg, guestIndex) {
                 prevSeatAssignmentSnapshot = null;
                 prevParticipantsDisconnectedSnapshot = null;
                 lobbyChatAutoOpened = false;
+
+                // Restaurer la préparation AVANT le rendu du salon : les checkboxes et
+                // le bandeau de donnes apparaissent ainsi immédiatement dans le bon état.
+                // Si le message venait exceptionnellement d'une ancienne version sans ce
+                // snapshot, on repart proprement d'un salon vide plutôt que de réutiliser
+                // un état host ancien présent sur cet appareil.
+                applyPregameTransferSetup(inheritedPregameSetup);
                 enterLobbyScreen();
                 renderLobby();
 
