@@ -612,6 +612,10 @@ let selfDisconnectedAt = null;
 // invité reste déconnecté — annulé dès qu'onGuestConnected réussit (voir
 // buildGuestHandlers), donc sans effet une fois reconnecté.
 let guestAutoReconnectTimer = null;
+// Vrai uniquement pendant une tentative P2P complète relancée en arrière-plan. Le délai
+// de 4 s reste le rythme voulu ENTRE deux essais ; il ne doit pas tuer un essai encore
+// légitimement en cours (R37 lui donne jusqu'à 45 s pour aboutir sur réseau difficile).
+let guestAutoReconnectInFlight = false;
 const GUEST_AUTO_RECONNECT_INTERVAL_MS = 4000;
 
 // (Hôte uniquement) jeton de reconnexion -> numéro de connexion PeerJS actif. Un invité
@@ -2852,7 +2856,7 @@ function tokenForGuestIndex(guestIndex) {
 
 // Voir échange avec Guillaume : bandeau plein écran affiché dès le clic sur "Créer" ou
 // "Rejoindre", masqué une fois la connexion établie ou en cas d'erreur explicite. Un filet
-// de sécurité (connectingOverlayTimeout) le masque de toute façon après 15s si aucun des
+// de sécurité (connectingOverlayTimeout) le masque de toute façon après 50s si aucun des
 // deux ne s'est produit — pour ne pas laisser le joueur bloqué indéfiniment derrière un
 // écran de chargement si la connexion traîne sans jamais aboutir ni échouer clairement.
 let connectingOverlayTimeout = null;
@@ -2925,6 +2929,7 @@ function rememberRoomAccessFromUrl(params) {
 
 function uiCreateRoom() {
     deferredRoomMode = false;
+    hostReconnectInFlight = false;
     recordPlayPerfMilestone('create-click');
     document.getElementById('landingError').style.display = 'none';
     showConnectingOverlay('Création de la partie…');
@@ -3007,6 +3012,7 @@ function buildHostHandlers(onOpenExtra) {
             // mais devenait trompeur après une reconnexion (manuelle ou automatique via
             // peer.reconnect()) tant que personne ne rejoignait entre-temps.
             setConnectionStatus(true);
+            hostReconnectInFlight = false;
             renderReconnectButton();
             // Voir échange avec Guillaume (session du 23 juillet) : succès (par n'importe
             // quelle voie — reconnexion légère ou réinitialisation complète, voir
@@ -3246,6 +3252,23 @@ function buildHostHandlers(onOpenExtra) {
             }
         },
         onSlowConnection: () => {},
+        // Distinct de onTimeout ci-dessous : celui-ci couvre uniquement l'ouverture de
+        // NOTRE signalisation hôte. Un invité qui met 45 s à ouvrir sa DataConnection ne
+        // doit jamais faire tomber le salon entier.
+        onHostOpenTimeout: () => {
+            if (myRole !== 'host') return;
+            recordSyncTrace('p2p.host.open-timeout');
+            hostReconnectInFlight = false;
+            setConnectionStatus(false);
+            renderReconnectButton();
+            hideConnectingOverlay();
+            if (deals) {
+                pushDebugLog("La reconnexion hôte n'a pas abouti après 45 s — état de partie conservé, nouvelle tentative possible.");
+                return;
+            }
+            showScreen('screen-landing');
+            showLandingError("⚠️ La création de la salle n'a pas abouti après 45 secondes. Vérifie le réseau puis réessaie.");
+        },
         onTimeout: () => {},
         onData: handlePeerData,
         // Voir onSignalingDisconnected côté invité (buildGuestHandlers) : même lacune côté
@@ -3296,7 +3319,17 @@ function buildGuestHandlers() {
     const myAttemptToken = guestJoinAttemptToken;
     return {
         onOpen: (role, roomCode) => {
+            if (myAttemptToken !== guestJoinAttemptToken) return; // tentative abandonnée/remplacée
             recordSyncTrace('p2p.guest.signaling-open', { roomCode });
+            // Si PeerJS vient de rétablir sa signalisation mais doit encore rouvrir le
+            // DataChannel, la tentative est désormais réellement en cours : annuler le
+            // fallback complet prévu à +4 s et laisser le timeout borné du canal décider.
+            // Si le canal WebRTC était resté ouvert, isConnected() est déjà vrai et
+            // onGuestConnected s'occupe immédiatement du retour à l'état stable.
+            if (everConnectedAsGuest && (!peerConn || !peerConn.isConnected())) {
+                cancelGuestAutoReconnectTimer();
+                guestAutoReconnectInFlight = true;
+            }
             document.getElementById('lobbyRoomCodeInline').textContent = `(code ${roomCode})`;
             // Voir échange avec Guillaume (session du 23 juillet) : même correctif que
             // côté hôte — la barre d'adresse ne reflétait jusqu'ici jamais le code de
@@ -3313,9 +3346,11 @@ function buildGuestHandlers() {
             updateShareLinkForRoom(roomCode);
         },
         onGuestConnected: () => {
+            if (myAttemptToken !== guestJoinAttemptToken) return; // tentative abandonnée/remplacée
             recordSyncTrace('p2p.guest.connected-to-host');
             hideConnectingOverlay();
             everConnectedAsGuest = true;
+            guestAutoReconnectInFlight = false;
             setConnectionStatus(true);
             renderReconnectButton();
             // Voir échange avec Guillaume ("si un joueur avait déjà été dans une
@@ -3359,6 +3394,7 @@ function buildGuestHandlers() {
             if (chatPanelOpen) { renderRoomBoard(); renderChat(); }
         },
         onPeerDisconnected: () => {
+            if (myAttemptToken !== guestJoinAttemptToken) return; // ancien Peer détruit après timeout/nouvel essai
             recordSyncTrace('p2p.guest.peer-disconnected');
             // Un ancien BridgePeerConnection invité peut encore émettre son événement
             // de fermeture quelques millisecondes après un transfert d'hôte réussi.
@@ -3379,6 +3415,9 @@ function buildGuestHandlers() {
             // a disparu d'ici (plus d'élection automatique d'un autre hôte) — seule reste la reconnexion
             // automatique en arrière-plan (voir scheduleGuestAutoReconnect), qui
             // concernait déjà TOUT invité déconnecté, pas seulement un participant désigné.
+            // Si cette fermeture appartenait à une tentative complète en cours, elle vient
+            // précisément de se terminer : le prochain essai peut être programmé dans 4 s.
+            guestAutoReconnectInFlight = false;
             scheduleGuestAutoReconnect();
             renderReconnectButton();
             // Voir échange avec Guillaume ("l'hôte devrait être affiché comme déconnecté
@@ -3420,6 +3459,7 @@ function buildGuestHandlers() {
         // ne provoque pas de fermeture propre de la DataConnection passait complètement
         // inaperçue — ni le statut ni le bouton ne se mettaient à jour.
         onSignalingDisconnected: () => {
+            if (myAttemptToken !== guestJoinAttemptToken) return; // ancien Peer détruit après timeout/nouvel essai
             recordSyncTrace('p2p.guest.signaling-disconnected');
             // Même garde que pour onPeerDisconnected : après une promotion en hôte,
             // l'ancienne connexion invitée est volontairement détruite et ses callbacks
@@ -3428,7 +3468,11 @@ function buildGuestHandlers() {
             setConnectionStatus(deferredRoomMode ? true : false);
             if (deferredRoomMode) enterDeferredGuestCloudContinuityAfterPeerLoss('signaling-disconnected');
             else startDeferredPolling();
-            scheduleGuestAutoReconnect();
+            // Une coupure sur une connexion déjà établie autorise un fallback complet dans
+            // 4 s si le peer.reconnect() léger de PeerJS ne réussit pas avant. Pendant une
+            // tentative complète déjà en cours, scheduleGuestAutoReconnect() verra le flag
+            // et n'empilera rien.
+            if (!guestAutoReconnectInFlight) scheduleGuestAutoReconnect();
             renderReconnectButton();
             // R23 — une coupure du serveur de signalisation n'implique pas que la
             // DataConnection WebRTC vers l'autre joueur soit tombée. En différé, ne pas
@@ -3457,20 +3501,47 @@ function buildGuestHandlers() {
             hideConnectingOverlay();
             if (myAttemptToken !== guestJoinAttemptToken) return; // un nouvel essai a pris le relais entre-temps
             if (deals) {
-                // On était déjà en jeu : pas de retour à l'écran d'accueil, on laisse le
-                // bouton "Se reconnecter" de la barre de connexion (renderReconnectButton).
+                // Reconnexion en cours de partie : conserver intégralement l'état local et
+                // le relais cloud, mais ABANDONNER réellement cet essai P2P arrivé à son
+                // terme. Le prochain sondage repartira 4 s plus tard avec un Peer neuf.
+                guestAutoReconnectInFlight = false;
+                guestJoinAttemptToken++;
+                const timedOutReconnectPeer = peerConn;
+                peerConn = null;
+                if (timedOutReconnectPeer) {
+                    try { timedOutReconnectPeer.destroy(); } catch (e) { /* best-effort */ }
+                }
+                setConnectionStatus(deferredRoomMode ? true : false);
+                scheduleGuestAutoReconnect();
+                renderReconnectButton();
                 return;
             }
-            // Voir même logique que dans onError (cas 'peer-unavailable') : un timeout pur
-            // (parfois le seul signal reçu, selon l'aléa réseau) mérite la même proposition
-            // de reprise cloud avant de conclure à un échec.
+
+            // R37 — le timeout couvre désormais TOUTE la tentative (chargement PeerJS,
+            // signalisation et WebRTC). À l'échéance, il faut aussi réellement ABANDONNER
+            // le Peer en cours : masquer seulement l'overlay laissait auparavant un objet
+            // PeerJS suspendu capable d'émettre plus tard un callback tardif et de remettre
+            // l'interface dans un état incohérent. On invalide d'abord les handlers de
+            // cette tentative, puis on détruit l'objet réseau.
             const roomCodeAttempted = currentRoomCode;
+            guestAutoReconnectInFlight = false;
+            guestJoinAttemptToken++;
+            const timedOutPeer = peerConn;
+            peerConn = null;
+            if (timedOutPeer) {
+                try { timedOutPeer.destroy(); } catch (e) { /* abandon best-effort */ }
+            }
+            setConnectionStatus(false);
+            renderReconnectButton();
+
+            // Même logique que dans onError (cas 'peer-unavailable') : avant de conclure
+            // à un échec, vérifier si ce code correspond à une partie différée reprenable.
             offerCloudResume(roomCodeAttempted).then(offered => {
                 if (offered) return;
                 showScreen('screen-landing');
                 showLandingError(
                     "⚠️ La connexion n'a pas abouti après 45 secondes. Vérifie le code, que l'hôte est " +
-                    "toujours connecté, et ouvre la console (F12) pour plus de détails avant de réessayer."
+                    "toujours connecté, puis réessaie."
                 );
             });
         },
@@ -3517,6 +3588,8 @@ function buildGuestHandlers() {
                     showLandingError('Erreur de connexion : ' + ((err && (err.message || err.type)) || err));
                 }
             } else {
+                guestAutoReconnectInFlight = false;
+                scheduleGuestAutoReconnect();
                 pushDebugLog('Erreur (après connexion déjà établie), ignorée côté interface : ' + ((err && (err.message || err.type)) || err));
             }
         }
@@ -3686,6 +3759,9 @@ function uiNicknamePromptKeydown(event) {
 // exactement comme un rejoin normal.
 function connectAsGuest(code, token, nickname, credentialOverride = null) {
     deferredRoomMode = false;
+    hostReconnectInFlight = false;
+    cancelGuestAutoReconnectTimer();
+    guestAutoReconnectInFlight = false;
     if (peerConn) peerConn.destroy();
     // Statut honnête tout de suite : sans ça, la barre garde l'affichage précédent
     // ("Connecté") pendant tout le temps de la nouvelle connexion, ce qui pouvait laisser
@@ -3780,6 +3856,8 @@ function uiReconnect() {
     // seul si CETTE tentative échoue à son tour (voir onPeerDisconnected/
     // onSignalingDisconnected).
     cancelGuestAutoReconnectTimer();
+    guestAutoReconnectInFlight = true;
+    guestJoinAttemptToken++;
     if (peerConn) peerConn.destroy();
     setConnectionStatus(false);
     peerConn = new BridgePeerConnection(buildGuestHandlers());
@@ -3804,10 +3882,12 @@ function uiReconnect() {
 // n'est toujours pas rétablie après ce délai, on bascule sur la réinitialisation complète
 // plutôt que de laisser le joueur bloqué indéfiniment sur "reconnexion en cours".
 let hostReconnectWatchdogTimer = null;
+let hostReconnectInFlight = false;
 const HOST_RECONNECT_WATCHDOG_MS = 4000;
 
 function uiHostReconnect() {
-    if (myRole !== 'host' || !currentRoomCode) return;
+    if (myRole !== 'host' || !currentRoomCode || hostReconnectInFlight) return;
+    hostReconnectInFlight = true;
     const codeToReclaim = currentRoomCode;
 
     // Tentative légère d'abord : réutilise la connexion existante (voir manualReconnect
@@ -3828,40 +3908,57 @@ function uiHostReconnect() {
     hardResetHostConnection(codeToReclaim);
 }
 
-// Réinitialisation complète : détruit la connexion actuelle, attend un court instant (le
-// temps que le serveur de signalisation PeerJS enregistre cette destruction, pour éviter
-// une collision avec notre PROPRE ancienne session), puis retente sous le même code forcé.
+// Réinitialisation complète : détruit la connexion actuelle, attend un court instant puis
+// retente sous le même code forcé. IMPORTANT : même après destroy(), PeerJS peut garder
+// notre ancien identifiant réservé un peu plus longtemps côté serveur. `unavailable-id`
+// n'est donc considéré comme la preuve d'un AUTRE hôte qu'après une retentative de
+// libération — cohérent avec les chemins de reprise à froid plus bas dans ce fichier.
 function hardResetHostConnection(codeToReclaim) {
     if (peerConn) peerConn.destroy();
     setConnectionStatus(false);
     renderReconnectButton();
     pushDebugLog(`Reconnexion manuelle en tant qu'hôte (nouveau Peer), salle ${codeToReclaim}…`);
 
-    setTimeout(() => {
-        if (myRole !== 'host') return; // entre-temps basculé autrement (ex. déjà résolu)
+    let releaseRetryUsed = false;
+    const attemptReclaim = () => {
+        if (myRole !== 'host') {
+            hostReconnectInFlight = false;
+            return; // entre-temps basculé autrement (ex. déjà résolu)
+        }
         const newPeerConn = new BridgePeerConnection(buildHostHandlers(() => {
-            // État déjà intact (voir plus haut) : juste rafraîchir l'affichage, rien à
-            // reconstruire côté salon/partie.
             renderReconnectButton();
             if (deals) renderBoard(); else renderLobby();
         }));
         peerConn = newPeerConn;
-        // Voir échange avec Guillaume : ICI seulement (après une réinitialisation
-        // complète, pas sur une simple reconnexion automatique — voir le onError partagé
-        // de buildHostHandlers, qui ne bascule plus jamais en invité tout seul) un
-        // 'unavailable-id' signifie que le code PeerJS est encore détenu par un autre peer live,
-        // pas notre propre session zombie, qu'on vient de détruire
-        // proprement juste avant.
         newPeerConn.handlers.onError = (err) => {
+            if (peerConn !== newPeerConn || myRole !== 'host') return; // callback d'un essai remplacé
+            if (err && err.type === 'unavailable-id' && !releaseRetryUsed) {
+                releaseRetryUsed = true;
+                pushDebugLog("Code hôte pas encore libéré côté PeerJS — une retentative avant toute conclusion.");
+                newPeerConn.destroy();
+                setTimeout(() => {
+                    if (myRole !== 'host') {
+                        hostReconnectInFlight = false;
+                        return;
+                    }
+                    attemptReclaim();
+                }, 1500);
+                return;
+            }
             if (err && err.type === 'unavailable-id' && deals) {
-                pushDebugLog("Impossible de reprendre notre rôle d'hôte (déjà repris) — on rejoint la partie comme simple invité.");
+                hostReconnectInFlight = false;
+                pushDebugLog("Le code hôte reste détenu après retentative — on rejoint la partie comme simple invité.");
                 connectAsGuest(codeToReclaim, getReconnectToken(), savedNickname);
                 return;
             }
+            hostReconnectInFlight = false;
+            renderReconnectButton();
             pushDebugLog("Échec de la reconnexion manuelle en tant qu'hôte : " + ((err && (err.message || err.type)) || err));
         };
         newPeerConn.createRoom(6, codeToReclaim);
-    }, 500);
+    };
+
+    setTimeout(attemptReclaim, 500);
 }
 
 let everConnectedAsGuest = false;
@@ -3883,7 +3980,7 @@ function renderReconnectButton() {
     // l'hôte dès qu'il est seul dans son propre salon (aucun invité connecté n'importe
     // vraiment) — sa PROPRE connexion (signalingOpen) est le seul critère qui compte pour
     // lui, indépendamment du nombre d'invités présents.
-    const shouldShow = peerConn && myRole === 'host' && !peerConn.signalingOpen;
+    const shouldShow = peerConn && myRole === 'host' && !peerConn.signalingOpen && !hostReconnectInFlight;
     btn.style.display = shouldShow ? '' : 'none';
 }
 
@@ -4654,12 +4751,13 @@ const SEAT_CLOCKWISE_NEXT = { N: 'E', E: 'S', S: 'W', W: 'N' };
 // Voir échange avec Guillaume ("l'invité ne se reconnecte jamais tout seul") : posé chez
 // TOUT invité déconnecté (voir ARCHITECTURE-P2P-SERVEUR.md, étape 4 — l'ancienne
 // toute distinction de participant de secours a disparu) — retente une reconnexion complète
-// toutes les GUEST_AUTO_RECONNECT_INTERVAL_MS, en tâche de fond, sans qu'aucun clic ne
-// soit nécessaire. Se reprogramme lui-même à chaque tentative tant que la déconnexion
-// dure — onGuestConnected (voir buildGuestHandlers) l'annule dès qu'une reconnexion
-// réussit, qu'elle vienne de ce minuteur ou d'un clic manuel entre-temps.
+// en tâche de fond, sans qu'aucun clic ne soit nécessaire. Le délai
+// GUEST_AUTO_RECONNECT_INTERVAL_MS reste l'intervalle MINIMUM entre deux essais : depuis
+// R38, un essai déjà lancé n'est plus détruit au tick suivant et peut aller jusqu'à son
+// succès/erreur/timeout. onGuestConnected l'annule dès qu'une reconnexion réussit.
 function scheduleGuestAutoReconnect() {
     if (myRole !== 'guest') return;
+    if (guestAutoReconnectInFlight) return; // l'essai courant a jusqu'à 45 s pour se terminer
     if (guestAutoReconnectTimer) return; // déjà programmé, pas la peine d'en reposer un
     guestAutoReconnectTimer = setTimeout(() => {
         guestAutoReconnectTimer = null;
@@ -4676,9 +4774,9 @@ function cancelGuestAutoReconnectTimer() {
 
 // Revérifie tout avant d'agir (le contexte a pu changer entre-temps, ex. déjà reconnecté
 // par un clic manuel juste avant que ce minuteur ne se déclenche) puis retente une
-// reconnexion complète, exactement comme uiReconnect — et se reprogramme pour la
-// prochaine tentative si celle-ci ne suffit pas à elle seule à rétablir la connexion
-// (onGuestConnected annulera ce cycle dès que ça aboutit réellement).
+// reconnexion complète, exactement comme uiReconnect. La prochaine tentative n'est
+// programmée qu'une fois celle-ci terminée (erreur, fermeture ou timeout), jamais pendant
+// qu'elle est encore en vol ; onGuestConnected annule le cycle dès que ça aboutit.
 // Voir échange avec Guillaume ("l'enchère disparaît une fois reconnecté") : incrémenté à
 // chaque nouvelle relecture lancée dans attemptGuestAutoReconnect, ET à chaque
 // reconnexion P2P réussie (voir onGuestConnected) — sert à rejeter une réponse arrivée en
@@ -4692,6 +4790,7 @@ let guestPullSequence = 0;
 
 function attemptGuestAutoReconnect() {
     if (myRole !== 'guest' || !currentRoomCode) return;
+    if (guestAutoReconnectInFlight) return;
     recordSyncTrace('reconnect.guest.attempt');
     if (peerConn && peerConn.isConnected()) return; // déjà reconnecté entre-temps (onGuestConnected a dû annuler ce cycle)
     // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 3) : tant que la reconnexion P2P n'a pas
@@ -4714,13 +4813,19 @@ function attemptGuestAutoReconnect() {
             if (result && result.version > lastKnownCloudVersion) applyCloudUpdate(result);
         }).catch(() => { /* panne réseau passagère, on retentera au prochain tick */ });
     }
+    guestAutoReconnectInFlight = true;
+    guestJoinAttemptToken++;
     if (peerConn) peerConn.destroy();
     peerConn = new BridgePeerConnection(buildGuestHandlers());
     const credential = getGuestRoomCredential(currentRoomCode, true);
-    if (!credential) return;
+    if (!credential) {
+        guestAutoReconnectInFlight = false;
+        return;
+    }
     pushDebugLog(`Reconnexion automatique en arrière-plan au salon ${currentRoomCode} avec l'identité ${credential.participantId.slice(0, 10)}…`);
     peerConn.joinRoom(currentRoomCode, guestConnectionMetadata(currentRoomCode, savedNickname, credential));
-    scheduleGuestAutoReconnect();
+    // Ne PAS reprogrammer ici : l'essai courant a le droit d'aller jusqu'à son succès,
+    // son erreur ou son timeout. Ces chemins programmeront alors le prochain tick à +4 s.
 }
 
 // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 4) : les anciennes fonctions de prise automatique du rôle hôte ont été retirées d'ici —
@@ -6145,8 +6250,46 @@ function handlePeerData(msg, guestIndex) {
             // Gardée dans une variable locale plutôt que relue depuis la globale `peerConn`
             // plus bas : voir le commentaire juste après sur la bascule immédiate de l'état.
             const oldPeerConn = peerConn;
+            const oldHostChannelStillOpen = () => !!(oldPeerConn && oldPeerConn.conns
+                && oldPeerConn.conns.some(c => c && c.open));
+            let claimSettled = false;
+            let claimDeadlineTimer = null;
+            let claimPeer = null;
 
-            const claimPeer = new BridgePeerConnection(buildHostHandlers((newRoomCode) => {
+            const failIncomingHostClaim = (reason) => {
+                if (claimSettled) return;
+                claimSettled = true;
+                if (claimDeadlineTimer) {
+                    clearTimeout(claimDeadlineTimer);
+                    claimDeadlineTimer = null;
+                }
+                if (claimPeer) {
+                    try { claimPeer.destroy(); } catch (e) {}
+                }
+                pushDebugLog('Échec de la prise de rôle hôte : ' + reason);
+                // Ne notifier que si l'ancien canal existe encore réellement. S'il est
+                // déjà tombé, l'ancien hôte annule lui-même le transfert via son handler
+                // onPeerDisconnected ; surtout ne pas promouvoir une nouvelle salle orpheline.
+                if (oldHostChannelStillOpen()) {
+                    oldPeerConn.send({ type: 'become-host-failed', reason });
+                }
+            };
+
+            claimPeer = new BridgePeerConnection(buildHostHandlers((newRoomCode) => {
+                // Le transfert n'est valide que tant que le canal qui porte le handshake
+                // avec l'ancien hôte est encore vivant. Si ce canal est tombé, l'ancien
+                // hôte a déjà annulé le transfert : créer malgré tout une nouvelle salle
+                // ferait diverger les deux joueurs sur deux hôtes différents.
+                if (claimSettled || !oldHostChannelStillOpen()) {
+                    failIncomingHostClaim('connexion avec l’ancien hôte perdue pendant le transfert');
+                    return;
+                }
+                claimSettled = true;
+                if (claimDeadlineTimer) {
+                    clearTimeout(claimDeadlineTimer);
+                    claimDeadlineTimer = null;
+                }
+
                 // BASCULE IMMÉDIATE ET SYNCHRONE de tout l'état global, avant même de
                 // prévenir l'ancien hôte. Sans ça (l'ancienne version attendait 300ms avant
                 // de le faire) : `claimPeer` accepte déjà des connexions entrantes dès son
@@ -6198,13 +6341,20 @@ function handlePeerData(msg, guestIndex) {
                 if (oldPeerConn) oldPeerConn.send({ type: 'become-host-ready', newRoomCode });
                 setTimeout(() => { if (oldPeerConn) oldPeerConn.destroy(); }, 300);
             }));
-            // Repli propre si la création de la nouvelle salle échoue (réseau, etc.) :
-            // prévenir l'ancien hôte plutôt que de le laisser attendre indéfiniment, sans
-            // toucher à quoi que ce soit côté local (on reste un invité normal, connecté
-            // comme avant à l'ancien hôte).
+            // L'ancien hôte abandonne son attente à 20 s. Le futur hôte doit donc arrêter
+            // lui aussi sa création AVANT cette frontière ; sinon une ouverture tardive
+            // pourrait le promouvoir dans une salle que l'ancien hôte considère déjà
+            // annulée. 19 s conserve presque toute la fenêtre existante tout en laissant
+            // une marge au message become-host-ready sur le canal direct.
+            claimDeadlineTimer = setTimeout(() => {
+                failIncomingHostClaim('délai de transfert dépassé');
+            }, 19000);
+
             claimPeer.handlers.onError = (err) => {
-                pushDebugLog('Échec de la prise de rôle hôte : ' + ((err && (err.message || err.type)) || err));
-                if (oldPeerConn) oldPeerConn.send({ type: 'become-host-failed', reason: (err && err.type) || 'erreur inconnue' });
+                failIncomingHostClaim((err && (err.type || err.message)) || 'erreur inconnue');
+            };
+            claimPeer.handlers.onHostOpenTimeout = () => {
+                failIncomingHostClaim('délai de création de la nouvelle salle dépassé');
             };
             claimPeer.createRoom();
             break;

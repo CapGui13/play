@@ -253,12 +253,15 @@ class BridgePeerConnection {
         this.maxGuests = 1;
         this._connectTimeoutId = null;
         this._slowHintTimeoutId = null;
+        this._hostOpenTimeoutId = null;
         this._settled = false; // vrai une fois au moins une connexion établie (désarme les timeouts)
         // Vrai tant que la connexion au serveur de signalisation PeerJS tient (voir
         // isConnected ci-dessous et l'événement 'disconnected' dans createRoom/joinRoom) :
         // distinct de l'état ouvert/fermé des DataConnection p2p elles-mêmes, qui peuvent
         // rester "ouvertes" un moment après une coupure côté signalisation.
-        this.signalingOpen = true;
+        // Faux tant que PeerJS n'a pas réellement émis `open` : une tentative en cours
+        // n'est pas encore une signalisation rétablie.
+        this.signalingOpen = false;
         // Vrai une fois que 'open' s'est déclenché au moins une fois (voir _attemptCreateRoom/
         // _attemptJoinRoom) : distingue un aléa réseau sur la toute première tentative de
         // connexion (retentée automatiquement, voir plus bas) d'une coupure survenant après
@@ -269,6 +272,10 @@ class BridgePeerConnection {
         // Invalide une réservation de code encore en vol si la création est relancée ou
         // détruite avant que le serveur ait répondu.
         this._roomCreateGeneration = 0;
+        // Même garde côté invité : _attemptJoinRoom contient un await (chargement PeerJS).
+        // Si destroy() survient pendant cet await (notamment au timeout global R37), la
+        // continuation tardive ne doit surtout pas recréer un Peer en arrière-plan.
+        this._roomJoinGeneration = 0;
     }
 
     get conn() {
@@ -291,6 +298,37 @@ class BridgePeerConnection {
     _clearTimers() {
         if (this._connectTimeoutId) { clearTimeout(this._connectTimeoutId); this._connectTimeoutId = null; }
         if (this._slowHintTimeoutId) { clearTimeout(this._slowHintTimeoutId); this._slowHintTimeoutId = null; }
+        if (this._hostOpenTimeoutId) { clearTimeout(this._hostOpenTimeoutId); this._hostOpenTimeoutId = null; }
+    }
+
+    _clearHostOpenTimeout() {
+        if (this._hostOpenTimeoutId) {
+            clearTimeout(this._hostOpenTimeoutId);
+            this._hostOpenTimeoutId = null;
+        }
+    }
+
+    // Timeout global de création/reprise hôte, limité à l'ouverture de la signalisation.
+    // Un hôte seul dans son salon est parfaitement valide : on ne peut donc pas réutiliser
+    // le timeout des DataConnections invitées. Ce watchdog couvre réservation du code,
+    // chargement PeerJS et WebSocket, puis se désarme au vrai événement `open`.
+    _armHostOpenTimeout(generation) {
+        this._clearHostOpenTimeout();
+        this._hostOpenTimeoutId = setTimeout(() => {
+            this._hostOpenTimeoutId = null;
+            if (generation !== this._roomCreateGeneration || this._everOpened) return;
+            this._log('Délai dépassé (45s) avant ouverture de la signalisation hôte : abandon.');
+            this.signalingOpen = false;
+            // Invalide aussi un await encore suspendu : sa continuation pourra finir plus
+            // tard, mais ne pourra plus recréer un Peer fantôme après cet abandon.
+            this._roomCreateGeneration++;
+            const stalePeer = this.peer;
+            this.peer = null;
+            if (stalePeer && !stalePeer.destroyed) {
+                try { stalePeer.destroy(); } catch (e) { /* abandon best-effort */ }
+            }
+            if (this.handlers.onHostOpenTimeout) this.handlers.onHostOpenTimeout();
+        }, CONNECTION_TIMEOUT_MS);
     }
 
     _wireConnection(conn, guestIndex) {
@@ -300,11 +338,16 @@ class BridgePeerConnection {
 
         conn.on('close', () => {
             this._log(`DataConnection #${guestIndex} fermée`);
-            // On libère le créneau (au lieu de laisser traîner la connexion fermée) pour
-            // qu'il puisse être réutilisé par une reconnexion, et pour ne pas finir par
-            // épuiser artificiellement `maxGuests` au fil des déconnexions/reconnexions.
-            if (this.conns[guestIndex] === conn) this.conns[guestIndex] = null;
-            if (this.handlers.onPeerDisconnected) this.handlers.onPeerDisconnected(guestIndex);
+            // Une connexion remplacée dans le même créneau peut fermer quelques ms APRÈS
+            // sa remplaçante. Cette fermeture obsolète ne doit pas annoncer la nouvelle
+            // connexion comme déconnectée. Même règle pour un destroy() volontaire.
+            const wasCurrent = this.conns[guestIndex] === conn;
+            if (wasCurrent) {
+                this.conns[guestIndex] = null;
+                if (this.handlers.onPeerDisconnected) this.handlers.onPeerDisconnected(guestIndex);
+            } else {
+                this._log(`DataConnection #${guestIndex} déjà remplacée — fermeture tardive ignorée.`);
+            }
         });
 
         conn.on('error', (err) => {
@@ -419,8 +462,11 @@ class BridgePeerConnection {
         this.maxGuests = cap;
         this._everOpened = false;
         this._connectRetries = 0;
+        this._settled = false;
+        this.signalingOpen = false;
         this._forcedRoomCode = forcedRoomCode || null;
         const generation = ++this._roomCreateGeneration;
+        this._armHostOpenTimeout(generation);
         this._attemptCreateRoom(cap, generation);
     }
 
@@ -471,6 +517,8 @@ class BridgePeerConnection {
         this.peer = new Peer(id, { config: ICE_CONFIG, debug: 1 });
 
         this.peer.on('open', () => {
+            if (generation !== this._roomCreateGeneration) return;
+            this._clearHostOpenTimeout();
             peerPerf('peer-signaling-open', { role: 'host' });
             this._log('Peer hôte ouvert, en attente de connexions...');
             this.signalingOpen = true; // aussi vrai en cas de succès d'un reconnect() après coupure
@@ -480,6 +528,10 @@ class BridgePeerConnection {
         });
 
         this.peer.on('connection', (conn) => {
+            if (generation !== this._roomCreateGeneration) {
+                try { conn.close(); } catch (e) {}
+                return;
+            }
             this._log('Connexion entrante reçue de', conn.peer);
             // Réutilise un créneau libéré par un départ précédent plutôt que d'en créer un
             // nouveau à chaque fois — sinon `maxGuests` finit par être atteint artificiellement
@@ -497,6 +549,7 @@ class BridgePeerConnection {
         });
 
         this.peer.on('disconnected', () => {
+            if (generation !== this._roomCreateGeneration) return;
             this.signalingOpen = false;
             // Voir le journal de diagnostic de Guillaume (4G, ne marchait toujours pas) :
             // 'disconnected' se déclenche AUSSI pendant la toute première tentative de
@@ -538,6 +591,7 @@ class BridgePeerConnection {
         });
 
         this.peer.on('error', (err) => {
+            if (generation !== this._roomCreateGeneration) return;
             this._log('Erreur Peer (hôte) :', err.type, err);
             // Retry uniquement pour la toute première connexion (jamais ouverte ne serait-
             // ce qu'une fois) — passé ce cap, une erreur relève de 'disconnected'/reconnect()
@@ -557,6 +611,7 @@ class BridgePeerConnection {
                 setTimeout(() => this._attemptCreateRoom(cap, generation), INITIAL_CONNECT_RETRY_DELAY_MS);
                 return;
             }
+            this._clearHostOpenTimeout();
             if (this.handlers.onError) this.handlers.onError(err);
         });
     }
@@ -570,7 +625,22 @@ class BridgePeerConnection {
         this.roomCode = roomCode.toUpperCase().trim();
         this._everOpened = false;
         this._connectRetries = 0;
-        this._attemptJoinRoom(metadata);
+        this._settled = false;
+        this.signalingOpen = false;
+
+        // R37 — timeout GLOBAL de connexion invité : il doit commencer dès l'appel à
+        // joinRoom(), AVANT le chargement éventuel de PeerJS et AVANT l'ouverture du
+        // WebSocket de signalisation. Jusqu'ici _armTimeouts() n'était appelé que dans
+        // peer.on('open') : si PeerJS restait bloqué entre la création du Peer et cet
+        // événement (ni 'open' ni 'error'), aucun chrono de 45 s n'existait réellement et
+        // l'interface pouvait mouliner indéfiniment sur « Connexion en cours… ».
+        // Le même chrono couvre maintenant : chargement PeerJS + signalisation + retries +
+        // négociation WebRTC. Une réussite ou une erreur définitive le désarme via les
+        // chemins _wireConnection/_clearTimers déjà existants.
+        this._clearTimers();
+        this._armTimeouts();
+        const generation = ++this._roomJoinGeneration;
+        this._attemptJoinRoom(metadata, generation);
     }
 
     // Une tentative de connexion, isolée pour pouvoir être rejouée telle quelle en cas
@@ -578,11 +648,14 @@ class BridgePeerConnection {
     // signalisation (voir RETRIABLE_ERROR_TYPES et le handler 'error' plus bas) — le code
     // de salon, lui, ne change pas d'une tentative à l'autre (contrairement à
     // _attemptCreateRoom côté hôte).
-    async _attemptJoinRoom(metadata) {
+    async _attemptJoinRoom(metadata, generation = this._roomJoinGeneration) {
+        if (generation !== this._roomJoinGeneration) return;
         const targetId = PEER_ID_PREFIX + this.roomCode;
         try {
             await ensurePeerJsReady();
+            if (generation !== this._roomJoinGeneration) return; // détruit/annulé pendant le await
         } catch (err) {
+            if (generation !== this._roomJoinGeneration) return;
             this._log('Chargement PeerJS impossible :', err);
             if (this.handlers.onError) this.handlers.onError({
                 type: 'peer-library-load-failed',
@@ -595,19 +668,49 @@ class BridgePeerConnection {
         this.peer = new Peer({ config: ICE_CONFIG, debug: 1 });
 
         this.peer.on('open', () => {
+            if (generation !== this._roomJoinGeneration) return;
             peerPerf('peer-signaling-open', { role: 'guest' });
             this._log('Peer invité ouvert, tentative de connexion à', targetId);
+            const isSignalingReconnect = this._everOpened;
             this.signalingOpen = true; // aussi vrai en cas de succès d'un reconnect() après coupure
             this._everOpened = true;
             this._postOpenReconnectAttempts = 0; // nouveau crédit de tentatives à chaque succès
+
+            // Une reconnexion de SIGNALISATION peut réussir alors que le canal WebRTC
+            // direct n'est jamais tombé. Dans ce cas, ne pas créer un deuxième canal : la
+            // fermeture tardive du premier pourrait sinon faire croire que le nouveau vient
+            // de se déconnecter. On conserve le canal vivant et on notifie simplement l'app.
+            const existingConn = this.conns[0];
+            if (existingConn && existingConn.open) {
+                this._settled = true;
+                this._clearTimers();
+                this._log('Signalisation invitée rétablie, DataConnection existante conservée.');
+                if (this.handlers.onGuestConnected) this.handlers.onGuestConnected(0, existingConn.metadata || {});
+                if (this.handlers.onPeerConnected) this.handlers.onPeerConnected(0);
+                if (this.handlers.onOpen) this.handlers.onOpen('guest', this.roomCode);
+                return;
+            }
+            if (existingConn) {
+                this.conns = [];
+                try { existingConn.close(); } catch (e) {}
+            }
+            // Sur une réouverture de signalisation après une connexion historique, les
+            // timeouts initiaux ont déjà été désarmés. Donner au nouveau canal son propre
+            // délai borné évite alors un état intermédiaire sans aucune échéance. Sur le
+            // tout premier join, on garde au contraire le chrono GLOBAL démarré avant
+            // PeerJS (R37), sans le remettre à zéro ici.
+            if (isSignalingReconnect) {
+                this._clearTimers();
+                this._armTimeouts();
+            }
             const conn = this.peer.connect(targetId, { reliable: true, metadata: metadata || {} });
             this.conns = [conn];
-            this._armTimeouts();
             this._wireConnection(conn, 0);
             if (this.handlers.onOpen) this.handlers.onOpen('guest', this.roomCode);
         });
 
         this.peer.on('disconnected', () => {
+            if (generation !== this._roomJoinGeneration) return;
             this.signalingOpen = false;
             // Voir le correctif symétrique côté hôte (_attemptCreateRoom) : même bug de
             // boucle infinie possible ici pendant la toute première tentative de
@@ -642,6 +745,7 @@ class BridgePeerConnection {
         });
 
         this.peer.on('error', (err) => {
+            if (generation !== this._roomJoinGeneration) return;
             this._log('Erreur Peer (invité) :', err.type, err);
             // Retry uniquement pour la toute première connexion (jamais ouverte ne serait-
             // ce qu'une fois) — passé ce cap, une erreur relève de 'disconnected'/reconnect()
@@ -653,7 +757,7 @@ class BridgePeerConnection {
                 this._connectRetries++;
                 this._log(`Nouvelle tentative de connexion (${this._connectRetries}/${MAX_INITIAL_CONNECT_RETRIES}) dans ${INITIAL_CONNECT_RETRY_DELAY_MS}ms...`);
                 if (this.peer && !this.peer.destroyed) this.peer.destroy();
-                setTimeout(() => this._attemptJoinRoom(metadata), INITIAL_CONNECT_RETRY_DELAY_MS);
+                setTimeout(() => this._attemptJoinRoom(metadata, generation), INITIAL_CONNECT_RETRY_DELAY_MS);
                 return;
             }
             this._clearTimers();
@@ -710,10 +814,20 @@ class BridgePeerConnection {
 
     destroy() {
         this._roomCreateGeneration++;
+        this._roomJoinGeneration++;
         this._clearTimers();
-        this.conns.forEach(c => c && c.close());
+        this.signalingOpen = false;
+        // Détacher d'abord les références courantes, PUIS fermer. Si PeerJS émet `close`
+        // synchroniquement pendant c.close(), ces canaux sont déjà identifiés comme
+        // volontairement abandonnés et ne génèrent aucun faux événement de présence.
+        const connsToClose = this.conns.slice();
         this.conns = [];
-        if (this.peer) this.peer.destroy();
+        connsToClose.forEach(c => { try { if (c) c.close(); } catch (e) {} });
+        const peerToDestroy = this.peer;
+        this.peer = null;
+        if (peerToDestroy) {
+            try { peerToDestroy.destroy(); } catch (e) {}
+        }
     }
 }
 
