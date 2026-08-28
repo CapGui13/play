@@ -2007,6 +2007,7 @@ function uiGenerateRandomDeals() {
     }
 
     kickOffBackgroundDD(generated);
+    preparePendingStatisticalParPrewarm(generated);
 }
 
 // ===== Double mort en arrière-plan pour les donnes générées aléatoirement =====
@@ -2177,6 +2178,898 @@ function applyDDResultToBoard(boardNumber, table) {
     }
 }
 
+// ===== Chances statistiques des contrats — version GitHub Pages =====
+//
+// Cette intégration reste 100 % navigateur : aucune dépendance à localhost, à Python,
+// à un .bat ou à un exécutable. Les tables DD des redistributions statistiques sont
+// résolues par l'API HTTPS déjà utilisée par PLAY sur GitHub Pages.
+const CONTRACT_CHANCE_TARGET = 24;
+const CONTRACT_CHANCE_DD_CHUNK_SIZE = 10;
+const CONTRACT_CHANCE_MAX_HTTP = 2;
+const CONTRACT_CHANCE_MAX_ATTEMPTS = 720;
+const CONTRACT_CHANCE_MIN_CONDITIONED = 8;
+const CONTRACT_CHANCE_RETRY_DELAY_MS = 1800;
+const CONTRACT_CHANCE_REMOTE_URL = RANDOM_DEAL_DD_SERVER_URL;
+
+let contractChanceGeneration = 0;
+let contractChanceTaskSequence = 0;
+let contractChanceQueue = [];
+let contractChanceActiveHttp = 0;
+let contractChancePreparedList = null;
+let contractChanceStates = new WeakMap();
+let contractChanceAdvancedDeals = new WeakSet();
+let contractChanceDeferredDeals = new WeakSet();
+let contractChancePumpTimer = null;
+
+function statisticalParSideFromDeclarer(declarer) {
+    const d = String(declarer || '');
+    if (d === 'N' || d === 'S' || d === 'NS') return 'NS';
+    if (d === 'E' || d === 'W' || d === 'EW') return 'EW';
+    return '';
+}
+
+function contractChanceConfigForSide(side) {
+    const normalized = side === 'EW' ? 'EW' : 'NS';
+    const knownSeats = normalized === 'NS' ? ['N', 'S'] : ['E', 'W'];
+    const randomizedSeats = normalized === 'NS' ? ['E', 'W'] : ['N', 'S'];
+    return {
+        ok: true,
+        mode: 'two-known-hands',
+        knownSeats: knownSeats.slice(),
+        humanSeats: knownSeats.slice(),
+        actualHumanSeats: knownSeats.slice(),
+        pendingSeats: [],
+        reservedHumanSeats: knownSeats.slice(),
+        randomizedSeats: randomizedSeats.slice(),
+        botSeats: randomizedSeats.slice(),
+        humanSide: normalized,
+        botSide: normalized === 'NS' ? 'EW' : 'NS',
+        diagnosticPerspective: 'optimal-contract-side'
+    };
+}
+
+function statisticalParAuctionSignature(deal) {
+    return (deal && Array.isArray(deal.auctionHistory) ? deal.auctionHistory : [])
+        .map(entry => String(entry && entry.call || '').trim().toUpperCase())
+        .join(' ');
+}
+
+function statisticalParPublicConditioning(deal, config) {
+    const signature = statisticalParAuctionSignature(deal);
+    if (!signature || !window.PonsEngine || typeof window.PonsEngine.infer !== 'function'
+        || !window.PlayStatisticalPar || typeof window.PlayStatisticalPar.publicConstraintsFromPonsInference !== 'function') {
+        return { key: 'raw', informative: false, constraints: null, signature };
+    }
+    try {
+        // Défense en profondeur : PONS ne reçoit ici aucune main cachée, seulement
+        // le donneur, la vulnérabilité et l'historique PUBLIC de l'enchère.
+        const publicDeal = { dealer: deal && deal.dealer, vulnerable: deal && deal.vulnerable };
+        const publicHistory = (deal && Array.isArray(deal.auctionHistory) ? deal.auctionHistory : [])
+            .map(entry => ({ call: String(entry && entry.call || '') }));
+        const inferred = window.PonsEngine.infer(publicDeal, publicHistory);
+        const constraints = window.PlayStatisticalPar.publicConstraintsFromPonsInference(
+            inferred,
+            publicDeal.dealer,
+            publicHistory.length
+        );
+        const informative = typeof window.PlayStatisticalPar.constraintsAreInformative === 'function'
+            ? window.PlayStatisticalPar.constraintsAreInformative(config, constraints)
+            : !!constraints;
+        return {
+            key: informative ? `pons-public:${signature}` : 'raw',
+            informative,
+            constraints: informative ? constraints : null,
+            signature,
+            source: informative ? 'PONS public auction hulls' : null
+        };
+    } catch (err) {
+        return { key: 'raw', informative: false, constraints: null, signature, error: (err && err.message) || String(err) };
+    }
+}
+
+function contractChanceBuildCandidates(deal, side) {
+    if (!deal || !deal.hands || !window.PlayStatisticalPar
+        || typeof window.PlayStatisticalPar.sampleHandsDeterministic !== 'function') return [];
+    const config = contractChanceConfigForSide(side);
+    const conditioning = statisticalParPublicConditioning(deal, config);
+    const canCondition = !!(conditioning && conditioning.informative
+        && typeof window.PlayStatisticalPar.profilesMatchPublicConstraints === 'function');
+    const buildOne = sampleIndex => {
+        const hands = window.PlayStatisticalPar.sampleHandsDeterministic(deal, config, sampleIndex);
+        const profiles = typeof window.PlayStatisticalPar.profilesForSeats === 'function'
+            ? window.PlayStatisticalPar.profilesForSeats(hands, config.randomizedSeats || [])
+            : null;
+        return { sampleIndex, hands, profiles };
+    };
+
+    if (!canCondition) {
+        return Array.from({ length: CONTRACT_CHANCE_TARGET }, (_, sampleIndex) => buildOne(sampleIndex));
+    }
+
+    const conditioned = [];
+    for (let sampleIndex = 0; sampleIndex < CONTRACT_CHANCE_MAX_ATTEMPTS && conditioned.length < CONTRACT_CHANCE_TARGET; sampleIndex++) {
+        const candidate = buildOne(sampleIndex);
+        if (window.PlayStatisticalPar.profilesMatchPublicConstraints(candidate.profiles, config, conditioning.constraints)) {
+            conditioned.push(candidate);
+        }
+    }
+    // Si les hulls publics PONS sont trop restrictifs, garder exactement la population
+    // brute de 24 redistributions plutôt que de laisser la statistique bloquée.
+    if (conditioned.length >= CONTRACT_CHANCE_MIN_CONDITIONED) return conditioned;
+    return Array.from({ length: CONTRACT_CHANCE_TARGET }, (_, sampleIndex) => buildOne(sampleIndex));
+}
+
+function contractChanceDealState(deal, create = false) {
+    if (!deal) return null;
+    let state = contractChanceStates.get(deal) || null;
+    if (!state && create) {
+        state = {
+            generation: contractChanceGeneration,
+            sides: {
+                NS: { entries: new Map(), queued: new Set(), active: new Set(), failures: 0 },
+                EW: { entries: new Map(), queued: new Set(), active: new Set(), failures: 0 }
+            }
+        };
+        contractChanceStates.set(deal, state);
+    }
+    return state;
+}
+
+function resetContractChancePrewarmPipeline() {
+    contractChanceGeneration++;
+    contractChancePreparedList = null;
+    contractChanceQueue = [];
+    // Les fetch de l'ancienne génération ne sont pas annulables côté serveur : on garde
+    // leur compteur actif jusqu'à leur vrai retour pour ne jamais dépasser la limite HTTP.
+    contractChanceStates = new WeakMap();
+    contractChanceAdvancedDeals = new WeakSet();
+    contractChanceDeferredDeals = new WeakSet();
+    if (contractChancePumpTimer) clearTimeout(contractChancePumpTimer);
+    contractChancePumpTimer = null;
+}
+
+function contractChanceMustYieldToPons() {
+    try {
+        if (robotBoardsResolving && robotBoardsResolving.size) return true;
+    } catch (_) {}
+    // Ne pas lancer le conditionnement PONS statistique juste avant une vraie décision
+    // robot : la décision d'enchère garde toujours la priorité CPU.
+    try {
+        const deal = currentDeal();
+        if (!deal || isAuctionOver(deal.auctionHistory || [])) return false;
+        const turnSeat = currentTurnSeat(deal.dealer, deal.auctionHistory || []);
+        return Array.isArray(autoPassSeats) && autoPassSeats.includes(turnSeat);
+    } catch (_) {
+        return false;
+    }
+}
+
+function contractChancePoolForDeal(deal) {
+    const pools = [
+        Array.isArray(deals) ? deals : null,
+        Array.isArray(pendingOrderedDeals) ? pendingOrderedDeals : null,
+        Array.isArray(pendingParsedDeals) ? pendingParsedDeals : null,
+        Array.isArray(contractChancePreparedList) ? contractChancePreparedList : null
+    ].filter(Boolean);
+    for (const pool of pools) if (pool.includes(deal)) return pool;
+    return pools[0] || [];
+}
+
+function preparePendingStatisticalParPrewarm(list) {
+    if (myRole !== 'host' || !Array.isArray(list) || !list.length) return;
+    if (!window.PlayStatisticalPar || !window.PlayDealerPar) return;
+    resetContractChancePrewarmPipeline();
+    // Si l'ordre aléatoire est déjà choisi dans le salon, préchauffer dans CET ordre :
+    // c'est la première donne réellement jouée qui doit être prête en premier.
+    contractChancePreparedList = (Array.isArray(pendingOrderedDeals) && pendingOrderedDeals.length)
+        ? pendingOrderedDeals
+        : list;
+    for (const deal of list) {
+        if (!deal) continue;
+        deal.statisticalParMode = true;
+        if (!Array.isArray(deal.auctionHistory)) deal.auctionHistory = [];
+    }
+    // Commencer immédiatement par la première donne ; la suivante sera lancée dès que
+    // les 24 redistributions des deux camps de celle-ci sont prêtes.
+    setTimeout(() => contractChanceQueueForDeal(contractChancePreparedList[0], 20), 0);
+}
+
+function contractChanceMarkSessionDeals(list) {
+    if (!Array.isArray(list)) return;
+    contractChancePreparedList = list;
+    for (const deal of list) {
+        if (!deal) continue;
+        deal.statisticalParMode = true;
+        if (!Array.isArray(deal.auctionHistory)) deal.auctionHistory = [];
+    }
+    if (list[0]) contractChanceQueueForDeal(list[0], 100);
+}
+
+function contractChanceQueueForDeal(deal, priority = 20) {
+    if (myRole !== 'host' || !deal || !deal.hands || !deal.statisticalParMode) return;
+    if (!window.PlayStatisticalPar || typeof window.PlayStatisticalPar.sampleHandsDeterministic !== 'function') return;
+    if (contractChanceMustYieldToPons()) {
+        if (!contractChanceDeferredDeals.has(deal)) {
+            contractChanceDeferredDeals.add(deal);
+            setTimeout(() => {
+                contractChanceDeferredDeals.delete(deal);
+                contractChanceQueueForDeal(deal, priority);
+            }, 100);
+        }
+        return;
+    }
+    const state = contractChanceDealState(deal, true);
+    if (!state || state.generation !== contractChanceGeneration) return;
+
+    for (const side of ['NS', 'EW']) {
+        let candidates = [];
+        try { candidates = contractChanceBuildCandidates(deal, side); } catch (_) { candidates = []; }
+        const sideState = state.sides[side];
+        const wanted = new Set(candidates.map(candidate => Number(candidate.sampleIndex)));
+        // Une nouvelle enchère peut modifier le conditionnement public. Retirer de la file
+        // les tirages devenus inutiles évite de gaspiller du DDS avant les échantillons
+        // réellement nécessaires à la position courante ; les résultats déjà calculés sont
+        // conservés car ils peuvent redevenir utiles si le conditionnement évolue encore.
+        contractChanceQueue = contractChanceQueue.filter(task => {
+            if (!task || task.generation !== contractChanceGeneration || task.deal !== deal || task.side !== side) return true;
+            if (wanted.has(Number(task.sampleIndex))) return true;
+            sideState.queued.delete(Number(task.sampleIndex));
+            return false;
+        });
+        for (const candidate of candidates) {
+            const sampleIndex = Number(candidate.sampleIndex);
+            if (sideState.entries.has(sampleIndex) || sideState.queued.has(sampleIndex) || sideState.active.has(sampleIndex)) continue;
+            sideState.queued.add(sampleIndex);
+            contractChanceQueue.push({
+                generation: contractChanceGeneration,
+                deal,
+                side,
+                sampleIndex,
+                hands: candidate.hands,
+                profiles: candidate.profiles,
+                priority: Number(priority || 0),
+                attempts: 0,
+                seq: ++contractChanceTaskSequence
+            });
+        }
+    }
+    pumpContractChanceQueue();
+}
+
+function contractChanceCandidatesReady(deal, side) {
+    const state = contractChanceDealState(deal, false);
+    if (!state || state.generation !== contractChanceGeneration) return false;
+    let candidates = [];
+    try { candidates = contractChanceBuildCandidates(deal, side); } catch (_) { return false; }
+    return candidates.length >= CONTRACT_CHANCE_TARGET
+        && candidates.every(candidate => state.sides[side].entries.has(Number(candidate.sampleIndex)));
+}
+
+function maybeAdvanceContractChancePrewarm(deal) {
+    if (!deal || contractChanceAdvancedDeals.has(deal)) return;
+    if (!contractChanceCandidatesReady(deal, 'NS') || !contractChanceCandidatesReady(deal, 'EW')) return;
+    contractChanceAdvancedDeals.add(deal);
+    const pool = contractChancePoolForDeal(deal);
+    const idx = pool.indexOf(deal);
+    if (idx >= 0 && idx + 1 < pool.length && pool[idx + 1]) {
+        const next = pool[idx + 1];
+        next.statisticalParMode = true;
+        if (!Array.isArray(next.auctionHistory)) next.auctionHistory = [];
+        setTimeout(() => contractChanceQueueForDeal(next, 10), 0);
+    }
+}
+
+function contractChanceSchedulePump(delay = 0) {
+    if (contractChancePumpTimer) return;
+    contractChancePumpTimer = setTimeout(() => {
+        contractChancePumpTimer = null;
+        pumpContractChanceQueue();
+    }, delay);
+}
+
+function pumpContractChanceQueue() {
+    if (contractChanceActiveHttp >= CONTRACT_CHANCE_MAX_HTTP || !contractChanceQueue.length) return;
+    if (contractChanceMustYieldToPons()) {
+        contractChanceSchedulePump(100);
+        return;
+    }
+
+    while (contractChanceActiveHttp < CONTRACT_CHANCE_MAX_HTTP && contractChanceQueue.length) {
+        contractChanceQueue.sort((a, b) => Number(b.priority || 0) - Number(a.priority || 0) || a.seq - b.seq);
+        const first = contractChanceQueue.shift();
+        if (!first || first.generation !== contractChanceGeneration) continue;
+        const state = contractChanceDealState(first.deal, false);
+        const sideState = state && state.sides[first.side];
+        if (!sideState || sideState.entries.has(first.sampleIndex)) {
+            if (sideState) sideState.queued.delete(first.sampleIndex);
+            continue;
+        }
+
+        const batch = [first];
+        for (let i = 0; i < contractChanceQueue.length && batch.length < CONTRACT_CHANCE_DD_CHUNK_SIZE;) {
+            const task = contractChanceQueue[i];
+            if (task && task.generation === first.generation && task.deal === first.deal && task.side === first.side) {
+                batch.push(task);
+                contractChanceQueue.splice(i, 1);
+            } else i++;
+        }
+        for (const task of batch) {
+            sideState.queued.delete(task.sampleIndex);
+            sideState.active.add(task.sampleIndex);
+        }
+        contractChanceActiveHttp++;
+        contractChanceSolveBatch(batch)
+            .catch(() => {})
+            .finally(() => {
+                contractChanceActiveHttp = Math.max(0, contractChanceActiveHttp - 1);
+                contractChanceSchedulePump(0);
+            });
+    }
+}
+
+async function contractChanceSolveBatch(batch) {
+    if (!batch || !batch.length) return;
+    const generation = batch[0].generation;
+    const deal = batch[0].deal;
+    const side = batch[0].side;
+    const state = contractChanceDealState(deal, false);
+    const sideState = state && state.sides[side];
+    if (!sideState) return;
+    const items = batch.map((task, i) => ({ id: i + 1, pbn: dealToPbnStringForDD({ hands: task.hands }) }));
+    const byId = new Map(batch.map((task, i) => [String(i + 1), task]));
+    const succeeded = new Set();
+    let error = null;
+    try {
+        const response = await fetch(CONTRACT_CHANCE_REMOTE_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ items })
+        });
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        const data = await response.json();
+        if (generation !== contractChanceGeneration) return;
+        for (const row of (data && Array.isArray(data.results) ? data.results : [])) {
+            if (!row || !row.table) continue;
+            const task = byId.get(String(row.id));
+            if (!task) continue;
+            succeeded.add(task.sampleIndex);
+            sideState.entries.set(task.sampleIndex, {
+                table: row.table,
+                profiles: task.profiles,
+                sampleIndex: task.sampleIndex,
+                fixedSide: side
+            });
+        }
+    } catch (err) {
+        error = err;
+        if (generation === contractChanceGeneration) sideState.failures++;
+    } finally {
+        if (generation !== contractChanceGeneration) return;
+        for (const task of batch) {
+            sideState.active.delete(task.sampleIndex);
+            if (succeeded.has(task.sampleIndex) || sideState.entries.has(task.sampleIndex)) continue;
+            const attempts = Number(task.attempts || 0) + 1;
+            if (attempts <= 2) {
+                task.attempts = attempts;
+                task.priority = Math.max(1, Number(task.priority || 0) - 1);
+                sideState.queued.add(task.sampleIndex);
+                contractChanceQueue.push(task);
+            } else {
+                // Un incident DDS ne doit jamais laisser x/24 figé pour toujours : après
+                // un délai, la donne reconstitue seulement les échantillons manquants.
+                setTimeout(() => {
+                    if (generation === contractChanceGeneration) contractChanceQueueForDeal(deal, 90);
+                }, CONTRACT_CHANCE_RETRY_DELAY_MS);
+            }
+        }
+        if (error && typeof pushDebugLog === 'function') {
+            pushDebugLog(`Chances statistiques ${side} : lot DDS à retenter (${(error && error.message) || error}).`);
+        }
+        maybeAdvanceContractChancePrewarm(deal);
+        refreshContractChanceDisplayForDeal(deal);
+    }
+}
+
+function contractChanceSelectedEntries(deal, side) {
+    const state = contractChanceDealState(deal, false);
+    if (!state || state.generation !== contractChanceGeneration) return [];
+    let candidates = [];
+    try { candidates = contractChanceBuildCandidates(deal, side); } catch (_) { candidates = []; }
+    const rows = [];
+    for (const candidate of candidates.slice(0, CONTRACT_CHANCE_TARGET)) {
+        const entry = state.sides[side].entries.get(Number(candidate.sampleIndex));
+        if (entry) rows.push(entry);
+    }
+    return rows;
+}
+
+function actualDealParFromKnownDeal(deal) {
+    if (!deal) return null;
+    if (deal.ddTable && window.PlayDealerPar && typeof window.PlayDealerPar.dealerPar === 'function') {
+        try {
+            const exact = window.PlayDealerPar.dealerPar(deal.ddTable, deal.dealer, deal.vulnerable);
+            if (exact && Array.isArray(exact.contracts) && exact.contracts.length) return exact;
+        } catch (_) {}
+    }
+    return null;
+}
+
+function optimalContractSide(contract) {
+    return statisticalParSideFromDeclarer(contract && contract.declarer);
+}
+
+function optimalContractSeatCandidates(contract) {
+    const d = String(contract && contract.declarer || '');
+    if (d === 'NS') return ['N', 'S'];
+    if (d === 'EW') return ['E', 'W'];
+    return ['N', 'E', 'S', 'W'].includes(d) ? [d] : [];
+}
+
+function optimalContractTricks(table, contract) {
+    if (!table || !contract || contract.passout) return null;
+    const strain = contract.strain === 'NT' ? 'N' : contract.strain;
+    const vals = optimalContractSeatCandidates(contract)
+        .map(seat => Number(table && table[strain] && table[strain][seat]))
+        .filter(Number.isFinite);
+    return vals.length ? Math.max(...vals) : null;
+}
+
+function optimalContractDuplicateScore(table, contract, vulnerability) {
+    if (!window.PlayDealerPar || typeof window.PlayDealerPar.duplicateContractScore !== 'function' || !contract || contract.passout) return null;
+    const side = optimalContractSide(contract);
+    const scores = optimalContractSeatCandidates(contract).map(seat => {
+        return Number(window.PlayDealerPar.duplicateContractScore(table, { ...contract, declarer: seat }, vulnerability));
+    }).filter(Number.isFinite);
+    if (!scores.length) return null;
+    return side === 'EW' ? Math.min(...scores) : Math.max(...scores);
+}
+
+function contractChanceTierForContract(contract) {
+    if (!contract || contract.passout) return 'contract';
+    const level = Number(contract.level || 0);
+    const strain = contract.strain === 'NT' ? 'N' : contract.strain;
+    if (level >= 6) return 'slam';
+    if ((strain === 'N' && level >= 3)
+        || ((strain === 'H' || strain === 'S') && level >= 4)
+        || ((strain === 'C' || strain === 'D') && level >= 5)) return 'game';
+    return 'partial';
+}
+
+function optimalContractTargetKey(target) {
+    if (!target) return '';
+    return [target.kind || 'make', target.level, target.strain, target.declarer || '', target.doubled || '', target.side || ''].join(':');
+}
+
+function bestMakingTargetsForSide(deal, side, scored = null) {
+    if (!deal || !deal.ddTable) return [];
+    const data = scored || computeDDScores(deal.ddTable, deal.vulnerable);
+    const summary = data.sideSummary && data.sideSummary[side];
+    if (!summary || !summary.activeTier || !Number.isFinite(Number(summary.bestScore))) return [];
+    const seats = side === 'NS' ? ['N', 'S'] : ['E', 'W'];
+    const groups = new Map();
+    for (const strain of STRAIN_ORDER) {
+        for (const seat of seats) {
+            const cell = data.info && data.info[strain] && data.info[strain][seat];
+            if (!cell || cell.tier !== summary.activeTier || Number(cell.score) !== Number(summary.bestScore)) continue;
+            const maxLevel = Number(deal.ddTable[strain] && deal.ddTable[strain][seat]) - 6;
+            if (!(maxLevel >= 1 && maxLevel <= 7)) continue;
+            let level = maxLevel;
+            if (summary.activeTier === 'game') {
+                level = strain === 'N' ? 3 : ((strain === 'H' || strain === 'S') ? 4 : 5);
+            } else if (summary.activeTier === 'slam') {
+                level = maxLevel >= 7 ? 7 : 6;
+            }
+            if (level > maxLevel) continue;
+            const key = `${level}${strain}`;
+            if (!groups.has(key)) groups.set(key, { level, strain, seats: [] });
+            groups.get(key).seats.push(seat);
+        }
+    }
+    return Array.from(groups.values()).map(group => ({
+        id: `make:${side}:${group.level}${group.strain}`,
+        kind: 'make', side, tier: summary.activeTier, level: group.level, strain: group.strain,
+        declarer: group.seats.length > 1 ? side : group.seats[0], doubled: '', actualBestScore: Number(summary.bestScore)
+    }));
+}
+
+function nextSacrificeLevel(opponentContract, strain) {
+    if (!opponentContract) return null;
+    const rank = { C: 0, D: 1, H: 2, S: 3, N: 4, NT: 4 };
+    const oppRank = rank[opponentContract.strain] ?? -1;
+    const ourRank = rank[strain] ?? -1;
+    let level = Number(opponentContract.level || 0);
+    if (ourRank <= oppRank) level++;
+    return level >= 1 && level <= 7 ? level : null;
+}
+
+function exactSacrificeTargetsForSide(deal, side) {
+    const exact = actualDealParFromKnownDeal(deal);
+    const out = [];
+    for (const contract of (exact && exact.contracts || [])) {
+        if (!contract || contract.passout || optimalContractSide(contract) !== side) continue;
+        const tricks = optimalContractTricks(deal.ddTable, contract);
+        const target = Number(contract.level || 0) + 6;
+        if (!contract.doubled || !Number.isFinite(tricks) || tricks >= target) continue;
+        out.push({
+            id: `sac:${side}:${contract.level}${contract.strain}:${contract.declarer || side}`,
+            kind: 'sacrifice', side, tier: 'sacrifice', level: Number(contract.level),
+            strain: contract.strain, declarer: contract.declarer || side,
+            doubled: contract.doubled || 'X', actualDelta: tricks - target
+        });
+    }
+    return out;
+}
+
+function syntheticSacrificeTarget(deal, partialSide, partialTarget, opponentTarget) {
+    if (!partialTarget || !opponentTarget) return null;
+    const level = nextSacrificeLevel(opponentTarget, partialTarget.strain);
+    if (!level) return null;
+    const candidate = {
+        id: `sac:${partialSide}:${level}${partialTarget.strain}:${partialTarget.declarer || partialSide}`,
+        kind: 'sacrifice', side: partialSide, tier: 'sacrifice', level,
+        strain: partialTarget.strain, declarer: partialTarget.declarer || partialSide,
+        doubled: 'X', synthetic: true
+    };
+    const sacScore = optimalContractDuplicateScore(deal.ddTable, candidate, deal.vulnerable);
+    const oppScore = optimalContractDuplicateScore(deal.ddTable, opponentTarget, deal.vulnerable);
+    if (!Number.isFinite(sacScore) || !Number.isFinite(oppScore)) return null;
+    const profitable = partialSide === 'NS' ? sacScore >= oppScore : sacScore <= oppScore;
+    if (!profitable) return null;
+    const tricks = optimalContractTricks(deal.ddTable, candidate);
+    candidate.actualDelta = Number.isFinite(tricks) ? tricks - (level + 6) : null;
+    return candidate;
+}
+
+function optimalContractTargetsForDeal(deal) {
+    if (!deal || !deal.ddTable) return [];
+    const scored = computeDDScores(deal.ddTable, deal.vulnerable);
+    const visibility = computeSacrificeAwareVisibility(deal.ddTable, deal.vulnerable, scored.info, scored.sideSummary);
+    const making = { NS: bestMakingTargetsForSide(deal, 'NS', scored), EW: bestMakingTargetsForSide(deal, 'EW', scored) };
+    const targets = [];
+    const add = target => {
+        if (!target) return;
+        const key = optimalContractTargetKey(target);
+        if (!targets.some(existing => optimalContractTargetKey(existing) === key)) targets.push(target);
+    };
+    const nsTier = scored.sideSummary.NS && scored.sideSummary.NS.activeTier;
+    const ewTier = scored.sideSummary.EW && scored.sideSummary.EW.activeTier;
+    const isBig = tier => tier === 'game' || tier === 'slam';
+    if (nsTier === 'partial' && ewTier === 'partial') {
+        making.NS.forEach(add); making.EW.forEach(add);
+    } else {
+        if (isBig(nsTier)) making.NS.forEach(add);
+        if (isBig(ewTier)) making.EW.forEach(add);
+        if (nsTier === 'partial' && !ewTier) making.NS.forEach(add);
+        if (ewTier === 'partial' && !nsTier) making.EW.forEach(add);
+        for (const partialSide of ['NS', 'EW']) {
+            const otherSide = partialSide === 'NS' ? 'EW' : 'NS';
+            const partialTier = scored.sideSummary[partialSide] && scored.sideSummary[partialSide].activeTier;
+            const otherTier = scored.sideSummary[otherSide] && scored.sideSummary[otherSide].activeTier;
+            if (partialTier !== 'partial' || !isBig(otherTier) || !visibility[partialSide]) continue;
+            const exactSacrifices = exactSacrificeTargetsForSide(deal, partialSide);
+            if (exactSacrifices.length) exactSacrifices.forEach(add);
+            else add(syntheticSacrificeTarget(deal, partialSide, making[partialSide][0], making[otherSide][0]));
+        }
+    }
+    for (const side of ['NS', 'EW']) {
+        for (const sac of exactSacrificeTargetsForSide(deal, side)) {
+            add(sac);
+            const other = side === 'NS' ? 'EW' : 'NS';
+            if (!targets.some(t => t.kind === 'make' && t.side === other)) making[other].forEach(add);
+        }
+    }
+    const order = { slam: 0, game: 1, sacrifice: 2, partial: 3 };
+    targets.sort((a, b) => (order[a.tier] ?? 9) - (order[b.tier] ?? 9) || a.side.localeCompare(b.side) || a.level - b.level);
+    return targets.slice(0, 6);
+}
+
+function playedContractChanceTarget(contract) {
+    if (!contract || contract.passout) return null;
+    const side = statisticalParSideFromDeclarer(contract.declarer);
+    const strain = contract.strain === 'NT' ? 'N' : contract.strain;
+    const level = Number(contract.level || 0);
+    if (!side || !(level >= 1 && level <= 7) || !STRAIN_ORDER.includes(strain)) return null;
+    return {
+        id: `played:${side}:${level}${strain}:${contract.declarer || side}`,
+        kind: 'make', side, tier: contractChanceTierForContract(contract), level, strain,
+        declarer: contract.declarer || side, doubled: contract.doubled || '',
+        isParTarget: false, isPlayed: true
+    };
+}
+
+function ddChanceCellMeta(strain, pos, ddTable, info, sideSummary, sideVisibility) {
+    const cellInfo = info[strain][pos];
+    const summary = sideSummary[cellInfo.side];
+    let cls = '';
+    if (sideVisibility[cellInfo.side] && summary.activeTier && cellInfo.tier === summary.activeTier) {
+        if (cellInfo.score === summary.bestScore) cls = 'dd-best-contract';
+        else if (summary.activeTier !== 'partial') cls = 'dd-secondary-contract';
+    }
+    return { cls, side: cellInfo.side, level: Number(ddTable[strain][pos]) - 6, text: tricksToContractLevel(ddTable[strain][pos]) };
+}
+
+function ddChanceTableTarget(side, strain, declarer, cell) {
+    const level = Number(cell && cell.level || 0);
+    if (!(level >= 1 && level <= 7)) return null;
+    return {
+        id: `table:${side}:${level}${strain}:${declarer}`,
+        kind: 'make', side, tier: contractChanceTierForContract({ level, strain }), level, strain, declarer,
+        doubled: '', isParTarget: true, isPlayed: false, isTableTarget: true,
+        isBestTableTarget: !!(cell && cell.cls === 'dd-best-contract'), rowStrain: strain
+    };
+}
+
+function ddTableChanceTargetsForDeal(deal) {
+    if (!deal || !deal.ddTable) return [];
+    const { info, sideSummary } = computeDDScores(deal.ddTable, deal.vulnerable);
+    const sideVisibility = computeSacrificeAwareVisibility(deal.ddTable, deal.vulnerable, info, sideSummary);
+    const targets = [];
+    const add = target => {
+        if (!target) return;
+        const key = optimalContractTargetKey(target);
+        if (!targets.some(existing => optimalContractTargetKey(existing) === key)) targets.push(target);
+    };
+    const collectPair = (strain, side, posA, posB) => {
+        const a = ddChanceCellMeta(strain, posA, deal.ddTable, info, sideSummary, sideVisibility);
+        const b = ddChanceCellMeta(strain, posB, deal.ddTable, info, sideSummary, sideVisibility);
+        const merged = a.text === b.text && a.cls === b.cls;
+        if (merged) add(ddChanceTableTarget(side, strain, side, a));
+        else { add(ddChanceTableTarget(side, strain, posA, a)); add(ddChanceTableTarget(side, strain, posB, b)); }
+    };
+    for (const strain of STRAIN_ORDER) {
+        collectPair(strain, 'NS', 'N', 'S');
+        collectPair(strain, 'EW', 'E', 'W');
+    }
+    return targets;
+}
+
+function contractChanceAuctionAnnouncedStrains(deal) {
+    const announced = new Set();
+    for (const entry of (deal && deal.auctionHistory || [])) {
+        const bid = parseBid(entry && entry.call || '');
+        if (bid) announced.add(bid.strain === 'NT' ? 'N' : bid.strain);
+    }
+    return announced;
+}
+
+function contractChanceAuctionMajorFits(deal) {
+    const byStrain = { H: { NS: new Set(), EW: new Set() }, S: { NS: new Set(), EW: new Set() } };
+    for (const entry of (deal && deal.auctionHistory || [])) {
+        const bid = parseBid(entry && entry.call || '');
+        const strain = bid && (bid.strain === 'NT' ? 'N' : bid.strain);
+        const seat = entry && entry.seat;
+        if (!bid || (strain !== 'H' && strain !== 'S') || !seat) continue;
+        const side = statisticalParSideFromDeclarer(seat);
+        if (side && byStrain[strain][side]) byStrain[strain][side].add(seat);
+    }
+    const fits = new Set();
+    for (const strain of ['H', 'S']) {
+        for (const side of ['NS', 'EW']) {
+            if (byStrain[strain][side].size >= 2) { fits.add(`${side}:${strain}`); continue; }
+            // Soutien conventionnel : une majeure nommée au moins une fois + 8 cartes
+            // réellement détenues par le camp suffit à reconnaître le fit.
+            if (byStrain[strain][side].size >= 1 && deal && deal.hands) {
+                const seats = side === 'NS' ? ['N', 'S'] : ['E', 'W'];
+                const fitLength = seats.reduce((sum, seat) => sum + String(deal.hands[seat] && deal.hands[seat][strain] || '').length, 0);
+                if (fitLength >= 8) fits.add(`${side}:${strain}`);
+            }
+        }
+    }
+    return fits;
+}
+
+function contractChanceSidesWithWinningMajorFitGame(deal, tableTargets = null) {
+    const fits = contractChanceAuctionMajorFits(deal);
+    const targets = Array.isArray(tableTargets) ? tableTargets : ddTableChanceTargetsForDeal(deal);
+    const sides = new Set();
+    for (const target of targets) {
+        if (!target || (target.strain !== 'H' && target.strain !== 'S') || Number(target.level || 0) < 4) continue;
+        if (fits.has(`${target.side}:${target.strain}`)) sides.add(target.side);
+    }
+    return sides;
+}
+
+function contractChanceSameStrainTableTarget(deal, contract) {
+    const played = playedContractChanceTarget(contract);
+    if (!played) return null;
+    const candidates = ddTableChanceTargetsForDeal(deal).filter(target => target.side === played.side && target.strain === played.strain);
+    if (!candidates.length) return null;
+    return candidates.find(target => target.declarer === played.declarer)
+        || candidates.find(target => target.declarer === played.side)
+        || candidates.sort((a, b) => Number(b.level || 0) - Number(a.level || 0))[0]
+        || null;
+}
+
+function relevantContractChanceSidecarTargets(deal, contract) {
+    const played = playedContractChanceTarget(contract);
+    if (!played || !deal || !deal.ddTable) return [];
+    const announced = contractChanceAuctionAnnouncedStrains(deal);
+    const tableTargets = ddTableChanceTargetsForDeal(deal);
+    const sidesWithWinningMajorFitGame = contractChanceSidesWithWinningMajorFitGame(deal, tableTargets);
+    const otherSide = played.side === 'NS' ? 'EW' : 'NS';
+    const targets = [];
+    const add = target => {
+        if (!target) return;
+        const decorated = { ...target, isDisplayTarget: true, rowStrain: target.rowStrain || target.strain };
+        const key = optimalContractTargetKey(decorated);
+        if (!targets.some(existing => optimalContractTargetKey(existing) === key)) targets.push(decorated);
+    };
+    add(contractChanceSameStrainTableTarget(deal, contract));
+    for (const target of tableTargets) {
+        if (!target.isBestTableTarget) continue;
+        const isGameOrSlam = target.tier === 'game' || target.tier === 'slam';
+        if (isGameOrSlam) {
+            // Avec un fit majeur et une manche majeure gagnante, la manche à SA du même
+            // camp est inutile ; un chelem à SA reste en revanche pertinent.
+            if (target.strain === 'N' && target.tier === 'game' && sidesWithWinningMajorFitGame.has(target.side)) continue;
+            add(target);
+            continue;
+        }
+        if (target.side === otherSide && announced.has(target.strain)) add(target);
+    }
+    for (const target of optimalContractTargetsForDeal(deal)) {
+        if (target.side === otherSide && target.kind === 'sacrifice' && announced.has(target.strain)) {
+            add({ ...target, isParTarget: true, isTableTarget: false });
+        }
+    }
+    return targets;
+}
+
+function contractChanceTargetsForDeal(deal, contract) {
+    const displayTargets = relevantContractChanceSidecarTargets(deal, contract).map(target => ({ ...target, isPlayed: false, isReferenceOnly: false }));
+    const targets = displayTargets.slice();
+    const add = target => {
+        if (!target) return;
+        const key = optimalContractTargetKey(target);
+        const existing = targets.find(item => optimalContractTargetKey(item) === key);
+        if (existing) { if (target.isPlayed) existing.isPlayed = true; return; }
+        targets.push(target);
+    };
+    add(playedContractChanceTarget(contract));
+    const sacrifices = displayTargets.filter(target => target.kind === 'sacrifice');
+    if (sacrifices.length) {
+        const optimal = optimalContractTargetsForDeal(deal);
+        for (const sacrifice of sacrifices) {
+            const referenceSide = sacrifice.side === 'NS' ? 'EW' : 'NS';
+            for (const reference of optimal) {
+                if (reference.kind === 'make' && reference.side === referenceSide) {
+                    add({ ...reference, isParTarget: true, isPlayed: false, isReferenceOnly: true, isDisplayTarget: false });
+                }
+            }
+        }
+    }
+    return targets;
+}
+
+function opponentReferenceScore(table, target, targets, vulnerability) {
+    const otherSide = target.side === 'NS' ? 'EW' : 'NS';
+    const refs = (targets || []).filter(t => t.kind === 'make' && t.side === otherSide && t.isParTarget !== false);
+    const scores = refs.map(t => optimalContractDuplicateScore(table, t, vulnerability)).filter(Number.isFinite);
+    if (!scores.length) return null;
+    return otherSide === 'NS' ? Math.max(...scores) : Math.min(...scores);
+}
+
+function contractChanceTargetProgress(deal, contract, target) {
+    if (!deal || !target) return { n: 0, done: false, text: `0/${CONTRACT_CHANCE_TARGET}`, successPct: 0 };
+    const rows = contractChanceSelectedEntries(deal, target.side);
+    const targets = contractChanceTargetsForDeal(deal, contract);
+    const targetTricks = Number(target.level || 0) + 6;
+    let successes = 0;
+    let samples = 0;
+    for (const entry of rows) {
+        const table = entry && entry.table ? entry.table : entry;
+        const tricks = optimalContractTricks(table, target);
+        if (!Number.isFinite(tricks)) continue;
+        samples++;
+        if (target.kind === 'sacrifice') {
+            const sacScore = optimalContractDuplicateScore(table, target, deal.vulnerable);
+            const refScore = opponentReferenceScore(table, target, targets, deal.vulnerable);
+            if (Number.isFinite(sacScore) && Number.isFinite(refScore)) {
+                const profitable = target.side === 'NS' ? sacScore >= refScore : sacScore <= refScore;
+                if (profitable) successes++;
+            }
+        } else if (tricks >= targetTricks) successes++;
+    }
+    const done = samples >= CONTRACT_CHANCE_TARGET;
+    const pct = samples ? 100 * successes / samples : 0;
+    return { n: samples, done, successPct: pct, text: done ? `${pct.toFixed(0)}%` : `${samples}/${CONTRACT_CHANCE_TARGET}` };
+}
+
+function renderPlayedContractChanceHeader(root, deal, contract) {
+    if (!root) return;
+    const header = root.querySelector('.contract-final-text');
+    if (!header) return;
+    header.querySelectorAll('.contract-final-chance').forEach(node => node.remove());
+    const target = playedContractChanceTarget(contract);
+    if (!target || !deal || !deal.ddTable || myRole !== 'host') return;
+    const progress = contractChanceTargetProgress(deal, contract, target);
+    header.insertAdjacentHTML(
+        'beforeend',
+        `<span class="contract-final-chance${progress.done ? ' is-done' : ''}" aria-label="Chance statistique du contrat joué">· ${escapeHtml(progress.text)}</span>`
+    );
+}
+
+function contractChanceSidecarTargetHtml(deal, contract, target) {
+    const progress = contractChanceTargetProgress(deal, contract, target);
+    return `<span class="dd-chance-item"><strong class="dd-chance-value${progress.done ? ' is-done' : ''}">${escapeHtml(progress.text)}</strong></span>`;
+}
+
+function syncContractChanceSidecarRows(root) {
+    if (!root) return;
+    const wrapper = root.querySelector('.dd-table-with-stats');
+    const table = wrapper && wrapper.querySelector('table.dd-table');
+    const sidecar = wrapper && wrapper.querySelector('.dd-chance-sidecar');
+    if (!wrapper || !table || !sidecar || !sidecar.classList.contains('is-visible')) return;
+    const tableRect = table.getBoundingClientRect();
+    if (!Number.isFinite(tableRect.height) || tableRect.height <= 0) return;
+    sidecar.style.height = `${tableRect.height}px`;
+    for (const strain of STRAIN_ORDER) {
+        const tableRow = table.querySelector(`tbody tr[data-dd-strain="${strain}"]`);
+        const chanceRow = sidecar.querySelector(`[data-dd-chance-strain="${strain}"]`);
+        if (!tableRow || !chanceRow) continue;
+        const rowRect = tableRow.getBoundingClientRect();
+        const centerY = rowRect.top - tableRect.top + (rowRect.height / 2);
+        chanceRow.style.top = `${centerY}px`;
+    }
+    if (typeof ResizeObserver === 'function' && !wrapper.__ddChanceRowObserver) {
+        const observer = new ResizeObserver(() => syncContractChanceSidecarRows(root));
+        observer.observe(table);
+        wrapper.__ddChanceRowObserver = observer;
+    }
+}
+
+function renderContractChanceSidecar(root, deal, contract) {
+    if (!root) return;
+    const sidecar = root.querySelector('.dd-chance-sidecar');
+    if (!sidecar) return;
+    sidecar.innerHTML = '';
+    sidecar.classList.remove('is-visible');
+    if (!deal || !deal.ddTable || myRole !== 'host') return;
+    const targets = relevantContractChanceSidecarTargets(deal, contract);
+    if (!targets.length) return;
+    const grouped = Object.fromEntries(STRAIN_ORDER.map(strain => [strain, []]));
+    for (const target of targets) {
+        const row = target && (target.rowStrain || target.strain);
+        if (row && grouped[row]) grouped[row].push(target);
+    }
+    const declarerOrder = { NS: 0, N: 0, S: 1, EW: 2, E: 2, W: 3 };
+    for (const strain of STRAIN_ORDER) {
+        grouped[strain].sort((a, b) => (declarerOrder[a.declarer] ?? 9) - (declarerOrder[b.declarer] ?? 9)
+            || Number(b.level || 0) - Number(a.level || 0));
+    }
+    sidecar.innerHTML = `
+        <div class="dd-chance-spacer" aria-hidden="true"></div>
+        ${STRAIN_ORDER.map(strain => {
+            const html = grouped[strain].map(target => contractChanceSidecarTargetHtml(deal, contract, target)).join('<span class="dd-chance-sep">·</span>');
+            return `<div class="dd-chance-row" data-dd-chance-strain="${strain}">${html}</div>`;
+        }).join('')}
+    `;
+    sidecar.classList.add('is-visible');
+    syncContractChanceSidecarRows(root);
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => syncContractChanceSidecarRows(root));
+}
+
+function renderInlineParChances(root, deal, contract) {
+    renderPlayedContractChanceHeader(root, deal, contract);
+    renderContractChanceSidecar(root, deal, contract);
+}
+
+function refreshContractChanceDisplayForDeal(deal) {
+    if (!deals || !deal || currentDeal() !== deal || !isAuctionOver(auctionHistory)) return;
+    const root = document.getElementById('contractResult');
+    if (!root || !root.querySelector('.contract-final-header')) return;
+    const contract = determineContract(auctionHistory);
+    if (!contract) return;
+    renderInlineParChances(root, deal, contract);
+}
+
+function ensureContractChanceFinalCalculation(deal) {
+    if (myRole !== 'host' || !deal || !deal.statisticalParMode) return;
+    contractChanceQueueForDeal(deal, 100);
+    maybeAdvanceContractChancePrewarm(deal);
+}
+
+
 // Recalcule pendingOrderedDeals à partir de pendingParsedDeals et de l'état actuel de la
 // case à cocher. Appelé au chargement du fichier et à chaque bascule de la case.
 function refreshPendingOrderedDeals() {
@@ -2188,6 +3081,10 @@ function refreshPendingOrderedDeals() {
     pendingOrderedDeals = (checkbox && checkbox.checked)
         ? shuffleDealsArray(pendingParsedDeals)
         : pendingParsedDeals;
+    if (contractChancePreparedList && pendingOrderedDeals && pendingOrderedDeals.length) {
+        contractChancePreparedList = pendingOrderedDeals;
+        contractChanceQueueForDeal(pendingOrderedDeals[0], 20);
+    }
 }
 
 // Appelé par la case "Ordre aléatoire des donnes" du salon d'attente.
@@ -5509,6 +6406,7 @@ function updateDealFileNameDisplay() {
 
 function uiHandleDealFileChosen() {
     const fileInput = document.getElementById('dealFileInput');
+    resetContractChancePrewarmPipeline();
     pendingParsedDeals = null;
     pendingParsedSource = null;
     pendingOrderedDeals = null;
@@ -5533,12 +6431,14 @@ function uiHandleDealFileChosen() {
         pendingParsedSource = file;
         pendingParsedDeals = parsedDeals;
         refreshPendingOrderedDeals();
+        if (parsedDeals) preparePendingStatisticalParPrewarm(pendingOrderedDeals || parsedDeals);
     });
 }
 
 // Symétrique de uiHandleDealFileChosen, pour une donne piochée dans la bibliothèque du
 // club (voir donnes/catalogue.json et initDealLibrary) plutôt qu'un fichier local.
 function uiHandleDealLibraryChosen() {
+    resetContractChancePrewarmPipeline();
     const select = document.getElementById('dealLibrarySelect');
     const filename = select ? select.value : '';
     pendingParsedDeals = null;
@@ -5562,6 +6462,7 @@ function uiHandleDealLibraryChosen() {
         pendingParsedSource = `library:${filename}`;
         pendingParsedDeals = parsedDeals;
         refreshPendingOrderedDeals();
+        if (parsedDeals) preparePendingStatisticalParPrewarm(pendingOrderedDeals || parsedDeals);
     });
 }
 
@@ -5940,6 +6841,7 @@ async function uiStartGameAsHost() {
         cancelStartupLegacyRobotPrecalc();
         deals = orderedDeals;
         boardIndex = 0;
+        contractChanceMarkSessionDeals(deals);
         if (!deals[0].auctionHistory) deals[0].auctionHistory = [];
         auctionHistory = deals[0].auctionHistory;
         // Voir échange avec Guillaume (session du 23 juillet) : la partie démarre
@@ -7434,6 +8336,7 @@ function renderBoard() {
         renderRoomBoard();
         renderChat();
     }
+    if (currentDeal()) contractChanceQueueForDeal(currentDeal(), 100);
     maybeRobotBid();
 }
 
@@ -9285,6 +10188,7 @@ function renderAfterNormalCall() {
     if (auctionEndsNow) {
         endOptions.preCapturedMobileAuctionEndAnchor = preCapturedMobileAuctionEndAnchor;
     }
+    if (currentDeal()) contractChanceQueueForDeal(currentDeal(), 100);
     checkAuctionEnd(endOptions);
     renderUndoControls();
 }
@@ -9623,7 +10527,7 @@ function renderDDTable(ddTable, dealVulnerable) {
         const ew = renderDDCellPairHtml(strain, 'E', 'W', ddTable, info, sideSummary, sideVisibility);
         if (!ns.merged) allNSMerged = false;
         if (!ew.merged) allEWMerged = false;
-        return `<tr><th class="${STRAIN_CLASS[strain]}">${labelHtml}</th>${ns.html}${ew.html}</tr>`;
+        return `<tr data-dd-strain="${strain}"><th class="${STRAIN_CLASS[strain]}">${labelHtml}</th>${ns.html}${ew.html}</tr>`;
     }).join('');
     // Voir échange avec Guillaume (session du 8 août — "je parle des cases tout en haut,
     // celle où il y a écrit 'N' et celle où il y a écrit 'S'") : l'en-tête lui-même
@@ -9639,10 +10543,13 @@ function renderDDTable(ddTable, dealVulnerable) {
         : `<th>${SEAT_ABBR_FR.E}</th><th>${SEAT_ABBR_FR.W}</th>`;
     return `
         <div class="dd-table-title">Table du double mort</div>
-        <table class="dd-table">
-            <thead><tr><th></th>${headerHtml}${headerHtmlEW}</tr></thead>
-            <tbody>${rows}</tbody>
-        </table>
+        <div class="dd-table-with-stats">
+            <table class="dd-table">
+                <thead><tr><th></th>${headerHtml}${headerHtmlEW}</tr></thead>
+                <tbody>${rows}</tbody>
+            </table>
+            <div class="dd-chance-sidecar" aria-live="polite" aria-label="Chances statistiques"></div>
+        </div>
     `;
 }
 
@@ -10137,8 +11044,10 @@ function checkAuctionEnd(renderOptions = {}) {
     // tricher sur sa propre main, voir isTrueOriginalHost pour le détail).
     const hostForcedReveal = isTrueOriginalHost() && hostSeeAllHands;
     const showAllHandsEarly = hostForcedReveal || isKibbitz();
-    // Indépendant de « Voir les 4 mains » : le vrai hôte garde toujours son bouton PAR.
-    const canViewParDuringAuction = isTrueOriginalHost() || isKibbitz();
+    // Avec les chances statistiques systématiquement actives, le vrai DD/PAR de la
+    // distribution réelle reste masqué pendant l'enchère pour ne pas contaminer l'analyse.
+    const statisticalModeActive = !!(currentDeal() && currentDeal().statisticalParMode);
+    const canViewParDuringAuction = !statisticalModeActive && (isTrueOriginalHost() || isKibbitz());
 
     if (!auctionOver) {
         const myHandsEl = document.getElementById('myHandsContainer');
@@ -10244,6 +11153,11 @@ function checkAuctionEnd(renderOptions = {}) {
 
     if (ddTableHtml) {
         resultEl.innerHTML += ddTableHtml;
+    }
+
+    if (contract && currentDeal().statisticalParMode) {
+        renderInlineParChances(resultEl, currentDeal(), contract);
+        ensureContractChanceFinalCalculation(currentDeal());
     }
 
     if (ddArrivedLate || exportArrivedLate) {

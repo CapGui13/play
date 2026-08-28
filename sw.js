@@ -8,7 +8,7 @@
 // distribué ici n'embarque pas de workflow GitHub Actions qui la réécrive : elle doit donc
 // changer à chaque nouvelle release pour forcer l'installation du nouveau cache chez les
 // utilisateurs déjà passés par le Service Worker.
-const CACHE_NAME = 'bridge-encheres-hardened-r6-global-release-gate-r38-reconnect-hardening-20260826';
+const CACHE_NAME = 'bridge-encheres-github-statistical-contract-chances-20260828';
 
 // Ressources de la même origine : mises en cache de façon fiable via cache.addAll (un seul
 // échec fait échouer toute l'installation, ce qui est le comportement voulu ici — ce sont
@@ -20,6 +20,8 @@ const CORE_ASSETS = [
     './app.js',
     './ui-events.js',
     './bidding-rules.js',
+    './dealer-par.js',
+    './statistical-par.js',
     // PONS (~15,2 Mo brut) est volontairement absent du pré-cache d'installation.
     // Il est chargé/caché à la demande après l'entrée dans un salon ; sinon chaque
     // déploiement saturait inutilement le réseau dès l'accueil et ralentissait même
