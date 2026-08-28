@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval' 'unsafe-eval' https://unpkg.com https://js.pusher.com https://cdnjs.cloudflare.com; script-src-attr 'none'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob:; connect-src 'self' https://api-gen-beta.vercel.app https://*.peerjs.com wss://*.peerjs.com https://*.pusher.com wss://*.pusher.com; worker-src 'self' blob:; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-src 'none'; upgrade-insecure-requests">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval' 'unsafe-eval' https://unpkg.com https://js.pusher.com https://cdnjs.cloudflare.com; script-src-attr 'none'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob:; connect-src 'self' https://api-gen-beta.vercel.app https://play-dds-native.vercel.app https://*.peerjs.com wss://*.peerjs.com https://*.pusher.com wss://*.pusher.com; worker-src 'self' blob:; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-src 'none'; upgrade-insecure-requests">
 <title>Table d'enchères — Bridge à distance</title>
 
 <!-- PWA : voir manifest.json + sw.js. theme_color/background_color y reprennent le vert
@@ -23,6 +23,9 @@
      sans déclencher de requête applicative ni réveiller inutilement l'API. -->
 <link rel="preconnect" href="https://api-gen-beta.vercel.app" crossorigin>
 <link rel="dns-prefetch" href="//api-gen-beta.vercel.app">
+<!-- DDS statistique : deux lanes natives utilisées en priorité en production. -->
+<link rel="preconnect" href="https://play-dds-native.vercel.app" crossorigin>
+<link rel="dns-prefetch" href="//play-dds-native.vercel.app">
 <link rel="preconnect" href="https://0.peerjs.com" crossorigin>
 <link rel="dns-prefetch" href="//0.peerjs.com">
 

@@ -2184,12 +2184,19 @@ function applyDDResultToBoard(boardNumber, table) {
 // à un .bat ou à un exécutable. Les tables DD des redistributions statistiques sont
 // résolues par l'API HTTPS déjà utilisée par PLAY sur GitHub Pages.
 const CONTRACT_CHANCE_TARGET = 24;
-const CONTRACT_CHANCE_DD_CHUNK_SIZE = 10;
-const CONTRACT_CHANCE_MAX_HTTP = 2;
+// Online R117 — un lot logique utilise deux fonctions DDS natives en parallèle.
+// Une seule opération logique à la fois => au plus 2 requêtes DDS simultanées, comme R116.
+const CONTRACT_CHANCE_DD_CHUNK_SIZE = 12;
+const CONTRACT_CHANCE_MAX_HTTP = 1;
 const CONTRACT_CHANCE_MAX_ATTEMPTS = 720;
 const CONTRACT_CHANCE_MIN_CONDITIONED = 8;
 const CONTRACT_CHANCE_RETRY_DELAY_MS = 1800;
-const CONTRACT_CHANCE_REMOTE_URL = RANDOM_DEAL_DD_SERVER_URL;
+const CONTRACT_CHANCE_REMOTE_TIMEOUT_MS = 18000;
+const CONTRACT_CHANCE_NATIVE_URLS = [
+    'https://play-dds-native.vercel.app/api/dds-a',
+    'https://play-dds-native.vercel.app/api/dds-b'
+];
+const CONTRACT_CHANCE_LEGACY_URL = RANDOM_DEAL_DD_SERVER_URL;
 
 let contractChanceGeneration = 0;
 let contractChanceTaskSequence = 0;
@@ -2267,12 +2274,18 @@ function statisticalParPublicConditioning(deal, config) {
     }
 }
 
-function contractChanceBuildCandidates(deal, side) {
+function contractChanceBuildCandidates(deal, side, allowConditioning = true) {
     if (!deal || !deal.hands || !window.PlayStatisticalPar
         || typeof window.PlayStatisticalPar.sampleHandsDeterministic !== 'function') return [];
     const config = contractChanceConfigForSide(side);
-    const conditioning = statisticalParPublicConditioning(deal, config);
-    const canCondition = !!(conditioning && conditioning.informative
+    // Pendant l'enchère, le préchauffage reste volontairement sur les 24 tirages bruts.
+    // Sinon chaque nouvelle annonce change les hulls PONS et déclenche jusqu'à 48 nouveaux
+    // DDS, ce qui saturait très vite l'endpoint online. Le conditionnement public n'est
+    // matérialisé qu'une fois l'enchère terminée.
+    const conditioning = allowConditioning
+        ? statisticalParPublicConditioning(deal, config)
+        : { key: 'raw-prewarm', informative: false, constraints: null, signature: statisticalParAuctionSignature(deal) };
+    const canCondition = !!(allowConditioning && conditioning && conditioning.informative
         && typeof window.PlayStatisticalPar.profilesMatchPublicConstraints === 'function');
     const buildOne = sampleIndex => {
         const hands = window.PlayStatisticalPar.sampleHandsDeterministic(deal, config, sampleIndex);
@@ -2401,9 +2414,12 @@ function contractChanceQueueForDeal(deal, priority = 20) {
     const state = contractChanceDealState(deal, true);
     if (!state || state.generation !== contractChanceGeneration) return;
 
+    const auctionFinished = (() => {
+        try { return isAuctionOver(deal.auctionHistory || []); } catch (_) { return false; }
+    })();
     for (const side of ['NS', 'EW']) {
         let candidates = [];
-        try { candidates = contractChanceBuildCandidates(deal, side); } catch (_) { candidates = []; }
+        try { candidates = contractChanceBuildCandidates(deal, side, auctionFinished); } catch (_) { candidates = []; }
         const sideState = state.sides[side];
         const wanted = new Set(candidates.map(candidate => Number(candidate.sampleIndex)));
         // Une nouvelle enchère peut modifier le conditionnement public. Retirer de la file
@@ -2440,7 +2456,10 @@ function contractChanceCandidatesReady(deal, side) {
     const state = contractChanceDealState(deal, false);
     if (!state || state.generation !== contractChanceGeneration) return false;
     let candidates = [];
-    try { candidates = contractChanceBuildCandidates(deal, side); } catch (_) { return false; }
+    const auctionFinished = (() => {
+        try { return isAuctionOver(deal.auctionHistory || []); } catch (_) { return false; }
+    })();
+    try { candidates = contractChanceBuildCandidates(deal, side, auctionFinished); } catch (_) { return false; }
     return candidates.length >= CONTRACT_CHANCE_TARGET
         && candidates.every(candidate => state.sides[side].entries.has(Number(candidate.sampleIndex)));
 }
@@ -2507,6 +2526,52 @@ function pumpContractChanceQueue() {
     }
 }
 
+async function contractChanceFetchLane(url, items) {
+    if (!items || !items.length) return [];
+    const controller = typeof AbortController === 'function' ? new AbortController() : null;
+    let timeout = null;
+    try {
+        if (controller) timeout = setTimeout(() => {
+            try { controller.abort(); } catch (_) {}
+        }, CONTRACT_CHANCE_REMOTE_TIMEOUT_MS);
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ items }),
+            signal: controller ? controller.signal : undefined
+        });
+        if (!response.ok) {
+            const err = new Error('HTTP ' + response.status);
+            err.httpStatus = response.status;
+            const retryAfter = Number(response.headers && response.headers.get && response.headers.get('Retry-After') || 0);
+            if (retryAfter > 0) err.retryAfterMs = retryAfter * 1000;
+            throw err;
+        }
+        const data = await response.json();
+        return data && Array.isArray(data.results) ? data.results : [];
+    } finally {
+        if (timeout) clearTimeout(timeout);
+    }
+}
+
+function contractChanceApplyRows(rows, byId, sideState, side, succeeded) {
+    let changed = false;
+    for (const row of (Array.isArray(rows) ? rows : [])) {
+        if (!row || !row.table) continue;
+        const task = byId.get(String(row.id));
+        if (!task) continue;
+        succeeded.add(task.sampleIndex);
+        sideState.entries.set(task.sampleIndex, {
+            table: row.table,
+            profiles: task.profiles,
+            sampleIndex: task.sampleIndex,
+            fixedSide: side
+        });
+        changed = true;
+    }
+    return changed;
+}
+
 async function contractChanceSolveBatch(batch) {
     if (!batch || !batch.length) return;
     const generation = batch[0].generation;
@@ -2515,59 +2580,102 @@ async function contractChanceSolveBatch(batch) {
     const state = contractChanceDealState(deal, false);
     const sideState = state && state.sides[side];
     if (!sideState) return;
+
     const items = batch.map((task, i) => ({ id: i + 1, pbn: dealToPbnStringForDD({ hands: task.hands }) }));
     const byId = new Map(batch.map((task, i) => [String(i + 1), task]));
     const succeeded = new Set();
-    let error = null;
-    try {
-        const response = await fetch(CONTRACT_CHANCE_REMOTE_URL, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ items })
-        });
-        if (!response.ok) throw new Error('HTTP ' + response.status);
-        const data = await response.json();
-        if (generation !== contractChanceGeneration) return;
-        for (const row of (data && Array.isArray(data.results) ? data.results : [])) {
-            if (!row || !row.table) continue;
-            const task = byId.get(String(row.id));
-            if (!task) continue;
-            succeeded.add(task.sampleIndex);
-            sideState.entries.set(task.sampleIndex, {
-                table: row.table,
-                profiles: task.profiles,
-                sampleIndex: task.sampleIndex,
-                fixedSide: side
-            });
-        }
-    } catch (err) {
-        error = err;
-        if (generation === contractChanceGeneration) sideState.failures++;
-    } finally {
-        if (generation !== contractChanceGeneration) return;
-        for (const task of batch) {
-            sideState.active.delete(task.sampleIndex);
-            if (succeeded.has(task.sampleIndex) || sideState.entries.has(task.sampleIndex)) continue;
-            const attempts = Number(task.attempts || 0) + 1;
-            if (attempts <= 2) {
-                task.attempts = attempts;
-                task.priority = Math.max(1, Number(task.priority || 0) - 1);
-                sideState.queued.add(task.sampleIndex);
-                contractChanceQueue.push(task);
-            } else {
-                // Un incident DDS ne doit jamais laisser x/24 figé pour toujours : après
-                // un délai, la donne reconstitue seulement les échantillons manquants.
-                setTimeout(() => {
-                    if (generation === contractChanceGeneration) contractChanceQueueForDeal(deal, 90);
-                }, CONTRACT_CHANCE_RETRY_DELAY_MS);
+    const errors = [];
+    const nativeSuccessUrls = [];
+
+    // R117 online — même principe que le broker R116 : deux fonctions Vercel distinctes
+    // calculent chacune la moitié du lot. Une lane saine publie ses résultats immédiatement,
+    // sans attendre sa sœur. L'ancien endpoint api-gen ne sert plus qu'aux tables manquantes.
+    const midpoint = Math.ceil(items.length / 2);
+    const laneBatches = [items.slice(0, midpoint), items.slice(midpoint)].filter(part => part.length);
+    const lanePromises = laneBatches.map(async (part, i) => {
+        const laneUrl = CONTRACT_CHANCE_NATIVE_URLS[i % CONTRACT_CHANCE_NATIVE_URLS.length];
+        try {
+            const rows = await contractChanceFetchLane(laneUrl, part);
+            nativeSuccessUrls.push(laneUrl);
+            if (generation !== contractChanceGeneration) return;
+            if (contractChanceApplyRows(rows, byId, sideState, side, succeeded)) {
+                refreshContractChanceDisplayForDeal(deal);
             }
+        } catch (err) {
+            errors.push(err);
         }
-        if (error && typeof pushDebugLog === 'function') {
-            pushDebugLog(`Chances statistiques ${side} : lot DDS à retenter (${(error && error.message) || error}).`);
+    });
+    await Promise.allSettled(lanePromises);
+    if (generation !== contractChanceGeneration) return;
+
+    const missingNow = () => items.filter(item => {
+        const task = byId.get(String(item.id));
+        return task && !succeeded.has(task.sampleIndex) && !sideState.entries.has(task.sampleIndex);
+    });
+
+    // Si une des deux lanes natives a répondu, elle est saine : lui confier d'abord les
+    // éventuelles tables manquantes de sa sœur. Cela évite de tomber sur l'ancien endpoint
+    // rate-limité pour un simple incident d'une seule fonction native.
+    let missingItems = missingNow();
+    if (missingItems.length && nativeSuccessUrls.length) {
+        try {
+            const rows = await contractChanceFetchLane(nativeSuccessUrls[0], missingItems);
+            if (generation !== contractChanceGeneration) return;
+            if (contractChanceApplyRows(rows, byId, sideState, side, succeeded)) {
+                refreshContractChanceDisplayForDeal(deal);
+            }
+        } catch (err) {
+            errors.push(err);
         }
-        maybeAdvanceContractChancePrewarm(deal);
-        refreshContractChanceDisplayForDeal(deal);
     }
+
+    // Secours historique uniquement pour ce qui manque encore après les lanes natives.
+    missingItems = missingNow();
+    if (missingItems.length) {
+        try {
+            const rows = await contractChanceFetchLane(CONTRACT_CHANCE_LEGACY_URL, missingItems);
+            if (generation !== contractChanceGeneration) return;
+            if (contractChanceApplyRows(rows, byId, sideState, side, succeeded)) {
+                refreshContractChanceDisplayForDeal(deal);
+            }
+        } catch (err) {
+            errors.push(err);
+        }
+    }
+
+    if (generation !== contractChanceGeneration) return;
+    if (errors.length) sideState.failures++;
+    let retryDelay = CONTRACT_CHANCE_RETRY_DELAY_MS;
+    for (const err of errors) {
+        if (Number(err && err.retryAfterMs || 0) > retryDelay) retryDelay = Number(err.retryAfterMs);
+    }
+
+    const explicitlyRateLimited = errors.some(err => Number(err && err.retryAfterMs || 0) > 0);
+    let delayedRetryNeeded = false;
+    for (const task of batch) {
+        sideState.active.delete(task.sampleIndex);
+        if (succeeded.has(task.sampleIndex) || sideState.entries.has(task.sampleIndex)) continue;
+        const attempts = Number(task.attempts || 0) + 1;
+        if (!explicitlyRateLimited && attempts <= 2) {
+            task.attempts = attempts;
+            task.priority = Math.max(1, Number(task.priority || 0) - 1);
+            sideState.queued.add(task.sampleIndex);
+            contractChanceQueue.push(task);
+        } else {
+            delayedRetryNeeded = true;
+        }
+    }
+    if (delayedRetryNeeded) {
+        setTimeout(() => {
+            if (generation === contractChanceGeneration) contractChanceQueueForDeal(deal, 90);
+        }, retryDelay);
+    }
+    if (errors.length && typeof pushDebugLog === 'function') {
+        const labels = errors.map(err => (err && err.message) || String(err)).join(', ');
+        pushDebugLog(`Chances statistiques ${side} : DDS online partiel, tables manquantes à retenter (${labels}).`);
+    }
+    maybeAdvanceContractChancePrewarm(deal);
+    refreshContractChanceDisplayForDeal(deal);
 }
 
 function contractChanceSelectedEntries(deal, side) {
