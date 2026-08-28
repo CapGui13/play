@@ -2184,7 +2184,7 @@ function applyDDResultToBoard(boardNumber, table) {
 // à un .bat ou à un exécutable. Les tables DD des redistributions statistiques sont
 // résolues par l'API HTTPS déjà utilisée par PLAY sur GitHub Pages.
 const CONTRACT_CHANCE_TARGET = 24;
-// Online R117 — un lot logique utilise deux fonctions DDS natives en parallèle.
+// Online R118 — transport DDS R117 inchangé + synchronisation des résultats statistiques.
 // Une seule opération logique à la fois => au plus 2 requêtes DDS simultanées, comme R116.
 const CONTRACT_CHANCE_DD_CHUNK_SIZE = 12;
 const CONTRACT_CHANCE_MAX_HTTP = 1;
@@ -2206,6 +2206,7 @@ let contractChancePreparedList = null;
 let contractChanceStates = new WeakMap();
 let contractChanceAdvancedDeals = new WeakSet();
 let contractChanceDeferredDeals = new WeakSet();
+let contractChanceLastBroadcastSnapshot = new WeakMap();
 let contractChancePumpTimer = null;
 
 function statisticalParSideFromDeclarer(declarer) {
@@ -2337,6 +2338,7 @@ function resetContractChancePrewarmPipeline() {
     contractChanceStates = new WeakMap();
     contractChanceAdvancedDeals = new WeakSet();
     contractChanceDeferredDeals = new WeakSet();
+    contractChanceLastBroadcastSnapshot = new WeakMap();
     if (contractChancePumpTimer) clearTimeout(contractChancePumpTimer);
     contractChancePumpTimer = null;
 }
@@ -3057,6 +3059,24 @@ function opponentReferenceScore(table, target, targets, vulnerability) {
     return otherSide === 'NS' ? Math.max(...scores) : Math.min(...scores);
 }
 
+function contractChanceSnapshotProgress(deal, target) {
+    if (!deal || !target) return null;
+    const snapshot = deal.statisticalChanceSnapshot;
+    if (!snapshot || snapshot.version !== 1 || !snapshot.values) return null;
+    if (snapshot.auctionSignature !== statisticalParAuctionSignature(deal)) return null;
+    const raw = snapshot.values[optimalContractTargetKey(target)];
+    if (!raw || !Number.isFinite(Number(raw.n))) return null;
+    const n = Math.max(0, Math.min(CONTRACT_CHANCE_TARGET, Number(raw.n)));
+    const successPct = Number.isFinite(Number(raw.successPct)) ? Number(raw.successPct) : 0;
+    const done = !!raw.done || n >= CONTRACT_CHANCE_TARGET;
+    return {
+        n,
+        done,
+        successPct,
+        text: done ? `${successPct.toFixed(0)}%` : `${n}/${CONTRACT_CHANCE_TARGET}`
+    };
+}
+
 function contractChanceTargetProgress(deal, contract, target) {
     if (!deal || !target) return { n: 0, done: false, text: `0/${CONTRACT_CHANCE_TARGET}`, successPct: 0 };
     const rows = contractChanceSelectedEntries(deal, target.side);
@@ -3080,7 +3100,64 @@ function contractChanceTargetProgress(deal, contract, target) {
     }
     const done = samples >= CONTRACT_CHANCE_TARGET;
     const pct = samples ? 100 * successes / samples : 0;
-    return { n: samples, done, successPct: pct, text: done ? `${pct.toFixed(0)}%` : `${samples}/${CONTRACT_CHANCE_TARGET}` };
+    const local = { n: samples, done, successPct: pct, text: done ? `${pct.toFixed(0)}%` : `${samples}/${CONTRACT_CHANCE_TARGET}` };
+
+    // Les invités ne recalculent jamais les 24 redistributions : ils affichent le petit
+    // snapshot publié par l'hôte. Après transfert d'hôte, on garde aussi ce snapshot tant
+    // que le nouveau calcul local n'a pas rattrapé le même nombre d'échantillons.
+    const remote = contractChanceSnapshotProgress(deal, target);
+    return remote && remote.n > local.n ? remote : local;
+}
+
+function contractChanceBuildSnapshot(deal, contract) {
+    if (!deal || !contract || !deal.ddTable) return null;
+    const values = {};
+    const targets = contractChanceTargetsForDeal(deal, contract)
+        .filter(target => target && !target.isReferenceOnly);
+    for (const target of targets) {
+        const progress = contractChanceTargetProgress(deal, contract, target);
+        values[optimalContractTargetKey(target)] = {
+            n: progress.n,
+            done: progress.done,
+            successPct: progress.successPct
+        };
+    }
+    return {
+        version: 1,
+        auctionSignature: statisticalParAuctionSignature(deal),
+        values
+    };
+}
+
+function publishContractChanceSnapshot(deal) {
+    if (myRole !== 'host' || !deals || !deal || !deal.ddTable || !isAuctionOver(deal.auctionHistory || [])) return;
+    const contract = determineContract(deal.auctionHistory || []);
+    if (!contract) return;
+    const snapshot = contractChanceBuildSnapshot(deal, contract);
+    if (!snapshot) return;
+
+    deal.statisticalChanceSnapshot = snapshot;
+    const wireKey = JSON.stringify(snapshot);
+    if (contractChanceLastBroadcastSnapshot.get(deal) === wireKey) return;
+    contractChanceLastBroadcastSnapshot.set(deal, wireKey);
+
+    participants.filter(p => p.id !== 'host' && !p.disconnected).forEach(p => {
+        const guestIndex = guestIndexForParticipant(p.id);
+        if (guestIndex == null) return;
+        peerConn.send({
+            type: 'contract-chance-result',
+            boardNumber: deal.board,
+            snapshot
+        }, guestIndex);
+    });
+
+    // Le snapshot est également stocké sur `deal` : start-game/resync l'embarquent
+    // naturellement. Pour ne pas ajouter une écriture cloud à chaque lot DDS partiel,
+    // on ne force la sauvegarde durable qu'une fois tous les résultats affichables finis.
+    const snapshotValues = Object.values(snapshot.values || {});
+    if (snapshotValues.length && snapshotValues.every(value => value && value.done)) {
+        saveHostGameStateToStorage();
+    }
 }
 
 function renderPlayedContractChanceHeader(root, deal, contract) {
@@ -3089,7 +3166,8 @@ function renderPlayedContractChanceHeader(root, deal, contract) {
     if (!header) return;
     header.querySelectorAll('.contract-final-chance').forEach(node => node.remove());
     const target = playedContractChanceTarget(contract);
-    if (!target || !deal || !deal.ddTable || myRole !== 'host') return;
+    if (!target || !deal || !deal.ddTable) return;
+    if (myRole !== 'host' && !contractChanceSnapshotProgress(deal, target)) return;
     const progress = contractChanceTargetProgress(deal, contract, target);
     header.insertAdjacentHTML(
         'beforeend',
@@ -3132,8 +3210,9 @@ function renderContractChanceSidecar(root, deal, contract) {
     if (!sidecar) return;
     sidecar.innerHTML = '';
     sidecar.classList.remove('is-visible');
-    if (!deal || !deal.ddTable || myRole !== 'host') return;
+    if (!deal || !deal.ddTable) return;
     const targets = relevantContractChanceSidecarTargets(deal, contract);
+    if (myRole !== 'host' && !targets.some(target => contractChanceSnapshotProgress(deal, target))) return;
     if (!targets.length) return;
     const grouped = Object.fromEntries(STRAIN_ORDER.map(strain => [strain, []]));
     for (const target of targets) {
@@ -3163,7 +3242,11 @@ function renderInlineParChances(root, deal, contract) {
 }
 
 function refreshContractChanceDisplayForDeal(deal) {
-    if (!deals || !deal || currentDeal() !== deal || !isAuctionOver(auctionHistory)) return;
+    if (!deals || !deal) return;
+    // Le calcul d'une donne peut finir après que l'hôte est passé à la suivante : publier
+    // son snapshot quand même. Le DOM n'est rafraîchi que si cette donne est visible.
+    publishContractChanceSnapshot(deal);
+    if (currentDeal() !== deal || !isAuctionOver(auctionHistory)) return;
     const root = document.getElementById('contractResult');
     if (!root || !root.querySelector('.contract-final-header')) return;
     const contract = determineContract(auctionHistory);
@@ -3174,6 +3257,7 @@ function refreshContractChanceDisplayForDeal(deal) {
 function ensureContractChanceFinalCalculation(deal) {
     if (myRole !== 'host' || !deal || !deal.statisticalParMode) return;
     contractChanceQueueForDeal(deal, 100);
+    publishContractChanceSnapshot(deal);
     maybeAdvanceContractChancePrewarm(deal);
 }
 
@@ -7118,6 +7202,7 @@ const PEER_TYPES_FROM_HOST = new Set([
     'wizz',
     'precalc-board',
     'dd-result',
+    'contract-chance-result',
     'reset-auction',
     'goto-board',
     'undo-ask',
@@ -7854,6 +7939,19 @@ function handlePeerData(msg, guestIndex) {
             if (idx === -1) break;
             deals[idx].ddTable = msg.table;
             if (idx === boardIndex && (isAuctionOver(auctionHistory) || isTrueOriginalHost() || isKibbitz())) checkAuctionEnd();
+            break;
+        }
+
+        // Le calcul statistique reste centralisé chez l'hôte. Les autres joueurs reçoivent
+        // seulement progression/% ; aucune redistribution DD n'est recalculée chez eux.
+        case 'contract-chance-result': {
+            if (!deals || !msg.snapshot || msg.snapshot.version !== 1) break;
+            const idx = deals.findIndex(d => d.board === msg.boardNumber);
+            if (idx === -1) break;
+            deals[idx].statisticalChanceSnapshot = msg.snapshot;
+            if (idx === boardIndex && isAuctionOver(auctionHistory || [])) {
+                refreshContractChanceDisplayForDeal(deals[idx]);
+            }
             break;
         }
 
