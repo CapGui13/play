@@ -3227,7 +3227,8 @@ function ddChanceTableTarget(side, strain, declarer, cell) {
         id: `table:${side}:${level}${strain}:${declarer}`,
         kind: 'make', side, tier: contractChanceTierForContract({ level, strain }), level, strain, declarer,
         doubled: '', isParTarget: true, isPlayed: false, isTableTarget: true,
-        isBestTableTarget: !!(cell && cell.cls === 'dd-best-contract'), rowStrain: strain
+        isBestTableTarget: !!(cell && cell.cls === 'dd-best-contract'),
+        isSecondaryTableTarget: !!(cell && cell.cls === 'dd-secondary-contract'), rowStrain: strain
     };
 }
 
@@ -3343,7 +3344,14 @@ function relevantContractChanceSidecarTargets(deal, contract) {
     if (!played || !deal || !deal.ddTable) return [];
     const announced = contractChanceAuctionAnnouncedStrains(deal);
     const tableTargets = ddTableChanceTargetsForDeal(deal);
-    const sidesWithWinningMajorFitGame = contractChanceSidesWithWinningMajorFitGame(deal, tableTargets);
+    // R121 — La suppression d'une manche à SA au profit d'un fit majeur ne doit
+    // s'appuyer que sur une manche majeure qui sera elle-même réellement retenue.
+    // Sinon on peut supprimer 3/4SA parce qu'une majeure secondaire existe, puis
+    // supprimer cette majeure parce qu'elle n'est pas le meilleur score DD.
+    const sidesWithWinningMajorFitGame = contractChanceSidesWithWinningMajorFitGame(
+        deal,
+        tableTargets.filter(target => target && target.isBestTableTarget)
+    );
     const otherSide = played.side === 'NS' ? 'EW' : 'NS';
     const targets = [];
     const add = target => {
@@ -3355,15 +3363,27 @@ function relevantContractChanceSidecarTargets(deal, contract) {
     const sameStrainTarget = contractChanceSameStrainTableTarget(deal, contract);
     if (contractChanceSameStrainUpgradeIsUseful(played, sameStrainTarget)) add(sameStrainTarget);
     for (const target of tableTargets) {
-        if (!target.isBestTableTarget) continue;
+        const isGameOrSlam = target.tier === 'game' || target.tier === 'slam';
+        // Quand la ligne qui a joué n'est PAS celle qui détient les manches/chelems DD,
+        // conserver aussi les contrats secondaires mis en évidence par la table. Ils
+        // expliquent ce que les adversaires pouvaient réellement jouer (ex. 4SA et 4♠ EO
+        // face à un 3SA NS absurde), même si l'un marque quelques points de plus que l'autre.
+        const isRelevantOpponentSecondary = target.side === otherSide
+            && isGameOrSlam
+            && target.isSecondaryTableTarget;
+        if (!target.isBestTableTarget && !isRelevantOpponentSecondary) continue;
         // Le même filtre doit aussi s'appliquer au passage générique des manches/chelems,
         // sinon un 5♠ inutile après 4♠ serait réintroduit ici après avoir été supprimé ci-dessus.
         if (!contractChanceSameStrainUpgradeIsUseful(played, target)) continue;
-        const isGameOrSlam = target.tier === 'game' || target.tier === 'slam';
         if (isGameOrSlam) {
-            // Avec un fit majeur et une manche majeure gagnante, la manche à SA du même
-            // camp est inutile ; un chelem à SA reste en revanche pertinent.
-            if (target.strain === 'N' && target.tier === 'game' && sidesWithWinningMajorFitGame.has(target.side)) continue;
+            // Avec un fit majeur et une manche majeure gagnante, la manche à SA du camp
+            // qui a joué est inutile ; un chelem à SA reste pertinent. Pour l'AUTRE camp,
+            // on conserve les manches DD pertinentes (SA + majeure, par exemple) afin de
+            // montrer correctement ce qui a été abandonné ou concédé.
+            if (target.strain === 'N'
+                && target.tier === 'game'
+                && target.side === played.side
+                && sidesWithWinningMajorFitGame.has(target.side)) continue;
             add(target);
             continue;
         }
