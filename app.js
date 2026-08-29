@@ -3627,6 +3627,53 @@ function contractChanceAuctionMajorFits(deal) {
     return fits;
 }
 
+function contractChanceSideFitLength(deal, side, strain) {
+    if (!deal || !deal.hands || !['S', 'H', 'D', 'C'].includes(strain)) return 0;
+    const seats = side === 'NS' ? ['N', 'S'] : (side === 'EW' ? ['E', 'W'] : []);
+    return seats.reduce((sum, seat) => {
+        const hand = deal.hands && deal.hands[seat];
+        return sum + String(hand && hand[strain] || '').length;
+    }, 0);
+}
+
+// R134 — Si 6SA est le chelem DD de référence d'un camp, conserver aussi chaque
+// chelem de couleur de ce camp dès qu'il existe un fit réel d'au moins huit cartes.
+// Cette règle est volontairement multi-fit : avec, par exemple, huit cartes à Cœur ET
+// huit cartes à Carreau et un chelem DD dans les deux couleurs, les deux probabilités
+// statistiques sont calculées au lieu de ne garder que 6SA.
+function contractChanceAdditionalFitSlamTargets(deal, tableTargets = null) {
+    if (!deal || !deal.hands) return [];
+    const sourceTargets = Array.isArray(tableTargets) ? tableTargets : ddTableChanceTargetsForDeal(deal);
+    const extra = [];
+    const add = target => {
+        if (!target) return;
+        const decorated = { ...target, isFitSlamCompanion: true };
+        const key = optimalContractTargetKey(decorated);
+        if (!extra.some(existing => optimalContractTargetKey(existing) === key)) extra.push(decorated);
+    };
+
+    for (const side of ['NS', 'EW']) {
+        // "6SA au PAR" = au moins une cible DD 6SA marquée meilleur contrat du camp.
+        // Un simple 6SA secondaire ne suffit pas à déclencher cette extension.
+        const hasParSixNT = sourceTargets.some(target => target
+            && target.side === side
+            && target.strain === 'N'
+            && Number(target.level || 0) === 6
+            && target.isBestTableTarget);
+        if (!hasParSixNT) continue;
+
+        for (const strain of ['S', 'H', 'D', 'C']) {
+            if (contractChanceSideFitLength(deal, side, strain) < 8) continue;
+            for (const target of sourceTargets) {
+                if (!target || target.side !== side || target.strain !== strain) continue;
+                if (Number(target.level || 0) < 6) continue;
+                add(target);
+            }
+        }
+    }
+    return extra;
+}
+
 function contractChanceSidesWithWinningMajorFitGame(deal, tableTargets = null) {
     const fits = contractChanceAuctionMajorFits(deal);
     const targets = Array.isArray(tableTargets) ? tableTargets : ddTableChanceTargetsForDeal(deal);
@@ -3725,6 +3772,10 @@ function relevantContractChanceSidecarTargets(deal, contract) {
         }
         if (target.side === otherSide && announced.has(target.strain)) add(target);
     }
+    // R134 — 6SA n'écrase plus les autres chelems jouables dans un vrai fit 8+.
+    // Toutes les couleurs admissibles sont conservées : deux fits => deux calculs.
+    for (const target of contractChanceAdditionalFitSlamTargets(deal, tableTargets)) add(target);
+
     for (const target of optimalContractTargetsForDeal(deal)) {
         if (target.side === otherSide && target.kind === 'sacrifice' && announced.has(target.strain)) {
             add({ ...target, isParTarget: true, isTableTarget: false });
