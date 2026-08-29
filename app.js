@@ -2184,14 +2184,20 @@ function applyDDResultToBoard(boardNumber, table) {
 // à un .bat ou à un exécutable. Les tables DD des redistributions statistiques sont
 // résolues par l'API HTTPS déjà utilisée par PLAY sur GitHub Pages.
 const CONTRACT_CHANCE_TARGET = 24;
+// R125 — précision adaptative : 24 reste le résultat rapide de base. Une fois
+// l'enchère terminée, seuls les camps portant un contrat réellement affiché et dont
+// l'incertitude reste élevée poursuivent à 48 puis, si nécessaire, à 72 tirages.
+const CONTRACT_CHANCE_ADAPTIVE_MID_TARGET = 48;
+const CONTRACT_CHANCE_ADAPTIVE_MAX_TARGET = 72;
+const CONTRACT_CHANCE_ADAPTIVE_MARGIN_AFTER_24 = 0.13;
+const CONTRACT_CHANCE_ADAPTIVE_MARGIN_AFTER_48 = 0.10;
 // Online R119 — transport DDS R117 + synchro R118 + rattrapage collaboratif post-enchère.
 // Avant la fin de l'enchère, seul l'hôte préchauffe. Après la fin, le reliquat peut être
 // réparti entre les participants connectés, sans rendre aucun participant indispensable.
 // Une seule opération logique locale à la fois => au plus 2 requêtes DDS simultanées chez l'hôte.
 const CONTRACT_CHANCE_DD_CHUNK_SIZE = 12;
 const CONTRACT_CHANCE_MAX_HTTP = 1;
-const CONTRACT_CHANCE_MAX_ATTEMPTS = 720;
-const CONTRACT_CHANCE_MIN_CONDITIONED = 8;
+const CONTRACT_CHANCE_MAX_ATTEMPTS = 2160;
 const CONTRACT_CHANCE_RETRY_DELAY_MS = 1800;
 const CONTRACT_CHANCE_REMOTE_TIMEOUT_MS = 18000;
 const CONTRACT_CHANCE_COLLAB_MOBILE_BATCH = 2;
@@ -2213,6 +2219,7 @@ let contractChanceStates = new WeakMap();
 let contractChanceAdvancedDeals = new WeakSet();
 let contractChanceDeferredDeals = new WeakSet();
 let contractChanceLastBroadcastSnapshot = new WeakMap();
+let contractChanceCandidatePlanCache = new WeakMap();
 let contractChanceGuestCapabilities = new Map();
 let contractChanceRemoteJobs = new Map();
 let contractChanceRemoteJobSequence = 0;
@@ -2285,19 +2292,14 @@ function statisticalParPublicConditioning(deal, config) {
     }
 }
 
-function contractChanceBuildCandidates(deal, side, allowConditioning = true) {
+function contractChanceBuildCandidates(deal, side, allowConditioning = true, targetCount = CONTRACT_CHANCE_TARGET) {
     if (!deal || !deal.hands || !window.PlayStatisticalPar
         || typeof window.PlayStatisticalPar.sampleHandsDeterministic !== 'function') return [];
+    const requestedCount = Math.max(1, Math.min(
+        CONTRACT_CHANCE_ADAPTIVE_MAX_TARGET,
+        Number(targetCount || CONTRACT_CHANCE_TARGET)
+    ));
     const config = contractChanceConfigForSide(side);
-    // Pendant l'enchère, le préchauffage reste volontairement sur les 24 tirages bruts.
-    // Sinon chaque nouvelle annonce change les hulls PONS et déclenche jusqu'à 48 nouveaux
-    // DDS, ce qui saturait très vite l'endpoint online. Le conditionnement public n'est
-    // matérialisé qu'une fois l'enchère terminée.
-    const conditioning = allowConditioning
-        ? statisticalParPublicConditioning(deal, config)
-        : { key: 'raw-prewarm', informative: false, constraints: null, signature: statisticalParAuctionSignature(deal) };
-    const canCondition = !!(allowConditioning && conditioning && conditioning.informative
-        && typeof window.PlayStatisticalPar.profilesMatchPublicConstraints === 'function');
     const buildOne = sampleIndex => {
         const hands = window.PlayStatisticalPar.sampleHandsDeterministic(deal, config, sampleIndex);
         const profiles = typeof window.PlayStatisticalPar.profilesForSeats === 'function'
@@ -2305,22 +2307,54 @@ function contractChanceBuildCandidates(deal, side, allowConditioning = true) {
             : null;
         return { sampleIndex, hands, profiles };
     };
+    const rawPlan = count => Array.from({ length: count }, (_, sampleIndex) => buildOne(sampleIndex));
 
+    // Pendant l'enchère : préchauffage brut et seulement 24 tirages. Aucun coût adaptatif
+    // ni conditionnement PONS ne doit concurrencer une décision d'enchère réelle.
+    if (!allowConditioning) return rawPlan(requestedCount);
+
+    // Après l'enchère, la population doit rester IDENTIQUE quand on passe de 24 à 48/72.
+    // On choisit donc une fois pour toutes un plan complet de 72 tirages et on n'en expose
+    // qu'un préfixe. Si PONS ne peut pas fournir 72 tirages conditionnés complets dans la
+    // fenêtre bornée, tout le plan repasse au brut : jamais de mélange conditionné/brut.
+    const signature = statisticalParAuctionSignature(deal);
+    const conditioning = statisticalParPublicConditioning(deal, config);
+    const canCondition = !!(conditioning && conditioning.informative
+        && typeof window.PlayStatisticalPar.profilesMatchPublicConstraints === 'function');
+    let perDeal = contractChanceCandidatePlanCache.get(deal);
+    if (!perDeal) {
+        perDeal = new Map();
+        contractChanceCandidatePlanCache.set(deal, perDeal);
+    }
+    // Inclure la source de conditionnement dans la clé : si PONS n'était pas encore prêt
+    // au premier affichage puis devient disponible, un plan brut temporaire ne doit pas
+    // figer définitivement la donne dans ce mode.
+    const conditioningKey = canCondition ? String(conditioning.key || 'pons-public') : 'raw';
+    const cacheKey = `${side === 'EW' ? 'EW' : 'NS'}|${signature}|${conditioningKey}`;
+    const cached = perDeal.get(cacheKey);
+    if (cached && cached.length >= requestedCount) return cached.slice(0, requestedCount);
+
+    let plan;
     if (!canCondition) {
-        return Array.from({ length: CONTRACT_CHANCE_TARGET }, (_, sampleIndex) => buildOne(sampleIndex));
-    }
-
-    const conditioned = [];
-    for (let sampleIndex = 0; sampleIndex < CONTRACT_CHANCE_MAX_ATTEMPTS && conditioned.length < CONTRACT_CHANCE_TARGET; sampleIndex++) {
-        const candidate = buildOne(sampleIndex);
-        if (window.PlayStatisticalPar.profilesMatchPublicConstraints(candidate.profiles, config, conditioning.constraints)) {
-            conditioned.push(candidate);
+        plan = rawPlan(CONTRACT_CHANCE_ADAPTIVE_MAX_TARGET);
+    } else {
+        const conditioned = [];
+        for (let sampleIndex = 0;
+            sampleIndex < CONTRACT_CHANCE_MAX_ATTEMPTS && conditioned.length < CONTRACT_CHANCE_ADAPTIVE_MAX_TARGET;
+            sampleIndex++) {
+            const candidate = buildOne(sampleIndex);
+            if (window.PlayStatisticalPar.profilesMatchPublicConstraints(candidate.profiles, config, conditioning.constraints)) {
+                conditioned.push(candidate);
+            }
         }
+        // R123 + R125 : population complète ou fallback complet. Exiger 72 ici garantit
+        // aussi que le préfixe 24/48 ne changera jamais de nature pendant le raffinement.
+        plan = conditioned.length === CONTRACT_CHANCE_ADAPTIVE_MAX_TARGET
+            ? conditioned
+            : rawPlan(CONTRACT_CHANCE_ADAPTIVE_MAX_TARGET);
     }
-    // Si les hulls publics PONS sont trop restrictifs, garder exactement la population
-    // brute de 24 redistributions plutôt que de laisser la statistique bloquée.
-    if (conditioned.length >= CONTRACT_CHANCE_MIN_CONDITIONED) return conditioned;
-    return Array.from({ length: CONTRACT_CHANCE_TARGET }, (_, sampleIndex) => buildOne(sampleIndex));
+    perDeal.set(cacheKey, plan);
+    return plan.slice(0, requestedCount);
 }
 
 function contractChanceDealState(deal, create = false) {
@@ -2330,8 +2364,8 @@ function contractChanceDealState(deal, create = false) {
         state = {
             generation: contractChanceGeneration,
             sides: {
-                NS: { entries: new Map(), queued: new Set(), active: new Set(), remotePending: new Set(), failures: 0 },
-                EW: { entries: new Map(), queued: new Set(), active: new Set(), remotePending: new Set(), failures: 0 }
+                NS: { entries: new Map(), queued: new Set(), active: new Set(), remotePending: new Set(), failures: 0, adaptiveTarget: CONTRACT_CHANCE_TARGET, adaptiveSettled: false },
+                EW: { entries: new Map(), queued: new Set(), active: new Set(), remotePending: new Set(), failures: 0, adaptiveTarget: CONTRACT_CHANCE_TARGET, adaptiveSettled: false }
             }
         };
         contractChanceStates.set(deal, state);
@@ -2349,6 +2383,7 @@ function resetContractChancePrewarmPipeline() {
     contractChanceAdvancedDeals = new WeakSet();
     contractChanceDeferredDeals = new WeakSet();
     contractChanceLastBroadcastSnapshot = new WeakMap();
+    contractChanceCandidatePlanCache = new WeakMap();
     for (const job of contractChanceRemoteJobs.values()) {
         if (job && job.timer) clearTimeout(job.timer);
     }
@@ -2434,13 +2469,20 @@ function contractChanceQueueForDeal(deal, priority = 20) {
     const auctionFinished = (() => {
         try { return isAuctionOver(deal.auctionHistory || []); } catch (_) { return false; }
     })();
+    // Une fois les 24 premiers tirages disponibles, décider si un camp mérite 48/72.
+    // Cette décision ne porte que sur les contrats réellement affichés et ne s'active
+    // jamais pendant l'enchère.
+    if (auctionFinished) contractChanceUpdateAdaptiveTargets(deal);
     // Le partage n'existe qu'APRÈS la fin de l'enchère. On réserve d'abord quelques
     // échantillons aux invités disponibles ; la file locale de l'hôte prend tout le reste.
     if (auctionFinished) contractChanceDispatchCollaborativeWork(deal);
     for (const side of ['NS', 'EW']) {
-        let candidates = [];
-        try { candidates = contractChanceBuildCandidates(deal, side, auctionFinished); } catch (_) { candidates = []; }
         const sideState = state.sides[side];
+        const requestedCount = auctionFinished
+            ? Math.max(CONTRACT_CHANCE_TARGET, Number(sideState.adaptiveTarget || CONTRACT_CHANCE_TARGET))
+            : CONTRACT_CHANCE_TARGET;
+        let candidates = [];
+        try { candidates = contractChanceBuildCandidates(deal, side, auctionFinished, requestedCount); } catch (_) { candidates = []; }
         const wanted = new Set(candidates.map(candidate => Number(candidate.sampleIndex)));
         // Une nouvelle enchère peut modifier le conditionnement public. Retirer de la file
         // les tirages devenus inutiles évite de gaspiller du DDS avant les échantillons
@@ -2479,7 +2521,7 @@ function contractChanceCandidatesReady(deal, side) {
     const auctionFinished = (() => {
         try { return isAuctionOver(deal.auctionHistory || []); } catch (_) { return false; }
     })();
-    try { candidates = contractChanceBuildCandidates(deal, side, auctionFinished); } catch (_) { return false; }
+    try { candidates = contractChanceBuildCandidates(deal, side, auctionFinished, CONTRACT_CHANCE_TARGET); } catch (_) { return false; }
     return candidates.length >= CONTRACT_CHANCE_TARGET
         && candidates.every(candidate => state.sides[side].entries.has(Number(candidate.sampleIndex)));
 }
@@ -2676,10 +2718,11 @@ function contractChanceCollaborativeCandidates(deal) {
     const state = contractChanceDealState(deal, true);
     if (!state || state.generation !== contractChanceGeneration) return out;
     for (const side of ['NS', 'EW']) {
-        let candidates = [];
-        try { candidates = contractChanceBuildCandidates(deal, side, true); } catch (_) { candidates = []; }
         const sideState = state.sides[side];
-        for (const candidate of candidates.slice(0, CONTRACT_CHANCE_TARGET)) {
+        const requestedCount = Math.max(CONTRACT_CHANCE_TARGET, Number(sideState.adaptiveTarget || CONTRACT_CHANCE_TARGET));
+        let candidates = [];
+        try { candidates = contractChanceBuildCandidates(deal, side, true, requestedCount); } catch (_) { candidates = []; }
+        for (const candidate of candidates.slice(0, requestedCount)) {
             const sampleIndex = Number(candidate.sampleIndex);
             if (sideState.entries.has(sampleIndex) || sideState.active.has(sampleIndex) || sideState.remotePending.has(sampleIndex)) continue;
             out.push({
@@ -2870,8 +2913,10 @@ function contractChanceAcceptGuestWorkResult(msg, guestIndex) {
         }
     }
     contractChanceReleaseRemoteJob(job, { cooldown: !!msg.declined || accepted === 0 });
+    const adaptiveChanged = contractChanceUpdateAdaptiveTargets(job.deal);
     refreshContractChanceDisplayForDeal(job.deal);
     maybeAdvanceContractChancePrewarm(job.deal);
+    if (adaptiveChanged) contractChanceQueueForDeal(job.deal, 112);
     // Le participant peut recevoir le lot suivant immédiatement s'il est resté visible ;
     // les échantillons non rendus repartent sinon dans la file locale de l'hôte.
     contractChanceDispatchCollaborativeWork(job.deal);
@@ -2999,16 +3044,23 @@ async function contractChanceSolveBatch(batch) {
         pushDebugLog(`Chances statistiques ${side} : DDS online partiel, tables manquantes à retenter (${labels}).`);
     }
     maybeAdvanceContractChancePrewarm(deal);
+    const adaptiveChanged = contractChanceUpdateAdaptiveTargets(deal);
     refreshContractChanceDisplayForDeal(deal);
+    if (adaptiveChanged) contractChanceQueueForDeal(deal, 108);
 }
 
-function contractChanceSelectedEntries(deal, side) {
+function contractChanceSelectedEntries(deal, side, limit = null) {
     const state = contractChanceDealState(deal, false);
     if (!state || state.generation !== contractChanceGeneration) return [];
+    const sideState = state.sides[side];
+    const requestedCount = Math.max(CONTRACT_CHANCE_TARGET, Math.min(
+        CONTRACT_CHANCE_ADAPTIVE_MAX_TARGET,
+        Number(limit || sideState.adaptiveTarget || CONTRACT_CHANCE_TARGET)
+    ));
     let candidates = [];
-    try { candidates = contractChanceBuildCandidates(deal, side); } catch (_) { candidates = []; }
+    try { candidates = contractChanceBuildCandidates(deal, side, true, requestedCount); } catch (_) { candidates = []; }
     const rows = [];
-    for (const candidate of candidates.slice(0, CONTRACT_CHANCE_TARGET)) {
+    for (const candidate of candidates.slice(0, requestedCount)) {
         const entry = state.sides[side].entries.get(Number(candidate.sampleIndex));
         if (entry) rows.push(entry);
     }
@@ -3437,6 +3489,96 @@ function opponentReferenceScore(table, target, targets, vulnerability) {
     return otherSide === 'NS' ? Math.max(...scores) : Math.min(...scores);
 }
 
+function contractChanceWilsonMargin95(successes, samples) {
+    const n = Number(samples || 0);
+    if (!(n > 0)) return 1;
+    const p = Math.max(0, Math.min(1, Number(successes || 0) / n));
+    const z = 1.96;
+    const z2 = z * z;
+    const denominator = 1 + z2 / n;
+    return (z / denominator) * Math.sqrt((p * (1 - p) / n) + (z2 / (4 * n * n)));
+}
+
+function contractChanceNeedsAdaptiveRefinement(successes, samples, currentTarget) {
+    const n = Number(samples || 0);
+    const goal = Number(currentTarget || CONTRACT_CHANCE_TARGET);
+    if (n < goal) return false;
+    if (goal >= CONTRACT_CHANCE_ADAPTIVE_MAX_TARGET) return false;
+    const margin = contractChanceWilsonMargin95(successes, n);
+    const threshold = goal <= CONTRACT_CHANCE_TARGET
+        ? CONTRACT_CHANCE_ADAPTIVE_MARGIN_AFTER_24
+        : CONTRACT_CHANCE_ADAPTIVE_MARGIN_AFTER_48;
+    return margin > threshold;
+}
+
+function contractChanceSideGoal(deal, side) {
+    const state = contractChanceDealState(deal, false);
+    const sideState = state && state.sides && state.sides[side];
+    return Math.max(CONTRACT_CHANCE_TARGET, Math.min(
+        CONTRACT_CHANCE_ADAPTIVE_MAX_TARGET,
+        Number(sideState && sideState.adaptiveTarget || CONTRACT_CHANCE_TARGET)
+    ));
+}
+
+function contractChanceComputeTargetStats(deal, contract, target, rows, allTargets) {
+    const targetTricks = Number(target.level || 0) + 6;
+    let successes = 0;
+    let samples = 0;
+    for (const entry of (rows || [])) {
+        const table = entry && entry.table ? entry.table : entry;
+        const tricks = optimalContractTricks(table, target);
+        if (!Number.isFinite(tricks)) continue;
+        samples++;
+        if (target.kind === 'sacrifice') {
+            const sacScore = optimalContractDuplicateScore(table, target, deal.vulnerable);
+            const refScore = opponentReferenceScore(table, target, allTargets, deal.vulnerable);
+            if (Number.isFinite(sacScore) && Number.isFinite(refScore)) {
+                const profitable = target.side === 'NS' ? sacScore >= refScore : sacScore <= refScore;
+                if (profitable) successes++;
+            }
+        } else if (tricks >= targetTricks) successes++;
+    }
+    return { successes, samples };
+}
+
+function contractChanceUpdateAdaptiveTargets(deal) {
+    if (!deal || !deal.ddTable) return false;
+    try { if (!isAuctionOver(deal.auctionHistory || [])) return false; } catch (_) { return false; }
+    const contract = determineContract(deal.auctionHistory || []);
+    if (!contract) return false;
+    const state = contractChanceDealState(deal, false);
+    if (!state || state.generation !== contractChanceGeneration) return false;
+    const allTargets = contractChanceTargetsForDeal(deal, contract);
+    const displayTargets = allTargets.filter(target => target && !target.isReferenceOnly);
+    let changed = false;
+
+    for (const side of ['NS', 'EW']) {
+        const sideState = state.sides[side];
+        if (!sideState || sideState.adaptiveSettled) continue;
+        const goal = contractChanceSideGoal(deal, side);
+        const rows = contractChanceSelectedEntries(deal, side, goal);
+        if (rows.length < goal) continue;
+        const relevant = displayTargets.filter(target => target.side === side);
+        if (!relevant.length) {
+            sideState.adaptiveSettled = true;
+            continue;
+        }
+        const needsMore = relevant.some(target => {
+            const stats = contractChanceComputeTargetStats(deal, contract, target, rows, allTargets);
+            return contractChanceNeedsAdaptiveRefinement(stats.successes, stats.samples, goal);
+        });
+        if (needsMore && goal < CONTRACT_CHANCE_ADAPTIVE_MAX_TARGET) {
+            sideState.adaptiveTarget = goal <= CONTRACT_CHANCE_TARGET
+                ? CONTRACT_CHANCE_ADAPTIVE_MID_TARGET
+                : CONTRACT_CHANCE_ADAPTIVE_MAX_TARGET;
+            changed = true;
+        } else {
+            sideState.adaptiveSettled = true;
+        }
+    }
+    return changed;
+}
+
 function contractChanceSnapshotProgress(deal, target) {
     if (!deal || !target) return null;
     const snapshot = deal.statisticalChanceSnapshot;
@@ -3444,45 +3586,50 @@ function contractChanceSnapshotProgress(deal, target) {
     if (snapshot.auctionSignature !== statisticalParAuctionSignature(deal)) return null;
     const raw = snapshot.values[optimalContractTargetKey(target)];
     if (!raw || !Number.isFinite(Number(raw.n))) return null;
-    const n = Math.max(0, Math.min(CONTRACT_CHANCE_TARGET, Number(raw.n)));
+    const legacyN = Math.max(0, Math.min(CONTRACT_CHANCE_TARGET, Number(raw.n)));
+    const n = Math.max(0, Math.min(
+        CONTRACT_CHANCE_ADAPTIVE_MAX_TARGET,
+        Number.isFinite(Number(raw.adaptiveN)) ? Number(raw.adaptiveN) : legacyN
+    ));
+    const goal = Math.max(CONTRACT_CHANCE_TARGET, Math.min(
+        CONTRACT_CHANCE_ADAPTIVE_MAX_TARGET,
+        Number(raw.goal || CONTRACT_CHANCE_TARGET)
+    ));
     const successPct = Number.isFinite(Number(raw.successPct)) ? Number(raw.successPct) : 0;
-    const done = !!raw.done || n >= CONTRACT_CHANCE_TARGET;
-    return {
-        n,
-        done,
-        successPct,
-        text: done ? `${successPct.toFixed(0)}%` : `${n}/${CONTRACT_CHANCE_TARGET}`
-    };
+    const done = !!raw.done || n >= goal;
+    const text = done
+        ? `${successPct.toFixed(0)}%`
+        : (n >= CONTRACT_CHANCE_TARGET ? `${successPct.toFixed(0)}% · ${n}/${goal}` : `${n}/${CONTRACT_CHANCE_TARGET}`);
+    return { n, goal, done, successPct, text };
 }
 
 function contractChanceTargetProgress(deal, contract, target) {
-    if (!deal || !target) return { n: 0, done: false, text: `0/${CONTRACT_CHANCE_TARGET}`, successPct: 0 };
-    const rows = contractChanceSelectedEntries(deal, target.side);
+    if (!deal || !target) return { n: 0, goal: CONTRACT_CHANCE_TARGET, done: false, text: `0/${CONTRACT_CHANCE_TARGET}`, successPct: 0 };
+    const goal = contractChanceSideGoal(deal, target.side);
+    const rows = contractChanceSelectedEntries(deal, target.side, goal);
     const targets = contractChanceTargetsForDeal(deal, contract);
-    const targetTricks = Number(target.level || 0) + 6;
-    let successes = 0;
-    let samples = 0;
-    for (const entry of rows) {
-        const table = entry && entry.table ? entry.table : entry;
-        const tricks = optimalContractTricks(table, target);
-        if (!Number.isFinite(tricks)) continue;
-        samples++;
-        if (target.kind === 'sacrifice') {
-            const sacScore = optimalContractDuplicateScore(table, target, deal.vulnerable);
-            const refScore = opponentReferenceScore(table, target, targets, deal.vulnerable);
-            if (Number.isFinite(sacScore) && Number.isFinite(refScore)) {
-                const profitable = target.side === 'NS' ? sacScore >= refScore : sacScore <= refScore;
-                if (profitable) successes++;
-            }
-        } else if (tricks >= targetTricks) successes++;
-    }
-    const done = samples >= CONTRACT_CHANCE_TARGET;
-    const pct = samples ? 100 * successes / samples : 0;
-    const local = { n: samples, done, successPct: pct, text: done ? `${pct.toFixed(0)}%` : `${samples}/${CONTRACT_CHANCE_TARGET}` };
+    const stats = contractChanceComputeTargetStats(deal, contract, target, rows, targets);
+    const samples = stats.samples;
+    const pct = samples ? 100 * stats.successes / samples : 0;
+    const state = contractChanceDealState(deal, false);
+    const sideState = state && state.sides && state.sides[target.side];
+    const settled = !!(sideState && sideState.adaptiveSettled);
+    const done = samples >= goal && (settled || goal >= CONTRACT_CHANCE_ADAPTIVE_MAX_TARGET);
+    const text = done
+        ? `${pct.toFixed(0)}%`
+        : (samples >= CONTRACT_CHANCE_TARGET ? `${pct.toFixed(0)}% · ${samples}/${goal}` : `${samples}/${CONTRACT_CHANCE_TARGET}`);
+    const local = {
+        n: samples,
+        goal,
+        done,
+        successPct: pct,
+        successes: stats.successes,
+        margin95: contractChanceWilsonMargin95(stats.successes, samples),
+        text
+    };
 
-    // Les invités ne recalculent jamais les 24 redistributions : ils affichent le petit
-    // snapshot publié par l'hôte. Après transfert d'hôte, on garde aussi ce snapshot tant
-    // que le nouveau calcul local n'a pas rattrapé le même nombre d'échantillons.
+    // Les invités affichent le snapshot publié par l'hôte. Après transfert d'hôte, garder
+    // le snapshot tant que le nouveau calcul local n'a pas rattrapé le même nombre de tirages.
     const remote = contractChanceSnapshotProgress(deal, target);
     return remote && remote.n > local.n ? remote : local;
 }
@@ -3495,7 +3642,11 @@ function contractChanceBuildSnapshot(deal, contract) {
     for (const target of targets) {
         const progress = contractChanceTargetProgress(deal, contract, target);
         values[optimalContractTargetKey(target)] = {
-            n: progress.n,
+            // `n` reste borné à 24 pour qu'un ancien client R118-R124 puisse encore lire
+            // le snapshot. Les clients R125 utilisent adaptiveN + goal.
+            n: Math.min(CONTRACT_CHANCE_TARGET, progress.n),
+            adaptiveN: progress.n,
+            goal: progress.goal || CONTRACT_CHANCE_TARGET,
             done: progress.done,
             successPct: progress.successPct
         };

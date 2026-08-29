@@ -1,9 +1,7 @@
 name: Déployer sur GitHub Pages
 
-# Se déclenche à chaque push sur main (le mode "GitHub Actions" des réglages Pages ne fait
-# que dire à GitHub "il y aura un workflow qui gère le déploiement" — c'est ce fichier qui
-# fait le travail). "workflow_dispatch" permet aussi de le relancer à la main depuis
-# l'onglet Actions du dépôt, si besoin.
+# Se déclenche à chaque push sur main. Le déploiement n'est autorisé que si la gate de
+# non-régression ci-dessous passe entièrement.
 on:
   push:
     branches: [main]
@@ -14,8 +12,6 @@ permissions:
   pages: write
   id-token: write
 
-# Empêche deux déploiements de se chevaucher si plusieurs push arrivent coup sur coup —
-# le plus récent annule celui d'avant plutôt que de les laisser se marcher dessus.
 concurrency:
   group: pages
   cancel-in-progress: true
@@ -27,12 +23,22 @@ jobs:
       - name: Récupérer le dépôt
         uses: actions/checkout@v4
 
+      - name: Gate — syntaxe JavaScript
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Tous les .js présents dans le dépôt, y compris PONS et les futurs fichiers :
+          # une nouvelle dépendance ne peut donc pas échapper silencieusement à la gate.
+          while IFS= read -r -d '' file; do
+            echo "node --check $file"
+            node --check "$file"
+          done < <(find . -type f -name '*.js' -not -path './.git/*' -print0 | sort -z)
+
+      - name: Gate — non-régression PLAY
+        run: node tests/regression-gate.js
+
       - name: Bump automatique de CACHE_NAME dans sw.js
-        # Remplace CACHE_NAME par un identifiant unique dérivé du commit (8 premiers
-        # caractères de son SHA) : plus besoin d'y penser à la main (voir README.md) —
-        # chaque push produit forcément une valeur différente de la précédente, donc le
-        # service worker détecte toujours la mise à jour et la bannière "Nouvelle version
-        # disponible" (voir app.js) continue de fonctionner comme avant.
+        # Chaque déploiement validé reçoit un cache unique dérivé du commit.
         run: |
           NEW_CACHE_NAME="bridge-encheres-${GITHUB_SHA::8}"
           sed -i "s/const CACHE_NAME = '[^']*';/const CACHE_NAME = '${NEW_CACHE_NAME}';/" sw.js
@@ -40,10 +46,6 @@ jobs:
           grep CACHE_NAME sw.js
 
       - name: Régénérer donnes/catalogue.json à partir du contenu réel du dossier
-        # Plus besoin d'éditer catalogue.json à la main (voir donnes/README.md) : à chaque
-        # déploiement, il est reconstruit en listant simplement les .pbn/.lin réellement
-        # présents dans donnes/. Ajouter une donne à la bibliothèque du club se résume donc
-        # à déposer le fichier dans ce dossier et pousser — rien d'autre à tenir à jour.
         run: |
           python3 -c "
           import json, os
