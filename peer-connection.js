@@ -139,69 +139,157 @@ const ICE_STUCK_TIMEOUT_MS = 6000;
 // salon est alors généré à chaque tentative, ce qui résout ce cas précis.
 const RETRIABLE_ERROR_TYPES = ['network', 'server-error', 'socket-error', 'socket-closed'];
 
-// Configuration ICE explicite : serveurs STUN publics (Google + Metered, aucun des deux
-// n'a besoin d'identifiants), complétés par DEUX fournisseurs TURN indépendants
-// (relais qui font réellement transiter les données quand une connexion directe échoue —
-// cas fréquent avec les NAT restrictifs, certains pare-feux, le "NAT hairpinning", ou
-// l'isolation client d'un partage de connexion mobile) :
-//   - ExpressTURN (compte gratuit de Guillaume)
-//   - Metered / Open Relay (compte gratuit de Guillaume, identifiant généré depuis son
-//     tableau de bord — voir échange avec Guillaume : une première tentative avec des
-//     identifiants publics partagés `openrelayproject`/`openrelayproject` avait échoué,
-//     ce fournisseur exigeant désormais un vrai compte pour limiter les abus)
-// Si l'un des deux est indisponible à un instant donné (quota, panne, limite de débit...),
-// la négociation ICE a une vraie chance de réussir quand même via l'autre.
-const ICE_CONFIG = {
-    iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' },
-        { urls: 'stun:stun2.l.google.com:19302' },
-        { urls: 'stun:stun.relay.metered.ca:80' },
-        {
-            urls: 'turn:free.expressturn.com:3478',
-            username: '000000002098770532',
-            credential: 'zIohrx8x/vvzdIwz7VVCZ1nj2fI='
-        },
-        {
-            urls: 'turn:free.expressturn.com:3478?transport=tcp',
-            username: '000000002098770532',
-            credential: 'zIohrx8x/vvzdIwz7VVCZ1nj2fI='
-        },
-        {
-            urls: 'turns:free.expressturn.com:443?transport=tcp',
-            username: '000000002098770532',
-            credential: 'zIohrx8x/vvzdIwz7VVCZ1nj2fI='
-        },
-        {
-            urls: 'turn:standard.relay.metered.ca:80',
-            username: '770bea7717c25ad27a475345',
-            credential: '2lEc2n+zXAKRFb15'
-        },
-        {
-            urls: 'turn:standard.relay.metered.ca:80?transport=tcp',
-            username: '770bea7717c25ad27a475345',
-            credential: '2lEc2n+zXAKRFb15'
-        },
-        {
-            urls: 'turn:standard.relay.metered.ca:443',
-            username: '770bea7717c25ad27a475345',
-            credential: '2lEc2n+zXAKRFb15'
-        },
-        {
-            urls: 'turns:standard.relay.metered.ca:443?transport=tcp',
-            username: '770bea7717c25ad27a475345',
-            credential: '2lEc2n+zXAKRFb15'
+// R127 — les mots de passe TURN permanents ne sont plus publiés dans ce fichier.
+// Les STUN publics restent statiques (aucun secret). Les relais TURN sont obtenus à la
+// demande depuis API-gen sous forme de credentials temporaires. Ils sont gardés uniquement
+// en mémoire et rafraîchis automatiquement lors d'une nouvelle création/reconnexion P2P.
+// La durée d'une SALLE n'a aucun lien avec celle d'un credential TURN : rouvrir PLAY des
+// heures plus tard provoque simplement l'obtention d'un nouveau credential.
+const STATIC_STUN_SERVERS = Object.freeze([
+    Object.freeze({ urls: 'stun:stun.l.google.com:19302' }),
+    Object.freeze({ urls: 'stun:stun1.l.google.com:19302' }),
+    Object.freeze({ urls: 'stun:stun2.l.google.com:19302' }),
+    Object.freeze({ urls: 'stun:stun.relay.metered.ca:80' })
+]);
+const TURN_CREDENTIALS_ENDPOINT = 'https://api-gen-beta.vercel.app/api/turn-credentials';
+const TURN_CREDENTIAL_FETCH_TIMEOUT_MS = 4000;
+const TURN_CREDENTIAL_REFRESH_SKEW_MS = 30 * 60 * 1000;
+let temporaryIceCache = null;
+let temporaryIceFetchPromise = null;
+
+function cloneIceServers(rows) {
+    return (Array.isArray(rows) ? rows : []).map(row => ({
+        urls: Array.isArray(row.urls) ? row.urls.slice() : row.urls,
+        ...(typeof row.username === 'string' ? { username: row.username } : {}),
+        ...(typeof row.credential === 'string' ? { credential: row.credential } : {})
+    }));
+}
+
+function staticStunConfig() {
+    return { iceServers: cloneIceServers(STATIC_STUN_SERVERS) };
+}
+
+function normalizeTemporaryIceServers(rows) {
+    if (!Array.isArray(rows)) return [];
+    const out = [];
+    const seen = new Set();
+    for (const raw of rows) {
+        if (!raw || typeof raw !== 'object') continue;
+        const urlsRaw = Array.isArray(raw.urls) ? raw.urls : [raw.urls];
+        const urls = urlsRaw
+            .filter(url => typeof url === 'string' && /^(?:stun|turn|turns):/i.test(url.trim()))
+            .map(url => url.trim());
+        if (!urls.length) continue;
+        const isTurn = urls.some(url => /^turns?:/i.test(url));
+        const username = typeof raw.username === 'string' ? raw.username.trim() : '';
+        const credential = typeof raw.credential === 'string' ? raw.credential : '';
+        if (isTurn && (!username || !credential)) continue;
+        const key = JSON.stringify([urls, username, credential]);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push({
+            urls: urls.length === 1 ? urls[0] : urls,
+            ...(username ? { username } : {}),
+            ...(credential ? { credential } : {})
+        });
+    }
+    return out;
+}
+
+function temporaryTurnCacheUsable(roomCode, now = Date.now()) {
+    return !!(temporaryIceCache
+        && temporaryIceCache.roomCode === String(roomCode || '').toUpperCase().trim()
+        && Number.isFinite(temporaryIceCache.expiresAt)
+        && temporaryIceCache.expiresAt - now > TURN_CREDENTIAL_REFRESH_SKEW_MS
+        && Array.isArray(temporaryIceCache.iceServers)
+        && temporaryIceCache.iceServers.some(row => {
+            const urls = Array.isArray(row.urls) ? row.urls : [row.urls];
+            return urls.some(url => /^turns?:/i.test(String(url || '')));
+        }));
+}
+
+async function ensureFreshIceConfig(roomCode, force = false) {
+    const normalizedRoom = String(roomCode || '').toUpperCase().trim();
+    if (!normalizedRoom || (typeof window !== 'undefined' && window.location && window.location.protocol === 'file:')) {
+        return staticStunConfig();
+    }
+    if (!force && temporaryTurnCacheUsable(normalizedRoom)) {
+        peerPerf('turn-credential-cache-hit', { roomCode: normalizedRoom });
+        return { iceServers: cloneIceServers(STATIC_STUN_SERVERS).concat(cloneIceServers(temporaryIceCache.iceServers)) };
+    }
+    if (!force && temporaryIceFetchPromise && temporaryIceFetchPromise.roomCode === normalizedRoom) {
+        return temporaryIceFetchPromise.promise;
+    }
+
+    const promise = (async () => {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), TURN_CREDENTIAL_FETCH_TIMEOUT_MS);
+        try {
+            peerPerf('turn-credential-fetch-start', { roomCode: normalizedRoom });
+            const url = `${TURN_CREDENTIALS_ENDPOINT}?code=${encodeURIComponent(normalizedRoom)}`;
+            const response = await fetch(url, { method: 'POST', cache: 'no-store', signal: controller.signal });
+            if (!response.ok) throw new Error(`TURN HTTP ${response.status}`);
+            const body = await response.json();
+            const iceServers = normalizeTemporaryIceServers(body && body.iceServers);
+            const expiresAt = Number(body && body.expiresAt);
+            if (!iceServers.some(row => {
+                const urls = Array.isArray(row.urls) ? row.urls : [row.urls];
+                return urls.some(item => /^turns?:/i.test(String(item || '')));
+            }) || !Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+                throw new Error('Réponse TURN temporaire invalide');
+            }
+            temporaryIceCache = { roomCode: normalizedRoom, expiresAt, iceServers };
+            peerPerf('turn-credential-ready', {
+                roomCode: normalizedRoom,
+                expiresInSec: Math.max(0, Math.round((expiresAt - Date.now()) / 1000))
+            });
+            return { iceServers: cloneIceServers(STATIC_STUN_SERVERS).concat(cloneIceServers(iceServers)) };
+        } catch (err) {
+            // Ne jamais rendre Create/Join impossible uniquement parce que le broker TURN
+            // est momentanément indisponible. STUN/direct reste utilisable ; si le réseau
+            // exige absolument un relais, la reconnexion complète suivante retentera le
+            // broker et récupérera de nouveaux credentials.
+            const reason = controller.signal.aborted ? 'timeout' : ((err && err.message) || String(err));
+            peerPerf('turn-credential-fallback-stun', { roomCode: normalizedRoom, reason });
+            if (typeof console !== 'undefined' && console.warn) {
+                console.warn('[peer] Credentials TURN temporaires indisponibles, tentative STUN/direct uniquement :', reason);
+            }
+            return staticStunConfig();
+        } finally {
+            clearTimeout(timer);
         }
-    ]
-};
+    })();
+    if (!force) temporaryIceFetchPromise = { roomCode: normalizedRoom, promise };
+    try {
+        return await promise;
+    } finally {
+        if (!force && temporaryIceFetchPromise && temporaryIceFetchPromise.promise === promise) temporaryIceFetchPromise = null;
+    }
+}
 
-// Test isolé : force tout le trafic à passer par TURN (iceTransportPolicy:'relay'), sans
-// STUN ni connexion directe. Résultat loggué dans le panneau de diagnostic.
-function testTurnConnectivity() {
+// Test isolé : force tout le trafic à passer par TURN (iceTransportPolicy:'relay').
+// Contrairement aux anciennes releases, ce test récupère d'abord un credential frais :
+// aucun mot de passe permanent n'est contenu dans le bundle public.
+async function testTurnConnectivity() {
     const log = (typeof pushDebugLog === 'function') ? pushDebugLog : (s => console.log(s));
-    log('--- Test TURN isolé (iceTransportPolicy=relay) ---');
+    log('--- Test TURN isolé (credentials temporaires, iceTransportPolicy=relay) ---');
 
-    const pc = new RTCPeerConnection({ iceServers: ICE_CONFIG.iceServers, iceTransportPolicy: 'relay' });
+    const roomCode = (typeof currentRoomCode !== 'undefined' && currentRoomCode) ? currentRoomCode : null;
+    if (!roomCode) {
+        log('Test TURN — aucune salle active : impossible de demander un credential temporaire.');
+        return;
+    }
+    const config = await ensureFreshIceConfig(roomCode, true);
+    const turnServers = (config.iceServers || []).filter(row => {
+        const urls = Array.isArray(row.urls) ? row.urls : [row.urls];
+        return urls.some(url => /^turns?:/i.test(String(url || '')));
+    });
+    if (!turnServers.length) {
+        log('Test TURN — aucun credential TURN temporaire disponible (STUN/direct seulement).');
+        return;
+    }
+
+    const pc = new RTCPeerConnection({ iceServers: turnServers, iceTransportPolicy: 'relay' });
     let gotRelay = false;
 
     pc.onicecandidate = (event) => {
@@ -209,7 +297,7 @@ function testTurnConnectivity() {
             log('Test TURN — candidat reçu, type = ' + (event.candidate.type || '?'));
             if (event.candidate.type === 'relay') gotRelay = true;
         } else {
-            log('Test TURN — récolte terminée. Résultat : ' + (gotRelay ? '✅ TURN joignable !' : '❌ Aucun relais obtenu.'));
+            log('Test TURN — récolte terminée. Résultat : ' + (gotRelay ? '✅ TURN temporaire joignable !' : '❌ Aucun relais obtenu.'));
             pc.close();
         }
     };
@@ -491,8 +579,11 @@ class BridgePeerConnection {
                 ? reserveFreshRoomCode()
                 : Promise.resolve(makeRoomCode()));
         let nextRoomCode;
+        let iceConfig;
         try {
             [nextRoomCode] = await Promise.all([roomCodePromise, peerReadyPromise]);
+            if (generation !== this._roomCreateGeneration) return;
+            iceConfig = await ensureFreshIceConfig(nextRoomCode);
         } catch (err) {
             if (generation !== this._roomCreateGeneration) return;
             const peerFailed = typeof Peer === 'undefined';
@@ -514,7 +605,7 @@ class BridgePeerConnection {
         const id = PEER_ID_PREFIX + this.roomCode;
         this._log('Création de la partie, id =', id, this._connectRetries ? `(tentative ${this._connectRetries + 1})` : '');
         peerPerf('peer-signaling-start', { role: 'host' });
-        this.peer = new Peer(id, { config: ICE_CONFIG, debug: 1 });
+        this.peer = new Peer(id, { config: iceConfig, debug: 1 });
 
         this.peer.on('open', () => {
             if (generation !== this._roomCreateGeneration) return;
@@ -651,8 +742,12 @@ class BridgePeerConnection {
     async _attemptJoinRoom(metadata, generation = this._roomJoinGeneration) {
         if (generation !== this._roomJoinGeneration) return;
         const targetId = PEER_ID_PREFIX + this.roomCode;
+        let iceConfig;
         try {
-            await ensurePeerJsReady();
+            [, iceConfig] = await Promise.all([
+                ensurePeerJsReady(),
+                ensureFreshIceConfig(this.roomCode)
+            ]);
             if (generation !== this._roomJoinGeneration) return; // détruit/annulé pendant le await
         } catch (err) {
             if (generation !== this._roomJoinGeneration) return;
@@ -665,7 +760,7 @@ class BridgePeerConnection {
             return;
         }
         peerPerf('peer-signaling-start', { role: 'guest' });
-        this.peer = new Peer({ config: ICE_CONFIG, debug: 1 });
+        this.peer = new Peer({ config: iceConfig, debug: 1 });
 
         this.peer.on('open', () => {
             if (generation !== this._roomJoinGeneration) return;

@@ -7,6 +7,7 @@ const vm = require('vm');
 const ROOT = path.resolve(__dirname, '..');
 const appPath = path.join(ROOT, 'app.js');
 const swPath = path.join(ROOT, 'sw.js');
+const peerPath = path.join(ROOT, 'peer-connection.js');
 
 function fail(message) {
     throw new Error(message);
@@ -74,6 +75,7 @@ function extractSetValues(source, name) {
 
 const app = read(appPath);
 const sw = read(swPath);
+const peer = read(peerPath);
 
 // ---------------------------------------------------------------------------
 // 1) R123 + R125 : population complète et stable 24 -> 48 -> 72
@@ -336,5 +338,22 @@ assert(shouldNeverCache('https://play-dds-native.vercel.app/api/dds-a'), 'SW: DD
 assert(shouldNeverCache('https://0.peerjs.com/id'), 'SW: PeerJS pourrait être caché');
 assert(shouldNeverCache('https://js.pusher.com/8.4.0/pusher.min.js'), 'SW: Pusher pourrait être caché');
 assert(!shouldNeverCache('https://capgui13.github.io/play/app.js'), 'SW: assets PLAY classés à tort comme externes interdits');
+
+
+// ---------------------------------------------------------------------------
+// 7) R127 : TURN temporaire — aucun secret permanent dans le bundle public
+// ---------------------------------------------------------------------------
+assert(peer.includes("const TURN_CREDENTIALS_ENDPOINT = 'https://api-gen-beta.vercel.app/api/turn-credentials'"), 'R127: endpoint TURN temporaire absent');
+assert(peer.includes('async function ensureFreshIceConfig('), 'R127: rafraîchissement TURN temporaire absent');
+assert(peer.includes('TURN_CREDENTIAL_REFRESH_SKEW_MS'), 'R127: marge de rafraîchissement TURN absente');
+assert(peer.includes('temporaryTurnCacheUsable'), 'R127: cache mémoire TURN absent');
+assert(peer.includes('iceConfig = await ensureFreshIceConfig(nextRoomCode)'), 'R127: création hôte ne récupère pas de TURN frais');
+assert(/ensureFreshIceConfig\(this\.roomCode\)/.test(peer), 'R127: join/reconnexion invité ne récupère pas de TURN frais');
+assert(peer.includes('new Peer(id, { config: iceConfig, debug: 1 })'), 'R127: hôte n’utilise pas la config ICE dynamique');
+assert(peer.includes('new Peer({ config: iceConfig, debug: 1 })'), 'R127: invité n’utilise pas la config ICE dynamique');
+assert(!/const\s+ICE_CONFIG\s*=/.test(peer), 'R127: ancienne configuration ICE statique encore présente');
+assert(!/username\s*:\s*['"][^'"]+['"]/.test(peer), 'R127: username TURN littéral encore publié dans le client');
+assert(!/credential\s*:\s*['"][^'"]+['"]/.test(peer), 'R127: credential TURN littéral encore publié dans le client');
+assert(/return staticStunConfig\(\)/.test(extractFunction(peer, 'ensureFreshIceConfig')), 'R127: panne du broker TURN doit conserver STUN/direct');
 
 console.log('PLAY regression gate PASS');
