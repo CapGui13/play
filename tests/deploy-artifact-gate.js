@@ -94,7 +94,12 @@ for (const match of index.matchAll(/\b(?:src|href)=["']([^"']+)["']/g)) {
 const sw = fs.readFileSync(path.join(SITE, 'sw.js'), 'utf8');
 const assetsMatch = sw.match(/const\s+CORE_ASSETS\s*=\s*\[([\s\S]*?)\]\s*;/);
 assert(assetsMatch, 'R129: CORE_ASSETS introuvable dans sw.js');
-const coreAssets = Array.from(assetsMatch[1].matchAll(/['"]([^'"]+)['"]/g), m => m[1]);
+// Retire les commentaires avant d'extraire les littéraux : une apostrophe dans un
+// commentaire (ex. l'installation) ne doit jamais devenir un faux nom de ressource.
+const coreAssetsSource = assetsMatch[1]
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\/\/.*$/gm, '');
+const coreAssets = Array.from(coreAssetsSource.matchAll(/['"]([^'"]+)['"]/g), m => m[1]);
 
 for (let ref of coreAssets) {
     if (ref === './' || ref === '/') continue;
