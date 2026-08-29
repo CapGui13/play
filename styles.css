@@ -2701,13 +2701,14 @@ button.kibitz-chip {
     width: 25%;
     font-size: 0.95rem;
     font-weight: 700;
-    padding: 8px 6px 0 6px;
+    padding: 8px 6px 11px 6px;
     color: var(--text);
     background: var(--card);
     border: 1px solid var(--border);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    position: relative;
 }
 
 /* Colonne "au tour de" mise en évidence par inversion fond/texte (plutôt que par une
@@ -2733,8 +2734,11 @@ button.kibitz-chip {
    PERMANENTE (indépendante du tour) reflétant qui est qui du point de vue de la personne
    qui regarde, pas juste à qui c'est le tour. */
 .ledger-seat-label {
-    display: block;
-    padding-bottom: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 1.2em;
+    padding-bottom: 0;
 }
 
 /* Même adaptation dans les quatre colonnes du tableau d'enchères, où la largeur
@@ -2769,9 +2773,13 @@ button.kibitz-chip {
 
 .vuln-bar {
     display: block;
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
     height: 5px;
-    margin: 0 -6px;
-    width: calc(100% + 12px);
+    margin: 0;
+    width: auto;
 }
 
 .vuln-bar-safe {
@@ -2780,6 +2788,18 @@ button.kibitz-chip {
 
 .vuln-bar-danger {
     background: #ef4444;
+}
+
+@media (max-width: 760px), ((hover: none) and (pointer: coarse) and (max-width: 1366px)) {
+    .auction-ledger th {
+        padding-top: 7px;
+        padding-bottom: 10px;
+    }
+
+    .auction-ledger th .ledger-seat-label {
+        min-height: 1.25em;
+        line-height: 1.1;
+    }
 }
 
 .auction-ledger td {
