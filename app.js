@@ -2184,14 +2184,20 @@ function applyDDResultToBoard(boardNumber, table) {
 // à un .bat ou à un exécutable. Les tables DD des redistributions statistiques sont
 // résolues par l'API HTTPS déjà utilisée par PLAY sur GitHub Pages.
 const CONTRACT_CHANCE_TARGET = 24;
-// Online R118 — transport DDS R117 inchangé + synchronisation des résultats statistiques.
-// Une seule opération logique à la fois => au plus 2 requêtes DDS simultanées, comme R116.
+// Online R119 — transport DDS R117 + synchro R118 + rattrapage collaboratif post-enchère.
+// Avant la fin de l'enchère, seul l'hôte préchauffe. Après la fin, le reliquat peut être
+// réparti entre les participants connectés, sans rendre aucun participant indispensable.
+// Une seule opération logique locale à la fois => au plus 2 requêtes DDS simultanées chez l'hôte.
 const CONTRACT_CHANCE_DD_CHUNK_SIZE = 12;
 const CONTRACT_CHANCE_MAX_HTTP = 1;
 const CONTRACT_CHANCE_MAX_ATTEMPTS = 720;
 const CONTRACT_CHANCE_MIN_CONDITIONED = 8;
 const CONTRACT_CHANCE_RETRY_DELAY_MS = 1800;
 const CONTRACT_CHANCE_REMOTE_TIMEOUT_MS = 18000;
+const CONTRACT_CHANCE_COLLAB_MOBILE_BATCH = 2;
+const CONTRACT_CHANCE_COLLAB_DESKTOP_BATCH = 6;
+const CONTRACT_CHANCE_COLLAB_JOB_TIMEOUT_MS = 12000;
+const CONTRACT_CHANCE_COLLAB_COOLDOWN_MS = 15000;
 const CONTRACT_CHANCE_NATIVE_URLS = [
     'https://play-dds-native.vercel.app/api/dds-a',
     'https://play-dds-native.vercel.app/api/dds-b'
@@ -2207,6 +2213,10 @@ let contractChanceStates = new WeakMap();
 let contractChanceAdvancedDeals = new WeakSet();
 let contractChanceDeferredDeals = new WeakSet();
 let contractChanceLastBroadcastSnapshot = new WeakMap();
+let contractChanceGuestCapabilities = new Map();
+let contractChanceRemoteJobs = new Map();
+let contractChanceRemoteJobSequence = 0;
+let contractChanceGuestActiveJobs = new Set();
 let contractChancePumpTimer = null;
 
 function statisticalParSideFromDeclarer(declarer) {
@@ -2320,8 +2330,8 @@ function contractChanceDealState(deal, create = false) {
         state = {
             generation: contractChanceGeneration,
             sides: {
-                NS: { entries: new Map(), queued: new Set(), active: new Set(), failures: 0 },
-                EW: { entries: new Map(), queued: new Set(), active: new Set(), failures: 0 }
+                NS: { entries: new Map(), queued: new Set(), active: new Set(), remotePending: new Set(), failures: 0 },
+                EW: { entries: new Map(), queued: new Set(), active: new Set(), remotePending: new Set(), failures: 0 }
             }
         };
         contractChanceStates.set(deal, state);
@@ -2339,6 +2349,11 @@ function resetContractChancePrewarmPipeline() {
     contractChanceAdvancedDeals = new WeakSet();
     contractChanceDeferredDeals = new WeakSet();
     contractChanceLastBroadcastSnapshot = new WeakMap();
+    for (const job of contractChanceRemoteJobs.values()) {
+        if (job && job.timer) clearTimeout(job.timer);
+    }
+    contractChanceRemoteJobs.clear();
+    contractChanceGuestActiveJobs.clear();
     if (contractChancePumpTimer) clearTimeout(contractChancePumpTimer);
     contractChancePumpTimer = null;
 }
@@ -2419,6 +2434,9 @@ function contractChanceQueueForDeal(deal, priority = 20) {
     const auctionFinished = (() => {
         try { return isAuctionOver(deal.auctionHistory || []); } catch (_) { return false; }
     })();
+    // Le partage n'existe qu'APRÈS la fin de l'enchère. On réserve d'abord quelques
+    // échantillons aux invités disponibles ; la file locale de l'hôte prend tout le reste.
+    if (auctionFinished) contractChanceDispatchCollaborativeWork(deal);
     for (const side of ['NS', 'EW']) {
         let candidates = [];
         try { candidates = contractChanceBuildCandidates(deal, side, auctionFinished); } catch (_) { candidates = []; }
@@ -2436,7 +2454,7 @@ function contractChanceQueueForDeal(deal, priority = 20) {
         });
         for (const candidate of candidates) {
             const sampleIndex = Number(candidate.sampleIndex);
-            if (sideState.entries.has(sampleIndex) || sideState.queued.has(sampleIndex) || sideState.active.has(sampleIndex)) continue;
+            if (sideState.entries.has(sampleIndex) || sideState.queued.has(sampleIndex) || sideState.active.has(sampleIndex) || sideState.remotePending.has(sampleIndex)) continue;
             sideState.queued.add(sampleIndex);
             contractChanceQueue.push({
                 generation: contractChanceGeneration,
@@ -2554,6 +2572,310 @@ async function contractChanceFetchLane(url, items) {
     } finally {
         if (timeout) clearTimeout(timeout);
     }
+}
+
+
+function contractChanceTableIsValid(table) {
+    if (!table || typeof table !== 'object') return false;
+    for (const strain of ['N', 'S', 'H', 'D', 'C']) {
+        if (!table[strain] || typeof table[strain] !== 'object') return false;
+        for (const seat of ['N', 'S', 'E', 'W']) {
+            const value = Number(table[strain][seat]);
+            if (!Number.isInteger(value) || value < 0 || value > 13) return false;
+        }
+    }
+    return true;
+}
+
+function contractChanceLocalCapability() {
+    const mobile = isLikelyMobileDevice();
+    return {
+        mobile,
+        visible: typeof document === 'undefined' || document.visibilityState === 'visible',
+        batchSize: mobile ? CONTRACT_CHANCE_COLLAB_MOBILE_BATCH : CONTRACT_CHANCE_COLLAB_DESKTOP_BATCH
+    };
+}
+
+function announceContractChanceCapability() {
+    if (myRole !== 'guest' || !peerConn || !deals) return;
+    const cap = contractChanceLocalCapability();
+    try {
+        peerConn.send({
+            type: 'contract-chance-capability',
+            mobile: cap.mobile,
+            visible: cap.visible,
+            batchSize: cap.batchSize
+        });
+    } catch (_) {}
+}
+
+if (typeof document !== 'undefined' && !document.__playContractChanceVisibilityListener) {
+    document.__playContractChanceVisibilityListener = true;
+    document.addEventListener('visibilitychange', () => {
+        announceContractChanceCapability();
+    });
+}
+
+function contractChanceGuestCapabilityForParticipant(participantId) {
+    const cap = contractChanceGuestCapabilities.get(participantId);
+    if (!cap) return null;
+    if (cap.visible === false) return null;
+    if (Number(cap.cooldownUntil || 0) > Date.now()) return null;
+    return cap;
+}
+
+function contractChanceRemoteJobsForParticipant(participantId) {
+    let count = 0;
+    for (const job of contractChanceRemoteJobs.values()) {
+        if (job && job.participantId === participantId) count++;
+    }
+    return count;
+}
+
+function contractChanceReleaseRemoteJob(job, { cooldown = false } = {}) {
+    if (!job) return;
+    if (job.timer) clearTimeout(job.timer);
+    contractChanceRemoteJobs.delete(job.id);
+    const state = contractChanceDealState(job.deal, false);
+    if (state && state.generation === job.generation) {
+        for (const item of job.items || []) {
+            const sideState = state.sides[item.side];
+            if (sideState) sideState.remotePending.delete(Number(item.sampleIndex));
+        }
+    }
+    if (cooldown && job.participantId) {
+        const cap = contractChanceGuestCapabilities.get(job.participantId);
+        if (cap) cap.cooldownUntil = Date.now() + CONTRACT_CHANCE_COLLAB_COOLDOWN_MS;
+    }
+}
+
+
+function contractChanceReclaimParticipantJobs(participantId) {
+    if (!participantId) return 0;
+    const jobs = Array.from(contractChanceRemoteJobs.values()).filter(job => job && job.participantId === participantId);
+    for (const job of jobs) {
+        contractChanceReleaseRemoteJob(job, { cooldown: true });
+        if (job.generation === contractChanceGeneration) contractChanceQueueForDeal(job.deal, 115);
+    }
+    return jobs.length;
+}
+
+function contractChanceRemoteJobTimedOut(jobId) {
+    const job = contractChanceRemoteJobs.get(jobId);
+    if (!job) return;
+    contractChanceReleaseRemoteJob(job, { cooldown: true });
+    if (job.generation !== contractChanceGeneration) return;
+    // L'invité n'est jamais indispensable : dès le timeout, l'hôte reprend immédiatement
+    // les échantillons libérés et peut aussi les confier à un autre participant sain.
+    contractChanceDispatchCollaborativeWork(job.deal);
+    contractChanceQueueForDeal(job.deal, 110);
+}
+
+function contractChanceCollaborativeCandidates(deal) {
+    const out = [];
+    const state = contractChanceDealState(deal, true);
+    if (!state || state.generation !== contractChanceGeneration) return out;
+    for (const side of ['NS', 'EW']) {
+        let candidates = [];
+        try { candidates = contractChanceBuildCandidates(deal, side, true); } catch (_) { candidates = []; }
+        const sideState = state.sides[side];
+        for (const candidate of candidates.slice(0, CONTRACT_CHANCE_TARGET)) {
+            const sampleIndex = Number(candidate.sampleIndex);
+            if (sideState.entries.has(sampleIndex) || sideState.active.has(sampleIndex) || sideState.remotePending.has(sampleIndex)) continue;
+            out.push({
+                side,
+                sampleIndex,
+                hands: candidate.hands,
+                profiles: candidate.profiles
+            });
+        }
+    }
+    return out;
+}
+
+function contractChanceDispatchCollaborativeWork(deal) {
+    if (myRole !== 'host' || !deals || !deal || !deal.hands || !deal.statisticalParMode) return 0;
+    try { if (!isAuctionOver(deal.auctionHistory || [])) return 0; } catch (_) { return 0; }
+    if (!peerConn || !Array.isArray(participants)) return 0;
+
+    let available = contractChanceCollaborativeCandidates(deal);
+    if (!available.length) return 0;
+    let assigned = 0;
+    const signature = statisticalParAuctionSignature(deal);
+    const guests = participants
+        .filter(p => p && p.id !== 'host' && !p.disconnected)
+        .map(p => ({ participant: p, guestIndex: guestIndexForParticipant(p.id), cap: contractChanceGuestCapabilityForParticipant(p.id) }))
+        .filter(x => x.guestIndex != null && x.cap && contractChanceRemoteJobsForParticipant(x.participant.id) === 0)
+        // Les desktops prennent les plus gros lots ; les mobiles restent opportunistes.
+        .sort((a, b) => Number(a.cap.mobile) - Number(b.cap.mobile));
+
+    for (const guest of guests) {
+        if (!available.length) break;
+        const batchSize = Math.max(1, Math.min(
+            guest.cap.mobile ? CONTRACT_CHANCE_COLLAB_MOBILE_BATCH : CONTRACT_CHANCE_COLLAB_DESKTOP_BATCH,
+            Number(guest.cap.batchSize || 0) || (guest.cap.mobile ? CONTRACT_CHANCE_COLLAB_MOBILE_BATCH : CONTRACT_CHANCE_COLLAB_DESKTOP_BATCH)
+        ));
+        const chosen = available.splice(0, batchSize);
+        if (!chosen.length) continue;
+        const state = contractChanceDealState(deal, true);
+        const wireItems = [];
+        for (const item of chosen) {
+            const sideState = state.sides[item.side];
+            // Si l'échantillon était seulement en attente locale, on le retire avant de
+            // le déléguer. Un calcul déjà actif chez l'hôte n'est jamais volé.
+            if (sideState.queued.has(item.sampleIndex)) {
+                contractChanceQueue = contractChanceQueue.filter(task => !(task && task.deal === deal && task.side === item.side && Number(task.sampleIndex) === item.sampleIndex));
+                sideState.queued.delete(item.sampleIndex);
+            }
+            if (sideState.entries.has(item.sampleIndex) || sideState.active.has(item.sampleIndex) || sideState.remotePending.has(item.sampleIndex)) continue;
+            sideState.remotePending.add(item.sampleIndex);
+            wireItems.push({
+                side: item.side,
+                sampleIndex: item.sampleIndex,
+                pbn: dealToPbnStringForDD({ hands: item.hands })
+            });
+        }
+        if (!wireItems.length) continue;
+        const jobId = `ccw-${contractChanceGeneration}-${++contractChanceRemoteJobSequence}`;
+        const job = {
+            id: jobId,
+            generation: contractChanceGeneration,
+            deal,
+            boardNumber: deal.board,
+            auctionSignature: signature,
+            participantId: guest.participant.id,
+            guestIndex: guest.guestIndex,
+            items: wireItems,
+            timer: null
+        };
+        contractChanceRemoteJobs.set(jobId, job);
+        try {
+            peerConn.send({
+                type: 'contract-chance-work',
+                jobId,
+                boardNumber: deal.board,
+                auctionSignature: signature,
+                items: wireItems
+            }, guest.guestIndex);
+            job.timer = setTimeout(() => contractChanceRemoteJobTimedOut(jobId), CONTRACT_CHANCE_COLLAB_JOB_TIMEOUT_MS);
+            assigned += wireItems.length;
+        } catch (_) {
+            contractChanceReleaseRemoteJob(job, { cooldown: true });
+        }
+    }
+    return assigned;
+}
+
+async function contractChanceSolveGuestWork(msg) {
+    if (myRole !== 'guest' || !deals || !msg || typeof msg.jobId !== 'string' || !Array.isArray(msg.items)) return;
+    const capNow = contractChanceLocalCapability();
+    const maxActiveJobs = capNow.mobile ? 1 : 2;
+    if (contractChanceGuestActiveJobs.has(msg.jobId)) return;
+    if (contractChanceGuestActiveJobs.size >= maxActiveJobs) {
+        try { peerConn.send({ type: 'contract-chance-work-result', jobId: msg.jobId, boardNumber: msg.boardNumber, declined: true, reason: 'busy' }); } catch (_) {}
+        return;
+    }
+    const idx = deals.findIndex(d => d && d.board === msg.boardNumber);
+    if (idx < 0) return;
+    const deal = deals[idx];
+    // Défense de confidentialité : un client moderne refuse absolument tout travail tant
+    // que l'enchère n'est pas terminée, même si un ancien hôte lui envoyait un job trop tôt.
+    if (!isAuctionOver(deal.auctionHistory || []) || statisticalParAuctionSignature(deal) !== String(msg.auctionSignature || '')) {
+        try { peerConn.send({ type: 'contract-chance-work-result', jobId: msg.jobId, boardNumber: msg.boardNumber, declined: true, reason: 'auction-not-final' }); } catch (_) {}
+        return;
+    }
+    const cap = contractChanceLocalCapability();
+    if (!cap.visible) {
+        try { peerConn.send({ type: 'contract-chance-work-result', jobId: msg.jobId, boardNumber: msg.boardNumber, declined: true, reason: 'background' }); } catch (_) {}
+        return;
+    }
+    const maxItems = cap.mobile ? CONTRACT_CHANCE_COLLAB_MOBILE_BATCH : CONTRACT_CHANCE_COLLAB_DESKTOP_BATCH;
+    const incoming = msg.items.slice(0, maxItems).filter(item => item
+        && (item.side === 'NS' || item.side === 'EW')
+        && Number.isInteger(Number(item.sampleIndex))
+        && typeof item.pbn === 'string' && item.pbn.length > 0 && item.pbn.length <= 180);
+    if (!incoming.length) {
+        try { peerConn.send({ type: 'contract-chance-work-result', jobId: msg.jobId, boardNumber: msg.boardNumber, declined: true, reason: 'empty' }); } catch (_) {}
+        return;
+    }
+
+    contractChanceGuestActiveJobs.add(msg.jobId);
+    const workItems = incoming.map((item, i) => ({ id: String(i + 1), pbn: item.pbn }));
+    const metaById = new Map(incoming.map((item, i) => [String(i + 1), item]));
+    const results = [];
+    try {
+        if (cap.mobile || workItems.length <= 2) {
+            const rows = await contractChanceFetchLane(CONTRACT_CHANCE_NATIVE_URLS[0], workItems);
+            for (const row of rows) {
+                const meta = row && metaById.get(String(row.id));
+                if (meta && contractChanceTableIsValid(row.table)) results.push({ side: meta.side, sampleIndex: meta.sampleIndex, table: row.table });
+            }
+        } else {
+            const midpoint = Math.ceil(workItems.length / 2);
+            const chunks = [workItems.slice(0, midpoint), workItems.slice(midpoint)].filter(Boolean).filter(x => x.length);
+            const settled = await Promise.allSettled(chunks.map((chunk, i) => contractChanceFetchLane(CONTRACT_CHANCE_NATIVE_URLS[i % 2], chunk)));
+            for (const part of settled) {
+                if (part.status !== 'fulfilled') continue;
+                for (const row of part.value || []) {
+                    const meta = row && metaById.get(String(row.id));
+                    if (meta && contractChanceTableIsValid(row.table)) results.push({ side: meta.side, sampleIndex: meta.sampleIndex, table: row.table });
+                }
+            }
+        }
+    } catch (_) {
+        // Retour partiel autorisé : l'hôte reprendra ce qui manque, sans bloquer la donne.
+    }
+    try {
+        peerConn.send({
+            type: 'contract-chance-work-result',
+            jobId: msg.jobId,
+            boardNumber: msg.boardNumber,
+            results
+        });
+    } catch (_) {}
+    finally {
+        contractChanceGuestActiveJobs.delete(msg.jobId);
+    }
+}
+
+function contractChanceAcceptGuestWorkResult(msg, guestIndex) {
+    if (myRole !== 'host' || !msg || typeof msg.jobId !== 'string') return;
+    const job = contractChanceRemoteJobs.get(msg.jobId);
+    if (!job) return; // résultat tardif d'un job déjà repris : déduplication naturelle.
+    const senderId = authenticatedGuestId(guestIndex);
+    if (!senderId || senderId !== job.participantId || guestIndex !== job.guestIndex) return;
+    if (job.generation !== contractChanceGeneration || job.boardNumber !== msg.boardNumber
+        || statisticalParAuctionSignature(job.deal) !== job.auctionSignature) {
+        contractChanceReleaseRemoteJob(job);
+        return;
+    }
+    const expected = new Map((job.items || []).map(item => [`${item.side}:${Number(item.sampleIndex)}`, item]));
+    const state = contractChanceDealState(job.deal, false);
+    if (!state || state.generation !== job.generation) {
+        contractChanceReleaseRemoteJob(job);
+        return;
+    }
+    let accepted = 0;
+    if (!msg.declined && Array.isArray(msg.results)) {
+        for (const row of msg.results) {
+            const side = row && row.side;
+            const sampleIndex = Number(row && row.sampleIndex);
+            const key = `${side}:${sampleIndex}`;
+            if (!expected.has(key) || !contractChanceTableIsValid(row.table)) continue;
+            const sideState = state.sides[side];
+            if (!sideState.entries.has(sampleIndex)) {
+                sideState.entries.set(sampleIndex, { table: row.table, profiles: null, sampleIndex, fixedSide: side });
+                accepted++;
+            }
+        }
+    }
+    contractChanceReleaseRemoteJob(job, { cooldown: !!msg.declined || accepted === 0 });
+    refreshContractChanceDisplayForDeal(job.deal);
+    maybeAdvanceContractChancePrewarm(job.deal);
+    // Le participant peut recevoir le lot suivant immédiatement s'il est resté visible ;
+    // les échantillons non rendus repartent sinon dans la file locale de l'hôte.
+    contractChanceDispatchCollaborativeWork(job.deal);
+    contractChanceQueueForDeal(job.deal, 105);
 }
 
 function contractChanceApplyRows(rows, byId, sideState, side, succeeded) {
@@ -2979,6 +3301,32 @@ function contractChanceSidesWithWinningMajorFitGame(deal, tableTargets = null) {
     return sides;
 }
 
+// R120 — Un contrat supérieur dans la même dénomination n'est utile à afficher
+// que s'il franchit un vrai palier de prime : manche, petit chelem ou grand chelem.
+// Exemples supprimés : 1SA→2SA, 2♥→3♥, 4♠→5♠, 3SA→4SA.
+// Exemples conservés : 2SA→3SA, 3♠→4♠, 4♣→5♣, 5♠→6♠, 6♠→7♠.
+function contractChanceBonusMilestone(target) {
+    if (!target) return -1;
+    const level = Number(target.level || 0);
+    const strain = target.strain === 'NT' ? 'N' : target.strain;
+    if (!(level >= 1 && level <= 7) || !STRAIN_ORDER.includes(strain)) return -1;
+    if (level >= 7) return 3; // grand chelem
+    if (level >= 6) return 2; // petit chelem
+    const gameLevel = strain === 'N' ? 3 : ((strain === 'H' || strain === 'S') ? 4 : 5);
+    return level >= gameLevel ? 1 : 0; // manche / partielle
+}
+
+function contractChanceSameStrainUpgradeIsUseful(played, target) {
+    if (!played || !target) return true;
+    if (target.side !== played.side || target.strain !== played.strain) return true;
+    const playedLevel = Number(played.level || 0);
+    const targetLevel = Number(target.level || 0);
+    // Un contrat inférieur reste informatif : ex. chance de gagner 1♠ quand 2♠ a été joué.
+    if (targetLevel < playedLevel) return true;
+    // Même niveau ou niveau supérieur sans nouveau bonus : aucun intérêt statistique.
+    return contractChanceBonusMilestone(target) > contractChanceBonusMilestone(played);
+}
+
 function contractChanceSameStrainTableTarget(deal, contract) {
     const played = playedContractChanceTarget(contract);
     if (!played) return null;
@@ -3004,9 +3352,13 @@ function relevantContractChanceSidecarTargets(deal, contract) {
         const key = optimalContractTargetKey(decorated);
         if (!targets.some(existing => optimalContractTargetKey(existing) === key)) targets.push(decorated);
     };
-    add(contractChanceSameStrainTableTarget(deal, contract));
+    const sameStrainTarget = contractChanceSameStrainTableTarget(deal, contract);
+    if (contractChanceSameStrainUpgradeIsUseful(played, sameStrainTarget)) add(sameStrainTarget);
     for (const target of tableTargets) {
         if (!target.isBestTableTarget) continue;
+        // Le même filtre doit aussi s'appliquer au passage générique des manches/chelems,
+        // sinon un 5♠ inutile après 4♠ serait réintroduit ici après avoir été supprimé ci-dessus.
+        if (!contractChanceSameStrainUpgradeIsUseful(played, target)) continue;
         const isGameOrSlam = target.tier === 'game' || target.tier === 'slam';
         if (isGameOrSlam) {
             // Avec un fit majeur et une manche majeure gagnante, la manche à SA du même
@@ -3256,6 +3608,7 @@ function refreshContractChanceDisplayForDeal(deal) {
 
 function ensureContractChanceFinalCalculation(deal) {
     if (myRole !== 'host' || !deal || !deal.statisticalParMode) return;
+    contractChanceDispatchCollaborativeWork(deal);
     contractChanceQueueForDeal(deal, 100);
     publishContractChanceSnapshot(deal);
     maybeAdvanceContractChancePrewarm(deal);
@@ -7184,7 +7537,9 @@ const PEER_TYPES_FROM_GUEST = new Set([
     'wizz',
     'undo-request',
     'become-host-ready',
-    'become-host-failed'
+    'become-host-failed',
+    'contract-chance-capability',
+    'contract-chance-work-result'
 ]);
 
 const PEER_TYPES_FROM_HOST = new Set([
@@ -7203,6 +7558,7 @@ const PEER_TYPES_FROM_HOST = new Set([
     'precalc-board',
     'dd-result',
     'contract-chance-result',
+    'contract-chance-work',
     'reset-auction',
     'goto-board',
     'undo-ask',
@@ -7244,6 +7600,7 @@ function markHostParticipantDisconnected(participantId, source = 'p2p-close') {
     if (!wasDisconnected && deals && SEATS.some(s => seatAssignment[s] === p.id)) {
         flashPresenceToast(`🔌 ${presenceLabelFor(p)} s'est déconnecté`, false);
     }
+    contractChanceReclaimParticipantJobs(participantId);
     recordSyncTrace('presence.host.participant-disconnected', { participantId, source, wasDisconnected });
     return !wasDisconnected;
 }
@@ -7701,6 +8058,7 @@ function handlePeerData(msg, guestIndex) {
             clearUndoUiState();
             resetAuctionVisualModeForNewSession();
             enterGameScreen();
+            announceContractChanceCapability();
             break;
         }
 
@@ -7739,6 +8097,7 @@ function handlePeerData(msg, guestIndex) {
             hostPendingUndo = null;
             clearUndoUiState();
             enterGameScreen();
+            announceContractChanceCapability();
             // Voir échange avec Guillaume (session du 23 juillet) : élargi à TOUT
             // 'resync' — au départ réservé à un tout nouveau kibitz sans siège
             // (isNewJoiner), mais un joueur qui REVIENT après une vraie coupure a tout
@@ -7942,8 +8301,45 @@ function handlePeerData(msg, guestIndex) {
             break;
         }
 
-        // Le calcul statistique reste centralisé chez l'hôte. Les autres joueurs reçoivent
-        // seulement progression/% ; aucune redistribution DD n'est recalculée chez eux.
+        // Capacité opportuniste annoncée par un invité. Elle ne donne aucune autorité :
+        // l'hôte décide seul des jobs, et seulement après la fin de l'enchère.
+        case 'contract-chance-capability': {
+            if (myRole !== 'host') break;
+            const senderId = authenticatedGuestId(guestIndex);
+            if (!senderId) break;
+            contractChanceGuestCapabilities.set(senderId, {
+                mobile: !!msg.mobile,
+                visible: msg.visible !== false,
+                batchSize: Math.max(1, Math.min(CONTRACT_CHANCE_COLLAB_DESKTOP_BATCH, Number(msg.batchSize || 1))),
+                cooldownUntil: 0
+            });
+            if (deals) {
+                for (const deal of deals) {
+                    if (deal && deal.statisticalParMode && isAuctionOver(deal.auctionHistory || [])) {
+                        contractChanceDispatchCollaborativeWork(deal);
+                    }
+                }
+            }
+            break;
+        }
+
+        // Travail DDS post-enchère envoyé par l'hôte. Le client moderne refuse ce message
+        // si la donne n'est pas réellement terminée (voir contractChanceSolveGuestWork).
+        case 'contract-chance-work': {
+            contractChanceSolveGuestWork(msg);
+            break;
+        }
+
+        // Retour d'un lot collaboratif. Validation stricte du job, du participant, des
+        // indices et de chaque table avant fusion dans l'état autoritaire de l'hôte.
+        case 'contract-chance-work-result': {
+            contractChanceAcceptGuestWorkResult(msg, guestIndex);
+            break;
+        }
+
+        // Le calcul statistique reste autoritaire chez l'hôte. Les autres joueurs reçoivent
+        // progression/% ; le calcul collaboratif post-enchère ne renvoie que des tables DDS
+        // de jobs explicitement attribués par l'hôte.
         case 'contract-chance-result': {
             if (!deals || !msg.snapshot || msg.snapshot.version !== 1) break;
             const idx = deals.findIndex(d => d.board === msg.boardNumber);
