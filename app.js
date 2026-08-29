@@ -2321,6 +2321,11 @@ const CONTRACT_CHANCE_NATIVE_URLS = [
     'https://play-dds-native.vercel.app/api/dds-b'
 ];
 const CONTRACT_CHANCE_LEGACY_URL = RANDOM_DEAL_DD_SERVER_URL;
+// R132 — coupe-circuit de coût : les calculs DDS statistiques distants sont désactivés
+// après l'alerte de quota Fluid Active CPU du free tier Vercel. Les structures R131
+// restent en place pour faciliter le remplacement par DDS WASM local, mais aucun appel
+// contract-chance ne doit quitter le navigateur tant que ce flag vaut false.
+const CONTRACT_CHANCE_REMOTE_DDS_ENABLED = false;
 
 let contractChanceGeneration = 0;
 let contractChanceTaskSequence = 0;
@@ -2565,6 +2570,7 @@ function contractChanceMarkSessionDeals(list) {
 }
 
 function contractChanceQueueForDeal(deal, priority = 20) {
+    if (!CONTRACT_CHANCE_REMOTE_DDS_ENABLED) return;
     if (myRole !== 'host' || !deal || !deal.hands || !deal.statisticalParMode) return;
     if (!window.PlayStatisticalPar || typeof window.PlayStatisticalPar.sampleHandsDeterministic !== 'function') return;
     if (contractChanceMustYieldToPons()) {
@@ -2703,6 +2709,9 @@ function pumpContractChanceQueue() {
 }
 
 async function contractChanceFetchLane(url, items, timeoutMs = CONTRACT_CHANCE_REMOTE_TIMEOUT_MS) {
+    // Filet de sécurité R132 : même un ancien chemin d'appel ou un job collaboratif
+    // tardif ne peut plus consommer du CPU Vercel.
+    if (!CONTRACT_CHANCE_REMOTE_DDS_ENABLED) return [];
     if (!items || !items.length) return [];
     const controller = typeof AbortController === 'function' ? new AbortController() : null;
     let timeout = null;
@@ -2851,6 +2860,7 @@ function contractChanceCollaborativeCandidates(deal) {
 }
 
 function contractChanceDispatchCollaborativeWork(deal) {
+    if (!CONTRACT_CHANCE_REMOTE_DDS_ENABLED) return 0;
     if (myRole !== 'host' || !deals || !deal || !deal.hands || !deal.statisticalParMode) return 0;
     try { if (!isAuctionOver(deal.auctionHistory || [])) return 0; } catch (_) { return 0; }
     if (!peerConn || !Array.isArray(participants)) return 0;
@@ -3985,6 +3995,9 @@ function renderContractChanceSidecar(root, deal, contract) {
 }
 
 function renderInlineParChances(root, deal, contract) {
+    // R132 : tant que DDS WASM local n'est pas installé, ne pas laisser un 0/24
+    // permanent suggérer qu'un calcul distant est encore en cours.
+    if (!CONTRACT_CHANCE_REMOTE_DDS_ENABLED) return;
     renderPlayedContractChanceHeader(root, deal, contract);
     renderContractChanceSidecar(root, deal, contract);
 }
@@ -4003,6 +4016,7 @@ function refreshContractChanceDisplayForDeal(deal) {
 }
 
 function ensureContractChanceFinalCalculation(deal) {
+    if (!CONTRACT_CHANCE_REMOTE_DDS_ENABLED) return;
     if (myRole !== 'host' || !deal || !deal.statisticalParMode) return;
     contractChanceDispatchCollaborativeWork(deal);
     contractChanceQueueForDeal(deal, 100);
