@@ -341,19 +341,22 @@ assert(!shouldNeverCache('https://capgui13.github.io/play/app.js'), 'SW: assets 
 
 
 // ---------------------------------------------------------------------------
-// 7) R127 : TURN temporaire — aucun secret permanent dans le bundle public
+// 7) R128 : TURN hybride — temporaire d'abord, fallback historique si le broker refuse/tombe
 // ---------------------------------------------------------------------------
-assert(peer.includes("const TURN_CREDENTIALS_ENDPOINT = 'https://api-gen-beta.vercel.app/api/turn-credentials'"), 'R127: endpoint TURN temporaire absent');
-assert(peer.includes('async function ensureFreshIceConfig('), 'R127: rafraîchissement TURN temporaire absent');
-assert(peer.includes('TURN_CREDENTIAL_REFRESH_SKEW_MS'), 'R127: marge de rafraîchissement TURN absente');
-assert(peer.includes('temporaryTurnCacheUsable'), 'R127: cache mémoire TURN absent');
-assert(peer.includes('iceConfig = await ensureFreshIceConfig(nextRoomCode)'), 'R127: création hôte ne récupère pas de TURN frais');
-assert(/ensureFreshIceConfig\(this\.roomCode\)/.test(peer), 'R127: join/reconnexion invité ne récupère pas de TURN frais');
-assert(peer.includes('new Peer(id, { config: iceConfig, debug: 1 })'), 'R127: hôte n’utilise pas la config ICE dynamique');
-assert(peer.includes('new Peer({ config: iceConfig, debug: 1 })'), 'R127: invité n’utilise pas la config ICE dynamique');
-assert(!/const\s+ICE_CONFIG\s*=/.test(peer), 'R127: ancienne configuration ICE statique encore présente');
-assert(!/username\s*:\s*['"][^'"]+['"]/.test(peer), 'R127: username TURN littéral encore publié dans le client');
-assert(!/credential\s*:\s*['"][^'"]+['"]/.test(peer), 'R127: credential TURN littéral encore publié dans le client');
-assert(/return staticStunConfig\(\)/.test(extractFunction(peer, 'ensureFreshIceConfig')), 'R127: panne du broker TURN doit conserver STUN/direct');
+assert(peer.includes("const TURN_CREDENTIALS_ENDPOINT = 'https://api-gen-beta.vercel.app/api/turn-credentials'"), 'R128: endpoint TURN temporaire absent');
+assert(peer.includes('async function ensureFreshIceConfig('), 'R128: rafraîchissement TURN temporaire absent');
+assert(peer.includes('TURN_CREDENTIAL_REFRESH_SKEW_MS'), 'R128: marge de rafraîchissement TURN absente');
+assert(peer.includes('temporaryTurnCacheUsable'), 'R128: cache mémoire TURN absent');
+assert(peer.includes('LEGACY_TURN_FALLBACK_SERVERS'), 'R128: fallback TURN historique absent');
+assert(peer.includes('turn:free.expressturn.com:3478'), 'R128: fallback ExpressTURN absent');
+assert(peer.includes('turn:standard.relay.metered.ca:80'), 'R128: fallback Metered absent');
+assert(peer.includes('function legacyTurnFallbackConfig()'), 'R128: constructeur fallback TURN absent');
+assert(peer.includes('turn-credential-fallback-legacy'), 'R128: télémétrie fallback TURN absente');
+assert(/return legacyTurnFallbackConfig\(\)/.test(extractFunction(peer, 'ensureFreshIceConfig')), 'R128: panne du broker doit reprendre les relais historiques');
+assert(peer.includes('iceConfig = await ensureFreshIceConfig(nextRoomCode)'), 'R128: création hôte ne récupère pas de config ICE dynamique');
+assert(/ensureFreshIceConfig\(this\.roomCode\)/.test(peer), 'R128: join/reconnexion invité ne récupère pas de config ICE dynamique');
+assert(peer.includes('new Peer(id, { config: iceConfig, debug: 1 })'), 'R128: hôte n’utilise pas la config ICE dynamique');
+assert(peer.includes('new Peer({ config: iceConfig, debug: 1 })'), 'R128: invité n’utilise pas la config ICE dynamique');
+assert(!/const\s+ICE_CONFIG\s*=/.test(peer), 'R128: ancienne configuration ICE monolithique réintroduite');
 
 console.log('PLAY regression gate PASS');

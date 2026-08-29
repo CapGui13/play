@@ -139,17 +139,58 @@ const ICE_STUCK_TIMEOUT_MS = 6000;
 // salon est alors généré à chaque tentative, ce qui résout ce cas précis.
 const RETRIABLE_ERROR_TYPES = ['network', 'server-error', 'socket-error', 'socket-closed'];
 
-// R127 — les mots de passe TURN permanents ne sont plus publiés dans ce fichier.
-// Les STUN publics restent statiques (aucun secret). Les relais TURN sont obtenus à la
-// demande depuis API-gen sous forme de credentials temporaires. Ils sont gardés uniquement
-// en mémoire et rafraîchis automatiquement lors d'une nouvelle création/reconnexion P2P.
-// La durée d'une SALLE n'a aucun lien avec celle d'un credential TURN : rouvrir PLAY des
-// heures plus tard provoque simplement l'obtention d'un nouveau credential.
+// R128 — stratégie ICE hybride. PLAY tente toujours d'abord d'obtenir des credentials
+// TURN temporaires auprès d'API-gen. Sur le plan Metered Free, l'API de création dynamique
+// peut refuser cette opération ; dans ce cas (ou si le broker est momentanément indisponible),
+// on reprend automatiquement les relais statiques qui assuraient la compatibilité réseau
+// avant R127. Cela évite toute régression sur les NAT/pare-feux exigeant un relais.
+// La durée d'une SALLE reste indépendante de la durée d'un credential temporaire : une
+// reprise ultérieure retente d'abord le broker, puis utilise le fallback si nécessaire.
 const STATIC_STUN_SERVERS = Object.freeze([
     Object.freeze({ urls: 'stun:stun.l.google.com:19302' }),
     Object.freeze({ urls: 'stun:stun1.l.google.com:19302' }),
     Object.freeze({ urls: 'stun:stun2.l.google.com:19302' }),
     Object.freeze({ urls: 'stun:stun.relay.metered.ca:80' })
+]);
+
+// Fallback de compatibilité R128 : mêmes deux fournisseurs TURN qu'avant R127.
+// Ces credentials ne sont utilisés QUE si la tentative temporaire n'aboutit pas.
+const LEGACY_TURN_FALLBACK_SERVERS = Object.freeze([
+    Object.freeze({
+        urls: 'turn:free.expressturn.com:3478',
+        username: '000000002098770532',
+        credential: 'zIohrx8x/vvzdIwz7VVCZ1nj2fI='
+    }),
+    Object.freeze({
+        urls: 'turn:free.expressturn.com:3478?transport=tcp',
+        username: '000000002098770532',
+        credential: 'zIohrx8x/vvzdIwz7VVCZ1nj2fI='
+    }),
+    Object.freeze({
+        urls: 'turns:free.expressturn.com:443?transport=tcp',
+        username: '000000002098770532',
+        credential: 'zIohrx8x/vvzdIwz7VVCZ1nj2fI='
+    }),
+    Object.freeze({
+        urls: 'turn:standard.relay.metered.ca:80',
+        username: '770bea7717c25ad27a475345',
+        credential: '2lEc2n+zXAKRFb15'
+    }),
+    Object.freeze({
+        urls: 'turn:standard.relay.metered.ca:80?transport=tcp',
+        username: '770bea7717c25ad27a475345',
+        credential: '2lEc2n+zXAKRFb15'
+    }),
+    Object.freeze({
+        urls: 'turn:standard.relay.metered.ca:443',
+        username: '770bea7717c25ad27a475345',
+        credential: '2lEc2n+zXAKRFb15'
+    }),
+    Object.freeze({
+        urls: 'turns:standard.relay.metered.ca:443?transport=tcp',
+        username: '770bea7717c25ad27a475345',
+        credential: '2lEc2n+zXAKRFb15'
+    })
 ]);
 const TURN_CREDENTIALS_ENDPOINT = 'https://api-gen-beta.vercel.app/api/turn-credentials';
 const TURN_CREDENTIAL_FETCH_TIMEOUT_MS = 4000;
@@ -167,6 +208,13 @@ function cloneIceServers(rows) {
 
 function staticStunConfig() {
     return { iceServers: cloneIceServers(STATIC_STUN_SERVERS) };
+}
+
+function legacyTurnFallbackConfig() {
+    return {
+        iceServers: cloneIceServers(STATIC_STUN_SERVERS)
+            .concat(cloneIceServers(LEGACY_TURN_FALLBACK_SERVERS))
+    };
 }
 
 function normalizeTemporaryIceServers(rows) {
@@ -245,16 +293,16 @@ async function ensureFreshIceConfig(roomCode, force = false) {
             });
             return { iceServers: cloneIceServers(STATIC_STUN_SERVERS).concat(cloneIceServers(iceServers)) };
         } catch (err) {
-            // Ne jamais rendre Create/Join impossible uniquement parce que le broker TURN
-            // est momentanément indisponible. STUN/direct reste utilisable ; si le réseau
-            // exige absolument un relais, la reconnexion complète suivante retentera le
-            // broker et récupérera de nouveaux credentials.
+            // R128 : une panne/refus du broker ne doit surtout pas enlever le filet de
+            // sécurité TURN historique. On conserve donc STUN/direct + les deux relais
+            // statiques de compatibilité, tout en retentant le broker lors de la prochaine
+            // création/reconnexion complète.
             const reason = controller.signal.aborted ? 'timeout' : ((err && err.message) || String(err));
-            peerPerf('turn-credential-fallback-stun', { roomCode: normalizedRoom, reason });
+            peerPerf('turn-credential-fallback-legacy', { roomCode: normalizedRoom, reason });
             if (typeof console !== 'undefined' && console.warn) {
-                console.warn('[peer] Credentials TURN temporaires indisponibles, tentative STUN/direct uniquement :', reason);
+                console.warn('[peer] TURN temporaire indisponible, fallback TURN historique activé :', reason);
             }
-            return staticStunConfig();
+            return legacyTurnFallbackConfig();
         } finally {
             clearTimeout(timer);
         }
@@ -268,8 +316,8 @@ async function ensureFreshIceConfig(roomCode, force = false) {
 }
 
 // Test isolé : force tout le trafic à passer par TURN (iceTransportPolicy:'relay').
-// Contrairement aux anciennes releases, ce test récupère d'abord un credential frais :
-// aucun mot de passe permanent n'est contenu dans le bundle public.
+// Il tente le TURN temporaire ; si celui-ci est indisponible, R128 teste le fallback
+// historique exactement comme une connexion réelle.
 async function testTurnConnectivity() {
     const log = (typeof pushDebugLog === 'function') ? pushDebugLog : (s => console.log(s));
     log('--- Test TURN isolé (credentials temporaires, iceTransportPolicy=relay) ---');
