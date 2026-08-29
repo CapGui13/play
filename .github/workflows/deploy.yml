@@ -35,7 +35,7 @@ jobs:
           done < <(find . -type f -name '*.js' -not -path './.git/*' -print0 | sort -z)
 
       - name: Gate — non-régression PLAY
-        run: node tests/regression-gate.js
+        run: node tests/regression-gate-r133.js
 
       - name: Bump automatique de CACHE_NAME dans sw.js
         # Chaque déploiement validé reçoit un cache unique dérivé du commit.
@@ -68,7 +68,14 @@ jobs:
 
           # On conserve par défaut les ressources du dépôt et on retire uniquement
           # ce qui n'a aucune raison d'être servi par GitHub Pages.
-          rsync -a             --exclude='.git/'             --exclude='.github/'             --exclude='tests/'             --exclude='_site/'             --exclude='*.md'             --exclude='bidding-engine.js'             ./ _site/
+          rsync -a \
+            --exclude='.git/' \
+            --exclude='.github/' \
+            --exclude='tests/' \
+            --exclude='_site/' \
+            --exclude='*.md' \
+            --exclude='bidding-engine.js' \
+            ./ _site/
 
       - name: Gate — artefact GitHub Pages
         run: node tests/deploy-artifact-gate.js _site
