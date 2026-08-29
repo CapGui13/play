@@ -2121,16 +2121,13 @@ function uiGenerateRandomDeals() {
     preparePendingStatisticalParPrewarm(generated);
 }
 
-// ===== Double mort en arrière-plan pour les donnes générées aléatoirement =====
+// ===== Double mort local navigateur — DDS WebAssembly R133 =====
 //
-// Réutilise TELLE QUELLE l'API serverless déjà utilisée par le générateur externe
-// (gen/dds-controller.js, voir les fichiers fournis par Guillaume pour cette
-// fonctionnalité) : même URL, même format de requête/réponse. Comme table-encheres est
-// hébergé sur le même domaine (capgui13.github.io), le CORS déjà en place pour le
-// générateur (Access-Control-Allow-Origin restreint à ce domaine, pas au sous-dossier)
-// couvre aussi cette appli sans rien à reconfigurer côté serveur.
-const RANDOM_DEAL_DD_SERVER_URL = 'https://api-gen-beta.vercel.app/api/dds';
-const RANDOM_DEAL_DD_CHUNK_SIZE = 10; // donnes par requête HTTP, comme dds-controller.js
+// Les tables double-mort ne partent plus vers Vercel. PLAY charge à la demande le build
+// navigateur officiel de DDS dans un petit pool de Web Workers et effectue les calculs
+// sur l'appareil du joueur. Le thread UI reste libre, GitHub Pages ne fournit que les
+// fichiers statiques .js/.wasm et aucun quota CPU serveur n'est consommé.
+const RANDOM_DEAL_DD_CHUNK_SIZE = 10; // lot logique ; le pool local borne la concurrence réelle
 
 // Même format PBN que dealToPBNString dans generator.js (gen/), à ceci près que les mains
 // sont déjà des chaînes ici (pas des tableaux de rangs) — pas de .join('') à faire.
@@ -2139,6 +2136,191 @@ function dealToPbnStringForDD(deal) {
         .map(pos => ['S', 'H', 'D', 'C'].map(suit => deal.hands[pos][suit]).join('.'))
         .join(' ');
     return 'N:' + hands;
+}
+
+
+// R133 — client DDS local partagé entre le double mort exact et les chances statistiques.
+// Un Worker = une instance DDS WASM indépendante (~64 Mo de mémoire initiale). On reste
+// volontairement conservateur sur mobile afin d'éviter les crashs mémoire ; sur desktop,
+// 2 à 3 Workers exploitent les cœurs disponibles sans bloquer le thread de l'interface.
+const LOCAL_DDS_WORKER_URL = 'dds/local-dds-worker.js';
+const LOCAL_DDS_BROWSER_ENABLED = typeof Worker === 'function';
+const LOCAL_DDS_MAX_DESKTOP_WORKERS = 3;
+let localDdsWorkers = [];
+let localDdsQueue = [];
+let localDdsPendingByPbn = new Map();
+let localDdsRequestSequence = 0;
+let localDdsTaskSequence = 0;
+let localDdsCompleted = 0;
+let localDdsFailures = 0;
+let localDdsPumpTimer = null;
+
+function localDdsDesiredWorkerCount() {
+    if (!LOCAL_DDS_BROWSER_ENABLED) return 0;
+    if (isLikelyMobileDevice()) return 1;
+    const hc = Math.max(1, Number((typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 4));
+    if (hc >= 6) return LOCAL_DDS_MAX_DESKTOP_WORKERS;
+    if (hc >= 3) return 2;
+    return 1;
+}
+
+function localDdsDiagnostic() {
+    return {
+        enabled: LOCAL_DDS_BROWSER_ENABLED,
+        desiredWorkers: localDdsDesiredWorkerCount(),
+        workers: localDdsWorkers.length,
+        active: localDdsWorkers.filter(slot => slot && slot.current).length,
+        queued: localDdsQueue.length,
+        completed: localDdsCompleted,
+        failures: localDdsFailures,
+        remoteDdsEnabled: false
+    };
+}
+if (typeof window !== 'undefined') window.getLocalDdsDiagnostic = localDdsDiagnostic;
+
+function localDdsSchedulePump(delay = 0) {
+    if (localDdsPumpTimer) return;
+    localDdsPumpTimer = setTimeout(() => {
+        localDdsPumpTimer = null;
+        localDdsPump();
+    }, Math.max(0, Number(delay || 0)));
+}
+
+function localDdsFinishSlot(slot, ok, payload) {
+    const task = slot && slot.current;
+    if (!task) return;
+    slot.current = null;
+    if (localDdsPendingByPbn.get(task.pbn) === task) localDdsPendingByPbn.delete(task.pbn);
+    if (ok) {
+        localDdsCompleted++;
+        task.resolve(payload);
+    } else {
+        localDdsFailures++;
+        task.reject(payload instanceof Error ? payload : new Error(String(payload || 'DDS local indisponible')));
+    }
+    localDdsSchedulePump(0);
+}
+
+function localDdsSpawnWorker(index) {
+    let worker;
+    try {
+        worker = new Worker(LOCAL_DDS_WORKER_URL);
+    } catch (err) {
+        return null;
+    }
+    const slot = { index, worker, current: null };
+    worker.onmessage = event => {
+        const msg = event && event.data || {};
+        const task = slot.current;
+        if (!task || String(msg.requestId || '') !== task.requestId) return;
+        if (msg.type === 'result' && contractChanceTableIsValid(msg.table)) {
+            localDdsFinishSlot(slot, true, msg.table);
+        } else {
+            localDdsFinishSlot(slot, false, new Error(String(msg.error || 'Table DDS locale invalide')));
+        }
+    };
+    worker.onerror = event => {
+        const message = event && event.message ? event.message : 'Worker DDS local en erreur';
+        if (slot.current) localDdsFinishSlot(slot, false, new Error(message));
+        try { worker.terminate(); } catch (_) {}
+        const pos = localDdsWorkers.indexOf(slot);
+        if (pos >= 0) localDdsWorkers.splice(pos, 1);
+        localDdsSchedulePump(500);
+    };
+    return slot;
+}
+
+function localDdsEnsureWorkers() {
+    const desired = localDdsDesiredWorkerCount();
+    while (localDdsWorkers.length < desired) {
+        const slot = localDdsSpawnWorker(localDdsWorkers.length);
+        if (!slot) break;
+        localDdsWorkers.push(slot);
+    }
+    return localDdsWorkers;
+}
+
+function localDdsPump() {
+    if (!localDdsQueue.length) return;
+    const workers = localDdsEnsureWorkers();
+    if (!workers.length) {
+        const pending = localDdsQueue.splice(0);
+        for (const task of pending) {
+            if (localDdsPendingByPbn.get(task.pbn) === task) localDdsPendingByPbn.delete(task.pbn);
+            localDdsFailures++;
+            task.reject(new Error('Web Worker DDS non disponible dans ce navigateur'));
+        }
+        return;
+    }
+    localDdsQueue.sort((a, b) => Number(b.priority || 0) - Number(a.priority || 0) || a.seq - b.seq);
+    for (const slot of workers) {
+        if (!localDdsQueue.length) break;
+        if (!slot || slot.current) continue;
+        const task = localDdsQueue.shift();
+        slot.current = task;
+        try {
+            slot.worker.postMessage({ type: 'solve', requestId: task.requestId, pbn: task.pbn });
+        } catch (err) {
+            localDdsFinishSlot(slot, false, err);
+        }
+    }
+}
+
+function localDdsSolveOne(pbn, priority = 50) {
+    if (!LOCAL_DDS_BROWSER_ENABLED) return Promise.reject(new Error('DDS WebAssembly local non supporté'));
+    const normalizedPbn = String(pbn || '').trim();
+    if (!/^N:/.test(normalizedPbn)) return Promise.reject(new Error('PBN DDS local invalide'));
+
+    // Une même distribution peut être demandée simultanément par le pré-calcul exact et
+    // par un rerendu. Ne jamais lancer deux DDS identiques : on partage la Promise et une
+    // demande plus urgente ne fait que relever la priorité du travail déjà en file.
+    const existing = localDdsPendingByPbn.get(normalizedPbn);
+    if (existing) {
+        existing.priority = Math.max(Number(existing.priority || 0), Number(priority || 0));
+        localDdsPump();
+        return existing.promise;
+    }
+
+    let resolveTask;
+    let rejectTask;
+    const promise = new Promise((resolve, reject) => {
+        resolveTask = resolve;
+        rejectTask = reject;
+    });
+    const task = {
+        requestId: `local-dds-${++localDdsRequestSequence}`,
+        pbn: normalizedPbn,
+        priority: Number(priority || 0),
+        seq: ++localDdsTaskSequence,
+        resolve: resolveTask,
+        reject: rejectTask,
+        promise
+    };
+    localDdsPendingByPbn.set(normalizedPbn, task);
+    localDdsQueue.push(task);
+    localDdsPump();
+    return promise;
+}
+
+function localDdsPromotePbn(pbn, priority = 150) {
+    const normalizedPbn = String(pbn || '').trim();
+    const task = localDdsPendingByPbn.get(normalizedPbn);
+    if (!task) return false;
+    task.priority = Math.max(Number(task.priority || 0), Number(priority || 0));
+    localDdsPump();
+    return true;
+}
+
+async function localDdsSolveItems(items, priority = 50) {
+    const list = Array.isArray(items) ? items : [];
+    return Promise.all(list.map(async item => {
+        try {
+            const table = await localDdsSolveOne(item && item.pbn, priority);
+            return { id: item && item.id, table };
+        } catch (err) {
+            return { id: item && item.id, error: String(err && err.message || err || 'DDS local en erreur') };
+        }
+    }));
 }
 
 // Incrémenté à chaque nouveau lancement de calcul (voir kickOffBackgroundDD) : si l'hôte
@@ -2158,8 +2340,14 @@ let ddResultGenerationId = 0;
 function kickOffBackgroundDD(dealsList) {
     ddResultGenerationId++;
     const generationId = ddResultGenerationId;
-    for (let i = 0; i < dealsList.length; i += RANDOM_DEAL_DD_CHUNK_SIZE) {
-        sendDDChunk(dealsList.slice(i, i + RANDOM_DEAL_DD_CHUNK_SIZE), generationId);
+    if (!Array.isArray(dealsList) || !dealsList.length) return;
+
+    // La première donne doit obtenir sa table exacte immédiatement. Les suivantes restent
+    // en basse priorité : dès qu'un calcul statistique de la donne jouée arrive dans la
+    // file, il peut donc passer devant le pré-calcul des boards futurs.
+    sendDDChunk(dealsList.slice(0, 1), generationId, 0, 180);
+    for (let i = 1; i < dealsList.length; i += RANDOM_DEAL_DD_CHUNK_SIZE) {
+        sendDDChunk(dealsList.slice(i, i + RANDOM_DEAL_DD_CHUNK_SIZE), generationId, 0, 10);
     }
     scheduleDDWatchdog(dealsList, generationId);
 }
@@ -2188,7 +2376,7 @@ function scheduleDDWatchdog(dealsList, generationId) {
         if (stillMissing.length === 0) return;
         pushDebugLog(`Double mort : ${stillMissing.length} donne(s) toujours sans résultat après le délai de sécurité (${DD_WATCHDOG_DELAY_MS / 1000}s) — nouvelle tentative automatique.`);
         for (let i = 0; i < stillMissing.length; i += RANDOM_DEAL_DD_CHUNK_SIZE) {
-            sendDDChunk(stillMissing.slice(i, i + RANDOM_DEAL_DD_CHUNK_SIZE), generationId);
+            sendDDChunk(stillMissing.slice(i, i + RANDOM_DEAL_DD_CHUNK_SIZE), generationId, 0, 120);
         }
     }, DD_WATCHDOG_DELAY_MS);
 }
@@ -2202,52 +2390,63 @@ function scheduleDDWatchdog(dealsList, generationId) {
 const DD_MAX_RETRIES_PER_DEAL = 2;
 const DD_RETRY_DELAY_MS = 1500;
 
-async function sendDDChunk(chunk, generationId, retryCount = 0) {
+async function sendDDChunk(chunk, generationId, retryCount = 0, priority = 40) {
     const items = chunk.map(deal => ({ id: deal.board, pbn: dealToPbnStringForDD(deal) }));
     try {
-        const response = await fetch(RANDOM_DEAL_DD_SERVER_URL, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ items })
-        });
-        if (!response.ok) throw new Error('HTTP ' + response.status);
-        const data = await response.json();
-        if (generationId !== ddResultGenerationId) return; // lot périmé, voir ddResultGenerationId
-
-        // Voir échange avec Guillaume : un résultat sans `table` (voir applyDDResultToBoard,
-        // qui ignore silencieusement ce cas) signifie très probablement un timeout ponctuel
-        // du solveur côté serveur sur CETTE distribution précise — les autres donnes du même
-        // lot, elles, ont bien abouti. On les identifie ici pour les retenter isolément,
-        // plutôt que de les laisser filer sans PAR pour le reste de la partie.
-        const succeededIds = new Set();
-        for (const r of data.results) {
-            if (r.table) {
-                applyDDResultToBoard(r.id, r.table);
-                succeededIds.add(r.id);
+        // Appliquer chaque table dès qu'elle sort du Worker. On ne doit pas attendre les
+        // 9 autres donnes d'un lot basse priorité pour afficher la table de la donne qui
+        // vient de devenir courante.
+        const rows = await Promise.all(items.map(async item => {
+            try {
+                const table = await localDdsSolveOne(item.pbn, priority);
+                if (generationId === ddResultGenerationId && contractChanceTableIsValid(table)) {
+                    applyDDResultToBoard(item.id, table);
+                }
+                return { id: item.id, table };
+            } catch (err) {
+                return { id: item.id, error: String(err && err.message || err || 'DDS local en erreur') };
             }
-        }
+        }));
+        if (generationId !== ddResultGenerationId) return;
+
+        const succeededIds = new Set(rows
+            .filter(r => r && r.table && contractChanceTableIsValid(r.table))
+            .map(r => r.id));
         const missingDeals = chunk.filter(d => !succeededIds.has(d.board));
         if (missingDeals.length > 0 && retryCount < DD_MAX_RETRIES_PER_DEAL) {
-            pushDebugLog(`Double mort : ${missingDeals.length} donne(s) sans résultat dans ce lot — nouvelle tentative (${retryCount + 1}/${DD_MAX_RETRIES_PER_DEAL})…`);
-            setTimeout(() => sendDDChunk(missingDeals, generationId, retryCount + 1), DD_RETRY_DELAY_MS);
+            pushDebugLog(`Double mort local : ${missingDeals.length} donne(s) sans résultat — nouvelle tentative (${retryCount + 1}/${DD_MAX_RETRIES_PER_DEAL})…`);
+            setTimeout(
+                () => sendDDChunk(missingDeals, generationId, retryCount + 1, Math.max(120, priority)),
+                DD_RETRY_DELAY_MS
+            );
         } else if (missingDeals.length > 0) {
-            pushDebugLog(`Double mort : ${missingDeals.length} donne(s) toujours sans résultat après ${DD_MAX_RETRIES_PER_DEAL} tentatives — abandon pour elles (le reste de la partie n'est pas affecté).`);
+            pushDebugLog(`Double mort local : ${missingDeals.length} donne(s) toujours sans résultat après ${DD_MAX_RETRIES_PER_DEAL} tentatives — abandon pour elles.`);
         }
     } catch (err) {
-        // Échec COMPLET du lot (réseau, erreur HTTP...) — même logique de retry borné que
-        // pour un résultat partiel ci-dessus, plutôt que d'abandonner tout de suite sur un
-        // aléa réseau transitoire.
+        if (generationId !== ddResultGenerationId) return;
         if (retryCount < DD_MAX_RETRIES_PER_DEAL) {
-            pushDebugLog(`Double mort en arrière-plan : échec pour un lot (${(err && err.message) || err}) — nouvelle tentative (${retryCount + 1}/${DD_MAX_RETRIES_PER_DEAL})…`);
-            setTimeout(() => sendDDChunk(chunk, generationId, retryCount + 1), DD_RETRY_DELAY_MS);
+            pushDebugLog(`Double mort local indisponible (${err && err.message ? err.message : err}) — nouvelle tentative (${retryCount + 1}/${DD_MAX_RETRIES_PER_DEAL})…`);
+            setTimeout(
+                () => sendDDChunk(chunk, generationId, retryCount + 1, Math.max(120, priority)),
+                DD_RETRY_DELAY_MS
+            );
         } else {
-            // Échec silencieux du point de vue du joueur : pas de PAR pour ce lot, mais la
-            // partie elle-même n'est pas affectée (voir échange avec Guillaume — le calcul
-            // DD est un bonus, jamais un prérequis pour jouer). Tracé dans le journal de
-            // diagnostic pour comprendre après coup si ça arrive souvent.
-            pushDebugLog(`Double mort en arrière-plan : échec définitif pour un lot après ${DD_MAX_RETRIES_PER_DEAL} tentatives (${(err && err.message) || err})`);
+            pushDebugLog(`Double mort local : abandon du lot après ${DD_MAX_RETRIES_PER_DEAL} tentatives.`);
         }
     }
+}
+
+function ensureLocalExactDdForDeal(deal) {
+    if (myRole !== 'host' || !deal || !deal.hands || deal.ddTable) return;
+    const generationId = ddResultGenerationId;
+    const pbn = dealToPbnStringForDD(deal);
+    // Si le board est déjà en pré-calcul, cette demande partage le même DDS et le promeut.
+    // Sinon (reprise ancienne sans pré-calcul), elle crée le travail manquant.
+    localDdsPromotePbn(pbn, 180);
+    localDdsSolveOne(pbn, 180).then(table => {
+        if (generationId !== ddResultGenerationId || deal.ddTable) return;
+        if (contractChanceTableIsValid(table)) applyDDResultToBoard(deal.board, table);
+    }).catch(() => {});
 }
 
 // Point d'entrée UNIQUE pour appliquer un résultat de double mort à une donne, quelle que
@@ -2289,11 +2488,11 @@ function applyDDResultToBoard(boardNumber, table) {
     }
 }
 
-// ===== Chances statistiques des contrats — version GitHub Pages =====
+// ===== Chances statistiques des contrats — DDS WASM local R133 =====
 //
-// Cette intégration reste 100 % navigateur : aucune dépendance à localhost, à Python,
-// à un .bat ou à un exécutable. Les tables DD des redistributions statistiques sont
-// résolues par l'API HTTPS déjà utilisée par PLAY sur GitHub Pages.
+// Les redistributions statistiques sont résolues dans le même pool DDS WebAssembly que
+// le double mort exact. Aucun POST DDS ne quitte désormais le navigateur : Vercel reste
+// disponible pour les fonctions de session de PLAY, mais plus pour le calcul double-mort.
 const CONTRACT_CHANCE_TARGET = 24;
 // R125 — précision adaptative : 24 reste le résultat rapide de base. Une fois
 // l'enchère terminée, seuls les camps portant un contrat réellement affiché et dont
@@ -2316,16 +2515,13 @@ const CONTRACT_CHANCE_COLLAB_MOBILE_BATCH = 2;
 const CONTRACT_CHANCE_COLLAB_DESKTOP_BATCH = 6;
 const CONTRACT_CHANCE_COLLAB_JOB_TIMEOUT_MS = 12000;
 const CONTRACT_CHANCE_COLLAB_COOLDOWN_MS = 15000;
-const CONTRACT_CHANCE_NATIVE_URLS = [
-    'https://play-dds-native.vercel.app/api/dds-a',
-    'https://play-dds-native.vercel.app/api/dds-b'
-];
-const CONTRACT_CHANCE_LEGACY_URL = RANDOM_DEAL_DD_SERVER_URL;
-// R132 — coupe-circuit de coût : les calculs DDS statistiques distants sont désactivés
-// après l'alerte de quota Fluid Active CPU du free tier Vercel. Les structures R131
-// restent en place pour faciliter le remplacement par DDS WASM local, mais aucun appel
-// contract-chance ne doit quitter le navigateur tant que ce flag vaut false.
+// R133 — les URLs DDS Vercel ont été retirées du runtime. Le drapeau distant reste à
+// false comme filet de sécurité pour les anciens chemins collaboratifs R131 encore
+// présents pour compatibilité protocolaire avec un onglet plus ancien.
+const CONTRACT_CHANCE_NATIVE_URLS = [];
+const CONTRACT_CHANCE_LEGACY_URL = '';
 const CONTRACT_CHANCE_REMOTE_DDS_ENABLED = false;
+const CONTRACT_CHANCE_LOCAL_DDS_ENABLED = LOCAL_DDS_BROWSER_ENABLED;
 
 let contractChanceGeneration = 0;
 let contractChanceTaskSequence = 0;
@@ -2570,7 +2766,7 @@ function contractChanceMarkSessionDeals(list) {
 }
 
 function contractChanceQueueForDeal(deal, priority = 20) {
-    if (!CONTRACT_CHANCE_REMOTE_DDS_ENABLED) return;
+    if (!CONTRACT_CHANCE_LOCAL_DDS_ENABLED) return;
     if (myRole !== 'host' || !deal || !deal.hands || !deal.statisticalParMode) return;
     if (!window.PlayStatisticalPar || typeof window.PlayStatisticalPar.sampleHandsDeterministic !== 'function') return;
     if (contractChanceMustYieldToPons()) {
@@ -2647,6 +2843,10 @@ function contractChanceCandidatesReady(deal, side) {
 }
 
 function maybeAdvanceContractChancePrewarm(deal) {
+    // R133 : le CPU est désormais celui du joueur. Ne jamais enchaîner silencieusement
+    // les 48 DDS de toutes les donnes futures ; la prochaine donne sera lancée dès qu'elle
+    // devient courante via renderBoard(), ce qui laisse le temps de l'enchère pour finir.
+    if (CONTRACT_CHANCE_LOCAL_DDS_ENABLED) return;
     if (!deal || contractChanceAdvancedDeals.has(deal)) return;
     if (!contractChanceCandidatesReady(deal, 'NS') || !contractChanceCandidatesReady(deal, 'EW')) return;
     contractChanceAdvancedDeals.add(deal);
@@ -3080,89 +3280,49 @@ async function contractChanceSolveBatch(batch) {
     const items = batch.map((task, i) => ({ id: i + 1, pbn: dealToPbnStringForDD({ hands: task.hands }) }));
     const byId = new Map(batch.map((task, i) => [String(i + 1), task]));
     const succeeded = new Set();
-    const errors = [];
+    const priority = Math.max(...batch.map(task => Number(task.priority || 0)), 20);
 
-    // R131 — une vague de 24 est ordonnancée par le pump en 6 lots de 4. Un lot ne se
-    // redivise plus : cela reproduit exactement le meilleur profil mesuré sur Vercel et
-    // évite de transformer 6 opérations logiques en 12 micro-requêtes non benchmarkées.
-    const primaryLaneIndex = contractChanceNativeLaneSequence++ % CONTRACT_CHANCE_NATIVE_URLS.length;
-    const primaryLaneUrl = CONTRACT_CHANCE_NATIVE_URLS[primaryLaneIndex];
-    const alternateLaneUrl = CONTRACT_CHANCE_NATIVE_URLS[(primaryLaneIndex + 1) % CONTRACT_CHANCE_NATIVE_URLS.length];
-
+    let rows = [];
     try {
-        const rows = await contractChanceFetchLane(primaryLaneUrl, items);
-        if (generation !== contractChanceGeneration) return;
-        if (contractChanceApplyRows(rows, byId, sideState, side, succeeded)) {
-            refreshContractChanceDisplayForDeal(deal);
-        }
-    } catch (err) {
-        errors.push(err);
+        rows = await localDdsSolveItems(items, priority);
+    } catch (_) {
+        rows = [];
     }
     if (generation !== contractChanceGeneration) return;
 
-    const missingNow = () => items.filter(item => {
-        const task = byId.get(String(item.id));
-        return task && !succeeded.has(task.sampleIndex) && !sideState.entries.has(task.sampleIndex);
-    });
-
-    // Première reprise : uniquement les tables manquantes, sur l'autre lane native.
-    // Une panne ou un retour partiel A n'entraîne donc jamais le recalcul des tables déjà reçues.
-    let missingItems = missingNow();
-    if (missingItems.length) {
-        try {
-            const rows = await contractChanceFetchLane(alternateLaneUrl, missingItems);
-            if (generation !== contractChanceGeneration) return;
-            if (contractChanceApplyRows(rows, byId, sideState, side, succeeded)) {
-                refreshContractChanceDisplayForDeal(deal);
-            }
-        } catch (err) {
-            errors.push(err);
-        }
+    const validRows = rows.filter(row => row && row.table && contractChanceTableIsValid(row.table));
+    if (contractChanceApplyRows(validRows, byId, sideState, side, succeeded)) {
+        refreshContractChanceDisplayForDeal(deal);
     }
+    const hadFailure = validRows.length < batch.length;
+    if (hadFailure) sideState.failures++;
 
-    // Secours historique uniquement pour ce qui manque encore après A/B.
-    missingItems = missingNow();
-    if (missingItems.length) {
-        try {
-            const rows = await contractChanceFetchLane(CONTRACT_CHANCE_LEGACY_URL, missingItems);
-            if (generation !== contractChanceGeneration) return;
-            if (contractChanceApplyRows(rows, byId, sideState, side, succeeded)) {
-                refreshContractChanceDisplayForDeal(deal);
-            }
-        } catch (err) {
-            errors.push(err);
-        }
-    }
-
-    if (generation !== contractChanceGeneration) return;
-    if (errors.length) sideState.failures++;
-    let retryDelay = CONTRACT_CHANCE_RETRY_DELAY_MS;
-    for (const err of errors) {
-        if (Number(err && err.retryAfterMs || 0) > retryDelay) retryDelay = Number(err.retryAfterMs);
-    }
-
-    const explicitlyRateLimited = errors.some(err => Number(err && err.retryAfterMs || 0) > 0);
     let delayedRetryNeeded = false;
     for (const task of batch) {
         sideState.active.delete(task.sampleIndex);
         if (succeeded.has(task.sampleIndex) || sideState.entries.has(task.sampleIndex)) continue;
-        if (task.attempt < 4 && !explicitlyRateLimited) {
+        if (task.attempt < 3) {
             task.attempt++;
-            task.priority = Math.max(0, Number(task.priority || 0) - 12);
+            task.priority = Math.max(0, Number(task.priority || 0) - 8);
             sideState.queued.add(task.sampleIndex);
             contractChanceQueue.push(task);
         } else {
-            // Après plusieurs échecs ou un 429 explicite, ne pas boucler immédiatement :
-            // réinjecter la donne plus tard et laisser les autres calculs progresser.
             delayedRetryNeeded = true;
         }
     }
 
+    // R125 adaptatif : une fois le palier 24 (ou 48) réellement atteint par le calcul
+    // local, décider immédiatement s'il faut étendre à 48/72 et injecter ces nouveaux
+    // tirages. Le chemin serveur R131 ne faisait cette transition que lors d'un retour
+    // collaboratif ; le moteur local la rend explicite et déterministe.
+    const adaptiveChanged = contractChanceUpdateAdaptiveTargets(deal);
     refreshContractChanceDisplayForDeal(deal);
+    if (adaptiveChanged) contractChanceQueueForDeal(deal, 110);
+
     if (delayedRetryNeeded) {
         setTimeout(() => {
             if (generation === contractChanceGeneration) contractChanceQueueForDeal(deal, 90);
-        }, retryDelay);
+        }, CONTRACT_CHANCE_RETRY_DELAY_MS);
     }
     maybeAdvanceContractChancePrewarm(deal);
 }
@@ -3995,9 +4155,7 @@ function renderContractChanceSidecar(root, deal, contract) {
 }
 
 function renderInlineParChances(root, deal, contract) {
-    // R132 : tant que DDS WASM local n'est pas installé, ne pas laisser un 0/24
-    // permanent suggérer qu'un calcul distant est encore en cours.
-    if (!CONTRACT_CHANCE_REMOTE_DDS_ENABLED) return;
+    if (!CONTRACT_CHANCE_LOCAL_DDS_ENABLED) return;
     renderPlayedContractChanceHeader(root, deal, contract);
     renderContractChanceSidecar(root, deal, contract);
 }
@@ -4016,7 +4174,7 @@ function refreshContractChanceDisplayForDeal(deal) {
 }
 
 function ensureContractChanceFinalCalculation(deal) {
-    if (!CONTRACT_CHANCE_REMOTE_DDS_ENABLED) return;
+    if (!CONTRACT_CHANCE_LOCAL_DDS_ENABLED) return;
     if (myRole !== 'host' || !deal || !deal.statisticalParMode) return;
     contractChanceDispatchCollaborativeWork(deal);
     contractChanceQueueForDeal(deal, 100);
@@ -9393,7 +9551,10 @@ function renderBoard() {
         renderRoomBoard();
         renderChat();
     }
-    if (currentDeal()) contractChanceQueueForDeal(currentDeal(), 100);
+    if (currentDeal()) {
+        ensureLocalExactDdForDeal(currentDeal());
+        contractChanceQueueForDeal(currentDeal(), 100);
+    }
     maybeRobotBid();
 }
 

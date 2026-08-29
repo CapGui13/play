@@ -32,6 +32,12 @@ const required = [
     'realtime-updates.js',
     'manifest.json',
     'sw.js',
+
+    // R133 : DDS officiel exécuté localement dans un Web Worker.
+    'dds/local-dds-worker.js',
+    'dds/dds_web_wasm.js',
+    'dds/dds_web_wasm.wasm',
+    'dds/DDS_LICENSE.txt',
     'icons/icon-192.png',
     'icons/icon-512.png',
     'icons/apple-icon-180.png',
@@ -55,6 +61,20 @@ for (const rel of required) {
     assert(fs.statSync(file).isFile(), `R129: ressource runtime invalide: ${rel}`);
     assert(fs.statSync(file).size > 0, `R129: ressource runtime vide: ${rel}`);
 }
+
+// R133 : le calcul double-mort doit être réellement local. Une régression ne doit ni
+// republier un bundle WASM tronqué, ni réintroduire les anciens endpoints DDS Vercel.
+assert(fs.statSync(path.join(SITE, 'dds/dds_web_wasm.wasm')).size > 100_000,
+    'R133: DDS WASM local anormalement petit');
+assert(fs.statSync(path.join(SITE, 'dds/dds_web_wasm.js')).size > 50_000,
+    'R133: loader DDS WASM local anormalement petit');
+const appJs = fs.readFileSync(path.join(SITE, 'app.js'), 'utf8');
+assert(/LOCAL_DDS_WORKER_URL\s*=\s*['"]dds\/local-dds-worker\.js['"]/.test(appJs),
+    'R133: app.js ne référence pas le Worker DDS local');
+assert(!/play-dds-native\.vercel\.app\/api\/dds-[ab]/.test(appJs),
+    'R133: ancien endpoint play-dds-native réintroduit dans app.js');
+assert(!/api-gen-beta\.vercel\.app\/api\/dds/.test(appJs),
+    'R133: ancien endpoint api-gen DDS réintroduit dans app.js');
 
 // L'ancien moteur de 519 ko n'est plus chargé par index.html et ne doit plus être publié.
 assert(!fs.existsSync(path.join(SITE, 'bidding-engine.js')),
