@@ -276,7 +276,53 @@ const remoteAdaptive = snapshotProgress({
 assert(remoteAdaptive.n === 36 && remoteAdaptive.goal === 48 && remoteAdaptive.text === '75% · 36/48', 'R125: progression adaptative distante incorrecte');
 
 // ---------------------------------------------------------------------------
-// 5) Service Worker : ne jamais mettre en cache API / PeerJS / Pusher
+// 5) R126 : protocole réseau versionné sans casser les clients legacy
+// ---------------------------------------------------------------------------
+const localProtocol = compileFunction(app, 'localPlayProtocolInfo', {
+    PLAY_PROTOCOL_VERSION: 1,
+    PLAY_PROTOCOL_MIN_COMPATIBLE: 0,
+    PLAY_PROTOCOL_CAPABILITIES: Object.freeze([
+        'network-authority-v1', 'cloud-session-v1', 'contract-chance-sync-v1',
+        'contract-chance-collab-v1', 'contract-chance-adaptive-v1',
+        'contract-chance-declarer-split-v1'
+    ])
+});
+const normalizeProtocol = compileFunction(app, 'normalizePlayProtocolInfo');
+const protocolsCompatible = compileFunction(app, 'arePlayProtocolsCompatible', {
+    normalizePlayProtocolInfo: normalizeProtocol
+});
+const allowsProtocolCapability = compileFunction(app, 'playProtocolAllowsCapability', {
+    normalizePlayProtocolInfo: normalizeProtocol
+});
+const lp = localProtocol();
+assert(lp.version === 1 && lp.minCompatibleVersion === 0, 'R126: version locale du protocole incorrecte');
+assert(lp.capabilities.includes('contract-chance-collab-v1'), 'R126: capacité collaborative non publiée');
+const legacyProtocol = normalizeProtocol(undefined);
+assert(legacyProtocol.version === 0 && legacyProtocol.legacy && legacyProtocol.valid, 'R126: client pré-R126 non reconnu comme legacy');
+assert(protocolsCompatible(lp, legacyProtocol), 'R126: R126 ne doit pas casser un client legacy compatible');
+assert(protocolsCompatible(lp, { version: 1, minCompatibleVersion: 0, capabilities: [] }), 'R126: protocole v1 compatible rejeté');
+assert(!protocolsCompatible(lp, { version: 2, minCompatibleVersion: 2, capabilities: [] }), 'R126: client futur exigeant v2 devrait être rejeté');
+assert(!protocolsCompatible(lp, { version: 1, minCompatibleVersion: 2, capabilities: [] }), 'R126: déclaration de protocole invalide acceptée');
+assert(allowsProtocolCapability(null, 'contract-chance-collab-v1', true), 'R126: compatibilité legacy de la collaboration cassée');
+assert(!allowsProtocolCapability({ version: 1, minCompatibleVersion: 0, capabilities: [] }, 'contract-chance-collab-v1', true), 'R126: capacité absente ignorée sur pair versionné');
+assert(allowsProtocolCapability({ version: 1, minCompatibleVersion: 0, capabilities: ['contract-chance-collab-v1'] }, 'contract-chance-collab-v1', true), 'R126: capacité déclarée non reconnue');
+
+const guestMetadataText = extractFunction(app, 'guestConnectionMetadata');
+assert(/protocol:\s*localPlayProtocolInfo\(\)/.test(guestMetadataText), 'R126: l’invité ne publie pas sa version dans les métadonnées PeerJS');
+const hostHandlersText = extractFunction(app, 'buildHostHandlers');
+assert(/protocol:\s*localPlayProtocolInfo\(\)/.test(hostHandlersText), 'R126: welcome hôte ne publie pas la version du protocole');
+assert(/protocolCompatible:\s*false/.test(hostHandlersText), 'R126: rejet explicite des versions incompatibles absent côté hôte');
+const handlePeerText = extractFunction(app, 'handlePeerData');
+assert(/stopGuestForIncompatibleProtocol\(remoteProtocol\)/.test(handlePeerText), 'R126: rejet clair d’un hôte incompatible absent côté invité');
+const dispatchProtocolText = extractFunction(app, 'contractChanceDispatchCollaborativeWork');
+assert(dispatchProtocolText.includes("guestPlayProtocolAllowsCapability(x.participant.id, 'contract-chance-collab-v1', true)"), 'R126: travail collaboratif non protégé par la négociation de capacité');
+
+// Aucun nouveau type de message n’est requis pour négocier : les champs sont transportés
+// dans les métadonnées PeerJS et le `welcome` historique, ce qui conserve l’interop legacy.
+assert(!guestTypes.has('protocol-version') && !hostTypes.has('protocol-version'), 'R126: nouveau type de handshake inutilement ajouté');
+
+// ---------------------------------------------------------------------------
+// 6) Service Worker : ne jamais mettre en cache API / PeerJS / Pusher
 // ---------------------------------------------------------------------------
 const neverCacheMatch = sw.match(/const\s+NEVER_CACHE_HOSTS\s*=\s*\[([^\]]+)\]/);
 assert(neverCacheMatch, 'Service Worker: NEVER_CACHE_HOSTS introuvable');

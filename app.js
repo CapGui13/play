@@ -928,6 +928,116 @@ function registerHostGuestReconnectSecret(participantId, reconnectSecret) {
     return true;
 }
 
+// R126 — Version du protocole P2P. La version 0 désigne les clients antérieurs à R126
+// qui ne publiaient encore aucune information de protocole. Ils restent compatibles avec
+// cette première génération : le versionnage commence sans casser une salle ouverte sur
+// une version légèrement plus ancienne. Une future rupture de format pourra relever
+// PLAY_PROTOCOL_MIN_COMPATIBLE et provoquer un message clair plutôt qu'une divergence
+// silencieuse entre deux écrans.
+const PLAY_PROTOCOL_VERSION = 1;
+const PLAY_PROTOCOL_MIN_COMPATIBLE = 0;
+const PLAY_PROTOCOL_CAPABILITIES = Object.freeze([
+    'network-authority-v1',
+    'cloud-session-v1',
+    'contract-chance-sync-v1',
+    'contract-chance-collab-v1',
+    'contract-chance-adaptive-v1',
+    'contract-chance-declarer-split-v1'
+]);
+
+let hostPeerProtocolInfo = null;
+const guestPeerProtocolInfoByParticipantId = new Map();
+
+function localPlayProtocolInfo() {
+    return {
+        version: PLAY_PROTOCOL_VERSION,
+        minCompatibleVersion: PLAY_PROTOCOL_MIN_COMPATIBLE,
+        capabilities: PLAY_PROTOCOL_CAPABILITIES.slice()
+    };
+}
+
+function normalizePlayProtocolInfo(raw) {
+    // Aucun bloc de protocole = client legacy pré-R126. Version 0 est volontairement un
+    // format reconnu et compatible tant que PLAY_PROTOCOL_MIN_COMPATIBLE reste à 0.
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+        return { version: 0, minCompatibleVersion: 0, capabilities: [], legacy: true, valid: true };
+    }
+    const version = Number(raw.version);
+    const minCompatibleVersion = Number(raw.minCompatibleVersion);
+    const validVersion = Number.isInteger(version) && version >= 0 && version <= 1000;
+    const validMin = Number.isInteger(minCompatibleVersion) && minCompatibleVersion >= 0 && minCompatibleVersion <= 1000;
+    const capabilities = Array.isArray(raw.capabilities)
+        ? Array.from(new Set(raw.capabilities
+            .filter(value => typeof value === 'string' && /^[a-z0-9][a-z0-9-]{0,63}$/i.test(value))
+            .slice(0, 32)))
+        : [];
+    const valid = !!(validVersion && validMin && minCompatibleVersion <= version);
+    return {
+        version: validVersion ? version : -1,
+        minCompatibleVersion: validMin ? minCompatibleVersion : -1,
+        capabilities,
+        legacy: false,
+        valid
+    };
+}
+
+function arePlayProtocolsCompatible(localInfo, remoteInfo) {
+    const local = normalizePlayProtocolInfo(localInfo);
+    const remote = normalizePlayProtocolInfo(remoteInfo);
+    if (!local.valid || !remote.valid) return false;
+    return remote.version >= local.minCompatibleVersion
+        && local.version >= remote.minCompatibleVersion;
+}
+
+function playProtocolCompatibilityMessage(remoteInfo) {
+    const remote = normalizePlayProtocolInfo(remoteInfo);
+    if (!remote.valid) return 'Version réseau PLAY invalide. Rechargez PLAY sur les deux appareils.';
+    if (PLAY_PROTOCOL_VERSION < remote.minCompatibleVersion) {
+        return 'Votre version de PLAY est trop ancienne pour cette partie. Rechargez la page pour obtenir la dernière version.';
+    }
+    if (remote.version < PLAY_PROTOCOL_MIN_COMPATIBLE) {
+        return 'L’autre joueur utilise une version de PLAY trop ancienne. Demandez-lui de recharger la page.';
+    }
+    return 'Les versions de PLAY utilisées sur les deux appareils ne sont pas compatibles. Rechargez PLAY sur les deux appareils.';
+}
+
+function playProtocolAllowsCapability(info, capability, legacyDefault = true) {
+    const normalized = normalizePlayProtocolInfo(info);
+    if (!normalized.valid) return false;
+    if (normalized.legacy || normalized.version === 0) return !!legacyDefault;
+    return normalized.capabilities.includes(capability);
+}
+
+function guestPlayProtocolAllowsCapability(participantId, capability, legacyDefault = true) {
+    return playProtocolAllowsCapability(
+        guestPeerProtocolInfoByParticipantId.get(participantId) || null,
+        capability,
+        legacyDefault
+    );
+}
+
+function stopGuestForIncompatibleProtocol(remoteInfo) {
+    hostPeerProtocolInfo = normalizePlayProtocolInfo(remoteInfo);
+    // Invalide les callbacks de cette tentative avant de fermer le Peer : sinon le close
+    // pourrait déclencher la logique normale de reconnexion automatique et créer une boucle.
+    guestJoinAttemptToken++;
+    cancelGuestAutoReconnectTimer();
+    guestAutoReconnectInFlight = false;
+    hideConnectingOverlay();
+    setConnectionStatus(false);
+    showLandingError(playProtocolCompatibilityMessage(hostPeerProtocolInfo));
+    const doomed = peerConn;
+    setTimeout(() => { try { if (doomed) doomed.destroy(); } catch (_) {} }, 60);
+}
+
+if (typeof window !== 'undefined') {
+    window.getPlayProtocolDiagnostic = () => ({
+        local: localPlayProtocolInfo(),
+        host: hostPeerProtocolInfo ? { ...hostPeerProtocolInfo } : null,
+        guests: Object.fromEntries(Array.from(guestPeerProtocolInfoByParticipantId.entries()).map(([id, info]) => [id, { ...info }]))
+    });
+}
+
 function guestConnectionMetadata(roomCode, nickname, credentialOverride = null) {
     const credential = credentialOverride || getGuestRoomCredential(roomCode, true);
     if (!credential) throw new Error('Identité invitée indisponible.');
@@ -937,7 +1047,8 @@ function guestConnectionMetadata(roomCode, nickname, credentialOverride = null) 
         participantId: credential.participantId,
         reconnectSecret: credential.reconnectSecret,
         nickname: nickname,
-        avatarColor: isAllowedAvatarColor(savedAvatarColor) ? savedAvatarColor : null
+        avatarColor: isAllowedAvatarColor(savedAvatarColor) ? savedAvatarColor : null,
+        protocol: localPlayProtocolInfo()
     };
 }
 
@@ -2748,7 +2859,10 @@ function contractChanceDispatchCollaborativeWork(deal) {
     const guests = participants
         .filter(p => p && p.id !== 'host' && !p.disconnected)
         .map(p => ({ participant: p, guestIndex: guestIndexForParticipant(p.id), cap: contractChanceGuestCapabilityForParticipant(p.id) }))
-        .filter(x => x.guestIndex != null && x.cap && contractChanceRemoteJobsForParticipant(x.participant.id) === 0)
+        .filter(x => x.guestIndex != null
+            && x.cap
+            && guestPlayProtocolAllowsCapability(x.participant.id, 'contract-chance-collab-v1', true)
+            && contractChanceRemoteJobsForParticipant(x.participant.id) === 0)
         // Les desktops prennent les plus gros lots ; les mobiles restent opportunistes.
         .sort((a, b) => Number(a.cap.mobile) - Number(b.cap.mobile));
 
@@ -4656,6 +4770,8 @@ function uiCreateRoom() {
     roomCreatorToken = getReconnectToken();
     seatAssignment = { N: null, E: null, S: null, W: null };
     guestIndexByToken = {};
+    hostPeerProtocolInfo = null;
+    guestPeerProtocolInfoByParticipantId.clear();
     guestReconnectSecretsByParticipantId = {};
     prevSeatAssignmentSnapshot = null;
     prevParticipantsDisconnectedSnapshot = null;
@@ -4760,6 +4876,23 @@ function buildHostHandlers(onOpenExtra) {
                 return;
             }
 
+            const remoteProtocol = normalizePlayProtocolInfo(metadata && metadata.protocol);
+            if (!arePlayProtocolsCompatible(localPlayProtocolInfo(), remoteProtocol)) {
+                rejectPeerProtocolMessage({ type: 'protocol' }, guestIndex, 'version PLAY incompatible');
+                // `welcome` existe déjà dans les anciens protocoles : on transporte donc
+                // l'information de compatibilité dans ce message plutôt que d'inventer un
+                // nouveau type qu'un client légèrement ancien rejetterait avant de le lire.
+                peerConn.send({
+                    type: 'welcome',
+                    yourId: token,
+                    protocol: localPlayProtocolInfo(),
+                    protocolCompatible: false
+                }, guestIndex);
+                const badConn = peerConn.conns && peerConn.conns[guestIndex];
+                setTimeout(() => { try { if (badConn) badConn.close(); } catch (_) {} }, 180);
+                return;
+            }
+
             let p = participants.find(x => x.id === token);
             const isReturning = !!p;
             recordSyncTrace('p2p.host.guest-connected', { guestIndex, participantId: token, returning: isReturning });
@@ -4807,6 +4940,13 @@ function buildHostHandlers(onOpenExtra) {
 
             // Seulement APRÈS authentification : une reconnexion valide peut remplacer une
             // ancienne DataConnection fantôme portant la même identité publique.
+            guestPeerProtocolInfoByParticipantId.set(token, remoteProtocol);
+            recordSyncTrace('p2p.protocol.negotiated', {
+                participantId: token,
+                remoteVersion: remoteProtocol.version,
+                remoteMin: remoteProtocol.minCompatibleVersion,
+                legacy: remoteProtocol.legacy
+            });
             const previousGuestIndex = guestIndexByToken[token];
             if (previousGuestIndex !== undefined && previousGuestIndex !== guestIndex) {
                 const staleConn = peerConn.conns[previousGuestIndex];
@@ -4856,7 +4996,9 @@ function buildHostHandlers(onOpenExtra) {
 
             peerConn.send({
                 type: 'welcome',
-                yourId: token
+                yourId: token,
+                protocol: localPlayProtocolInfo(),
+                protocolCompatible: true
             }, guestIndex);
 
             // Ne jamais donner la capacité cloud à un simple nouveau pair qui connaît
@@ -5475,6 +5617,8 @@ function connectAsGuest(code, token, nickname, credentialOverride = null) {
     // de la NOUVELLE salle via buildCloudStatePayload(), malgré le transfert réussi.
     roomCreatorToken = null;
     currentHostReconnectToken = null;
+    hostPeerProtocolInfo = null;
+    guestPeerProtocolInfoByParticipantId.clear();
     roomCreatorName = null;
     participants = [];
     seatAssignment = { N: null, E: null, S: null, W: null };
@@ -7870,6 +8014,19 @@ function handlePeerData(msg, guestIndex) {
 
     switch (msg.type) {
         case 'welcome': {
+            const remoteProtocol = normalizePlayProtocolInfo(msg.protocol);
+            hostPeerProtocolInfo = remoteProtocol;
+            if (msg.protocolCompatible === false || !arePlayProtocolsCompatible(localPlayProtocolInfo(), remoteProtocol)) {
+                rejectPeerProtocolMessage(msg, guestIndex, 'version PLAY incompatible');
+                stopGuestForIncompatibleProtocol(remoteProtocol);
+                break;
+            }
+            recordSyncTrace('p2p.protocol.negotiated', {
+                participantId: 'host',
+                remoteVersion: remoteProtocol.version,
+                remoteMin: remoteProtocol.minCompatibleVersion,
+                legacy: remoteProtocol.legacy
+            });
             if (!isSafeParticipantId(msg.yourId)) {
                 rejectPeerProtocolMessage(msg, guestIndex, 'identifiant welcome invalide');
                 break;
@@ -8027,6 +8184,8 @@ function handlePeerData(msg, guestIndex) {
                     || savedNickname || 'Hôte';
 
                 guestIndexByToken = {};
+                hostPeerProtocolInfo = null;
+                guestPeerProtocolInfoByParticipantId.clear();
                 guestReconnectSecretsByParticipantId = inheritedReconnectSecrets;
                 persistHostGuestReconnectSecrets(newRoomCode);
                 prevSeatAssignmentSnapshot = null;
@@ -13826,6 +13985,8 @@ async function uiResumeHostSession(roomCode) {
     }
     currentRoomCode = saved.roomCode;
     guestIndexByToken = {};
+    hostPeerProtocolInfo = null;
+    guestPeerProtocolInfoByParticipantId.clear();
     hostPendingUndo = null;
     hostTransferInProgress = false;
     // Voir échange avec Guillaume (session du 23 juillet — même genre de bug que les
@@ -15250,6 +15411,8 @@ function uiResumeFromCloud() {
     cloudResumeCandidate = null;
 
     guestIndexByToken = {};
+    hostPeerProtocolInfo = null;
+    guestPeerProtocolInfoByParticipantId.clear();
     hostPendingUndo = null;
     hostTransferInProgress = false;
     prevSeatAssignmentSnapshot = null;
