@@ -3228,7 +3228,9 @@ function ddChanceTableTarget(side, strain, declarer, cell) {
         kind: 'make', side, tier: contractChanceTierForContract({ level, strain }), level, strain, declarer,
         doubled: '', isParTarget: true, isPlayed: false, isTableTarget: true,
         isBestTableTarget: !!(cell && cell.cls === 'dd-best-contract'),
-        isSecondaryTableTarget: !!(cell && cell.cls === 'dd-secondary-contract'), rowStrain: strain
+        isSecondaryTableTarget: !!(cell && cell.cls === 'dd-secondary-contract'),
+        pairMergedInDD: !!(cell && cell.pairMergedInDD),
+        rowStrain: strain
     };
 }
 
@@ -3246,8 +3248,12 @@ function ddTableChanceTargetsForDeal(deal) {
         const a = ddChanceCellMeta(strain, posA, deal.ddTable, info, sideSummary, sideVisibility);
         const b = ddChanceCellMeta(strain, posB, deal.ddTable, info, sideSummary, sideVisibility);
         const merged = a.text === b.text && a.cls === b.cls;
-        if (merged) add(ddChanceTableTarget(side, strain, side, a));
-        else { add(ddChanceTableTarget(side, strain, posA, a)); add(ddChanceTableTarget(side, strain, posB, b)); }
+        // R122 — La table DD peut rester visuellement fusionnée, mais les probabilités
+        // statistiques doivent conserver le déclarant exact. Une cible `NS`/`EW` ferait
+        // utiliser le meilleur des deux déclarants à chaque redistribution et fabriquerait
+        // un pourcentage hybride. On garde donc toujours N+S (ou E+O) séparément.
+        add(ddChanceTableTarget(side, strain, posA, { ...a, pairMergedInDD: merged }));
+        add(ddChanceTableTarget(side, strain, posB, { ...b, pairMergedInDD: merged }));
     };
     for (const strain of STRAIN_ORDER) {
         collectPair(strain, 'NS', 'N', 'S');
@@ -3547,9 +3553,93 @@ function renderPlayedContractChanceHeader(root, deal, contract) {
     );
 }
 
-function contractChanceSidecarTargetHtml(deal, contract, target) {
+function contractChanceSidecarTargetHtml(deal, contract, target, options = {}) {
     const progress = contractChanceTargetProgress(deal, contract, target);
-    return `<span class="dd-chance-item"><strong class="dd-chance-value${progress.done ? ' is-done' : ''}">${escapeHtml(progress.text)}</strong></span>`;
+    const declarer = String(options.declarer || '');
+    const prefix = declarer && SEAT_ABBR_FR[declarer]
+        ? `<span class="dd-chance-declarer">${escapeHtml(SEAT_ABBR_FR[declarer])}</span> `
+        : '';
+    return `<span class="dd-chance-item">${prefix}<strong class="dd-chance-value${progress.done ? ' is-done' : ''}">${escapeHtml(progress.text)}</strong></span>`;
+}
+
+// R122 — Déclarant statistique exact pour une ligne de la table DD.
+// L'ordre d'affichage suit le premier joueur du camp qui a nommé la dénomination dans
+// l'enchère (règle normale de détermination du déclarant). Si la dénomination n'a jamais
+// été nommée par ce camp, on garde l'ordre naturel N/S ou E/O.
+function contractChanceEstablishedDeclarerForStrain(deal, contract, side, strain) {
+    const normalizedStrain = strain === 'NT' ? 'N' : strain;
+    const seats = side === 'NS' ? ['N', 'S'] : ['E', 'W'];
+    for (const entry of (deal && deal.auctionHistory || [])) {
+        const seat = entry && entry.seat;
+        if (!seats.includes(seat)) continue;
+        const bid = parseBid(entry && entry.call || '');
+        const bidStrain = bid && (bid.strain === 'NT' ? 'N' : bid.strain);
+        if (bid && bidStrain === normalizedStrain) return seat;
+    }
+    const contractStrain = contract && (contract.strain === 'NT' ? 'N' : contract.strain);
+    if (contract && statisticalParSideFromDeclarer(contract.declarer) === side
+        && contractStrain === normalizedStrain && seats.includes(contract.declarer)) {
+        return contract.declarer;
+    }
+    return seats[0];
+}
+
+function contractChanceSidecarSideGroupHtml(deal, contract, targets) {
+    const rows = (Array.isArray(targets) ? targets : []).filter(Boolean);
+    if (!rows.length) return '';
+    const side = rows[0].side;
+    const strain = rows[0].rowStrain || rows[0].strain;
+    const exactSeats = side === 'NS' ? ['N', 'S'] : ['E', 'W'];
+    const established = contractChanceEstablishedDeclarerForStrain(deal, contract, side, strain);
+    const ordered = rows.slice().sort((a, b) => {
+        const seatRank = (target) => {
+            if (target.declarer === established) return 0;
+            const idx = exactSeats.indexOf(target.declarer);
+            return idx >= 0 ? idx + 1 : 9;
+        };
+        return seatRank(a) - seatRank(b) || Number(b.level || 0) - Number(a.level || 0);
+    });
+
+    // Quand les deux déclarants ont le même contrat ET exactement le même résultat,
+    // conserver l'affichage compact historique : `100%`. Dès qu'ils diffèrent, afficher
+    // explicitement le différentiel, ex. `N 75% / S 100%`.
+    if (ordered.length === 2
+        && exactSeats.includes(ordered[0].declarer)
+        && exactSeats.includes(ordered[1].declarer)
+        && ordered[0].declarer !== ordered[1].declarer
+        && Number(ordered[0].level || 0) === Number(ordered[1].level || 0)
+        && ordered[0].strain === ordered[1].strain) {
+        const firstProgress = contractChanceTargetProgress(deal, contract, ordered[0]);
+        const secondProgress = contractChanceTargetProgress(deal, contract, ordered[1]);
+        if (firstProgress.text === secondProgress.text && firstProgress.done === secondProgress.done) {
+            return contractChanceSidecarTargetHtml(deal, contract, ordered[0]);
+        }
+        return ordered.map(target => contractChanceSidecarTargetHtml(deal, contract, target, { declarer: target.declarer }))
+            .join('<span class="dd-chance-sep"> / </span>');
+    }
+
+    if (ordered.length > 1 && ordered.every(target => exactSeats.includes(target.declarer))) {
+        return ordered.map(target => contractChanceSidecarTargetHtml(deal, contract, target, { declarer: target.declarer }))
+            .join('<span class="dd-chance-sep"> / </span>');
+    }
+    return ordered.map(target => contractChanceSidecarTargetHtml(deal, contract, target)).join('<span class="dd-chance-sep">·</span>');
+}
+
+function contractChanceSidecarRowHtml(deal, contract, targets) {
+    const groups = [];
+    for (const target of (Array.isArray(targets) ? targets : [])) {
+        const key = target && target.side ? target.side : 'other';
+        let group = groups.find(item => item.key === key);
+        if (!group) {
+            group = { key, targets: [] };
+            groups.push(group);
+        }
+        group.targets.push(target);
+    }
+    groups.sort((a, b) => (a.key === 'NS' ? 0 : a.key === 'EW' ? 1 : 2) - (b.key === 'NS' ? 0 : b.key === 'EW' ? 1 : 2));
+    return groups.map(group => contractChanceSidecarSideGroupHtml(deal, contract, group.targets))
+        .filter(Boolean)
+        .join('<span class="dd-chance-sep"> · </span>');
 }
 
 function syncContractChanceSidecarRows(root) {
@@ -3591,15 +3681,10 @@ function renderContractChanceSidecar(root, deal, contract) {
         const row = target && (target.rowStrain || target.strain);
         if (row && grouped[row]) grouped[row].push(target);
     }
-    const declarerOrder = { NS: 0, N: 0, S: 1, EW: 2, E: 2, W: 3 };
-    for (const strain of STRAIN_ORDER) {
-        grouped[strain].sort((a, b) => (declarerOrder[a.declarer] ?? 9) - (declarerOrder[b.declarer] ?? 9)
-            || Number(b.level || 0) - Number(a.level || 0));
-    }
     sidecar.innerHTML = `
         <div class="dd-chance-spacer" aria-hidden="true"></div>
         ${STRAIN_ORDER.map(strain => {
-            const html = grouped[strain].map(target => contractChanceSidecarTargetHtml(deal, contract, target)).join('<span class="dd-chance-sep">·</span>');
+            const html = contractChanceSidecarRowHtml(deal, contract, grouped[strain]);
             return `<div class="dd-chance-row" data-dd-chance-strain="${strain}">${html}</div>`;
         }).join('')}
     `;
