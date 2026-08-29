@@ -2302,15 +2302,16 @@ const CONTRACT_CHANCE_ADAPTIVE_MID_TARGET = 48;
 const CONTRACT_CHANCE_ADAPTIVE_MAX_TARGET = 72;
 const CONTRACT_CHANCE_ADAPTIVE_MARGIN_AFTER_24 = 0.13;
 const CONTRACT_CHANCE_ADAPTIVE_MARGIN_AFTER_48 = 0.10;
-// Online R119 — transport DDS R117 + synchro R118 + rattrapage collaboratif post-enchère.
-// Avant la fin de l'enchère, seul l'hôte préchauffe. Après la fin, le reliquat peut être
-// réparti entre les participants connectés, sans rendre aucun participant indispensable.
-// Une seule opération logique locale à la fois => au plus 2 requêtes DDS simultanées chez l'hôte.
-const CONTRACT_CHANCE_DD_CHUNK_SIZE = 12;
-const CONTRACT_CHANCE_MAX_HTTP = 1;
+// Online R131 — benchmark réel Vercel sur une vague adaptative de 24 DDS :
+// 6 lots de 4 en parallèle donnent la meilleure médiane, sans modifier ni l'échantillon
+// ni l'ordre 24 -> 48 -> 72. Chaque lot utilise une seule lane native A/B, puis l'autre
+// lane uniquement en reprise ; l'ancien endpoint api-gen reste le dernier secours.
+const CONTRACT_CHANCE_DD_CHUNK_SIZE = 4;
+const CONTRACT_CHANCE_MAX_HTTP = 6;
 const CONTRACT_CHANCE_MAX_ATTEMPTS = 2160;
 const CONTRACT_CHANCE_RETRY_DELAY_MS = 1800;
-const CONTRACT_CHANCE_REMOTE_TIMEOUT_MS = 18000;
+const CONTRACT_CHANCE_REMOTE_TIMEOUT_MS = 30000;
+const CONTRACT_CHANCE_COLLAB_FETCH_TIMEOUT_MS = 10000;
 const CONTRACT_CHANCE_COLLAB_MOBILE_BATCH = 2;
 const CONTRACT_CHANCE_COLLAB_DESKTOP_BATCH = 6;
 const CONTRACT_CHANCE_COLLAB_JOB_TIMEOUT_MS = 12000;
@@ -2323,6 +2324,7 @@ const CONTRACT_CHANCE_LEGACY_URL = RANDOM_DEAL_DD_SERVER_URL;
 
 let contractChanceGeneration = 0;
 let contractChanceTaskSequence = 0;
+let contractChanceNativeLaneSequence = 0;
 let contractChanceQueue = [];
 let contractChanceActiveHttp = 0;
 let contractChancePreparedList = null;
@@ -2486,6 +2488,7 @@ function contractChanceDealState(deal, create = false) {
 
 function resetContractChancePrewarmPipeline() {
     contractChanceGeneration++;
+    contractChanceNativeLaneSequence = 0;
     contractChancePreparedList = null;
     contractChanceQueue = [];
     // Les fetch de l'ancienne génération ne sont pas annulables côté serveur : on garde
@@ -2699,14 +2702,14 @@ function pumpContractChanceQueue() {
     }
 }
 
-async function contractChanceFetchLane(url, items) {
+async function contractChanceFetchLane(url, items, timeoutMs = CONTRACT_CHANCE_REMOTE_TIMEOUT_MS) {
     if (!items || !items.length) return [];
     const controller = typeof AbortController === 'function' ? new AbortController() : null;
     let timeout = null;
     try {
         if (controller) timeout = setTimeout(() => {
             try { controller.abort(); } catch (_) {}
-        }, CONTRACT_CHANCE_REMOTE_TIMEOUT_MS);
+        }, Math.max(1000, Number(timeoutMs || CONTRACT_CHANCE_REMOTE_TIMEOUT_MS)));
         const response = await fetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -2962,7 +2965,7 @@ async function contractChanceSolveGuestWork(msg) {
     const results = [];
     try {
         if (cap.mobile || workItems.length <= 2) {
-            const rows = await contractChanceFetchLane(CONTRACT_CHANCE_NATIVE_URLS[0], workItems);
+            const rows = await contractChanceFetchLane(CONTRACT_CHANCE_NATIVE_URLS[0], workItems, CONTRACT_CHANCE_COLLAB_FETCH_TIMEOUT_MS);
             for (const row of rows) {
                 const meta = row && metaById.get(String(row.id));
                 if (meta && contractChanceTableIsValid(row.table)) results.push({ side: meta.side, sampleIndex: meta.sampleIndex, table: row.table });
@@ -2970,7 +2973,7 @@ async function contractChanceSolveGuestWork(msg) {
         } else {
             const midpoint = Math.ceil(workItems.length / 2);
             const chunks = [workItems.slice(0, midpoint), workItems.slice(midpoint)].filter(Boolean).filter(x => x.length);
-            const settled = await Promise.allSettled(chunks.map((chunk, i) => contractChanceFetchLane(CONTRACT_CHANCE_NATIVE_URLS[i % 2], chunk)));
+            const settled = await Promise.allSettled(chunks.map((chunk, i) => contractChanceFetchLane(CONTRACT_CHANCE_NATIVE_URLS[i % 2], chunk, CONTRACT_CHANCE_COLLAB_FETCH_TIMEOUT_MS)));
             for (const part of settled) {
                 if (part.status !== 'fulfilled') continue;
                 for (const row of part.value || []) {
@@ -3068,27 +3071,23 @@ async function contractChanceSolveBatch(batch) {
     const byId = new Map(batch.map((task, i) => [String(i + 1), task]));
     const succeeded = new Set();
     const errors = [];
-    const nativeSuccessUrls = [];
 
-    // R117 online — même principe que le broker R116 : deux fonctions Vercel distinctes
-    // calculent chacune la moitié du lot. Une lane saine publie ses résultats immédiatement,
-    // sans attendre sa sœur. L'ancien endpoint api-gen ne sert plus qu'aux tables manquantes.
-    const midpoint = Math.ceil(items.length / 2);
-    const laneBatches = [items.slice(0, midpoint), items.slice(midpoint)].filter(part => part.length);
-    const lanePromises = laneBatches.map(async (part, i) => {
-        const laneUrl = CONTRACT_CHANCE_NATIVE_URLS[i % CONTRACT_CHANCE_NATIVE_URLS.length];
-        try {
-            const rows = await contractChanceFetchLane(laneUrl, part);
-            nativeSuccessUrls.push(laneUrl);
-            if (generation !== contractChanceGeneration) return;
-            if (contractChanceApplyRows(rows, byId, sideState, side, succeeded)) {
-                refreshContractChanceDisplayForDeal(deal);
-            }
-        } catch (err) {
-            errors.push(err);
+    // R131 — une vague de 24 est ordonnancée par le pump en 6 lots de 4. Un lot ne se
+    // redivise plus : cela reproduit exactement le meilleur profil mesuré sur Vercel et
+    // évite de transformer 6 opérations logiques en 12 micro-requêtes non benchmarkées.
+    const primaryLaneIndex = contractChanceNativeLaneSequence++ % CONTRACT_CHANCE_NATIVE_URLS.length;
+    const primaryLaneUrl = CONTRACT_CHANCE_NATIVE_URLS[primaryLaneIndex];
+    const alternateLaneUrl = CONTRACT_CHANCE_NATIVE_URLS[(primaryLaneIndex + 1) % CONTRACT_CHANCE_NATIVE_URLS.length];
+
+    try {
+        const rows = await contractChanceFetchLane(primaryLaneUrl, items);
+        if (generation !== contractChanceGeneration) return;
+        if (contractChanceApplyRows(rows, byId, sideState, side, succeeded)) {
+            refreshContractChanceDisplayForDeal(deal);
         }
-    });
-    await Promise.allSettled(lanePromises);
+    } catch (err) {
+        errors.push(err);
+    }
     if (generation !== contractChanceGeneration) return;
 
     const missingNow = () => items.filter(item => {
@@ -3096,13 +3095,12 @@ async function contractChanceSolveBatch(batch) {
         return task && !succeeded.has(task.sampleIndex) && !sideState.entries.has(task.sampleIndex);
     });
 
-    // Si une des deux lanes natives a répondu, elle est saine : lui confier d'abord les
-    // éventuelles tables manquantes de sa sœur. Cela évite de tomber sur l'ancien endpoint
-    // rate-limité pour un simple incident d'une seule fonction native.
+    // Première reprise : uniquement les tables manquantes, sur l'autre lane native.
+    // Une panne ou un retour partiel A n'entraîne donc jamais le recalcul des tables déjà reçues.
     let missingItems = missingNow();
-    if (missingItems.length && nativeSuccessUrls.length) {
+    if (missingItems.length) {
         try {
-            const rows = await contractChanceFetchLane(nativeSuccessUrls[0], missingItems);
+            const rows = await contractChanceFetchLane(alternateLaneUrl, missingItems);
             if (generation !== contractChanceGeneration) return;
             if (contractChanceApplyRows(rows, byId, sideState, side, succeeded)) {
                 refreshContractChanceDisplayForDeal(deal);
@@ -3112,7 +3110,7 @@ async function contractChanceSolveBatch(batch) {
         }
     }
 
-    // Secours historique uniquement pour ce qui manque encore après les lanes natives.
+    // Secours historique uniquement pour ce qui manque encore après A/B.
     missingItems = missingNow();
     if (missingItems.length) {
         try {
@@ -3138,29 +3136,25 @@ async function contractChanceSolveBatch(batch) {
     for (const task of batch) {
         sideState.active.delete(task.sampleIndex);
         if (succeeded.has(task.sampleIndex) || sideState.entries.has(task.sampleIndex)) continue;
-        const attempts = Number(task.attempts || 0) + 1;
-        if (!explicitlyRateLimited && attempts <= 2) {
-            task.attempts = attempts;
-            task.priority = Math.max(1, Number(task.priority || 0) - 1);
+        if (task.attempt < 4 && !explicitlyRateLimited) {
+            task.attempt++;
+            task.priority = Math.max(0, Number(task.priority || 0) - 12);
             sideState.queued.add(task.sampleIndex);
             contractChanceQueue.push(task);
         } else {
+            // Après plusieurs échecs ou un 429 explicite, ne pas boucler immédiatement :
+            // réinjecter la donne plus tard et laisser les autres calculs progresser.
             delayedRetryNeeded = true;
         }
     }
+
+    refreshContractChanceDisplayForDeal(deal);
     if (delayedRetryNeeded) {
         setTimeout(() => {
             if (generation === contractChanceGeneration) contractChanceQueueForDeal(deal, 90);
         }, retryDelay);
     }
-    if (errors.length && typeof pushDebugLog === 'function') {
-        const labels = errors.map(err => (err && err.message) || String(err)).join(', ');
-        pushDebugLog(`Chances statistiques ${side} : DDS online partiel, tables manquantes à retenter (${labels}).`);
-    }
     maybeAdvanceContractChancePrewarm(deal);
-    const adaptiveChanged = contractChanceUpdateAdaptiveTargets(deal);
-    refreshContractChanceDisplayForDeal(deal);
-    if (adaptiveChanged) contractChanceQueueForDeal(deal, 108);
 }
 
 function contractChanceSelectedEntries(deal, side, limit = null) {

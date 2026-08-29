@@ -223,8 +223,11 @@ assert(established({ auctionHistory: [{ seat: 'N', call: '1NT' }, { seat: 'E', c
 
 const progressMap = new Map([['N', '75%'], ['S', '100%']]);
 const groupHtml = compileFunction(app, 'contractChanceSidecarSideGroupHtml', {
+    CONTRACT_CHANCE_TARGET: 24,
     contractChanceEstablishedDeclarerForStrain: established,
-    contractChanceTargetProgress: (_deal, _contract, target) => ({ text: progressMap.get(target.declarer), done: true }),
+    contractChanceTargetProgress: (_deal, _contract, target) => ({ text: progressMap.get(target.declarer), done: true, n: 24, goal: 24, successPct: Number(String(progressMap.get(target.declarer)).replace('%', '')) }),
+    contractChanceRoundedPctText: progress => `${Number(progress && progress.successPct || 0).toFixed(0)}%`,
+    contractChanceProgressCountText: progress => `${Number(progress && progress.n || 0)}/${Number(progress && progress.goal || 24)}`,
     contractChanceSidecarTargetHtml: (_deal, _contract, target, opts) => opts && opts.declarer ? `${opts.declarer} ${progressMap.get(target.declarer)}` : progressMap.get(target.declarer)
 });
 const splitTargets = [
@@ -358,5 +361,37 @@ assert(/ensureFreshIceConfig\(this\.roomCode\)/.test(peer), 'R128: join/reconnex
 assert(peer.includes('new Peer(id, { config: iceConfig, debug: 1 })'), 'R128: hôte n’utilise pas la config ICE dynamique');
 assert(peer.includes('new Peer({ config: iceConfig, debug: 1 })'), 'R128: invité n’utilise pas la config ICE dynamique');
 assert(!/const\s+ICE_CONFIG\s*=/.test(peer), 'R128: ancienne configuration ICE monolithique réintroduite');
+
+
+// ---------------------------------------------------------------------------
+// 8) R131 : parallélisme Vercel mesuré — une vague de 24 = 6 lots de 4
+// ---------------------------------------------------------------------------
+assert(/const\s+CONTRACT_CHANCE_DD_CHUNK_SIZE\s*=\s*4\s*;/.test(app), 'R131: lot DDS doit être de 4');
+assert(/const\s+CONTRACT_CHANCE_MAX_HTTP\s*=\s*6\s*;/.test(app), 'R131: six lots locaux doivent pouvoir tourner en parallèle');
+assert(/const\s+CONTRACT_CHANCE_REMOTE_TIMEOUT_MS\s*=\s*30000\s*;/.test(app), 'R131: timeout hôte 30 s absent');
+assert(/const\s+CONTRACT_CHANCE_COLLAB_FETCH_TIMEOUT_MS\s*=\s*10000\s*;/.test(app), 'R131: timeout collaboration court absent');
+assert(/const\s+CONTRACT_CHANCE_TARGET\s*=\s*24\s*;/.test(app), 'R131: cible initiale 24 modifiée');
+assert(/const\s+CONTRACT_CHANCE_ADAPTIVE_MID_TARGET\s*=\s*48\s*;/.test(app), 'R131: cible 48 modifiée');
+assert(/const\s+CONTRACT_CHANCE_ADAPTIVE_MAX_TARGET\s*=\s*72\s*;/.test(app), 'R131: cible 72 modifiée');
+
+const r131Solve = extractFunction(app, 'contractChanceSolveBatch');
+assert(r131Solve.includes('const primaryLaneIndex = contractChanceNativeLaneSequence++ % CONTRACT_CHANCE_NATIVE_URLS.length'), 'R131: alternance A/B primaire absente');
+assert(r131Solve.includes('const alternateLaneUrl = CONTRACT_CHANCE_NATIVE_URLS[(primaryLaneIndex + 1) % CONTRACT_CHANCE_NATIVE_URLS.length]'), 'R131: reprise sur lane native opposée absente');
+assert(!r131Solve.includes('laneBatches'), 'R131: ancien redécoupage interne du lot encore présent');
+assert(!r131Solve.includes('Promise.allSettled(lanePromises)'), 'R131: ancien double appel par lot encore présent');
+const primaryFetchAt = r131Solve.indexOf('contractChanceFetchLane(primaryLaneUrl, items)');
+const alternateFetchAt = r131Solve.indexOf('contractChanceFetchLane(alternateLaneUrl, missingItems)');
+const legacyFetchAt = r131Solve.indexOf('contractChanceFetchLane(CONTRACT_CHANCE_LEGACY_URL, missingItems)');
+assert(primaryFetchAt >= 0 && alternateFetchAt > primaryFetchAt && legacyFetchAt > alternateFetchAt, 'R131: ordre primaire -> alternate -> legacy incorrect');
+assert(r131Solve.includes('missingNow()'), 'R131: reprise ciblée des seules tables manquantes absente');
+
+const r131Pump = extractFunction(app, 'pumpContractChanceQueue');
+assert(r131Pump.includes('batch.length < CONTRACT_CHANCE_DD_CHUNK_SIZE'), 'R131: pump ne respecte plus la taille de lot');
+assert(r131Pump.includes('contractChanceActiveHttp < CONTRACT_CHANCE_MAX_HTTP'), 'R131: limite de concurrence locale absente');
+
+const r131Fetch = extractFunction(app, 'contractChanceFetchLane');
+assert(r131Fetch.includes('timeoutMs = CONTRACT_CHANCE_REMOTE_TIMEOUT_MS'), 'R131: timeout par appel non paramétrable');
+assert(app.includes('contractChanceFetchLane(CONTRACT_CHANCE_NATIVE_URLS[0], workItems, CONTRACT_CHANCE_COLLAB_FETCH_TIMEOUT_MS)'), 'R131: collaboration mobile ne conserve pas son timeout court');
+assert(app.includes('contractChanceFetchLane(CONTRACT_CHANCE_NATIVE_URLS[i % 2], chunk, CONTRACT_CHANCE_COLLAB_FETCH_TIMEOUT_MS)'), 'R131: collaboration desktop ne conserve pas son timeout court');
 
 console.log('PLAY regression gate PASS');
