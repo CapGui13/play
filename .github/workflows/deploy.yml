@@ -1,7 +1,7 @@
 name: Déployer sur GitHub Pages
 
-# Se déclenche à chaque push sur main. Le déploiement n'est autorisé que si la gate de
-# non-régression ci-dessous passe entièrement.
+# Se déclenche à chaque push sur main. Le déploiement n'est autorisé que si les gates de
+# non-régression et de packaging ci-dessous passent entièrement.
 on:
   push:
     branches: [main]
@@ -59,10 +59,24 @@ jobs:
           print(files)
           "
 
+      - name: Construire l'artefact Pages propre
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf _site
+          mkdir -p _site
+
+          # On conserve par défaut les ressources du dépôt et on retire uniquement
+          # ce qui n'a aucune raison d'être servi par GitHub Pages.
+          rsync -a             --exclude='.git/'             --exclude='.github/'             --exclude='tests/'             --exclude='_site/'             --exclude='*.md'             --exclude='bidding-engine.js'             ./ _site/
+
+      - name: Gate — artefact GitHub Pages
+        run: node tests/deploy-artifact-gate.js _site
+
       - name: Préparer les fichiers pour Pages
         uses: actions/upload-pages-artifact@v3
         with:
-          path: .
+          path: _site
 
   deploy:
     needs: build
