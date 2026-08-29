@@ -3818,13 +3818,26 @@ function renderPlayedContractChanceHeader(root, deal, contract) {
     );
 }
 
+function contractChanceRoundedPctText(progress) {
+    return `${Number(progress && progress.successPct || 0).toFixed(0)}%`;
+}
+
+function contractChanceProgressCountText(progress) {
+    const n = Number(progress && progress.n || 0);
+    const goal = Number(progress && progress.goal || CONTRACT_CHANCE_TARGET) || CONTRACT_CHANCE_TARGET;
+    return `${n}/${goal}`;
+}
+
 function contractChanceSidecarTargetHtml(deal, contract, target, options = {}) {
     const progress = contractChanceTargetProgress(deal, contract, target);
     const declarer = String(options.declarer || '');
     const prefix = declarer && SEAT_ABBR_FR[declarer]
-        ? `<span class="dd-chance-declarer">${escapeHtml(SEAT_ABBR_FR[declarer])}</span> `
+        ? `<span class="dd-chance-declarer">${escapeHtml(SEAT_ABBR_FR[declarer])}&nbsp;</span>`
         : '';
-    return `<span class="dd-chance-item">${prefix}<strong class="dd-chance-value${progress.done ? ' is-done' : ''}">${escapeHtml(progress.text)}</strong></span>`;
+    const valueText = Object.prototype.hasOwnProperty.call(options, 'valueText')
+        ? String(options.valueText)
+        : progress.text;
+    return `<span class="dd-chance-item">${prefix}<strong class="dd-chance-value${progress.done ? ' is-done' : ''}">${escapeHtml(valueText)}</strong></span>`;
 }
 
 // R122 — Déclarant statistique exact pour une ligne de la table DD.
@@ -3878,6 +3891,25 @@ function contractChanceSidecarSideGroupHtml(deal, contract, targets) {
         const secondProgress = contractChanceTargetProgress(deal, contract, ordered[1]);
         if (firstProgress.text === secondProgress.text && firstProgress.done === secondProgress.done) {
             return contractChanceSidecarTargetHtml(deal, contract, ordered[0]);
+        }
+        const sameWindow = Number(firstProgress.n || 0) === Number(secondProgress.n || 0)
+            && Number(firstProgress.goal || 0) === Number(secondProgress.goal || 0);
+        const bothPctVisible = Number(firstProgress.n || 0) >= CONTRACT_CHANCE_TARGET
+            && Number(secondProgress.n || 0) >= CONTRACT_CHANCE_TARGET;
+        if (sameWindow && bothPctVisible && !firstProgress.done && !secondProgress.done) {
+            return [
+                contractChanceSidecarTargetHtml(deal, contract, ordered[0], {
+                    declarer: ordered[0].declarer,
+                    valueText: contractChanceRoundedPctText(firstProgress)
+                }),
+                '<span class="dd-chance-sep"> - </span>',
+                contractChanceSidecarTargetHtml(deal, contract, ordered[1], {
+                    declarer: ordered[1].declarer,
+                    valueText: contractChanceRoundedPctText(secondProgress)
+                }),
+                '<span class="dd-chance-sep"> - </span>',
+                `<span class="dd-chance-item"><strong class="dd-chance-value">${escapeHtml(contractChanceProgressCountText(firstProgress))}</strong></span>`
+            ].join('');
         }
         return ordered.map(target => contractChanceSidecarTargetHtml(deal, contract, target, { declarer: target.declarer }))
             .join('<span class="dd-chance-sep"> / </span>');
