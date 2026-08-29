@@ -4093,9 +4093,11 @@ function contractChanceSidecarSideGroupHtml(deal, contract, targets) {
         return seatRank(a) - seatRank(b) || Number(b.level || 0) - Number(a.level || 0);
     });
 
-    // Quand les deux déclarants ont le même contrat ET exactement le même résultat,
-    // conserver l'affichage compact historique : `100%`. Dès qu'ils diffèrent, afficher
-    // explicitement le différentiel, ex. `N 75% / S 100%`.
+    // R135 — Les deux déclarants restent calculés séparément en interne, car l'entame
+    // peut créer une vraie différence. Mais avec seulement 24/48/72 redistributions,
+    // quelques points d'écart sont surtout du bruit visuel. On ne montre donc le
+    // différentiel N/S ou E/O que lorsqu'il atteint au moins 10 points. Sinon on affiche
+    // uniquement le déclarant établi par l'enchère (placé en tête de `ordered`).
     if (ordered.length === 2
         && exactSeats.includes(ordered[0].declarer)
         && exactSeats.includes(ordered[1].declarer)
@@ -4104,14 +4106,23 @@ function contractChanceSidecarSideGroupHtml(deal, contract, targets) {
         && ordered[0].strain === ordered[1].strain) {
         const firstProgress = contractChanceTargetProgress(deal, contract, ordered[0]);
         const secondProgress = contractChanceTargetProgress(deal, contract, ordered[1]);
-        if (firstProgress.text === secondProgress.text && firstProgress.done === secondProgress.done) {
-            return contractChanceSidecarTargetHtml(deal, contract, ordered[0]);
-        }
-        const sameWindow = Number(firstProgress.n || 0) === Number(secondProgress.n || 0)
-            && Number(firstProgress.goal || 0) === Number(secondProgress.goal || 0);
         const bothPctVisible = Number(firstProgress.n || 0) >= CONTRACT_CHANCE_TARGET
             && Number(secondProgress.n || 0) >= CONTRACT_CHANCE_TARGET;
-        if (sameWindow && bothPctVisible && !firstProgress.done && !secondProgress.done) {
+        const firstPct = Number(firstProgress.successPct);
+        const secondPct = Number(secondProgress.successPct);
+        const meaningfulDeclarerGap = bothPctVisible
+            && Number.isFinite(firstPct) && Number.isFinite(secondPct)
+            && Math.abs(firstPct - secondPct) >= 10;
+
+        // Tant que les deux séries n'ont pas au moins 24 observations, ou si leur écart
+        // reste inférieur à 10 points, ne pas exposer un différentiel non significatif.
+        if (!meaningfulDeclarerGap) {
+            return contractChanceSidecarTargetHtml(deal, contract, ordered[0]);
+        }
+
+        const sameWindow = Number(firstProgress.n || 0) === Number(secondProgress.n || 0)
+            && Number(firstProgress.goal || 0) === Number(secondProgress.goal || 0);
+        if (sameWindow && !firstProgress.done && !secondProgress.done) {
             return [
                 contractChanceSidecarTargetHtml(deal, contract, ordered[0], {
                     declarer: ordered[0].declarer,
