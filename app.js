@@ -2145,7 +2145,7 @@ function dealToPbnStringForDD(deal) {
 // 2 à 3 Workers exploitent les cœurs disponibles sans bloquer le thread de l'interface.
 const LOCAL_DDS_WORKER_URL = 'dds/local-dds-worker.js';
 const LOCAL_DDS_BROWSER_ENABLED = typeof Worker === 'function';
-const LOCAL_DDS_MAX_DESKTOP_WORKERS = 3;
+const LOCAL_DDS_MAX_DESKTOP_WORKERS = 4;
 let localDdsWorkers = [];
 let localDdsQueue = [];
 let localDdsPendingByPbn = new Map();
@@ -2159,7 +2159,12 @@ function localDdsDesiredWorkerCount() {
     if (!LOCAL_DDS_BROWSER_ENABLED) return 0;
     if (isLikelyMobileDevice()) return 1;
     const hc = Math.max(1, Number((typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 4));
-    if (hc >= 6) return LOCAL_DDS_MAX_DESKTOP_WORKERS;
+    const dm = Number((typeof navigator !== 'undefined' && navigator.deviceMemory) || 0);
+    // R138 — un quatrième solveur apporte un gain sensible sur les desktops modernes,
+    // mais on ne le crée que si la machine a au moins 8 threads logiques et n'annonce
+    // pas une mémoire particulièrement faible. Mobile reste strictement à 1 Worker.
+    if (hc >= 8 && (!dm || dm >= 8)) return LOCAL_DDS_MAX_DESKTOP_WORKERS;
+    if (hc >= 6) return 3;
     if (hc >= 3) return 2;
     return 1;
 }
@@ -2467,6 +2472,19 @@ function applyDDResultToBoard(boardNumber, table) {
     if (idx === -1) return;
     pool[idx].ddTable = table;
 
+    // R138 — le PAR exact est désormais le déclencheur du pré-calcul statistique. Avant
+    // cette table, on ne sait pas quel camp/contrat mérite la priorité ; après son arrivée,
+    // injecter immédiatement le vrai camp de PAR évite de perdre du CPU sur l'autre camp.
+    if (myRole === 'host' && pool[idx].statisticalParMode) {
+        // Ne surtout pas transformer l'arrivée DD des 8/16 donnes futures en lancement
+        // de 24 DDS statistiques chacune. En salon : seulement la première donne prévue ;
+        // en partie : seulement la donne actuellement affichée.
+        const isCurrentStatDeal = (Array.isArray(deals) && deals === pool)
+            ? currentDeal() === pool[idx]
+            : (Array.isArray(contractChancePreparedList) && contractChancePreparedList[0] === pool[idx]);
+        if (isCurrentStatDeal) setTimeout(() => contractChanceQueueForDeal(pool[idx], 125), 0);
+    }
+
     if (deals && pool === deals) {
         // La partie est déjà lancée. Si on regarde justement cette donne-là, rafraîchir
         // dès que le PAR doit être visible : à la fin de l'enchère, ou immédiatement pour
@@ -2769,6 +2787,15 @@ function contractChanceQueueForDeal(deal, priority = 20) {
     if (!CONTRACT_CHANCE_LOCAL_DDS_ENABLED) return;
     if (myRole !== 'host' || !deal || !deal.hands || !deal.statisticalParMode) return;
     if (!window.PlayStatisticalPar || typeof window.PlayStatisticalPar.sampleHandsDeterministic !== 'function') return;
+
+    // R138 — aucune statistique avant la table DD exacte : c'est elle qui dit quel camp
+    // porte le PAR principal. Cela donne aussi la priorité absolue au seul DDS exact de la
+    // donne au lieu de le mettre en concurrence avec 48 redistributions aveugles.
+    if (!deal.ddTable) {
+        try { ensureLocalExactDdForDeal(deal); } catch (_) {}
+        return;
+    }
+
     if (contractChanceMustYieldToPons()) {
         if (!contractChanceDeferredDeals.has(deal)) {
             contractChanceDeferredDeals.add(deal);
@@ -2785,14 +2812,24 @@ function contractChanceQueueForDeal(deal, priority = 20) {
     const auctionFinished = (() => {
         try { return isAuctionOver(deal.auctionHistory || []); } catch (_) { return false; }
     })();
-    // Une fois les 24 premiers tirages disponibles, décider si un camp mérite 48/72.
-    // Cette décision ne porte que sur les contrats réellement affichés et ne s'active
-    // jamais pendant l'enchère.
+    const primarySide = contractChancePrimarySide(deal);
+
+    // Après la fin, seules les faces réellement utiles (PAR/contrat joué/référence de
+    // sacrifice) doivent consommer du DDS. Pendant l'enchère, on calcule D'ABORD les 24
+    // du camp de PAR ; l'autre camp n'entre en file qu'une fois ces 24 prêts.
+    let allowedSides = auctionFinished ? contractChanceFinalUsefulSides(deal) : ['NS', 'EW'];
+    if (!auctionFinished && primarySide && !contractChanceCandidatesReady(deal, primarySide)) {
+        allowedSides = [primarySide];
+    }
+
+    // Le raffinement 48/72 n'est décidé qu'après les 24 de toutes les cibles utiles ; le
+    // pourcentage principal 24/24 peut donc être servi avant qu'un raffinement ne reprenne
+    // les Workers.
     if (auctionFinished) contractChanceUpdateAdaptiveTargets(deal);
-    // Le partage n'existe qu'APRÈS la fin de l'enchère. On réserve d'abord quelques
-    // échantillons aux invités disponibles ; la file locale de l'hôte prend tout le reste.
     if (auctionFinished) contractChanceDispatchCollaborativeWork(deal);
-    for (const side of ['NS', 'EW']) {
+
+    const orderedSides = contractChanceOrderedSides(deal, allowedSides);
+    for (const side of orderedSides) {
         const sideState = state.sides[side];
         const requestedCount = auctionFinished
             ? Math.max(CONTRACT_CHANCE_TARGET, Number(sideState.adaptiveTarget || CONTRACT_CHANCE_TARGET))
@@ -2800,16 +2837,13 @@ function contractChanceQueueForDeal(deal, priority = 20) {
         let candidates = [];
         try { candidates = contractChanceBuildCandidates(deal, side, auctionFinished, requestedCount); } catch (_) { candidates = []; }
         const wanted = new Set(candidates.map(candidate => Number(candidate.sampleIndex)));
-        // Une nouvelle enchère peut modifier le conditionnement public. Retirer de la file
-        // les tirages devenus inutiles évite de gaspiller du DDS avant les échantillons
-        // réellement nécessaires à la position courante ; les résultats déjà calculés sont
-        // conservés car ils peuvent redevenir utiles si le conditionnement évolue encore.
         contractChanceQueue = contractChanceQueue.filter(task => {
             if (!task || task.generation !== contractChanceGeneration || task.deal !== deal || task.side !== side) return true;
             if (wanted.has(Number(task.sampleIndex))) return true;
             sideState.queued.delete(Number(task.sampleIndex));
             return false;
         });
+        const taskPriority = contractChanceTaskPriorityForSide(deal, side, requestedCount, priority, auctionFinished);
         for (const candidate of candidates) {
             const sampleIndex = Number(candidate.sampleIndex);
             if (sideState.entries.has(sampleIndex) || sideState.queued.has(sampleIndex) || sideState.active.has(sampleIndex) || sideState.remotePending.has(sampleIndex)) continue;
@@ -2821,7 +2855,7 @@ function contractChanceQueueForDeal(deal, priority = 20) {
                 sampleIndex,
                 hands: candidate.hands,
                 profiles: candidate.profiles,
-                priority: Number(priority || 0),
+                priority: taskPriority,
                 attempts: 0,
                 seq: ++contractChanceTaskSequence
             });
@@ -2829,7 +2863,6 @@ function contractChanceQueueForDeal(deal, priority = 20) {
     }
     pumpContractChanceQueue();
 }
-
 function contractChanceCandidatesReady(deal, side) {
     const state = contractChanceDealState(deal, false);
     if (!state || state.generation !== contractChanceGeneration) return false;
@@ -3040,7 +3073,7 @@ function contractChanceCollaborativeCandidates(deal) {
     const out = [];
     const state = contractChanceDealState(deal, true);
     if (!state || state.generation !== contractChanceGeneration) return out;
-    for (const side of ['NS', 'EW']) {
+    for (const side of contractChanceFinalUsefulSides(deal)) {
         const sideState = state.sides[side];
         const requestedCount = Math.max(CONTRACT_CHANCE_TARGET, Number(sideState.adaptiveTarget || CONTRACT_CHANCE_TARGET));
         let candidates = [];
@@ -3060,7 +3093,7 @@ function contractChanceCollaborativeCandidates(deal) {
 }
 
 function contractChanceDispatchCollaborativeWork(deal) {
-    if (!CONTRACT_CHANCE_REMOTE_DDS_ENABLED) return 0;
+    if (!CONTRACT_CHANCE_LOCAL_DDS_ENABLED) return 0;
     if (myRole !== 'host' || !deals || !deal || !deal.hands || !deal.statisticalParMode) return 0;
     try { if (!isAuctionOver(deal.auctionHistory || [])) return 0; } catch (_) { return 0; }
     if (!peerConn || !Array.isArray(participants)) return 0;
@@ -3174,26 +3207,18 @@ async function contractChanceSolveGuestWork(msg) {
     const metaById = new Map(incoming.map((item, i) => [String(i + 1), item]));
     const results = [];
     try {
-        if (cap.mobile || workItems.length <= 2) {
-            const rows = await contractChanceFetchLane(CONTRACT_CHANCE_NATIVE_URLS[0], workItems, CONTRACT_CHANCE_COLLAB_FETCH_TIMEOUT_MS);
-            for (const row of rows) {
-                const meta = row && metaById.get(String(row.id));
-                if (meta && contractChanceTableIsValid(row.table)) results.push({ side: meta.side, sampleIndex: meta.sampleIndex, table: row.table });
-            }
-        } else {
-            const midpoint = Math.ceil(workItems.length / 2);
-            const chunks = [workItems.slice(0, midpoint), workItems.slice(midpoint)].filter(Boolean).filter(x => x.length);
-            const settled = await Promise.allSettled(chunks.map((chunk, i) => contractChanceFetchLane(CONTRACT_CHANCE_NATIVE_URLS[i % 2], chunk, CONTRACT_CHANCE_COLLAB_FETCH_TIMEOUT_MS)));
-            for (const part of settled) {
-                if (part.status !== 'fulfilled') continue;
-                for (const row of part.value || []) {
-                    const meta = row && metaById.get(String(row.id));
-                    if (meta && contractChanceTableIsValid(row.table)) results.push({ side: meta.side, sampleIndex: meta.sampleIndex, table: row.table });
-                }
+        // R138 — coopération P2P réellement locale : l'invité résout le petit lot dans
+        // son propre pool WASM, puis renvoie seulement les tables DD à l'hôte. Aucun
+        // endpoint Vercel et aucune dépendance réseau supplémentaire.
+        const rows = await localDdsSolveItems(workItems, 145);
+        for (const row of rows || []) {
+            const meta = row && metaById.get(String(row.id));
+            if (meta && contractChanceTableIsValid(row.table)) {
+                results.push({ side: meta.side, sampleIndex: meta.sampleIndex, table: row.table });
             }
         }
     } catch (_) {
-        // Retour partiel autorisé : l'hôte reprendra ce qui manque, sans bloquer la donne.
+        // Retour partiel autorisé : l'hôte reprend ce qui manque, sans bloquer la donne.
     }
     try {
         peerConn.send({
@@ -3324,6 +3349,18 @@ async function contractChanceSolveBatch(batch) {
             if (generation === contractChanceGeneration) contractChanceQueueForDeal(deal, 90);
         }, CONTRACT_CHANCE_RETRY_DELAY_MS);
     }
+
+    // R138 — pendant l'enchère, dès que les 24 du camp de PAR sont terminés, utiliser le
+    // temps restant pour préchauffer l'autre camp. Jamais l'inverse.
+    try {
+        const auctionFinishedNow = isAuctionOver(deal.auctionHistory || []);
+        const primarySide = contractChancePrimarySide(deal);
+        if (!auctionFinishedNow && primarySide === side && contractChanceCandidatesReady(deal, primarySide)) {
+            setTimeout(() => {
+                if (generation === contractChanceGeneration) contractChanceQueueForDeal(deal, 65);
+            }, 0);
+        }
+    } catch (_) {}
     maybeAdvanceContractChancePrewarm(deal);
 }
 
@@ -3354,6 +3391,172 @@ function actualDealParFromKnownDeal(deal) {
         } catch (_) {}
     }
     return null;
+}
+
+// R138 — cible PAR prioritaire. Le coût DDS est partagé entre tous les contrats d'un
+// même camp : choisir 4♠ plutôt que 3SA ne lance donc pas 24 DDS supplémentaires, mais
+// cette cible détermine QUEL CAMP reçoit les 24 premiers solveurs. C'est le levier de
+// latence le plus important : auparavant NS partait toujours avant EO.
+function contractChanceExactParTargets(deal) {
+    const exact = actualDealParFromKnownDeal(deal);
+    const out = [];
+    for (const contract of (exact && exact.contracts || [])) {
+        if (!contract || contract.passout) continue;
+        const side = statisticalParSideFromDeclarer(contract.declarer);
+        const strain = contract.strain === 'NT' ? 'N' : contract.strain;
+        const level = Number(contract.level || 0);
+        if (!side || !STRAIN_ORDER.includes(strain) || !(level >= 1 && level <= 7)) continue;
+        out.push({
+            id: `exact-par:${side}:${level}${strain}:${contract.declarer || side}`,
+            kind: contract.doubled ? 'sacrifice' : 'make',
+            side,
+            tier: contract.doubled ? 'sacrifice' : contractChanceTierForContract({ level, strain }),
+            level,
+            strain,
+            declarer: contract.declarer || side,
+            doubled: contract.doubled || '',
+            isExactDealerPar: true
+        });
+    }
+    return out;
+}
+
+function contractChanceTargetSideScore(deal, target) {
+    if (!deal || !deal.ddTable || !target) return null;
+    const score = optimalContractDuplicateScore(deal.ddTable, target, deal.vulnerable);
+    if (!Number.isFinite(score)) return null;
+    return target.side === 'EW' ? -score : score;
+}
+
+function contractChanceNormalMakingAlternatives(deal, side, tier, referenceLevel = 0) {
+    if (!deal || !deal.ddTable || (side !== 'NS' && side !== 'EW')) return [];
+    const seats = side === 'NS' ? ['N', 'S'] : ['E', 'W'];
+    const levels = {};
+    if (tier === 'game') Object.assign(levels, { N: 3, S: 4, H: 4, D: 5, C: 5 });
+    else if (tier === 'slam') {
+        const level = Number(referenceLevel || 0) >= 7 ? 7 : 6;
+        for (const strain of STRAIN_ORDER) levels[strain] = level;
+    } else return [];
+
+    const out = [];
+    for (const strain of STRAIN_ORDER) {
+        const level = levels[strain];
+        if (!level) continue;
+        const targetTricks = level + 6;
+        const tricksBySeat = seats.map(seat => ({ seat, tricks: Number(deal.ddTable[strain] && deal.ddTable[strain][seat]) }))
+            .filter(row => Number.isFinite(row.tricks));
+        if (!tricksBySeat.some(row => row.tricks >= targetTricks)) continue;
+        const best = Math.max(...tricksBySeat.map(row => row.tricks));
+        const bestSeats = tricksBySeat.filter(row => row.tricks === best).map(row => row.seat);
+        out.push({
+            id: `normal-par:${side}:${level}${strain}`,
+            kind: 'make', side, tier, level, strain,
+            declarer: bestSeats.length > 1 ? side : bestSeats[0], doubled: '',
+            fitLength: strain === 'N' ? 0 : contractChanceSideFitLength(deal, side, strain)
+        });
+    }
+    return out;
+}
+
+function contractChanceLogicalTargetRank(deal, target) {
+    if (!target) return -9999;
+    const fitLength = target.strain === 'N' ? 0 : contractChanceSideFitLength(deal, target.side, target.strain);
+    // Convention demandée : à valeur comparable, un fit majeur 8+ est le contrat normal.
+    if ((target.strain === 'S' || target.strain === 'H') && fitLength >= 8) return 500 + Math.min(20, fitLength);
+    if (target.strain === 'N') return 400;
+    if ((target.strain === 'D' || target.strain === 'C') && fitLength >= 8) return 300 + Math.min(20, fitLength);
+    return 100;
+}
+
+function contractChancePrimaryParTarget(deal) {
+    if (!deal || !deal.ddTable) return null;
+    const exactTargets = contractChanceExactParTargets(deal);
+    if (exactTargets.length) {
+        // DealerPar peut donner plusieurs contrats équivalents. Tous appartiennent en
+        // pratique au même camp de primauté ; si ce sont des contrats gagnants, ouvrir
+        // aussi le petit ensemble des contrats "normaux" du même palier et ne préférer
+        // un fit majeur que si son score reste réellement proche du PAR (<= 30 points).
+        const base = exactTargets.slice().sort((a, b) => contractChanceLogicalTargetRank(deal, b) - contractChanceLogicalTargetRank(deal, a))[0];
+        if (base && base.kind === 'make' && (base.tier === 'game' || base.tier === 'slam')) {
+            const refScore = contractChanceTargetSideScore(deal, base);
+            const alternatives = contractChanceNormalMakingAlternatives(deal, base.side, base.tier, base.level)
+                .filter(target => {
+                    const score = contractChanceTargetSideScore(deal, target);
+                    return Number.isFinite(score) && Number.isFinite(refScore) && Math.abs(score - refScore) <= 30;
+                });
+            if (alternatives.length) {
+                alternatives.sort((a, b) => contractChanceLogicalTargetRank(deal, b) - contractChanceLogicalTargetRank(deal, a));
+                if (contractChanceLogicalTargetRank(deal, alternatives[0]) > contractChanceLogicalTargetRank(deal, base)) return alternatives[0];
+            }
+        }
+        return base;
+    }
+
+    // Fallback pour un ancien PBN sans résultat DealerPar exploitable : reprendre la table
+    // DD visuelle, en donnant la préférence aux meilleures cases et au fit majeur 8+.
+    const tableTargets = ddTableChanceTargetsForDeal(deal)
+        .filter(target => target && (target.isBestTableTarget || target.isSecondaryTableTarget));
+    tableTargets.sort((a, b) => Number(!!b.isBestTableTarget) - Number(!!a.isBestTableTarget)
+        || contractChanceLogicalTargetRank(deal, b) - contractChanceLogicalTargetRank(deal, a));
+    return tableTargets[0] || null;
+}
+
+function contractChancePrimarySide(deal) {
+    const target = contractChancePrimaryParTarget(deal);
+    return target && (target.side === 'NS' || target.side === 'EW') ? target.side : '';
+}
+
+function contractChancePriorityDiagnostic(deal = null) {
+    const d = deal || (typeof currentDeal === 'function' ? currentDeal() : null);
+    const target = contractChancePrimaryParTarget(d);
+    const state = contractChanceDealState(d, false);
+    const countFor = side => state && state.sides && state.sides[side] ? state.sides[side].entries.size : 0;
+    return {
+        board: d && d.board,
+        primarySide: target && target.side || '',
+        primaryContract: target ? `${target.level}${target.strain === 'N' ? 'SA' : target.strain}` : '',
+        fitLength: target && target.strain !== 'N' ? contractChanceSideFitLength(d, target.side, target.strain) : 0,
+        samples: { NS: countFor('NS'), EW: countFor('EW') },
+        localDds: localDdsDiagnostic()
+    };
+}
+if (typeof window !== 'undefined') window.getContractChancePriorityDiagnostic = contractChancePriorityDiagnostic;
+
+function contractChanceOrderedSides(deal, allowedSides = null) {
+    const allowed = new Set(Array.isArray(allowedSides) && allowedSides.length ? allowedSides : ['NS', 'EW']);
+    const primary = contractChancePrimarySide(deal);
+    const order = [];
+    if (primary && allowed.has(primary)) order.push(primary);
+    for (const side of ['NS', 'EW']) if (allowed.has(side) && !order.includes(side)) order.push(side);
+    return order;
+}
+
+function contractChanceFinalUsefulSides(deal) {
+    const primary = contractChancePrimarySide(deal);
+    try {
+        if (!deal || !isAuctionOver(deal.auctionHistory || [])) return contractChanceOrderedSides(deal);
+        const contract = determineContract(deal.auctionHistory || []);
+        const sides = new Set(contractChanceTargetsForDeal(deal, contract)
+            .filter(target => target && !target.isReferenceOnly)
+            .map(target => target.side)
+            .filter(side => side === 'NS' || side === 'EW'));
+        if (primary) sides.add(primary);
+        return contractChanceOrderedSides(deal, Array.from(sides));
+    } catch (_) {
+        return contractChanceOrderedSides(deal);
+    }
+}
+
+function contractChanceTaskPriorityForSide(deal, side, requestedCount, basePriority, auctionFinished) {
+    const primary = contractChancePrimarySide(deal);
+    const isPrimary = !!primary && side === primary;
+    const baseStage = Number(requestedCount || CONTRACT_CHANCE_TARGET) <= CONTRACT_CHANCE_TARGET;
+    let value = Number(basePriority || 0);
+    if (isPrimary) value += baseStage ? 120 : 70;
+    else value += baseStage ? 30 : 0;
+    if (auctionFinished) value += 20;
+    try { if (currentDeal && currentDeal() === deal) value += 15; } catch (_) {}
+    return value;
 }
 
 function optimalContractSide(contract) {
@@ -3879,9 +4082,17 @@ function contractChanceUpdateAdaptiveTargets(deal) {
     if (!state || state.generation !== contractChanceGeneration) return false;
     const allTargets = contractChanceTargetsForDeal(deal, contract);
     const displayTargets = allTargets.filter(target => target && !target.isReferenceOnly);
-    let changed = false;
+    const relevantSides = Array.from(new Set(displayTargets.map(target => target.side).filter(side => side === 'NS' || side === 'EW')));
 
-    for (const side of ['NS', 'EW']) {
+    // R138 — règle d'ordonnancement : BASE 24 de toutes les cibles utiles avant le moindre
+    // raffinement 48/72. Cela empêche un contrat incertain de monopoliser les Workers alors
+    // que le contrat joué ou le PAR secondaire n'a pas encore son premier pourcentage.
+    for (const side of relevantSides) {
+        if (contractChanceSelectedEntries(deal, side, CONTRACT_CHANCE_TARGET).length < CONTRACT_CHANCE_TARGET) return false;
+    }
+
+    let changed = false;
+    for (const side of contractChanceOrderedSides(deal, relevantSides)) {
         const sideState = state.sides[side];
         if (!sideState || sideState.adaptiveSettled) continue;
         const goal = contractChanceSideGoal(deal, side);
@@ -3907,7 +4118,6 @@ function contractChanceUpdateAdaptiveTargets(deal) {
     }
     return changed;
 }
-
 function contractChanceSnapshotProgress(deal, target) {
     if (!deal || !target) return null;
     const snapshot = deal.statisticalChanceSnapshot;
