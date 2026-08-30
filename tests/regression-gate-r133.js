@@ -13,6 +13,15 @@ const Module = require('module');
 
 const legacyPath = path.join(__dirname, 'regression-gate.js');
 const source = fs.readFileSync(legacyPath, 'utf8');
+const localDdsWorkerPath = path.join(__dirname, '..', 'dds', 'local-dds-worker.js');
+const localDdsWorker = fs.readFileSync(localDdsWorkerPath, 'utf8');
+if (!localDdsWorker.includes("msg.type !== 'solve' && msg.type !== 'solve-contract'")) {
+    throw new Error('R139: Worker DDS contrat-seul absent');
+}
+if (!localDdsWorker.includes("'dds_web_solve_leads'")) {
+    throw new Error('R139: chemin SolveBoard rapide absent du Worker');
+}
+
 
 const startMarker = '// 8) R131 : parallélisme Vercel mesuré — une vague de 24 = 6 lots de 4';
 const endMarker = "console.log('PLAY regression gate PASS');";
@@ -69,8 +78,15 @@ assert(app.includes('function contractChancePrimaryParTarget('), 'R138: sélecti
 assert(app.includes('function contractChanceTaskPriorityForSide('), 'R138: priorité par camp absente');
 const r138Queue = extractFunction(app, 'contractChanceQueueForDeal');
 assert(r138Queue.includes('if (!deal.ddTable)'), 'R138: statistiques lancées avant le DD exact');
-assert(r138Queue.includes('contractChancePrimarySide(deal)'), 'R138: camp de PAR non priorisé');
-assert(r138Queue.includes('!contractChanceCandidatesReady(deal, primarySide)'), 'R138: second camp peut encore passer avant les 24 du PAR');
+assert(r138Queue.includes('contractChanceQueueFastPrimary(deal, auctionFinished)'), 'R139: contrat de PAR rapide non priorisé');
+assert(r138Queue.includes('if (!fastPrimaryReady) return'), 'R139: tables complètes peuvent passer avant les 24 rapides');
+assert(r138Queue.includes('if (!auctionFinished) return'), 'R139: tables statistiques complètes encore calculées pendant les enchères');
+const r139Fast = extractFunction(app, 'contractChanceQueueFastPrimary');
+assert(r139Fast.includes('localDdsSolveContract(pbn, targetStrain, declarer, allowConditioning ? 300 : 210, fastState.groupKey)'), 'R139: PAR principal ne passe pas par SolveBoard rapide');
+const r139Progress = extractFunction(app, 'contractChanceTargetProgress');
+assert(r139Progress.includes('contractChanceFastPrimaryStats(deal, target)'), 'R139: affichage ne consomme pas le résultat rapide');
+const r139Kickoff = extractFunction(app, 'kickOffBackgroundDD');
+assert(!r139Kickoff.includes('for (let i = 1; i < dealsList.length'), 'R139: DD des donnes futures peut encore monopoliser les Workers');
 const r138Adapt = extractFunction(app, 'contractChanceUpdateAdaptiveTargets');
 assert(r138Adapt.includes('CONTRACT_CHANCE_TARGET).length < CONTRACT_CHANCE_TARGET'), 'R138: 48/72 peut démarrer avant les bases 24');
 const r138Guest = extractFunction(app, 'contractChanceSolveGuestWork');

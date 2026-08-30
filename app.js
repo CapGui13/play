@@ -2149,6 +2149,7 @@ const LOCAL_DDS_MAX_DESKTOP_WORKERS = 4;
 let localDdsWorkers = [];
 let localDdsQueue = [];
 let localDdsPendingByPbn = new Map();
+let localDdsPendingByContract = new Map();
 let localDdsRequestSequence = 0;
 let localDdsTaskSequence = 0;
 let localDdsCompleted = 0;
@@ -2195,7 +2196,11 @@ function localDdsFinishSlot(slot, ok, payload) {
     const task = slot && slot.current;
     if (!task) return;
     slot.current = null;
-    if (localDdsPendingByPbn.get(task.pbn) === task) localDdsPendingByPbn.delete(task.pbn);
+    if (task.kind === 'contract') {
+        if (localDdsPendingByContract.get(task.cacheKey) === task) localDdsPendingByContract.delete(task.cacheKey);
+    } else if (localDdsPendingByPbn.get(task.pbn) === task) {
+        localDdsPendingByPbn.delete(task.pbn);
+    }
     if (ok) {
         localDdsCompleted++;
         task.resolve(payload);
@@ -2218,7 +2223,14 @@ function localDdsSpawnWorker(index) {
         const msg = event && event.data || {};
         const task = slot.current;
         if (!task || String(msg.requestId || '') !== task.requestId) return;
-        if (msg.type === 'result' && contractChanceTableIsValid(msg.table)) {
+        if (task.kind === 'contract' && msg.type === 'contract-result') {
+            const tricks = Number(msg.tricks);
+            if (Number.isInteger(tricks) && tricks >= 0 && tricks <= 13) {
+                localDdsFinishSlot(slot, true, tricks);
+            } else {
+                localDdsFinishSlot(slot, false, new Error(String(msg.error || 'Résultat DDS contrat invalide')));
+            }
+        } else if (task.kind !== 'contract' && msg.type === 'result' && contractChanceTableIsValid(msg.table)) {
             localDdsFinishSlot(slot, true, msg.table);
         } else {
             localDdsFinishSlot(slot, false, new Error(String(msg.error || 'Table DDS locale invalide')));
@@ -2251,7 +2263,11 @@ function localDdsPump() {
     if (!workers.length) {
         const pending = localDdsQueue.splice(0);
         for (const task of pending) {
-            if (localDdsPendingByPbn.get(task.pbn) === task) localDdsPendingByPbn.delete(task.pbn);
+            if (task.kind === 'contract') {
+                if (localDdsPendingByContract.get(task.cacheKey) === task) localDdsPendingByContract.delete(task.cacheKey);
+            } else if (localDdsPendingByPbn.get(task.pbn) === task) {
+                localDdsPendingByPbn.delete(task.pbn);
+            }
             localDdsFailures++;
             task.reject(new Error('Web Worker DDS non disponible dans ce navigateur'));
         }
@@ -2264,7 +2280,17 @@ function localDdsPump() {
         const task = localDdsQueue.shift();
         slot.current = task;
         try {
-            slot.worker.postMessage({ type: 'solve', requestId: task.requestId, pbn: task.pbn });
+            if (task.kind === 'contract') {
+                slot.worker.postMessage({
+                    type: 'solve-contract',
+                    requestId: task.requestId,
+                    pbn: task.pbn,
+                    strain: task.strain,
+                    declarer: task.declarer
+                });
+            } else {
+                slot.worker.postMessage({ type: 'solve', requestId: task.requestId, pbn: task.pbn });
+            }
         } catch (err) {
             localDdsFinishSlot(slot, false, err);
         }
@@ -2293,8 +2319,10 @@ function localDdsSolveOne(pbn, priority = 50) {
         rejectTask = reject;
     });
     const task = {
+        kind: 'table',
         requestId: `local-dds-${++localDdsRequestSequence}`,
         pbn: normalizedPbn,
+        cacheKey: normalizedPbn,
         priority: Number(priority || 0),
         seq: ++localDdsTaskSequence,
         resolve: resolveTask,
@@ -2305,6 +2333,63 @@ function localDdsSolveOne(pbn, priority = 50) {
     localDdsQueue.push(task);
     localDdsPump();
     return promise;
+}
+
+function localDdsSolveContract(pbn, strain, declarer, priority = 200, groupKey = '') {
+    if (!LOCAL_DDS_BROWSER_ENABLED) return Promise.reject(new Error('DDS WebAssembly local non supporté'));
+    const normalizedPbn = String(pbn || '').trim();
+    const normalizedStrain = String(strain || '').toUpperCase() === 'NT' ? 'N' : String(strain || '').toUpperCase();
+    const normalizedDeclarer = String(declarer || '').toUpperCase();
+    if (!/^N:/.test(normalizedPbn) || !['S', 'H', 'D', 'C', 'N'].includes(normalizedStrain)
+        || !['N', 'E', 'S', 'W'].includes(normalizedDeclarer)) {
+        return Promise.reject(new Error('Contrat DDS local invalide'));
+    }
+    const cacheKey = `${normalizedPbn}|${normalizedStrain}|${normalizedDeclarer}`;
+    const existing = localDdsPendingByContract.get(cacheKey);
+    if (existing) {
+        existing.priority = Math.max(Number(existing.priority || 0), Number(priority || 0));
+        localDdsPump();
+        return existing.promise;
+    }
+
+    let resolveTask;
+    let rejectTask;
+    const promise = new Promise((resolve, reject) => {
+        resolveTask = resolve;
+        rejectTask = reject;
+    });
+    const task = {
+        kind: 'contract',
+        requestId: `local-dds-contract-${++localDdsRequestSequence}`,
+        pbn: normalizedPbn,
+        strain: normalizedStrain,
+        declarer: normalizedDeclarer,
+        cacheKey,
+        groupKey: String(groupKey || ''),
+        priority: Number(priority || 0),
+        seq: ++localDdsTaskSequence,
+        resolve: resolveTask,
+        reject: rejectTask,
+        promise
+    };
+    localDdsPendingByContract.set(cacheKey, task);
+    localDdsQueue.push(task);
+    localDdsPump();
+    return promise;
+}
+
+function localDdsCancelQueuedContractGroup(groupKey) {
+    const key = String(groupKey || '');
+    if (!key) return 0;
+    let cancelled = 0;
+    localDdsQueue = localDdsQueue.filter(task => {
+        if (!task || task.kind !== 'contract' || task.groupKey !== key) return true;
+        if (localDdsPendingByContract.get(task.cacheKey) === task) localDdsPendingByContract.delete(task.cacheKey);
+        cancelled++;
+        try { task.reject(new Error('DDS contrat préchauffé remplacé')); } catch (_) {}
+        return false;
+    });
+    return cancelled;
 }
 
 function localDdsPromotePbn(pbn, priority = 150) {
@@ -2347,14 +2432,14 @@ function kickOffBackgroundDD(dealsList) {
     const generationId = ddResultGenerationId;
     if (!Array.isArray(dealsList) || !dealsList.length) return;
 
-    // La première donne doit obtenir sa table exacte immédiatement. Les suivantes restent
-    // en basse priorité : dès qu'un calcul statistique de la donne jouée arrive dans la
-    // file, il peut donc passer devant le pré-calcul des boards futurs.
-    sendDDChunk(dealsList.slice(0, 1), generationId, 0, 180);
-    for (let i = 1; i < dealsList.length; i += RANDOM_DEAL_DD_CHUNK_SIZE) {
-        sendDDChunk(dealsList.slice(i, i + RANDOM_DEAL_DD_CHUNK_SIZE), generationId, 0, 10);
-    }
-    scheduleDDWatchdog(dealsList, generationId);
+    // R139 — ne plus remplir les Workers avec les tables DD des 7/15 donnes futures.
+    // Chaque future donne dispose de toute la durée de SON enchère pour calculer son DD
+    // exact via renderBoard()/ensureLocalExactDdForDeal. Au chargement, seule la première
+    // donne est donc calculée : aucun solveur basse priorité ne peut retarder les 24
+    // essais rapides du contrat de PAR principal.
+    const firstDeal = dealsList.slice(0, 1);
+    sendDDChunk(firstDeal, generationId, 0, 180);
+    scheduleDDWatchdog(firstDeal, generationId);
 }
 
 // Voir échange avec Guillaume (session du 8 août — "des fois il ne se lance juste pas,
@@ -2552,6 +2637,7 @@ let contractChanceAdvancedDeals = new WeakSet();
 let contractChanceDeferredDeals = new WeakSet();
 let contractChanceLastBroadcastSnapshot = new WeakMap();
 let contractChanceCandidatePlanCache = new WeakMap();
+let contractChanceFastPrimaryStates = new WeakMap();
 let contractChanceGuestCapabilities = new Map();
 let contractChanceRemoteJobs = new Map();
 let contractChanceRemoteJobSequence = 0;
@@ -2717,6 +2803,7 @@ function resetContractChancePrewarmPipeline() {
     contractChanceDeferredDeals = new WeakSet();
     contractChanceLastBroadcastSnapshot = new WeakMap();
     contractChanceCandidatePlanCache = new WeakMap();
+    contractChanceFastPrimaryStates = new WeakMap();
     for (const job of contractChanceRemoteJobs.values()) {
         if (job && job.timer) clearTimeout(job.timer);
     }
@@ -2814,19 +2901,21 @@ function contractChanceQueueForDeal(deal, priority = 20) {
     })();
     const primarySide = contractChancePrimarySide(deal);
 
-    // Après la fin, seules les faces réellement utiles (PAR/contrat joué/référence de
-    // sacrifice) doivent consommer du DDS. Pendant l'enchère, on calcule D'ABORD les 24
-    // du camp de PAR ; l'autre camp n'entre en file qu'une fois ces 24 prêts.
-    let allowedSides = auctionFinished ? contractChanceFinalUsefulSides(deal) : ['NS', 'EW'];
-    if (!auctionFinished && primarySide && !contractChanceCandidatesReady(deal, primarySide)) {
-        allowedSides = [primarySide];
-    }
+    // R139 — phase 1 ultra-courte : résoudre uniquement le contrat de PAR principal.
+    // Une table DD complète cherche 20 couples couleur/déclarant ; ce chemin n'en cherche
+    // qu'un. Tant que ses 24 essais ne sont pas prêts, RIEN d'autre de statistique ne
+    // consomme les Workers. Pendant l'enchère on s'arrête même après ces 24 : les tables
+    // complètes secondaires attendent la fin, ce qui évite du CPU jeté si le
+    // conditionnement PONS final diffère du préchauffage brut.
+    const fastPrimaryReady = contractChanceQueueFastPrimary(deal, auctionFinished);
+    if (!fastPrimaryReady) return;
+    if (!auctionFinished) return;
 
-    // Le raffinement 48/72 n'est décidé qu'après les 24 de toutes les cibles utiles ; le
-    // pourcentage principal 24/24 peut donc être servi avant qu'un raffinement ne reprenne
-    // les Workers.
-    if (auctionFinished) contractChanceUpdateAdaptiveTargets(deal);
-    if (auctionFinished) contractChanceDispatchCollaborativeWork(deal);
+    // Phase 2 seulement après le premier pourcentage servi : tables complètes pour les
+    // autres PAR, le contrat joué, les sacrifices et enfin les raffinements 48/72.
+    const allowedSides = contractChanceFinalUsefulSides(deal);
+    contractChanceUpdateAdaptiveTargets(deal);
+    contractChanceDispatchCollaborativeWork(deal);
 
     const orderedSides = contractChanceOrderedSides(deal, allowedSides);
     for (const side of orderedSides) {
@@ -3506,6 +3595,141 @@ function contractChancePrimarySide(deal) {
     return target && (target.side === 'NS' || target.side === 'EW') ? target.side : '';
 }
 
+// R139 — identité du plan utilisé par le chemin rapide. Avant la fin de l'enchère le
+// préchauffage reste brut et déterministe ; après la fin il bascule vers exactement le
+// même conditionnement PONS que le calcul complet. Si le plan final est encore brut, les
+// 24 résultats préchauffés sont réutilisables immédiatement.
+function contractChanceFastPrimaryPlanIdentity(deal, side, allowConditioning) {
+    if (!allowConditioning) return 'raw';
+    const config = contractChanceConfigForSide(side);
+    const conditioning = statisticalParPublicConditioning(deal, config);
+    const canCondition = !!(conditioning && conditioning.informative
+        && typeof window.PlayStatisticalPar.profilesMatchPublicConstraints === 'function');
+    return canCondition ? String(conditioning.key || `pons-public:${statisticalParAuctionSignature(deal)}`) : 'raw';
+}
+
+function contractChanceFastPrimaryDeclarer(deal, target, requireAuctionEstablished = false) {
+    if (!deal || !target) return '';
+    const seats = target.side === 'NS' ? ['N', 'S'] : target.side === 'EW' ? ['E', 'W'] : [];
+    if (!seats.length) return '';
+    const strain = target.strain === 'NT' ? 'N' : target.strain;
+    // Dès qu'une couleur a été nommée par le camp, la règle normale du déclarant gagne :
+    // premier joueur du camp à avoir nommé cette dénomination.
+    for (const entry of (deal.auctionHistory || [])) {
+        if (!entry || !seats.includes(entry.seat)) continue;
+        const bid = parseBid(entry.call || '');
+        const bidStrain = bid && (bid.strain === 'NT' ? 'N' : bid.strain);
+        if (bid && bidStrain === strain) return entry.seat;
+    }
+    // Pendant l'enchère, ne pas préchauffer un déclarant hypothétique qui pourrait
+    // changer au prochain tour. Dès que la dénomination est nommée une première fois,
+    // le déclarant devient irréversiblement connu et le préchauffage est sûr.
+    if (requireAuctionEstablished) return '';
+    if (seats.includes(target.declarer)) return target.declarer;
+    const row = deal.ddTable && deal.ddTable[strain];
+    if (row) {
+        const ranked = seats.map(seat => ({ seat, tricks: Number(row[seat]) }))
+            .filter(item => Number.isFinite(item.tricks))
+            .sort((a, b) => b.tricks - a.tricks);
+        if (ranked.length) return ranked[0].seat;
+    }
+    return seats[0];
+}
+
+function contractChanceFastPrimaryState(deal, create = false) {
+    if (!deal) return null;
+    let state = contractChanceFastPrimaryStates.get(deal) || null;
+    if (!state && create) {
+        state = { key: '', groupKey: '', target: null, declarer: '', entries: new Map(), pending: new Set(), failures: 0 };
+        contractChanceFastPrimaryStates.set(deal, state);
+    }
+    return state;
+}
+
+function contractChanceFastPrimaryMatchesTarget(deal, target, fastState) {
+    if (!deal || !target || !fastState || !fastState.target) return false;
+    const primary = fastState.target;
+    if (target.kind === 'sacrifice' || primary.kind === 'sacrifice') return false;
+    if (target.side !== primary.side || Number(target.level || 0) !== Number(primary.level || 0)) return false;
+    const a = target.strain === 'NT' ? 'N' : target.strain;
+    const b = primary.strain === 'NT' ? 'N' : primary.strain;
+    if (a !== b) return false;
+    const targetDeclarer = String(target.declarer || '');
+    return targetDeclarer === fastState.declarer || targetDeclarer === primary.side || targetDeclarer === '';
+}
+
+function contractChanceFastPrimaryStats(deal, target) {
+    const fastState = contractChanceFastPrimaryState(deal, false);
+    if (!contractChanceFastPrimaryMatchesTarget(deal, target, fastState)) return null;
+    let successes = 0;
+    let samples = 0;
+    const threshold = Number(target.level || 0) + 6;
+    for (const tricks of fastState.entries.values()) {
+        const n = Number(tricks);
+        if (!Number.isFinite(n)) continue;
+        samples++;
+        if (n >= threshold) successes++;
+    }
+    return { successes, samples, declarer: fastState.declarer, key: fastState.key };
+}
+
+function contractChanceQueueFastPrimary(deal, allowConditioning) {
+    if (!deal || !deal.ddTable || !deal.hands || !CONTRACT_CHANCE_LOCAL_DDS_ENABLED) return false;
+    const target = contractChancePrimaryParTarget(deal);
+    if (!target || target.kind === 'sacrifice' || !['NS', 'EW'].includes(target.side)) return true;
+    const declarer = contractChanceFastPrimaryDeclarer(deal, target, !allowConditioning);
+    if (!declarer) return true;
+    const planKey = contractChanceFastPrimaryPlanIdentity(deal, target.side, !!allowConditioning);
+    const targetStrain = target.strain === 'NT' ? 'N' : target.strain;
+    const key = `${target.side}|${target.level}${targetStrain}|${declarer}|${planKey}`;
+    const fastState = contractChanceFastPrimaryState(deal, true);
+    if (fastState.key !== key) {
+        if (fastState.groupKey) localDdsCancelQueuedContractGroup(fastState.groupKey);
+        fastState.key = key;
+        fastState.groupKey = `fast-par:${dealToPbnStringForDD(deal)}|${key}`;
+        fastState.target = { ...target, strain: targetStrain };
+        fastState.declarer = declarer;
+        fastState.entries.clear();
+        fastState.pending.clear();
+        fastState.failures = 0;
+    }
+
+    let candidates = [];
+    try {
+        candidates = contractChanceBuildCandidates(deal, target.side, !!allowConditioning, CONTRACT_CHANCE_TARGET);
+    } catch (_) {
+        candidates = [];
+    }
+    const wanted = candidates.slice(0, CONTRACT_CHANCE_TARGET);
+    for (const candidate of wanted) {
+        const sampleIndex = Number(candidate.sampleIndex);
+        if (!Number.isInteger(sampleIndex) || fastState.entries.has(sampleIndex) || fastState.pending.has(sampleIndex)) continue;
+        fastState.pending.add(sampleIndex);
+        const pbn = dealToPbnStringForDD({ hands: candidate.hands });
+        localDdsSolveContract(pbn, targetStrain, declarer, allowConditioning ? 300 : 210, fastState.groupKey)
+            .then(tricks => {
+                const current = contractChanceFastPrimaryState(deal, false);
+                if (!current || current.key !== key) return;
+                current.pending.delete(sampleIndex);
+                current.entries.set(sampleIndex, Number(tricks));
+                if (allowConditioning) refreshContractChanceDisplayForDeal(deal);
+                if (current.entries.size >= CONTRACT_CHANCE_TARGET) {
+                    setTimeout(() => {
+                        const latest = contractChanceFastPrimaryState(deal, false);
+                        if (latest && latest.key === key) contractChanceQueueForDeal(deal, 135);
+                    }, 0);
+                }
+            })
+            .catch(() => {
+                const current = contractChanceFastPrimaryState(deal, false);
+                if (!current || current.key !== key) return;
+                current.pending.delete(sampleIndex);
+                current.failures++;
+            });
+    }
+    return fastState.entries.size >= CONTRACT_CHANCE_TARGET;
+}
+
 function contractChancePriorityDiagnostic(deal = null) {
     const d = deal || (typeof currentDeal === 'function' ? currentDeal() : null);
     const target = contractChancePrimaryParTarget(d);
@@ -4144,16 +4368,27 @@ function contractChanceSnapshotProgress(deal, target) {
 
 function contractChanceTargetProgress(deal, contract, target) {
     if (!deal || !target) return { n: 0, goal: CONTRACT_CHANCE_TARGET, done: false, text: `0/${CONTRACT_CHANCE_TARGET}`, successPct: 0 };
-    const goal = contractChanceSideGoal(deal, target.side);
-    const rows = contractChanceSelectedEntries(deal, target.side, goal);
+    const fullGoal = contractChanceSideGoal(deal, target.side);
+    const rows = contractChanceSelectedEntries(deal, target.side, fullGoal);
     const targets = contractChanceTargetsForDeal(deal, contract);
-    const stats = contractChanceComputeTargetStats(deal, contract, target, rows, targets);
-    const samples = stats.samples;
-    const pct = samples ? 100 * stats.successes / samples : 0;
+    const fullStats = contractChanceComputeTargetStats(deal, contract, target, rows, targets);
+    const fastStats = contractChanceFastPrimaryStats(deal, target);
+
+    // R139 — tant que le calcul complet n'a pas rattrapé le chemin contrat-seul, afficher
+    // immédiatement ce dernier. À 24/24 on dispose déjà de la probabilité utile ; les
+    // tables complètes pourront ensuite la remplacer et décider d'un éventuel 48/72.
+    const useFast = !!(fastStats && fastStats.samples > fullStats.samples);
+    const stats = useFast ? fastStats : fullStats;
+    const samples = Number(stats && stats.samples || 0);
+    const successes = Number(stats && stats.successes || 0);
+    const goal = useFast ? CONTRACT_CHANCE_TARGET : fullGoal;
+    const pct = samples ? 100 * successes / samples : 0;
     const state = contractChanceDealState(deal, false);
     const sideState = state && state.sides && state.sides[target.side];
     const settled = !!(sideState && sideState.adaptiveSettled);
-    const done = samples >= goal && (settled || goal >= CONTRACT_CHANCE_ADAPTIVE_MAX_TARGET);
+    const done = useFast
+        ? samples >= CONTRACT_CHANCE_TARGET
+        : (samples >= goal && (settled || goal >= CONTRACT_CHANCE_ADAPTIVE_MAX_TARGET));
     const text = done
         ? `${pct.toFixed(0)}%`
         : (samples >= CONTRACT_CHANCE_TARGET ? `${pct.toFixed(0)}% · ${samples}/${goal}` : `${samples}/${CONTRACT_CHANCE_TARGET}`);
@@ -4162,9 +4397,10 @@ function contractChanceTargetProgress(deal, contract, target) {
         goal,
         done,
         successPct: pct,
-        successes: stats.successes,
-        margin95: contractChanceWilsonMargin95(stats.successes, samples),
-        text
+        successes,
+        margin95: contractChanceWilsonMargin95(successes, samples),
+        text,
+        fastPrimary: useFast
     };
 
     // Les invités affichent le snapshot publié par l'hôte. Après transfert d'hôte, garder
