@@ -21,10 +21,72 @@ const legacySource = fs.readFileSync(legacyPath, 'utf8');
 // il ne teste pas l'ordre des camps, seulement les transitions 24 -> 48 -> 72.
 const adaptiveContextNeedle = "contractChanceGeneration: 7,\n        contractChanceTargetsForDeal:";
 const adaptiveContextReplacement = "contractChanceGeneration: 7,\n        contractChanceOrderedSides: (_deal, sides) => Array.isArray(sides) ? sides : ['NS', 'EW'],\n        contractChanceTargetsForDeal:";
-const source = legacySource.replace(adaptiveContextNeedle, adaptiveContextReplacement);
+let source = legacySource.replace(adaptiveContextNeedle, adaptiveContextReplacement);
 if (source === legacySource) {
     throw new Error('R139 CI: contexte adaptatif historique introuvable');
 }
+
+// R142 CI hardening — les tests historiques utilisent compileFunction() pour exécuter
+// une fonction d'app.js dans un vm minimal. Jusqu'ici, chaque nouveau helper appelé par
+// cette fonction devait être ajouté manuellement au contexte du test, ce qui a provoqué
+// les échecs de déploiement #453 puis #457 alors que le runtime PLAY était valide.
+//
+// On rend ce compilateur de test auto-suffisant : il embarque récursivement les fonctions
+// app.js appelées par la fonction testée, ainsi que les constantes scalaires simples dont
+// elles dépendent. Les valeurs explicitement fournies par un test gardent toujours la
+// priorité. Cela conserve l'isolation des tests sans les coupler à chaque refactor interne.
+const legacyCompileFunction = `function compileFunction(source, name, context = {}) {
+    const fnText = extractFunction(source, name);
+    return vm.runInNewContext(\`${'${fnText}'}\\n${'${name}'};\`, { ...context });
+}`;
+const resilientCompileFunction = `function compileFunction(source, name, context = {}) {
+    const sandbox = { ...context };
+    const seenFunctions = new Set();
+    const functionChunks = [];
+    const scalarChunks = [];
+    const seenScalars = new Set();
+
+    function maybeCollectScalar(identifier, text) {
+        if (!/^[A-Z][A-Z0-9_]*$/.test(identifier)) return;
+        if (Object.prototype.hasOwnProperty.call(sandbox, identifier) || seenScalars.has(identifier)) return;
+        const re = new RegExp('(?:^|\\\\n)\\\\s*const\\\\s+' + identifier + '\\\\s*=\\\\s*([^;\\\\n]+)\\\\s*;', 'm');
+        const match = source.match(re);
+        if (!match) return;
+        const expression = String(match[1] || '').trim();
+        if (!/^(?:-?\\d+(?:\\.\\d+)?|true|false|null|undefined|'[^'\\n]*'|"[^"\\n]*")$/.test(expression)) return;
+        seenScalars.add(identifier);
+        scalarChunks.push('const ' + identifier + ' = ' + expression + ';');
+    }
+
+    function collect(functionName) {
+        if (seenFunctions.has(functionName) || Object.prototype.hasOwnProperty.call(sandbox, functionName)) return;
+        const marker = 'function ' + functionName + '(';
+        if (!source.includes(marker)) return;
+        seenFunctions.add(functionName);
+        const text = extractFunction(source, functionName);
+        const identifiers = text.match(/\\b[A-Za-z_$][A-Za-z0-9_$]*\\b/g) || [];
+        for (const identifier of identifiers) maybeCollectScalar(identifier, text);
+        const callRe = /\\b([A-Za-z_$][A-Za-z0-9_$]*)\\s*\\(/g;
+        let match;
+        while ((match = callRe.exec(text))) {
+            const dependency = match[1];
+            if (dependency !== functionName && source.includes('function ' + dependency + '(')) collect(dependency);
+        }
+        functionChunks.push(text);
+    }
+
+    collect(name);
+    if (!seenFunctions.has(name) && !Object.prototype.hasOwnProperty.call(sandbox, name)) {
+        fail('Fonction introuvable: ' + name);
+    }
+    const program = scalarChunks.join('\\n') + '\\n' + functionChunks.join('\\n') + '\\n' + name + ';';
+    return vm.runInNewContext(program, sandbox);
+}`;
+const sourceWithResilientCompiler = source.replace(legacyCompileFunction, resilientCompileFunction);
+if (sourceWithResilientCompiler === source) {
+    throw new Error('R142 CI: compileFunction historique introuvable');
+}
+source = sourceWithResilientCompiler;
 const localDdsWorkerPath = path.join(__dirname, '..', 'dds', 'local-dds-worker.js');
 const localDdsWorker = fs.readFileSync(localDdsWorkerPath, 'utf8');
 if (!localDdsWorker.includes("msg.type !== 'solve' && msg.type !== 'solve-contract'")) {
