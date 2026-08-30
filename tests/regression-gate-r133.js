@@ -136,6 +136,19 @@ assert(r141AdaptDirect.includes('cellState.adaptiveTarget'), 'R141: raffinement 
 assert(r141AdaptDirect.includes('cellState.adaptiveSettled = true'), 'R141: stabilisation indépendante par cellule absente');
 assert(r140Progress.includes("source === 'direct' && Number.isFinite(Number(directStats && directStats.goal))"), 'R141: affichage n’utilise pas l’objectif propre de la cellule');
 
+// R142 — pourcentage provisoire tôt + rafraîchissements UI/P2P regroupés.
+assert(/const\s+CONTRACT_CHANCE_EARLY_PCT_MIN_SAMPLES\s*=\s*8\s*;/.test(app), 'R142: seuil du premier pourcentage modifié');
+assert(/const\s+CONTRACT_CHANCE_REFRESH_THROTTLE_MS\s*=\s*90\s*;/.test(app), 'R142: throttle d’affichage absent');
+const r142Text = extractFunction(app, 'contractChanceProgressText');
+assert(r142Text.includes('n >= CONTRACT_CHANCE_EARLY_PCT_MIN_SAMPLES'), 'R142: pourcentage provisoire avant 24 absent');
+assert(r142Text.includes('pct.toFixed(0)') && r142Text.includes('CONTRACT_CHANCE_EARLY_PCT_MIN_SAMPLES'), 'R142: texte pourcentage + progression absent');
+assert(r142Text.includes('CONTRACT_CHANCE_TARGET'), 'R142: compteur initial avant seuil absent');
+const r142Schedule = extractFunction(app, 'scheduleContractChanceDisplayRefresh');
+assert(r142Schedule.includes('CONTRACT_CHANCE_REFRESH_THROTTLE_MS'), 'R142: scheduler n’utilise pas le throttle');
+assert(r142Schedule.includes('refreshContractChanceDisplayForDeal(deal)'), 'R142: scheduler ne rafraîchit pas l’affichage');
+assert(r139Fast.includes('scheduleContractChanceDisplayRefresh(deal, milestone)'), 'R142: primaire ne passe pas par le scheduler');
+assert(r140Cell.includes('scheduleContractChanceDisplayRefresh(deal, milestone)'), 'R142: secondaires ne passent pas par le scheduler');
+
 console.log('PLAY regression gate PASS');`;
 
 const patched =

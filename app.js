@@ -2640,6 +2640,10 @@ const CONTRACT_CHANCE_TARGET = 24;
 // l'incertitude reste élevée poursuivent à 48 puis, si nécessaire, à 72 tirages.
 const CONTRACT_CHANCE_ADAPTIVE_MID_TARGET = 48;
 const CONTRACT_CHANCE_ADAPTIVE_MAX_TARGET = 72;
+// R142 — dès 8 résultats, afficher un pourcentage PROVISOIRE accompagné du
+// compteur x/24. Le résultat final reste strictement celui des paliers 24/48/72.
+const CONTRACT_CHANCE_EARLY_PCT_MIN_SAMPLES = 8;
+const CONTRACT_CHANCE_REFRESH_THROTTLE_MS = 90;
 const CONTRACT_CHANCE_ADAPTIVE_MARGIN_AFTER_24 = 0.13;
 const CONTRACT_CHANCE_ADAPTIVE_MARGIN_AFTER_48 = 0.10;
 // Online R131 — benchmark réel Vercel sur une vague adaptative de 24 DDS :
@@ -2966,7 +2970,7 @@ function contractChanceQueueForDeal(deal, priority = 20) {
         for (const side of contractChanceOrderedSides(deal, allowedSides)) {
             contractChanceQueueDirectTargetsForSide(deal, contract, side, priority);
         }
-        if (adaptiveChanged) refreshContractChanceDisplayForDeal(deal);
+        if (adaptiveChanged) scheduleContractChanceDisplayRefresh(deal, true);
         return;
     }
 
@@ -3413,7 +3417,7 @@ function contractChanceAcceptGuestWorkResult(msg, guestIndex) {
     }
     contractChanceReleaseRemoteJob(job, { cooldown: !!msg.declined || accepted === 0 });
     const adaptiveChanged = contractChanceUpdateAdaptiveTargets(job.deal);
-    refreshContractChanceDisplayForDeal(job.deal);
+    scheduleContractChanceDisplayRefresh(job.deal, adaptiveChanged);
     maybeAdvanceContractChancePrewarm(job.deal);
     if (adaptiveChanged) contractChanceQueueForDeal(job.deal, 112);
     // Le participant peut recevoir le lot suivant immédiatement s'il est resté visible ;
@@ -3464,7 +3468,7 @@ async function contractChanceSolveBatch(batch) {
 
     const validRows = rows.filter(row => row && row.table && contractChanceTableIsValid(row.table));
     if (contractChanceApplyRows(validRows, byId, sideState, side, succeeded)) {
-        refreshContractChanceDisplayForDeal(deal);
+        scheduleContractChanceDisplayRefresh(deal, false);
     }
     const hadFailure = validRows.length < batch.length;
     if (hadFailure) sideState.failures++;
@@ -3488,7 +3492,7 @@ async function contractChanceSolveBatch(batch) {
     // tirages. Le chemin serveur R131 ne faisait cette transition que lors d'un retour
     // collaboratif ; le moteur local la rend explicite et déterministe.
     const adaptiveChanged = contractChanceUpdateAdaptiveTargets(deal);
-    refreshContractChanceDisplayForDeal(deal);
+    scheduleContractChanceDisplayRefresh(deal, adaptiveChanged);
     if (adaptiveChanged) contractChanceQueueForDeal(deal, 110);
 
     if (delayedRetryNeeded) {
@@ -3770,8 +3774,13 @@ function contractChanceQueueFastPrimary(deal, allowConditioning) {
                 if (!current || current.key !== key) return;
                 current.pending.delete(sampleIndex);
                 current.entries.set(sampleIndex, Number(tricks));
-                if (allowConditioning) refreshContractChanceDisplayForDeal(deal);
-                if (current.entries.size >= CONTRACT_CHANCE_TARGET) {
+                const sampleCount = current.entries.size;
+                if (allowConditioning) {
+                    const milestone = sampleCount === CONTRACT_CHANCE_EARLY_PCT_MIN_SAMPLES
+                        || sampleCount >= CONTRACT_CHANCE_TARGET;
+                    scheduleContractChanceDisplayRefresh(deal, milestone);
+                }
+                if (sampleCount >= CONTRACT_CHANCE_TARGET) {
                     setTimeout(() => {
                         const latest = contractChanceFastPrimaryState(deal, false);
                         if (latest && latest.key === key) contractChanceQueueForDeal(deal, 135);
@@ -3964,8 +3973,13 @@ function contractChanceQueueDirectCell(deal, target, goal, priority) {
                 if (!current || current.key !== state.key) return;
                 current.pending.delete(sampleIndex);
                 current.entries.set(sampleIndex, Number(tricks));
-                refreshContractChanceDisplayForDeal(deal);
-                if (current.entries.size >= requestedCount) {
+                const sampleCount = current.entries.size;
+                const milestone = sampleCount === CONTRACT_CHANCE_EARLY_PCT_MIN_SAMPLES
+                    || sampleCount === CONTRACT_CHANCE_TARGET
+                    || sampleCount === CONTRACT_CHANCE_ADAPTIVE_MID_TARGET
+                    || sampleCount >= requestedCount;
+                scheduleContractChanceDisplayRefresh(deal, milestone);
+                if (sampleCount >= requestedCount) {
                     setTimeout(() => contractChanceQueueForDeal(deal, 130), 0);
                 }
             })
@@ -4688,6 +4702,15 @@ function contractChanceUpdateAdaptiveTargets(deal) {
     }
     return changed;
 }
+function contractChanceProgressText(successPct, samples, goal, done) {
+    const n = Math.max(0, Number(samples || 0));
+    const g = Math.max(CONTRACT_CHANCE_TARGET, Number(goal || CONTRACT_CHANCE_TARGET));
+    const pct = Number.isFinite(Number(successPct)) ? Number(successPct) : 0;
+    if (done) return `${pct.toFixed(0)}%`;
+    if (n >= CONTRACT_CHANCE_EARLY_PCT_MIN_SAMPLES) return `${pct.toFixed(0)}% · ${n}/${g}`;
+    return `${n}/${CONTRACT_CHANCE_TARGET}`;
+}
+
 function contractChanceSnapshotProgress(deal, target) {
     if (!deal || !target) return null;
     const snapshot = deal.statisticalChanceSnapshot;
@@ -4706,9 +4729,7 @@ function contractChanceSnapshotProgress(deal, target) {
     ));
     const successPct = Number.isFinite(Number(raw.successPct)) ? Number(raw.successPct) : 0;
     const done = !!raw.done || n >= goal;
-    const text = done
-        ? `${successPct.toFixed(0)}%`
-        : (n >= CONTRACT_CHANCE_TARGET ? `${successPct.toFixed(0)}% · ${n}/${goal}` : `${n}/${CONTRACT_CHANCE_TARGET}`);
+    const text = contractChanceProgressText(successPct, n, goal, done);
     return { n, goal, done, successPct, text };
 }
 
@@ -4748,9 +4769,7 @@ function contractChanceTargetProgress(deal, contract, target) {
     const done = source === 'primary'
         ? samples >= CONTRACT_CHANCE_TARGET
         : (samples >= goal && (settled || goal >= CONTRACT_CHANCE_ADAPTIVE_MAX_TARGET));
-    const text = done
-        ? `${pct.toFixed(0)}%`
-        : (samples >= CONTRACT_CHANCE_TARGET ? `${pct.toFixed(0)}% · ${samples}/${goal}` : `${samples}/${CONTRACT_CHANCE_TARGET}`);
+    const text = contractChanceProgressText(pct, samples, goal, done);
     const local = {
         n: samples,
         goal,
@@ -5026,6 +5045,25 @@ function renderInlineParChances(root, deal, contract) {
     if (!CONTRACT_CHANCE_LOCAL_DDS_ENABLED) return;
     renderPlayedContractChanceHeader(root, deal, contract);
     renderContractChanceSidecar(root, deal, contract);
+}
+
+const contractChanceRefreshTimers = new WeakMap();
+
+function scheduleContractChanceDisplayRefresh(deal, immediate = false) {
+    if (!deal) return;
+    const existing = contractChanceRefreshTimers.get(deal);
+    if (immediate) {
+        if (existing) clearTimeout(existing);
+        contractChanceRefreshTimers.delete(deal);
+        refreshContractChanceDisplayForDeal(deal);
+        return;
+    }
+    if (existing) return;
+    const timer = setTimeout(() => {
+        contractChanceRefreshTimers.delete(deal);
+        refreshContractChanceDisplayForDeal(deal);
+    }, CONTRACT_CHANCE_REFRESH_THROTTLE_MS);
+    contractChanceRefreshTimers.set(deal, timer);
 }
 
 function refreshContractChanceDisplayForDeal(deal) {
