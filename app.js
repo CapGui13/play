@@ -2150,6 +2150,14 @@ let localDdsWorkers = [];
 let localDdsQueue = [];
 let localDdsPendingByPbn = new Map();
 let localDdsPendingByContract = new Map();
+// R141 — petit cache LRU des résultats DDS terminés. La clé contient la distribution
+// complète et, pour le chemin rapide, la cellule couleur/déclarant : réutilisation sûre
+// entre préchauffage brut, plan PONS final, rerendus et raffinements successifs.
+const LOCAL_DDS_CONTRACT_CACHE_LIMIT = 1536;
+const LOCAL_DDS_TABLE_CACHE_LIMIT = 128;
+let localDdsContractResultCache = new Map();
+let localDdsTableResultCache = new Map();
+let localDdsCacheHits = 0;
 let localDdsRequestSequence = 0;
 let localDdsTaskSequence = 0;
 let localDdsCompleted = 0;
@@ -2170,6 +2178,23 @@ function localDdsDesiredWorkerCount() {
     return 1;
 }
 
+function localDdsCacheGet(cache, key) {
+    if (!cache || !cache.has(key)) return undefined;
+    const value = cache.get(key);
+    cache.delete(key);
+    cache.set(key, value);
+    localDdsCacheHits++;
+    return value;
+}
+
+function localDdsCacheSet(cache, key, value, limit) {
+    if (!cache || !key) return;
+    if (cache.has(key)) cache.delete(key);
+    cache.set(key, value);
+    const max = Math.max(1, Number(limit || 1));
+    while (cache.size > max) cache.delete(cache.keys().next().value);
+}
+
 function localDdsDiagnostic() {
     return {
         enabled: LOCAL_DDS_BROWSER_ENABLED,
@@ -2179,6 +2204,9 @@ function localDdsDiagnostic() {
         queued: localDdsQueue.length,
         completed: localDdsCompleted,
         failures: localDdsFailures,
+        cacheHits: localDdsCacheHits,
+        contractCache: localDdsContractResultCache.size,
+        tableCache: localDdsTableResultCache.size,
         remoteDdsEnabled: false
     };
 }
@@ -2203,6 +2231,11 @@ function localDdsFinishSlot(slot, ok, payload) {
     }
     if (ok) {
         localDdsCompleted++;
+        if (task.kind === 'contract') {
+            localDdsCacheSet(localDdsContractResultCache, task.cacheKey, Number(payload), LOCAL_DDS_CONTRACT_CACHE_LIMIT);
+        } else {
+            localDdsCacheSet(localDdsTableResultCache, task.pbn, payload, LOCAL_DDS_TABLE_CACHE_LIMIT);
+        }
         task.resolve(payload);
     } else {
         localDdsFailures++;
@@ -2302,6 +2335,9 @@ function localDdsSolveOne(pbn, priority = 50) {
     const normalizedPbn = String(pbn || '').trim();
     if (!/^N:/.test(normalizedPbn)) return Promise.reject(new Error('PBN DDS local invalide'));
 
+    const cached = localDdsCacheGet(localDdsTableResultCache, normalizedPbn);
+    if (cached !== undefined) return Promise.resolve(cached);
+
     // Une même distribution peut être demandée simultanément par le pré-calcul exact et
     // par un rerendu. Ne jamais lancer deux DDS identiques : on partage la Promise et une
     // demande plus urgente ne fait que relever la priorité du travail déjà en file.
@@ -2345,6 +2381,8 @@ function localDdsSolveContract(pbn, strain, declarer, priority = 200, groupKey =
         return Promise.reject(new Error('Contrat DDS local invalide'));
     }
     const cacheKey = `${normalizedPbn}|${normalizedStrain}|${normalizedDeclarer}`;
+    const cached = localDdsCacheGet(localDdsContractResultCache, cacheKey);
+    if (cached !== undefined) return Promise.resolve(Number(cached));
     const existing = localDdsPendingByContract.get(cacheKey);
     if (existing) {
         existing.priority = Math.max(Number(existing.priority || 0), Number(priority || 0));
@@ -2917,7 +2955,7 @@ function contractChanceQueueForDeal(deal, priority = 20) {
 
     const contract = determineContract(deal.auctionHistory || []);
 
-    // R140 — chemin normal : après le PAR principal, résoudre directement chaque cellule
+    // R141 — chemin normal : après le PAR principal, résoudre directement chaque cellule
     // réellement affichée. Jusqu'à 4 cellules par camp, SolveBoard reste moins coûteux
     // qu'une table 20-cellules et les pourcentages arrivent l'un après l'autre au lieu
     // d'attendre une table complète. Les sacrifices gardent le chemin table, car leur
@@ -2926,9 +2964,7 @@ function contractChanceQueueForDeal(deal, priority = 20) {
         const adaptiveChanged = contractChanceUpdateDirectAdaptiveTargets(deal, contract);
         const allowedSides = contractChanceFinalUsefulSides(deal);
         for (const side of contractChanceOrderedSides(deal, allowedSides)) {
-            const sideState = state.sides[side];
-            const requestedCount = Math.max(CONTRACT_CHANCE_TARGET, Number(sideState.adaptiveTarget || CONTRACT_CHANCE_TARGET));
-            contractChanceQueueDirectTargetsForSide(deal, contract, side, requestedCount, priority);
+            contractChanceQueueDirectTargetsForSide(deal, contract, side, priority);
         }
         if (adaptiveChanged) refreshContractChanceDisplayForDeal(deal);
         return;
@@ -3808,7 +3844,9 @@ function contractChanceDirectStateForTarget(deal, target, create = false) {
             groupKey: `direct-par:${dealToPbnStringForDD(deal)}|${stateKey}`,
             entries: new Map(),
             pending: new Set(),
-            failures: 0
+            failures: 0,
+            adaptiveTarget: CONTRACT_CHANCE_TARGET,
+            adaptiveSettled: false
         };
         // Réutiliser les 24 levées déjà obtenues par R139 si le PAR principal appartient
         // à la même cellule. Le niveau peut être différent : 4♠ et 6♠ utilisent le même
@@ -3839,11 +3877,18 @@ function contractChanceDirectTargetStats(deal, target) {
             samples++;
             if (n >= threshold) successes++;
         }
-        best = { successes, samples, declarer: state.cell.declarer, direct: true };
+        best = {
+            successes,
+            samples,
+            declarer: state.cell.declarer,
+            direct: true,
+            goal: Math.max(CONTRACT_CHANCE_TARGET, Number(state.adaptiveTarget || CONTRACT_CHANCE_TARGET)),
+            settled: !!state.adaptiveSettled
+        };
     }
     // Le primaire R139 reste un fallback immédiat avant que l'état générique ne soit créé.
     const primary = contractChanceFastPrimaryStats(deal, target);
-    if (primary && (!best || primary.samples > best.samples)) return primary;
+    if (primary && (!best || primary.samples > best.samples)) return { ...primary, direct: false, primaryFallback: true };
     return best;
 }
 
@@ -3934,7 +3979,7 @@ function contractChanceQueueDirectCell(deal, target, goal, priority) {
     return state.entries.size >= requestedCount;
 }
 
-function contractChanceQueueDirectTargetsForSide(deal, contract, side, goal, basePriority = 100) {
+function contractChanceQueueDirectTargetsForSide(deal, contract, side, basePriority = 100) {
     const groups = contractChanceDirectCellGroups(deal, contract, side);
     groups.sort((a, b) => {
         const ai = Math.max(...a.targets.map(target => contractChanceDirectTargetImportance(deal, contract, target)));
@@ -3944,15 +3989,23 @@ function contractChanceQueueDirectTargetsForSide(deal, contract, side, goal, bas
     let allReady = true;
     groups.forEach((group, index) => {
         const representative = group.targets.slice().sort((a, b) => contractChanceDirectTargetImportance(deal, contract, b) - contractChanceDirectTargetImportance(deal, contract, a))[0];
+        const state = contractChanceDirectStateForTarget(deal, representative, true);
+        if (!state) { allReady = false; return; }
+        // R141 — chaque cellule possède désormais SON propre objectif 24/48/72. Un 6♠ à
+        // 50 % peut donc aller à 48 sans obliger 3SA à 100 % à refaire 24 DDS inutiles.
+        const goal = Math.max(CONTRACT_CHANCE_TARGET, Math.min(
+            CONTRACT_CHANCE_ADAPTIVE_MAX_TARGET,
+            Number(state.adaptiveTarget || CONTRACT_CHANCE_TARGET)
+        ));
         // Écart volontaire de priorité : terminer un contrat avant d'éparpiller le CPU sur
-        // le suivant. Les 4 Workers desktop peuvent néanmoins avancer ensemble sur ses 24.
+        // le suivant. Les Workers peuvent néanmoins avancer ensemble sur ses tirages.
         const priority = Math.max(150, Number(basePriority || 0) + 260 - index * 18);
         if (!contractChanceQueueDirectCell(deal, representative, goal, priority)) allReady = false;
     });
     return allReady;
 }
 
-function contractChanceDirectTargetsReadyForSide(deal, contract, side, goal) {
+function contractChanceDirectTargetsReadyForSide(deal, contract, side, goal = CONTRACT_CHANCE_TARGET) {
     const wanted = Math.max(CONTRACT_CHANCE_TARGET, Math.min(CONTRACT_CHANCE_ADAPTIVE_MAX_TARGET, Number(goal || CONTRACT_CHANCE_TARGET)));
     const targets = contractChanceDirectDisplayTargets(deal, contract, side);
     if (!targets.length) return true;
@@ -3962,6 +4015,24 @@ function contractChanceDirectTargetsReadyForSide(deal, contract, side, goal) {
     });
 }
 
+function contractChanceDirectSyncSideAdaptiveState(deal, contract, side) {
+    const state = contractChanceDealState(deal, false);
+    const sideState = state && state.sides && state.sides[side];
+    if (!sideState) return;
+    const groups = contractChanceDirectCellGroups(deal, contract, side);
+    const cellStates = groups.map(group => {
+        const target = group.targets[0];
+        return contractChanceDirectStateForTarget(deal, target, false);
+    }).filter(Boolean);
+    if (!cellStates.length) {
+        sideState.adaptiveTarget = CONTRACT_CHANCE_TARGET;
+        sideState.adaptiveSettled = true;
+        return;
+    }
+    sideState.adaptiveTarget = Math.max(CONTRACT_CHANCE_TARGET, ...cellStates.map(cellState => Number(cellState.adaptiveTarget || CONTRACT_CHANCE_TARGET)));
+    sideState.adaptiveSettled = cellStates.every(cellState => !!cellState.adaptiveSettled);
+}
+
 function contractChanceUpdateDirectAdaptiveTargets(deal, contract) {
     if (!deal || !contract || !contractChanceCanUseDirectTargetMode(deal, contract)) return false;
     const state = contractChanceDealState(deal, false);
@@ -3969,31 +4040,38 @@ function contractChanceUpdateDirectAdaptiveTargets(deal, contract) {
     const targets = contractChanceDirectDisplayTargets(deal, contract);
     const relevantSides = Array.from(new Set(targets.map(target => target.side).filter(side => side === 'NS' || side === 'EW')));
 
-    // Comme R138 : aucun 48 avant que TOUS les contrats affichables aient leur 24/24.
+    // R138 conservé : aucun raffinement avant que TOUTES les cellules affichables aient
+    // leur première base 24. Ensuite R141 raffine chaque cellule indépendamment.
     for (const side of relevantSides) {
         if (!contractChanceDirectTargetsReadyForSide(deal, contract, side, CONTRACT_CHANCE_TARGET)) return false;
     }
 
     let changed = false;
     for (const side of contractChanceOrderedSides(deal, relevantSides)) {
-        const sideState = state.sides[side];
-        if (!sideState || sideState.adaptiveSettled) continue;
-        const goal = contractChanceSideGoal(deal, side);
-        if (!contractChanceDirectTargetsReadyForSide(deal, contract, side, goal)) continue;
-        const sideTargets = targets.filter(target => target.side === side);
-        const needsMore = sideTargets.some(target => {
-            const stats = contractChanceDirectTargetStats(deal, target);
-            return stats && contractChanceNeedsAdaptiveRefinement(stats.successes, stats.samples, goal);
-        });
-        if (needsMore && goal < CONTRACT_CHANCE_ADAPTIVE_MAX_TARGET) {
-            sideState.adaptiveTarget = goal <= CONTRACT_CHANCE_TARGET
-                ? CONTRACT_CHANCE_ADAPTIVE_MID_TARGET
-                : CONTRACT_CHANCE_ADAPTIVE_MAX_TARGET;
-            changed = true;
-        } else {
-            sideState.adaptiveSettled = true;
+        const groups = contractChanceDirectCellGroups(deal, contract, side);
+        for (const group of groups) {
+            const representative = group.targets[0];
+            const cellState = contractChanceDirectStateForTarget(deal, representative, true);
+            if (!cellState || cellState.adaptiveSettled) continue;
+            const goal = Math.max(CONTRACT_CHANCE_TARGET, Math.min(
+                CONTRACT_CHANCE_ADAPTIVE_MAX_TARGET,
+                Number(cellState.adaptiveTarget || CONTRACT_CHANCE_TARGET)
+            ));
+            if (cellState.entries.size < goal) continue;
+            const needsMore = group.targets.some(target => {
+                const stats = contractChanceDirectTargetStats(deal, target);
+                return stats && contractChanceNeedsAdaptiveRefinement(stats.successes, stats.samples, goal);
+            });
+            if (needsMore && goal < CONTRACT_CHANCE_ADAPTIVE_MAX_TARGET) {
+                cellState.adaptiveTarget = goal <= CONTRACT_CHANCE_TARGET
+                    ? CONTRACT_CHANCE_ADAPTIVE_MID_TARGET
+                    : CONTRACT_CHANCE_ADAPTIVE_MAX_TARGET;
+            } else {
+                cellState.adaptiveSettled = true;
+            }
             changed = true;
         }
+        contractChanceDirectSyncSideAdaptiveState(deal, contract, side);
     }
     return changed;
 }
@@ -4649,14 +4727,24 @@ function contractChanceTargetProgress(deal, contract, target) {
     let stats = fullStats;
     let source = 'full';
     if (fastStats && fastStats.samples > Number(stats && stats.samples || 0)) { stats = fastStats; source = 'primary'; }
-    if (directStats && directStats.samples >= Number(stats && stats.samples || 0) && directStats.samples > 0) { stats = directStats; source = 'direct'; }
+    if (directStats && directStats.direct === true
+        && directStats.samples >= Number(stats && stats.samples || 0) && directStats.samples > 0) {
+        stats = directStats;
+        source = 'direct';
+    }
     const samples = Number(stats && stats.samples || 0);
     const successes = Number(stats && stats.successes || 0);
-    const goal = source === 'primary' ? CONTRACT_CHANCE_TARGET : fullGoal;
+    const goal = source === 'primary'
+        ? CONTRACT_CHANCE_TARGET
+        : (source === 'direct' && Number.isFinite(Number(directStats && directStats.goal))
+            ? Number(directStats.goal)
+            : fullGoal);
     const pct = samples ? 100 * successes / samples : 0;
     const state = contractChanceDealState(deal, false);
     const sideState = state && state.sides && state.sides[target.side];
-    const settled = !!(sideState && sideState.adaptiveSettled);
+    const settled = source === 'direct'
+        ? !!(directStats && directStats.settled)
+        : !!(sideState && sideState.adaptiveSettled);
     const done = source === 'primary'
         ? samples >= CONTRACT_CHANCE_TARGET
         : (samples >= goal && (settled || goal >= CONTRACT_CHANCE_ADAPTIVE_MAX_TARGET));

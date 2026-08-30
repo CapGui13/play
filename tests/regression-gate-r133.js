@@ -122,6 +122,20 @@ const r140Progress = extractFunction(app, 'contractChanceTargetProgress');
 assert(r140Progress.includes('contractChanceDirectTargetStats(deal, target)'), 'R140: affichage ne consomme pas le cache direct secondaire');
 assert(r138Dispatch.includes('contractChanceCanUseDirectTargetMode(deal, contract)'), 'R140: collaboration table peut encore concurrencer le mode direct');
 
+// R141 — cache DDS terminé + raffinement adaptatif indépendant par cellule.
+assert(app.includes('const LOCAL_DDS_CONTRACT_CACHE_LIMIT = 1536'), 'R141: cache DDS contrat absent');
+assert(app.includes('const LOCAL_DDS_TABLE_CACHE_LIMIT = 128'), 'R141: cache DDS table absent');
+const r141SolveContract = extractFunction(app, 'localDdsSolveContract');
+assert(r141SolveContract.includes('localDdsCacheGet(localDdsContractResultCache, cacheKey)'), 'R141: résultat contrat terminé non réutilisé');
+const r141SolveTable = extractFunction(app, 'localDdsSolveOne');
+assert(r141SolveTable.includes('localDdsCacheGet(localDdsTableResultCache, normalizedPbn)'), 'R141: résultat table terminé non réutilisé');
+const r141QueueDirect = extractFunction(app, 'contractChanceQueueDirectTargetsForSide');
+assert(r141QueueDirect.includes('state.adaptiveTarget'), 'R141: objectif direct encore piloté globalement par le camp');
+const r141AdaptDirect = extractFunction(app, 'contractChanceUpdateDirectAdaptiveTargets');
+assert(r141AdaptDirect.includes('cellState.adaptiveTarget'), 'R141: raffinement par cellule absent');
+assert(r141AdaptDirect.includes('cellState.adaptiveSettled = true'), 'R141: stabilisation indépendante par cellule absente');
+assert(r140Progress.includes("source === 'direct' && Number.isFinite(Number(directStats && directStats.goal))"), 'R141: affichage n’utilise pas l’objectif propre de la cellule');
+
 console.log('PLAY regression gate PASS');`;
 
 const patched =
