@@ -107,6 +107,21 @@ assert(!r138Guest.includes('contractChanceFetchLane('), 'R138: collaboration inv
 const r138Dispatch = extractFunction(app, 'contractChanceDispatchCollaborativeWork');
 assert(r138Dispatch.includes('if (!CONTRACT_CHANCE_LOCAL_DDS_ENABLED) return 0'), 'R138: collaboration locale non activée');
 
+// R140 — contrats secondaires par SolveBoard, groupés par couleur + déclarant.
+assert(app.includes('const CONTRACT_CHANCE_DIRECT_MAX_CELLS_PER_SIDE = 4'), 'R140: seuil direct par camp absent');
+assert(app.includes('function contractChanceDirectTargetCell('), 'R140: cellule DDS contrat-seul absente');
+assert(app.includes('function contractChanceDirectCellGroups('), 'R140: regroupement des niveaux par cellule absent');
+assert(app.includes('function contractChanceCanUseDirectTargetMode('), 'R140: sélection du mode direct absente');
+assert(app.includes('function contractChanceUpdateDirectAdaptiveTargets('), 'R140: adaptatif direct 24/48/72 absent');
+const r140Queue = extractFunction(app, 'contractChanceQueueForDeal');
+assert(r140Queue.includes('contractChanceCanUseDirectTargetMode(deal, contract)'), 'R140: chemin direct secondaire non branché');
+assert(r140Queue.includes('contractChanceQueueDirectTargetsForSide('), 'R140: cibles secondaires non envoyées à SolveBoard');
+const r140Cell = extractFunction(app, 'contractChanceQueueDirectCell');
+assert(r140Cell.includes('localDdsSolveContract('), 'R140: cellule secondaire ne passe pas par DDS contrat-seul');
+const r140Progress = extractFunction(app, 'contractChanceTargetProgress');
+assert(r140Progress.includes('contractChanceDirectTargetStats(deal, target)'), 'R140: affichage ne consomme pas le cache direct secondaire');
+assert(r138Dispatch.includes('contractChanceCanUseDirectTargetMode(deal, contract)'), 'R140: collaboration table peut encore concurrencer le mode direct');
+
 console.log('PLAY regression gate PASS');`;
 
 const patched =
