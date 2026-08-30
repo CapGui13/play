@@ -12,7 +12,19 @@ const path = require('path');
 const Module = require('module');
 
 const legacyPath = path.join(__dirname, 'regression-gate.js');
-const source = fs.readFileSync(legacyPath, 'utf8');
+const legacySource = fs.readFileSync(legacyPath, 'utf8');
+
+// R139 CI compat — la gate historique compile contractChanceUpdateAdaptiveTargets()
+// isolément dans un vm. R138 lui a ajouté le helper d'ordonnancement PAR-first
+// contractChanceOrderedSides(), présent au runtime dans app.js mais absent de ce petit
+// contexte de test. On fournit uniquement un stub neutre à CET ancien test adaptatif :
+// il ne teste pas l'ordre des camps, seulement les transitions 24 -> 48 -> 72.
+const adaptiveContextNeedle = "contractChanceGeneration: 7,\n        contractChanceTargetsForDeal:";
+const adaptiveContextReplacement = "contractChanceGeneration: 7,\n        contractChanceOrderedSides: (_deal, sides) => Array.isArray(sides) ? sides : ['NS', 'EW'],\n        contractChanceTargetsForDeal:";
+const source = legacySource.replace(adaptiveContextNeedle, adaptiveContextReplacement);
+if (source === legacySource) {
+    throw new Error('R139 CI: contexte adaptatif historique introuvable');
+}
 const localDdsWorkerPath = path.join(__dirname, '..', 'dds', 'local-dds-worker.js');
 const localDdsWorker = fs.readFileSync(localDdsWorkerPath, 'utf8');
 if (!localDdsWorker.includes("msg.type !== 'solve' && msg.type !== 'solve-contract'")) {
