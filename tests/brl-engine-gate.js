@@ -124,7 +124,7 @@ assert.strictEqual(zeroPolicy[test.callToAction('X')], 0, 'action illégale masq
 const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
 assert(html.includes('src="brl/brl-engine.js"'), 'script BRL présent dans index.html');
 assert(html.includes('value="brl-sl"'), 'option BRL-SL présente');
-assert(html.includes('value="brl-rl-fsp"'), 'option BRL-RL-FSP présente');
+assert(/<option\s+value="brl-rl-fsp"\s+disabled>/.test(html), 'option BRL-RL-FSP présente mais désactivée');
 assert(html.includes("connect-src 'self' https://raw.githubusercontent.com"), 'CSP autorise le chargement des poids BRL');
 const uiEvents = fs.readFileSync(path.join(ROOT, 'ui-events.js'), 'utf8');
 assert(uiEvents.includes("case 'robot-engine'"), 'route UI robot-engine présente');

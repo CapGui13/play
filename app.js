@@ -1079,10 +1079,11 @@ let robotBiddingMode = loadBoolPref('bridgeBidRobotPassOnly', false) ? 'passOnly
 let robotShortNtMode = loadBoolPref('bridgeBidRobotShortNT', false);
 
 // Moteur d'enchères sélectionné dans le salon. PONS reste le choix par défaut pour
-// préserver le comportement des sessions existantes ; BRL-SL et BRL-RL-FSP utilisent
-// le réseau neuronal BRL chargé directement dans le navigateur.
+// préserver le comportement des sessions existantes. BRL-RL-FSP est volontairement
+// désactivé dans PLAY : toute ancienne préférence qui le sélectionnait est migrée vers BRL-SL.
 function normalizeRobotEngine(value) {
-    return ['pons', 'brl-sl', 'brl-rl-fsp'].includes(value) ? value : 'pons';
+    if (value === 'brl-rl-fsp') return 'brl-sl';
+    return ['pons', 'brl-sl'].includes(value) ? value : 'pons';
 }
 let robotEngine = normalizeRobotEngine(loadStringPref('bridgeBidRobotEngine', 'pons'));
 
