@@ -33,6 +33,11 @@ const required = [
     'manifest.json',
     'sw.js',
 
+    // BRL : adaptateur navigateur + attribution/licence des poids Apache-2.0.
+    'brl/brl-engine.js',
+    'brl/NOTICE.txt',
+    'brl/LICENSE-BRL-APACHE-2.0.txt',
+
     // R133 : DDS officiel exécuté localement dans un Web Worker.
     'dds/local-dds-worker.js',
     'dds/dds_web_wasm.js',

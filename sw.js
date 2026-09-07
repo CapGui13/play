@@ -8,7 +8,7 @@
 // distribué ici n'embarque pas de workflow GitHub Actions qui la réécrive : elle doit donc
 // changer à chaque nouvelle release pour forcer l'installation du nouveau cache chez les
 // utilisateurs déjà passés par le Service Worker.
-const CACHE_NAME = 'bridge-encheres-github-vercel-parallel-r131-20260829';
+const CACHE_NAME = 'bridge-encheres-brl-r132-20260907';
 
 // Ressources de la même origine : mises en cache de façon fiable via cache.addAll (un seul
 // échec fait échouer toute l'installation, ce qui est le comportement voulu ici — ce sont
@@ -20,6 +20,7 @@ const CORE_ASSETS = [
     './app.js',
     './ui-events.js',
     './bidding-rules.js',
+    './brl/brl-engine.js',
     './dealer-par.js',
     './statistical-par.js',
     // PONS (~15,2 Mo brut) est volontairement absent du pré-cache d'installation.

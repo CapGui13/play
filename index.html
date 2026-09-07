@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval' 'unsafe-eval' https://unpkg.com https://js.pusher.com https://cdnjs.cloudflare.com; script-src-attr 'none'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob:; connect-src 'self' https://api-gen-beta.vercel.app https://play-dds-native.vercel.app https://*.peerjs.com wss://*.peerjs.com https://*.pusher.com wss://*.pusher.com; worker-src 'self' blob:; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-src 'none'; upgrade-insecure-requests">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval' 'unsafe-eval' https://unpkg.com https://js.pusher.com https://cdnjs.cloudflare.com; script-src-attr 'none'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob:; connect-src 'self' https://raw.githubusercontent.com https://api-gen-beta.vercel.app https://play-dds-native.vercel.app https://*.peerjs.com wss://*.peerjs.com https://*.pusher.com wss://*.pusher.com; worker-src 'self' blob:; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-src 'none'; upgrade-insecure-requests">
 <title>Table d'enchères — Bridge à distance</title>
 
 <!-- PWA : voir manifest.json + sw.js. theme_color/background_color y reprennent le vert
@@ -264,6 +264,14 @@
                             </label>
                         </div>
                     </div>
+                    <div id="hostRobotEngineGroup" class="robot-engine-group" style="display:none;">
+                        <label for="robotEngineSelect">Moteur d'enchères</label>
+                        <select id="robotEngineSelect" data-ui-change="robot-engine" aria-label="Moteur d'enchères des robots">
+                            <option value="pons">PONS v2.61</option>
+                            <option value="brl-sl">BRL-SL — style SAYC</option>
+                            <option value="brl-rl-fsp">BRL-RL-FSP — plus fort</option>
+                        </select>
+                    </div>
                 </div>
             </div>
         </div>
@@ -289,7 +297,7 @@
             </div>
         </div>
 
-        <div id="ponsBuildBadge" style="max-width:980px;margin:6px auto;font:700 12px Segoe UI;color:#d9b84c;">VERSION ACTIVE : PONS BIG v2.61 — portable strict</div>
+        <div id="ponsBuildBadge" style="max-width:980px;margin:6px auto;font:700 12px Segoe UI;color:#d9b84c;">MOTEURS ROBOTS : PONS BIG v2.61 + BRL (SL / RL-FSP)</div>
         <div id="ponsEngineStatus" class="wbridge-status is-offline">🧠 PONS : prêt à charger au besoin</div>
 
         <div id="hostSetupPanel" class="host-setup-panel" style="display:none;">
@@ -655,6 +663,7 @@
      (~519 ko) n'est plus chargé dans le navigateur : l'UI ne conservait que son calcul HCP,
      désormais minuscule dans app.js, et PONS utilise son fallback canonique v1. -->
 <script defer src="bidding-rules.js"></script>
+<script defer src="brl/brl-engine.js"></script>
 <!-- PONS v2.61(9) reste chargé strictement à la demande, dans le même ordre interne. -->
 <script defer src="deal-parser.js"></script>
 <script defer src="peer-connection.js"></script>

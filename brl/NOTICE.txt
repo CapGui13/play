@@ -1,0 +1,18 @@
+BRL bidding integration for PLAY
+================================
+
+The bidding neural-network parameters originate from:
+  Haruka Kita, Sotetsu Koyamada et al. — harukaki/brl
+  "A Simple, Solid, and Reproducible Baseline for Bridge Bidding AI" (CoG 2024)
+  https://github.com/harukaki/brl
+  License: Apache License 2.0
+
+The browser loader consumes raw float32 conversions of the BRL parameters published in
+brannondorsey/nickel-bridge, pinned to commit:
+  27c8e0ff8947c1635dfea4c1b1a9e80a791b2840
+The model manifests identify the underlying BRL weights as Apache-2.0.
+
+PLAY's brl-engine.js is an independent browser adapter written for this application.
+It reproduces the public PGX bridge_bidding observation layout required by the BRL model.
+
+The full Apache License 2.0 text applicable to BRL is included as LICENSE-BRL-APACHE-2.0.txt.

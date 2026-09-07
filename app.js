@@ -136,6 +136,9 @@ if (typeof window !== 'undefined') {
 }
 
 function setPonsClientLoadingStatus(text, kind = 'is-offline') {
+    // Si l'utilisateur a basculé vers BRL pendant qu'un préchargement PONS déjà lancé
+    // se termine, ne pas laisser son ancien statut écraser le moteur actuellement choisi.
+    if (typeof robotEngine !== 'undefined' && robotEngine !== 'pons') return;
     const el = document.getElementById('ponsEngineStatus');
     if (!el) return;
     el.className = `wbridge-status ${kind}`;
@@ -158,6 +161,7 @@ function isConstrainedNetworkForPreload() {
 
 function ponsNeededForCurrentSetup() {
     if (typeof robotBiddingMode !== 'undefined' && robotBiddingMode === 'passOnly') return false;
+    if (typeof robotEngine !== 'undefined' && robotEngine !== 'pons') return false;
     if (typeof seatAssignment !== 'object' || !seatAssignment) return true;
     return SEATS.some(seat => !seatAssignment[seat]);
 }
@@ -1074,6 +1078,60 @@ let robotBiddingMode = loadBoolPref('bridgeBidRobotPassOnly', false) ? 'passOnly
 // adaptée ; toutes les autres enchères continuent d'être décidées par PONS inchangé.
 let robotShortNtMode = loadBoolPref('bridgeBidRobotShortNT', false);
 
+// Moteur d'enchères sélectionné dans le salon. PONS reste le choix par défaut pour
+// préserver le comportement des sessions existantes ; BRL-SL et BRL-RL-FSP utilisent
+// le réseau neuronal BRL chargé directement dans le navigateur.
+function normalizeRobotEngine(value) {
+    return ['pons', 'brl-sl', 'brl-rl-fsp'].includes(value) ? value : 'pons';
+}
+let robotEngine = normalizeRobotEngine(loadStringPref('bridgeBidRobotEngine', 'pons'));
+
+function robotEngineLabel(engine = robotEngine) {
+    if (engine === 'brl-sl') return 'BRL-SL';
+    if (engine === 'brl-rl-fsp') return 'BRL-RL-FSP';
+    return 'PONS';
+}
+
+function updateRobotEngineOptionUi() {
+    const select = document.getElementById('robotEngineSelect');
+    if (select) {
+        select.value = normalizeRobotEngine(robotEngine);
+        select.disabled = robotBiddingMode === 'passOnly';
+    }
+    const shortNtCheckbox = document.getElementById('robotShortNtModeCheckbox');
+    if (shortNtCheckbox) {
+        shortNtCheckbox.checked = !!robotShortNtMode;
+        shortNtCheckbox.disabled = robotBiddingMode === 'passOnly' || robotEngine !== 'pons';
+        shortNtCheckbox.title = robotEngine === 'pons'
+            ? 'Variante PONS : ouverture de 1SA faible 12-14H'
+            : 'La variante 1SA faible est disponible avec PONS uniquement.';
+    }
+}
+
+async function ensureBrlClientReady(engine = robotEngine) {
+    if (!window.BrlEngine || typeof window.BrlEngine.ensureReady !== 'function') {
+        throw new Error('Moteur BRL navigateur absent');
+    }
+    const model = engine === 'brl-sl' ? 'sl' : 'rl-fsp';
+    return window.BrlEngine.ensureReady(model);
+}
+
+async function ensureConfiguredRobotEngineReady() {
+    if (robotBiddingMode === 'passOnly') return null;
+    if (robotEngine === 'pons') return ensurePonsClientReady();
+    return ensureBrlClientReady(robotEngine);
+}
+
+async function decideConfiguredRobotCall(turnSeat, deal, hist, robotSeats) {
+    if (robotEngine === 'pons') {
+        const pons = await ensurePonsClientReady();
+        return pons.decideRobotCallForApp(turnSeat, deal, hist, robotSeats, { shortNT: robotShortNtMode });
+    }
+    const model = robotEngine === 'brl-sl' ? 'sl' : 'rl-fsp';
+    await ensureBrlClientReady(robotEngine);
+    return window.BrlEngine.decideRobotCallForApp(turnSeat, deal, hist, { model });
+}
+
 // Plus de statut kibbitz suivi séparément (source de bug : oublié pour un joueur qui
 // rejoint après le lancement de la partie, resté "spectateur" sans les mains) — un
 // kibbitz, c'est simplement quiconque n'occupe aucun siège, dérivé à la demande plutôt
@@ -1642,6 +1700,7 @@ function buildPregameTransferSetup() {
     return {
         version: 1,
         robotBiddingMode: robotBiddingMode === 'passOnly' ? 'passOnly' : 'smart',
+        robotEngine: normalizeRobotEngine(robotEngine),
         robotShortNtMode: !!robotShortNtMode,
         randomizeDeals: !!(randomize && randomize.checked),
         randomDealFields: capturePregameFieldValues(),
@@ -1717,6 +1776,7 @@ function normalizePregameTransferSetup(raw) {
 
     return {
         robotBiddingMode: raw.robotBiddingMode === 'passOnly' ? 'passOnly' : 'smart',
+        robotEngine: normalizeRobotEngine(raw.robotEngine),
         robotShortNtMode: !!raw.robotShortNtMode,
         randomizeDeals: !!raw.randomizeDeals,
         randomDealFields,
@@ -1735,6 +1795,7 @@ function applyPregameTransferSetup(setup) {
     if (!setup) return;
 
     robotBiddingMode = setup.robotBiddingMode;
+    robotEngine = normalizeRobotEngine(setup.robotEngine);
     robotShortNtMode = !!setup.robotShortNtMode;
 
     const randomize = document.getElementById('randomizeDealsToggle');
@@ -6971,6 +7032,7 @@ function enterLobbyScreen() {
     // (voir index.html), donc sa visibilité host-only doit être pilotée séparément ici,
     // avec la même condition.
     document.getElementById('hostRobotModeGroup').style.display = myRole === 'host' ? 'flex' : 'none';
+    document.getElementById('hostRobotEngineGroup').style.display = myRole === 'host' ? 'flex' : 'none';
     document.getElementById('hostShortNtModeGroup').style.display = myRole === 'host' ? 'flex' : 'none';
     document.getElementById('guestWaitingNote').style.display = myRole === 'host' ? 'none' : 'block';
 
@@ -6988,11 +7050,7 @@ function enterLobbyScreen() {
 
         const robotModeCheckbox = document.getElementById('robotBiddingModeCheckbox');
         if (robotModeCheckbox) robotModeCheckbox.checked = robotBiddingMode === 'smart';
-        const shortNtCheckbox = document.getElementById('robotShortNtModeCheckbox');
-        if (shortNtCheckbox) {
-            shortNtCheckbox.checked = !!robotShortNtMode;
-            shortNtCheckbox.disabled = robotBiddingMode === 'passOnly';
-        }
+        updateRobotEngineOptionUi();
     }
 
     const nameInput = document.getElementById('myNameInput');
@@ -7809,8 +7867,25 @@ function uiSetRobotBiddingMode(robotsActive) {
     if (myRole !== 'host') return;
     robotBiddingMode = robotsActive ? 'smart' : 'passOnly';
     saveBoolPref('bridgeBidRobotPassOnly', !robotsActive);
-    const shortNtCheckbox = document.getElementById('robotShortNtModeCheckbox');
-    if (shortNtCheckbox) shortNtCheckbox.disabled = !robotsActive;
+    updateRobotEngineOptionUi();
+}
+
+function uiSetRobotEngine(engine) {
+    if (myRole !== 'host') return;
+    robotEngine = normalizeRobotEngine(engine);
+    saveStringPref('bridgeBidRobotEngine', robotEngine);
+    updateRobotEngineOptionUi();
+    if (robotBiddingMode === 'passOnly') return;
+
+    if (robotEngine === 'pons') {
+        setPonsClientLoadingStatus('🧠 PONS : prêt à charger au besoin');
+        schedulePonsClientPreload();
+    } else {
+        const model = robotEngine === 'brl-sl' ? 'sl' : 'rl-fsp';
+        if (window.BrlEngine && typeof window.BrlEngine.ensureReady === 'function') {
+            window.BrlEngine.ensureReady(model).catch(err => console.warn('[PLAY/BRL] préchargement impossible', err));
+        }
+    }
 }
 
 // Active/désactive la variante 1SA faible. Le réglage est volontairement indépendant
@@ -8821,21 +8896,41 @@ async function uiStartGameAsHost() {
         return;
     }
 
-    // Le chargement différé ne doit JAMAIS changer le moteur réellement utilisé : si un
-    // siège robot doit enchérir en mode normal, on attend explicitement PONS avant de
-    // lancer la séance. Le mode « passe en boucle » n'a, lui, besoin d'aucun moteur.
-    const needsPonsAtLaunch = robotBiddingMode !== 'passOnly' && SEATS.some(seat => !seatAssignment[seat]);
-    if (needsPonsAtLaunch) {
-        showConnectingOverlay('Préparation du moteur PONS…');
+    // BRL est embarqué côté navigateur. Le relais différé actuellement déployé ne sait
+    // faire progresser les tours robots qu'avec PONS côté serveur ; autoriser BRL ici
+    // provoquerait donc un changement silencieux de moteur dès que l'hôte ferme l'onglet.
+    // On bloque proprement cette combinaison tant que l'autorité serveur BRL n'est pas
+    // déployée. Une session live (hôte présent) peut utiliser BRL normalement.
+    const launchingDeferred = SEATS.some(seat => seatAssignment[seat] === SEAT_PENDING);
+    const hasRobotSeatsAtLaunch = SEATS.some(seat => !seatAssignment[seat]);
+    if (launchingDeferred && hasRobotSeatsAtLaunch && robotBiddingMode !== 'passOnly' && robotEngine !== 'pons') {
+        setHostSetupMessage(`Le moteur ${robotEngineLabel()} fonctionne en session live. Le mode différé avec robots utilise encore PONS côté serveur ; choisissez PONS pour cette session.`, false);
+        return;
+    }
+
+    // Le chargement différé ne doit JAMAIS changer silencieusement le moteur choisi :
+    // quand un siège robot existe, on attend le moteur sélectionné avant de lancer.
+    const needsRobotEngineAtLaunch = robotBiddingMode !== 'passOnly' && hasRobotSeatsAtLaunch;
+    if (needsRobotEngineAtLaunch) {
+        const engineLabel = robotEngineLabel();
+        showConnectingOverlay(`Préparation du moteur ${engineLabel}…`);
         try {
-            await withPonsTimeout(ensurePonsClientReady(), 110000, 'Préparation complète du moteur PONS');
-            hidePonsFailureDiagnostic();
+            if (robotEngine === 'pons') {
+                await withPonsTimeout(ensureConfiguredRobotEngineReady(), 110000, 'Préparation complète du moteur PONS');
+                hidePonsFailureDiagnostic();
+            } else {
+                await ensureConfiguredRobotEngineReady();
+            }
         } catch (err) {
             hideConnectingOverlay();
-            ponsLastLoadError = err;
-            setHostSetupMessage('Le moteur PONS n’a pas pu être chargé. Le diagnostic ci-dessous indique maintenant l’étape exacte.', false);
-            showPonsFailureDiagnostic();
-            console.error('[PLAY/PONS lazy] lancement bloqué : moteur indisponible', err);
+            if (robotEngine === 'pons') {
+                ponsLastLoadError = err;
+                setHostSetupMessage('Le moteur PONS n’a pas pu être chargé. Le diagnostic ci-dessous indique maintenant l’étape exacte.', false);
+                showPonsFailureDiagnostic();
+            } else {
+                setHostSetupMessage(`Le moteur ${engineLabel} n’a pas pu être chargé. Vérifiez la connexion Internet puis réessayez.`, false);
+            }
+            console.error(`[PLAY/${engineLabel}] lancement bloqué : moteur indisponible`, err);
             return;
         }
         hideConnectingOverlay();
@@ -8846,7 +8941,6 @@ async function uiStartGameAsHost() {
     // démarrer réellement la séance ; le clic dans le salon l'a déjà lancée en arrière-
     // plan, mais cette garde rend le comportement déterministe même si l'utilisateur est
     // très rapide.
-    const launchingDeferred = SEATS.some(seat => seatAssignment[seat] === SEAT_PENDING);
     if (launchingDeferred && currentRoomCode) {
         showConnectingOverlay('Préparation du mode différé…');
         const ready = await ensureDeferredInviteCredentialRegistered(currentRoomCode);
@@ -10073,10 +10167,9 @@ async function resolveRobotBoardInBackground(idx, generation = robotBackgroundGe
                 explanation = 'Mode « passe en boucle » activé';
             } else {
                 try {
-                    const pons = await ensurePonsClientReady();
-                    ({ call, explanation } = await pons.decideRobotCallForApp(turnSeat, deal, hist, autoPassSeats, { shortNT: robotShortNtMode }));
+                    ({ call, explanation } = await decideConfiguredRobotCall(turnSeat, deal, hist, autoPassSeats));
                 } catch (err) {
-                    console.error('[PLAY/PONS strict] calcul robot arrière-plan arrêté : PONS indisponible', err);
+                    console.error(`[PLAY/${robotEngineLabel()}] calcul robot arrière-plan arrêté : moteur indisponible`, err);
                     return;
                 }
             }
@@ -10088,7 +10181,7 @@ async function resolveRobotBoardInBackground(idx, generation = robotBackgroundGe
             if (isAuctionOver(hist) || currentTurnSeat(deal.dealer, hist) !== turnSeat) continue;
 
             if (!isCallLegal(hist, call, turnSeat)) {
-                console.warn('[Robot PONS arrière-plan] annonce illégale reçue, repli Passe', call);
+                console.warn(`[Robot ${robotEngineLabel()} arrière-plan] annonce illégale reçue, repli Passe`, call);
                 call = 'PASS';
                 explanation = `${explanation || 'Moteur robot'} · annonce illégale rejetée par PLAY`;
             }
@@ -10147,14 +10240,19 @@ async function resolveAllOtherRobotBoards(excludeIdx, options = {}) {
 function advanceRobotBidsOnAllBoards(excludeIdx) {
     if (myRole !== 'host') return;
     if (!deals || !autoPassSeats || autoPassSeats.length === 0) return;
-    if (robotBiddingMode !== 'passOnly' && !window.PonsEngine) {
-        ensurePonsClientReady()
-            .then(() => advanceRobotBidsOnAllBoards(excludeIdx))
-            .catch(err => console.warn('[Robot PONS arrière-plan] moteur indisponible', err));
-        return;
+    if (robotBiddingMode !== 'passOnly') {
+        const configuredReady = robotEngine === 'pons'
+            ? !!(window.PonsEngine && window.PonsEngine.loaded)
+            : !!(window.BrlEngine && window.BrlEngine.isReady(robotEngine === 'brl-sl' ? 'sl' : 'rl-fsp'));
+        if (!configuredReady) {
+            ensureConfiguredRobotEngineReady()
+                .then(() => advanceRobotBidsOnAllBoards(excludeIdx))
+                .catch(err => console.warn(`[Robot ${robotEngineLabel()} arrière-plan] moteur indisponible`, err));
+            return;
+        }
     }
     resolveAllOtherRobotBoards(excludeIdx).catch(err =>
-        console.warn('[Robot PONS arrière-plan] pré-calcul interrompu', err)
+        console.warn(`[Robot ${robotEngineLabel()} arrière-plan] pré-calcul interrompu`, err)
     );
 }
 
@@ -10343,10 +10441,9 @@ function maybeRobotBid() {
             explanation = 'Mode « passe en boucle » activé';
         } else {
             try {
-                const pons = await ensurePonsClientReady();
-                ({ call, explanation } = await pons.decideRobotCallForApp(turnSeat, currentDeal(), auctionHistory, autoPassSeats, { shortNT: robotShortNtMode }));
+                ({ call, explanation } = await decideConfiguredRobotCall(turnSeat, currentDeal(), auctionHistory, autoPassSeats));
             } catch (err) {
-                console.error("[PLAY/PONS strict] robot bloqué : PONS v2.61 n'est pas disponible", err);
+                console.error(`[PLAY/${robotEngineLabel()}] robot bloqué : moteur indisponible`, err);
                 return;
             }
         }
@@ -10358,7 +10455,7 @@ function maybeRobotBid() {
         if (isAuctionOver(auctionHistory)) return;
         if (currentTurnSeat(currentDeal().dealer, auctionHistory) !== turnSeat) return;
         if (!isCallLegal(auctionHistory, call, turnSeat)) {
-            console.warn('[Robot PONS] annonce illégale reçue, repli Passe', call);
+            console.warn(`[Robot ${robotEngineLabel()}] annonce illégale reçue, repli Passe`, call);
             call = 'PASS';
             explanation = `${explanation || 'Moteur robot'} · annonce illégale rejetée par PLAY`;
         }

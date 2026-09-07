@@ -150,6 +150,20 @@ joueur assis (à la différence de l'export unitaire, réservé à l'hôte puisq
 
 ## Enchères automatiques des robots
 
+### Moteur sélectionnable : PONS ou BRL
+
+Le salon de l'hôte propose désormais trois moteurs lorsque **Robots actifs** est coché :
+
+- **PONS v2.61** : moteur historique de PLAY, avec les conventions/ajustements SEF du projet et l'option **1SA faible (12-14H)**.
+- **BRL-SL** : réseau neuronal BRL supervisé, entraîné par imitation des enchères WBridge5.
+- **BRL-RL-FSP** : modèle BRL renforcé par self-play, à privilégier pour tester le moteur le plus performant des deux.
+
+BRL s'exécute directement dans le navigateur : PLAY encode la main, la vulnérabilité et l'historique dans l'observation PGX de 480 valeurs, calcule les 38 logits du réseau, puis ne choisit que parmi les annonces que `isCallLegal()` juge légales. Il n'y a aucun repli silencieux vers PONS si le chargement BRL échoue.
+
+Les poids BRL (~14 Mo par modèle) sont chargés à la première utilisation depuis une révision GitHub immuable, leur taille et leur Git blob SHA-1 sont contrôlés, puis ils sont conservés dans le cache runtime du Service Worker. Le code et les modèles BRL d'origine sont sous licence Apache-2.0 ; l'attribution et la licence sont dans `brl/`.
+
+**Limite actuelle du mode différé :** le relais serveur déployé sait décider les tours robots avec PONS, mais n'embarque pas encore BRL. PLAY refuse donc proprement de démarrer une session différée contenant des robots si BRL est sélectionné. Les sessions live peuvent utiliser BRL normalement. L'option 1SA faible reste PONS-only.
+
 **Outil de diagnostic** : chaque annonce jouée par un robot est tapable dans le relevé
 d'enchères (petit point discret sur la case) et affiche pourquoi elle a été choisie
 (points H/HL calculés, branche de décision, contexte) — pratique pour repérer directement
