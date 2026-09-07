@@ -155,10 +155,10 @@ joueur assis (à la différence de l'export unitaire, réservé à l'hôte puisq
 Le salon de l'hôte propose désormais trois moteurs lorsque **Robots actifs** est coché :
 
 - **PONS v2.61** : moteur historique de PLAY, avec les conventions/ajustements SEF du projet et l'option **1SA faible (12-14H)**.
-- **BRL-SL** : réseau neuronal BRL supervisé, entraîné par imitation des enchères WBridge5.
-- **BRL-RL-FSP** : modèle BRL renforcé par self-play, à privilégier pour tester le moteur le plus performant des deux.
+- **BRL-SL** : réseau neuronal BRL supervisé, entraîné par imitation des enchères WBridge5. C'est le mode BRL recommandé dans PLAY pour des enchères lisibles par un humain.
+- **BRL-RL-FSP** : modèle BRL renforcé par Fictitious Self Play. Il obtient le meilleur score expérimental publié, mais peut dériver vers un langage d'enchères propre au self-play ; il est donc marqué expérimental dans PLAY.
 
-BRL s'exécute directement dans le navigateur : PLAY encode la main, la vulnérabilité et l'historique dans l'observation PGX de 480 valeurs, calcule les 38 logits du réseau, puis ne choisit que parmi les annonces que `isCallLegal()` juge légales. Il n'y a aucun repli silencieux vers PONS si le chargement BRL échoue.
+BRL s'exécute directement dans le navigateur : PLAY encode la main, la vulnérabilité et l'historique dans l'observation PGX de 480 valeurs, calcule les 38 logits du réseau, puis applique deux filtres avant l'argmax : la légalité `isCallLegal()` et un garde-fou de cohérence bridge. Ce dernier élimine les violations grossières (par exemple une ouverture naturelle au palier de 1 avec 2 HCP, un contre/surcontre pratiquement sans jeu ou une ouverture incompatible avec la longueur promise) tout en restant volontairement permissif en cours d'enchères pour ne pas casser Stayman, Texas, cue-bids ou autres conventions artificielles. Il n'y a aucun repli silencieux vers PONS si le chargement BRL échoue.
 
 Les poids BRL (~14 Mo par modèle) sont chargés à la première utilisation depuis une révision GitHub immuable, leur taille et leur Git blob SHA-1 sont contrôlés, puis ils sont conservés dans le cache runtime du Service Worker. Le code et les modèles BRL d'origine sont sous licence Apache-2.0 ; l'attribution et la licence sont dans `brl/`.
 

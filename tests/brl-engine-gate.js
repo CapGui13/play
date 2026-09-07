@@ -88,6 +88,27 @@ assert.strictEqual(obs[4 + 3], 1, 'passe de E relative à S');
 const oneHAction = test.callToAction('1H');
 assert.strictEqual(obs[8 + (oneHAction - 3) * 12 + 0], 1, '1H de l’acteur encodé au bon siège relatif');
 
+// Garde-fou de cohérence : reproduit le cas signalé visuellement par l'utilisateur.
+// Nord : ♠T9853 ♥QT ♦T63 ♣932 = 2 HCP. Une ouverture de 1C, un X/XX et une
+// enchère naturelle au palier de 1 doivent être rejetés ; PASS doit rester disponible.
+const northTwoHcp = { S: 'T9853', H: 'QT', D: 'T63', C: '932' };
+assert.strictEqual(test.handFacts(northTwoHcp).hcp, 2, 'main de reproduction = 2 HCP');
+assert.strictEqual(test.brlCallPlausible(northTwoHcp, [], 'N', '1C'), false, '2 HCP ne peut pas ouvrir de 1C');
+assert.strictEqual(test.brlCallPlausible(northTwoHcp, [], 'N', 'PASS'), true, 'Passe reste plausible à 2 HCP');
+assert.strictEqual(test.brlCallPlausible(northTwoHcp, [{ seat: 'E', call: '1C' }], 'S', 'X'), false, 'contre grossièrement sous-minimum rejeté');
+assert.strictEqual(test.brlCallPlausible(northTwoHcp, [{ seat: 'N', call: '1C' }, { seat: 'E', call: 'X' }], 'S', 'XX'), false, 'surcontre grossièrement sous-minimum rejeté');
+assert.strictEqual(test.brlCallPlausible(northTwoHcp, [{ seat: 'E', call: '1C' }], 'S', '1S'), false, 'enchère naturelle au palier de 1 avec 2 HCP rejetée');
+
+// Les ouvertures usuelles doivent rester permises.
+const normalOneSpade = { S: 'AKJ87', H: 'Q54', D: 'K32', C: '76' }; // 13 HCP, 5 piques
+assert.strictEqual(test.brlCallPlausible(normalOneSpade, [], 'N', '1S'), true, '1S naturel normal conservé');
+const normalOneNt = { S: 'AQ4', H: 'KJ3', D: 'Q87', C: 'K642' }; // 15 HCP, 4-3-3-3
+assert.strictEqual(test.brlCallPlausible(normalOneNt, [], 'N', '1NT'), true, '1NT 15-17 régulier conservé');
+const weakTwoHearts = { S: '84', H: 'KJT976', D: 'T83', C: '52' }; // 4 HCP actually, should be too weak
+assert.strictEqual(test.brlCallPlausible(weakTwoHearts, [], 'N', '2H'), false, '2H sous 5 HCP rejeté');
+const validWeakTwoHearts = { S: '84', H: 'KQJ976', D: 'T83', C: '52' }; // 5 HCP? KQJ=6 actually, valid
+assert.strictEqual(test.brlCallPlausible(validWeakTwoHearts, [], 'N', '2H'), true, '2H faible avec 6 cartes conservé');
+
 // Smoke test de l'inférence MLP sans dépendre du réseau : poids nuls de la taille exacte.
 const zeroModelBytes = new ArrayBuffer(14725276);
 const zeroModel = new test.PolicyModel(zeroModelBytes);

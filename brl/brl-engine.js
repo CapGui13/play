@@ -96,6 +96,134 @@
         return idx;
     }
 
+
+    // Garde-fou de cohérence "humaine" autour du réseau BRL.
+    //
+    // Le modèle SL imite WBridge5 et le modèle RL-FSP est ensuite optimisé en self-play.
+    // Un réseau de politique n'a, à lui seul, aucune contrainte symbolique disant qu'une
+    // ouverture naturelle à 1 promet une force minimale. Le port Nickel Bridge ajoute
+    // lui aussi une couche de contraintes SAYC avant l'argmax. PLAY implémente ici sa
+    // propre couche, volontairement conservatrice : elle ne cherche pas à réécrire tout
+    // un système d'enchères, seulement à éliminer les violations grossières et certaines
+    // ouvertures dont le sens est suffisamment stable pour être contrôlé par la main.
+    function handFacts(hand) {
+        const HCP = { A: 4, K: 3, Q: 2, J: 1 };
+        const lengths = {};
+        let hcp = 0;
+        for (const suit of ['S', 'H', 'D', 'C']) {
+            const ranks = String(hand && hand[suit] || '').toUpperCase();
+            lengths[suit] = ranks.length;
+            for (const rank of ranks) hcp += HCP[rank] || 0;
+        }
+        const shape = Object.values(lengths).slice().sort((a, b) => b - a).join('-');
+        const balanced = shape === '4-3-3-3' || shape === '4-4-3-2' || shape === '5-3-3-2';
+        const ordered = Object.values(lengths).slice().sort((a, b) => b - a);
+        const rule20 = hcp + (ordered[0] || 0) + (ordered[1] || 0);
+        return { hcp, lengths, balanced, rule20 };
+    }
+
+    function parseContractCall(call) {
+        const m = /^([1-7])(C|D|H|S|NT)$/.exec(String(call || '').toUpperCase());
+        return m ? { level: Number(m[1]), strain: m[2] } : null;
+    }
+
+    function firstContractEntry(history) {
+        for (const entry of history || []) {
+            if (parseContractCall(entry && entry.call)) return entry;
+        }
+        return null;
+    }
+
+    function sideOf(seat) {
+        return seat === 'N' || seat === 'S' ? 'NS' : 'EW';
+    }
+
+    function brlCallPlausible(hand, history, actor, call) {
+        call = String(call || '').toUpperCase();
+        if (call === 'PASS') return true;
+
+        const f = handFacts(hand);
+        // Un contre/surcontre avec pratiquement aucun jeu est une des dérives les plus
+        // visibles du réseau brut. Les seuils restent bas pour ne pas supprimer les
+        // contres compétitifs ou de soutien légitimes.
+        if (call === 'X') return f.hcp >= 7;
+        if (call === 'XX') return f.hcp >= 8;
+
+        const bid = parseContractCall(call);
+        if (!bid) return false;
+        const opening = !firstContractEntry(history);
+
+        if (opening) {
+            // Ouvertures naturelles au palier de 1 : cinq cartes en majeure, trois en
+            // mineure et une force d'ouverture. La règle de 20 laisse passer les mains
+            // distribuées de 10H qui sont de vraies ouvertures de bridge.
+            if (bid.level === 1 && bid.strain !== 'NT') {
+                const enoughStrength = f.hcp >= 11 || (f.hcp >= 10 && f.rule20 >= 20);
+                if (!enoughStrength) return false;
+                if ((bid.strain === 'H' || bid.strain === 'S') && f.lengths[bid.strain] < 5) return false;
+                if ((bid.strain === 'C' || bid.strain === 'D') && f.lengths[bid.strain] < 3) return false;
+                return true;
+            }
+            if (call === '1NT') return f.balanced && f.hcp >= 15 && f.hcp <= 17;
+            if (call === '2C') return f.hcp >= 20;
+            if (call === '2NT') return f.balanced && f.hcp >= 20 && f.hcp <= 22;
+            if (bid.level === 2 && ['D', 'H', 'S'].includes(bid.strain)) {
+                return f.lengths[bid.strain] >= 6 && f.hcp >= 5 && f.hcp <= 11;
+            }
+            if (bid.level === 3 && bid.strain !== 'NT') {
+                return f.lengths[bid.strain] >= 7 && f.hcp <= 12;
+            }
+            // Une ouverture de 3SA/4SA/etc. est très conventionnelle. Plutôt que de
+            // laisser un réseau self-play utiliser ces appels comme code arbitraire, on
+            // n'autorise ici 3SA qu'avec une vraie main forte et régulière ; les autres
+            // ouvertures à SA au-dessus restent rejetées.
+            if (call === '3NT') return f.balanced && f.hcp >= 24;
+            if (bid.strain === 'NT') return false;
+            // Barrages très hauts : exiger au moins une vraie longue couleur.
+            if (bid.level >= 4) return f.lengths[bid.strain] >= 7;
+        }
+
+        // En cours d'enchères, on reste beaucoup moins intrusif : seules les anomalies
+        // manifestes sont éliminées. Cela préserve Stayman/Texas, cue-bids, quatrième
+        // couleur, splinters, etc., que l'on ne peut pas juger par la longueur de la
+        // couleur écrite sur le bouton.
+        if (bid.level === 1 && bid.strain !== 'NT' && f.hcp < 5) return false;
+        if (bid.strain === 'NT') {
+            if (bid.level === 1 && f.hcp < 5) return false;
+            if (bid.level === 2 && f.hcp < 7) return false;
+            if (bid.level >= 3 && f.hcp < 9) return false;
+        }
+        if (f.hcp <= 3 && bid.strain !== 'NT') {
+            // Avec 0-3H, une enchère de contrat n'est acceptable que comme barrage avec
+            // une longue couleur réelle ; cela bloque notamment le 1P à 2H vu en test.
+            if (bid.level <= 2 || f.lengths[bid.strain] < 7) return false;
+        }
+
+        // Surélévation naturelle du partenaire : au moins un minimum de fit. On ne fait
+        // ce contrôle que lorsque la couleur a déjà été annoncée par NOTRE camp ; un
+        // cue-bid de la couleur adverse reste donc libre.
+        if (bid.strain !== 'NT') {
+            const ourSide = sideOf(actor);
+            const sameSuitByUs = (history || []).some(e => sideOf(e && e.seat) === ourSide && parseContractCall(e && e.call)?.strain === bid.strain);
+            const sameSuitByThem = (history || []).some(e => sideOf(e && e.seat) !== ourSide && parseContractCall(e && e.call)?.strain === bid.strain);
+            if (sameSuitByUs && !sameSuitByThem && f.lengths[bid.strain] < 2) return false;
+        }
+        return true;
+    }
+
+    function buildPlausibilityMask(hand, history, actor, legalMask) {
+        const mask = new Array(ACTION_COUNT).fill(false);
+        for (let action = 0; action < ACTION_COUNT; action++) {
+            if (!legalMask[action]) continue;
+            mask[action] = brlCallPlausible(hand, history, actor, actionToCall(action));
+        }
+        // PASS doit rester un filet de sécurité absolu et est légal dans toute enchère
+        // non terminée. Si un futur changement de garde-fou filtrait tout, on ne force
+        // jamais une annonce arbitraire.
+        if (legalMask[0]) mask[0] = true;
+        return mask;
+    }
+
     function encodeObservation(hand, dealer, vulnerable, history, actor) {
         if (!hand) throw new Error(`BRL: main ${actor} absente`);
         const obs = new Float32Array(OBS_SIZE);
@@ -263,19 +391,29 @@
         const modelName = options && options.model === 'sl' ? 'sl' : 'rl-fsp';
         const model = await ensureReady(modelName);
         if (!deal || !deal.hands || !deal.hands[turnSeat]) throw new Error(`BRL: main ${turnSeat} non disponible`);
-        const obs = encodeObservation(deal.hands[turnSeat], deal.dealer, deal.vulnerable, history, turnSeat);
-        const mask = buildLegalMask(history, turnSeat);
-        const probs = model.policy(obs, mask);
+        const hand = deal.hands[turnSeat];
+        const obs = encodeObservation(hand, deal.dealer, deal.vulnerable, history, turnSeat);
+        const legalMask = buildLegalMask(history, turnSeat);
+        const probs = model.policy(obs, legalMask);
+        const plausibleMask = buildPlausibilityMask(hand, history, turnSeat, legalMask);
+
+        let rawBest = 0;
+        for (let a = 1; a < ACTION_COUNT; a++) {
+            if (legalMask[a] && probs[a] > probs[rawBest]) rawBest = a;
+        }
         let best = 0;
         for (let a = 1; a < ACTION_COUNT; a++) {
-            if (mask[a] && probs[a] > probs[best]) best = a;
+            if (plausibleMask[a] && probs[a] > probs[best]) best = a;
         }
         const call = actionToCall(best) || 'PASS';
         const pct = Math.round(probs[best] * 100);
+        const guarded = rawBest !== best;
         return {
             call,
-            explanation: `${MODELS[modelName].label} · choix réseau ${pct}%`,
+            explanation: `${MODELS[modelName].label} · choix réseau ${pct}%${guarded ? ' · garde-fou cohérence' : ''}`,
             probability: probs[best],
+            rawCall: actionToCall(rawBest),
+            guardrailApplied: guarded,
             model: modelName
         };
     }
@@ -302,6 +440,6 @@
         modelNameFromEngine,
         diagnostic,
         // Hooks purs utiles au gate de régression ; ils ne mutent aucun état de PLAY.
-        _test: Object.freeze({ actionToCall, callToAction, encodeObservation, buildLegalMask, PolicyModel })
+        _test: Object.freeze({ actionToCall, callToAction, encodeObservation, buildLegalMask, handFacts, brlCallPlausible, buildPlausibilityMask, PolicyModel })
     });
 })(typeof window !== 'undefined' ? window : globalThis);
