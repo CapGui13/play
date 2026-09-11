@@ -59,6 +59,23 @@
     }
 
     function deterministicSeedMaterial(deal, config, sampleIndex) {
+        // Les donnes issues du réservoir serveur possèdent un identifiant statistique
+        // permanent. Il remplace volontairement board/dealer/vulnérabilité dans la graine :
+        // une distribution peut ainsi devenir la donne 3 ou 14 d'une session sans changer
+        // ses redistributions pré-calculées. Pour toutes les anciennes sources (PBN,
+        // bibliothèque, génération locale), l'algorithme historique reste strictement
+        // inchangé afin de préserver la reproductibilité des résultats existants.
+        const poolSeedId = String(deal && deal.statisticalSeedId || '').trim();
+        if (poolSeedId) {
+            return [
+                STATISTICAL_PAR_SAMPLING_SEED_VERSION,
+                'pool',
+                poolSeedId,
+                String(config && config.mode || ''),
+                canonicalKnownCards(deal, config),
+                String(sampleIndex)
+            ].join('~');
+        }
         return [
             STATISTICAL_PAR_SAMPLING_SEED_VERSION,
             String(deal && deal.board != null ? deal.board : ''),

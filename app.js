@@ -2127,7 +2127,121 @@ function readRandomDealConstraintsFromUI() {
 // n'a eu lieu (pas d'avertissement à afficher dans ce cas).
 let lastGeneratedConstraintsJSON;
 
-function uiGenerateRandomDeals() {
+// ===== Réservoir serveur de donnes aléatoires pré-calculées =====
+//
+// Le navigateur ne reçoit JAMAIS le stock : il demande uniquement N donnes compatibles.
+// Si l'API est absente, lente, vide ou renvoie un lot incomplet, PLAY retombe sans erreur
+// visible sur le générateur local historique. Le réservoir est donc une optimisation, pas
+// une dépendance de fonctionnement.
+const RANDOM_DEAL_POOL_URL = 'https://api-gen-beta.vercel.app/api/deal-pool';
+const RANDOM_DEAL_POOL_TIMEOUT_MS = 4500;
+let randomDealPoolRequestGeneration = 0;
+
+function randomDealPoolSeatAssignmentSnapshot() {
+    const out = {};
+    for (const seat of ['N', 'E', 'S', 'W']) out[seat] = !!(seatAssignment && seatAssignment[seat]);
+    return out;
+}
+
+function randomDealPoolNormalizeHands(rawHands) {
+    if (!rawHands || typeof rawHands !== 'object') return null;
+    const hands = {};
+    const seen = new Set();
+    for (const seat of ['N', 'E', 'S', 'W']) {
+        const rawHand = rawHands[seat];
+        if (!rawHand || typeof rawHand !== 'object') return null;
+        hands[seat] = {};
+        let count = 0;
+        for (const suit of ['S', 'H', 'D', 'C']) {
+            const ranks = String(rawHand[suit] || '').toUpperCase();
+            if (!/^[AKQJT98765432]*$/.test(ranks)) return null;
+            hands[seat][suit] = ranks;
+            count += ranks.length;
+            for (const rank of ranks) {
+                const card = suit + rank;
+                if (seen.has(card)) return null;
+                seen.add(card);
+            }
+        }
+        if (count !== 13) return null;
+    }
+    return seen.size === 52 ? hands : null;
+}
+
+function normalizeRandomDealFromPool(raw, boardNumber, constraints) {
+    const hands = randomDealPoolNormalizeHands(raw && raw.hands);
+    if (!hands) return null;
+    // Défense en profondeur : même si l'API filtre déjà, ne jamais accepter une donne qui
+    // ne satisfait pas les règles demandées par l'hôte dans CETTE version de PLAY.
+    if (!dealSatisfiesHumanLineConstraint(hands, seatAssignment)
+        || !dealSatisfiesCustomConstraints(hands, constraints)) return null;
+    const table = raw && raw.ddTable;
+    if (!contractChanceTableIsValid(table)) return null;
+    const seedId = String(raw && raw.statisticalSeedId || '').trim();
+    if (!seedId || seedId.length > 160) return null;
+    const cycle = RANDOM_DEAL_BRIDGE_CYCLE[(boardNumber - 1) % 16];
+    return {
+        board: boardNumber,
+        dealer: cycle.dealer,
+        vulnerable: cycle.vulnerable,
+        hands,
+        par: null,
+        ddTable: table,
+        statisticalSeedId: seedId,
+        precomputedStatV1: raw && raw.precomputedStatV1 && typeof raw.precomputedStatV1 === 'object'
+            ? raw.precomputedStatV1
+            : null,
+        constraintsUnmet: false,
+        dealPoolVersion: String(raw && raw.poolVersion || 'v1')
+    };
+}
+
+async function fetchRandomDealsFromPool(count, constraints) {
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) return null;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), RANDOM_DEAL_POOL_TIMEOUT_MS);
+    try {
+        const response = await fetch(RANDOM_DEAL_POOL_URL, {
+            method: 'POST',
+            cache: 'no-store',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: 'take',
+                count,
+                seatAssignment: randomDealPoolSeatAssignmentSnapshot(),
+                constraints: constraints || null
+            }),
+            signal: controller.signal
+        });
+        if (!response.ok) return null;
+        const payload = await response.json().catch(() => null);
+        if (!payload || !Array.isArray(payload.deals) || payload.deals.length !== count) return null;
+        const normalized = payload.deals.map((raw, index) => normalizeRandomDealFromPool(raw, index + 1, constraints));
+        return normalized.every(Boolean) ? normalized : null;
+    } catch (_) {
+        return null;
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+function triggerRandomDealPoolReplenish() {
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
+    // Fire-and-forget volontaire : le joueur ne doit jamais attendre que le stock FUTUR
+    // soit reconstruit. Le verrou côté API empêche plusieurs salons de lancer le même
+    // remplissage simultanément.
+    try {
+        fetch(RANDOM_DEAL_POOL_URL, {
+            method: 'POST',
+            cache: 'no-store',
+            keepalive: true,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'replenish' })
+        }).catch(() => {});
+    } catch (_) {}
+}
+
+async function uiGenerateRandomDeals() {
     const countInput = document.getElementById('randomDealCount');
     const count = countInput ? parseInt(countInput.value, 10) : NaN;
     if (!Number.isFinite(count) || count < 1 || count > 40) {
@@ -2153,22 +2267,25 @@ function uiGenerateRandomDeals() {
     const librarySelect = document.getElementById('dealLibrarySelect');
     if (librarySelect) librarySelect.value = '';
 
-    const generated = generateRandomDeals(count, seatAssignment, constraints);
+    const requestGeneration = ++randomDealPoolRequestGeneration;
+    setHostSetupMessage('Préparation des donnes…', true);
+    let generated = await fetchRandomDealsFromPool(count, constraints);
+    if (requestGeneration !== randomDealPoolRequestGeneration) return;
+    if (!generated) generated = generateRandomDeals(count, seatAssignment, constraints);
+
     pendingParsedSource = 'random';
     pendingParsedDeals = generated;
     refreshPendingOrderedDeals();
 
     // rien à prévisualiser pour du random (voir uiPreviewDeals) : bandeau vert sans son
-    // bouton Prévisualiser.
+    // bouton Prévisualiser. Le texte reste volontairement identique que les cartes viennent
+    // du réservoir ou du générateur local : le stock est une implémentation invisible.
     setDealStatusReady(`✅ ${count} donne${count > 1 ? 's' : ''} générée${count > 1 ? 's' : ''}`, false);
 
     // Voir échange avec Guillaume : avec des contraintes très serrées (plusieurs fourchettes
     // étroites simultanées), certaines donnes peuvent ne pas les satisfaire même après
     // RANDOM_DEAL_MAX_RETRIES tentatives (voir generateRandomDeal) — mieux vaut prévenir que
-    // de laisser croire que toutes les donnes générées les respectent silencieusement. Voir
-    // échange avec Guillaume (session du 23 juillet) : plus de mention du PAR ici — le
-    // calcul du double mort en arrière-plan (voir kickOffBackgroundDD) tourne
-    // systématiquement, plus la peine de le signaler.
+    // de laisser croire que toutes les donnes générées les respectent silencieusement.
     const unmetCount = generated.filter(d => d.constraintsUnmet).length;
     if (unmetCount > 0) {
         setHostSetupMessage(
@@ -2179,8 +2296,11 @@ function uiGenerateRandomDeals() {
         clearHostSetupMessage();
     }
 
+    // Pour une donne du pool, ddTable est déjà présente : kickOffBackgroundDD ignore ces
+    // tables et ne calcule que le premier éventuel fallback local manquant.
     kickOffBackgroundDD(generated);
     preparePendingStatisticalParPrewarm(generated);
+    triggerRandomDealPoolReplenish();
 }
 
 // ===== Double mort local navigateur — DDS WebAssembly R133 =====
@@ -2537,7 +2657,8 @@ function kickOffBackgroundDD(dealsList) {
     // exact via renderBoard()/ensureLocalExactDdForDeal. Au chargement, seule la première
     // donne est donc calculée : aucun solveur basse priorité ne peut retarder les 24
     // essais rapides du contrat de PAR principal.
-    const firstDeal = dealsList.slice(0, 1);
+    const firstDeal = dealsList.filter(deal => deal && !deal.par && !deal.ddTable).slice(0, 1);
+    if (!firstDeal.length) return;
     sendDDChunk(firstDeal, generationId, 0, 180);
     scheduleDDWatchdog(firstDeal, generationId);
 }
@@ -3797,6 +3918,68 @@ function contractChanceFastPrimaryStats(deal, target) {
     return { successes, samples, declarer: fastState.declarer, key: fastState.key };
 }
 
+function contractChancePoolRawEntriesForCell(deal, side, strain, declarer) {
+    const payload = deal && deal.precomputedStatV1;
+    if (!payload) return null;
+    const expectedSampling = window.PlayStatisticalPar && window.PlayStatisticalPar.STATISTICAL_PAR_SAMPLING_SEED_VERSION;
+    if (!expectedSampling || String(payload.samplingSeedVersion || '') !== String(expectedSampling)) return null;
+    if (String(payload.statisticalSeedId || '') !== String(deal.statisticalSeedId || '')) return null;
+    const normalizedSide = side === 'EW' ? 'EW' : 'NS';
+    const normalizedStrain = strain === 'NT' ? 'N' : String(strain || '').toUpperCase();
+    const normalizedDeclarer = String(declarer || '').toUpperCase();
+    if (!['S', 'H', 'D', 'C', 'N'].includes(normalizedStrain)
+        || !['N', 'E', 'S', 'W'].includes(normalizedDeclarer)) return null;
+
+    // Format V2 recommandé : pour chacun des deux camps, 24 tables DD brutes complètes.
+    // Il est indépendant du donneur, de la vulnérabilité et du contrat de PAR qui sera
+    // finalement retenu ; la même banque sert donc tous les numéros de board.
+    const rows = payload.sides && Array.isArray(payload.sides[normalizedSide])
+        ? payload.sides[normalizedSide]
+        : null;
+    if (rows) {
+        const out = new Map();
+        for (const row of rows) {
+            const sampleIndex = Number(row && row.sampleIndex);
+            const tricks = Number(row && row.table && row.table[normalizedStrain] && row.table[normalizedStrain][normalizedDeclarer]);
+            if (!Number.isInteger(sampleIndex) || sampleIndex < 0 || sampleIndex >= CONTRACT_CHANCE_ADAPTIVE_MAX_TARGET) continue;
+            if (!Number.isInteger(tricks) || tricks < 0 || tricks > 13) continue;
+            out.set(sampleIndex, tricks);
+        }
+        return out.size ? out : null;
+    }
+
+    // Compatibilité avec le premier prototype ciblé sur le contrat principal.
+    const primary = payload.primary;
+    if (!primary || !Array.isArray(primary.entries)) return null;
+    if (String(primary.side || '') !== normalizedSide) return null;
+    if ((primary.strain === 'NT' ? 'N' : String(primary.strain || '').toUpperCase()) !== normalizedStrain) return null;
+    if (String(primary.declarer || '').toUpperCase() !== normalizedDeclarer) return null;
+    const out = new Map();
+    for (const row of primary.entries) {
+        const sampleIndex = Number(row && row.sampleIndex);
+        const tricks = Number(row && row.tricks);
+        if (!Number.isInteger(sampleIndex) || sampleIndex < 0 || sampleIndex >= CONTRACT_CHANCE_ADAPTIVE_MAX_TARGET) continue;
+        if (!Number.isInteger(tricks) || tricks < 0 || tricks > 13) continue;
+        out.set(sampleIndex, tricks);
+    }
+    return out.size ? out : null;
+}
+
+function contractChanceHydratePoolFastPrimary(deal, fastState, target, declarer, planKey) {
+    if (!fastState || !target || planKey !== 'raw') return 0;
+    const targetStrain = target.strain === 'NT' ? 'N' : String(target.strain || '').toUpperCase();
+    const source = contractChancePoolRawEntriesForCell(deal, target.side, targetStrain, declarer);
+    if (!source) return 0;
+    let added = 0;
+    for (const [sampleIndex, tricks] of source.entries()) {
+        if (!fastState.entries.has(sampleIndex)) {
+            fastState.entries.set(sampleIndex, tricks);
+            added++;
+        }
+    }
+    return added;
+}
+
 function contractChanceQueueFastPrimary(deal, allowConditioning) {
     if (!deal || !deal.ddTable || !deal.hands || !CONTRACT_CHANCE_LOCAL_DDS_ENABLED) return false;
     const target = contractChancePrimaryParTarget(deal);
@@ -3817,6 +4000,11 @@ function contractChanceQueueFastPrimary(deal, allowConditioning) {
         fastState.pending.clear();
         fastState.failures = 0;
     }
+    // V2 du réservoir : les 24 résultats bruts du contrat principal peuvent déjà avoir
+    // été résolus côté serveur. Ils ne sont réutilisables que pour le plan RAW exact ; dès
+    // que PONS conditionne la population après l'enchère, PLAY reprend automatiquement le
+    // chemin local afin de ne jamais mélanger deux populations statistiques différentes.
+    contractChanceHydratePoolFastPrimary(deal, fastState, target, declarer, planKey);
 
     let candidates = [];
     try {
@@ -3929,6 +4117,10 @@ function contractChanceDirectStateForTarget(deal, target, create = false) {
             && primary.declarer === cell.declarer
             && String(primary.key || '').endsWith(`|${planKey}`)) {
             for (const [sampleIndex, tricks] of primary.entries.entries()) state.entries.set(sampleIndex, tricks);
+        }
+        if (planKey === 'raw') {
+            const pooled = contractChancePoolRawEntriesForCell(deal, cell.side, cell.strain, cell.declarer);
+            if (pooled) for (const [sampleIndex, tricks] of pooled.entries()) state.entries.set(sampleIndex, tricks);
         }
         map.set(cell.key, state);
     }
@@ -8530,6 +8722,7 @@ function updateDealFileNameDisplay() {
 }
 
 function uiHandleDealFileChosen() {
+    randomDealPoolRequestGeneration++; // invalide un éventuel fetch de réservoir encore en vol
     const fileInput = document.getElementById('dealFileInput');
     resetContractChancePrewarmPipeline();
     pendingParsedDeals = null;
@@ -8563,6 +8756,7 @@ function uiHandleDealFileChosen() {
 // Symétrique de uiHandleDealFileChosen, pour une donne piochée dans la bibliothèque du
 // club (voir donnes/catalogue.json et initDealLibrary) plutôt qu'un fichier local.
 function uiHandleDealLibraryChosen() {
+    randomDealPoolRequestGeneration++; // invalide un éventuel fetch de réservoir encore en vol
     resetContractChancePrewarmPipeline();
     const select = document.getElementById('dealLibrarySelect');
     const filename = select ? select.value : '';
