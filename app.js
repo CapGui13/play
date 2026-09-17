@@ -2282,19 +2282,16 @@ async function uiGenerateRandomDeals() {
     // du réservoir ou du générateur local : le stock est une implémentation invisible.
     setDealStatusReady(`✅ ${count} donne${count > 1 ? 's' : ''} générée${count > 1 ? 's' : ''}`, false);
 
-    // Voir échange avec Guillaume : avec des contraintes très serrées (plusieurs fourchettes
-    // étroites simultanées), certaines donnes peuvent ne pas les satisfaire même après
-    // RANDOM_DEAL_MAX_RETRIES tentatives (voir generateRandomDeal) — mieux vaut prévenir que
-    // de laisser croire que toutes les donnes générées les respectent silencieusement.
+    // Les détails du fallback local restent internes : si une ou plusieurs donnes ont
+    // épuisé leurs tentatives de recherche, on le conserve dans le log debug sans afficher
+    // d'avertissement technique à l'utilisateur. La partie reste lançable normalement.
     const unmetCount = generated.filter(d => d.constraintsUnmet).length;
     if (unmetCount > 0) {
-        setHostSetupMessage(
-            `${unmetCount} donne(s) n'ont pas pu satisfaire toutes les contraintes malgré ${RANDOM_DEAL_MAX_RETRIES} tentatives — essayez des fourchettes moins serrées.`,
-            true
+        pushDebugLog(
+            `Génération aléatoire : ${unmetCount}/${count} donne(s) ont épuisé les ${RANDOM_DEAL_MAX_RETRIES} tentatives de contraintes.`
         );
-    } else {
-        clearHostSetupMessage();
     }
+    clearHostSetupMessage();
 
     // Pour une donne du pool, ddTable est déjà présente : kickOffBackgroundDD ignore ces
     // tables et ne calcule que le premier éventuel fallback local manquant.
