@@ -17,7 +17,7 @@ assert(app.includes('contractChancePoolRawEntriesForCell'), 'réutilisation V2 a
 assert(app.includes("action: 'enqueue-precompute'"), 'enqueue pré-calcul prioritaire absent');
 assert(app.includes("action: 'precompute-status'"), 'poll pré-calcul prioritaire absent');
 assert(app.includes('contractChanceHydrateRemotePrecompute'), 'hydratation progressive distante absente');
-assert(sw.includes('bridge-encheres-brl-r141-20260917-stat-resume-conditioned-prewarm'), 'cache service worker non versionné');
+assert(sw.includes('bridge-encheres-brl-r142-20260917-semantic-conditioning-key'), 'cache service worker non versionné');
 
 const hands = {
   N: { S: 'AKQJ', H: 'AKQ', D: 'AKQ', C: 'AKQ' },

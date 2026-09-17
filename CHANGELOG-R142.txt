@@ -1,0 +1,7 @@
+R142 — clé sémantique du PAR statistique conditionné
+
+- Corrige le préchauffage R141 qui était invalidé à chaque changement de signature brute de l’enchère.
+- La clé du plan conditionné dépend maintenant des contraintes PONS effectivement déduites.
+- Un Passe qui ne change pas les contraintes conserve donc les DDS déjà préchauffés.
+- Si PONS déduit réellement de nouvelles contraintes, le plan est invalidé comme auparavant.
+- Cache PWA bumpé pour forcer la prise en compte sur mobile.
