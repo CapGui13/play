@@ -14,7 +14,10 @@ assert(app.includes("const RANDOM_DEAL_POOL_URL = 'https://api-gen-beta.vercel.a
 assert(app.includes('if (!generated) generated = generateRandomDeals(count, seatAssignment, constraints);'), 'fallback local absent');
 assert(app.includes("dealsList.filter(deal => deal && !deal.par && !deal.ddTable).slice(0, 1)"), 'DDS exact précalculé non respecté');
 assert(app.includes('contractChancePoolRawEntriesForCell'), 'réutilisation V2 absente');
-assert(sw.includes('bridge-encheres-brl-r134-20260909-deal-pool'), 'cache service worker non versionné');
+assert(app.includes("action: 'enqueue-precompute'"), 'enqueue pré-calcul prioritaire absent');
+assert(app.includes("action: 'precompute-status'"), 'poll pré-calcul prioritaire absent');
+assert(app.includes('contractChanceHydrateRemotePrecompute'), 'hydratation progressive distante absente');
+assert(sw.includes('bridge-encheres-brl-r135-20260917-priority-precompute'), 'cache service worker non versionné');
 
 const hands = {
   N: { S: 'AKQJ', H: 'AKQ', D: 'AKQ', C: 'AKQ' },

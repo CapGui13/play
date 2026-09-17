@@ -1988,6 +1988,18 @@ function dealSatisfiesCustomConstraints(hands, constraints) {
 // contraintes optionnelles (des fourchettes trop serrées simultanément, par exemple), la
 // dernière donne tentée est renvoyée telle quelle plutôt que de bloquer indéfiniment —
 // signalé à l'appelant via `constraintsUnmet` pour qu'il prévienne l'utilisateur.
+function createLiveStatisticalSeedId() {
+    try {
+        const bytes = new Uint8Array(18);
+        const c = typeof globalThis !== 'undefined' && globalThis.crypto;
+        if (c && typeof c.getRandomValues === 'function') {
+            c.getRandomValues(bytes);
+            return 'live_' + Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+        }
+    } catch (_) {}
+    return 'live_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+}
+
 function generateRandomDeal(boardNumber, seatAssignment, constraints) {
     let hands;
     let attempts = 0;
@@ -2009,6 +2021,8 @@ function generateRandomDeal(boardNumber, seatAssignment, constraints) {
                      // double mort complet (ddTable) suffit à afficher le PAR en fin de
                      // donne, voir kickOffBackgroundDD et renderDDTable existant.
         ddTable: null,
+        statisticalSeedId: createLiveStatisticalSeedId(),
+        precomputedStatV1: null,
         constraintsUnmet: !satisfied
     };
 }
@@ -2241,6 +2255,102 @@ function triggerRandomDealPoolReplenish() {
     } catch (_) {}
 }
 
+// ===== Pré-calcul GitHub prioritaire des donnes générées localement =====
+//
+// Invisible pour l'utilisateur : dès qu'un fallback local a produit les cartes, PLAY les
+// place dans une file Redis. GitHub calcule DD exact puis 24/48/72 tables statistiques et
+// PLAY absorbe les paliers au fil de l'eau. Le calcul DDS local reste actif en parallèle :
+// aucune dépendance réseau et aucune attente supplémentaire n'est imposée au joueur.
+const RANDOM_DEAL_PRIORITY_POLL_INTERVAL_MS = 1800;
+const RANDOM_DEAL_PRIORITY_POLL_MAX_MS = 5 * 60 * 1000;
+
+function startRandomDealPriorityPrecompute(list, requestGeneration) {
+    if (!Array.isArray(list) || !list.length) return;
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
+    const candidates = list.filter(deal => deal && deal.hands && deal.statisticalSeedId && !deal.dealPoolVersion);
+    if (!candidates.length) return;
+
+    const payloadDeals = candidates.map(deal => ({
+        statisticalSeedId: String(deal.statisticalSeedId),
+        hands: deal.hands
+    }));
+
+    try {
+        fetch(RANDOM_DEAL_POOL_URL, {
+            method: 'POST',
+            cache: 'no-store',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'enqueue-precompute', deals: payloadDeals })
+        }).then(response => {
+            if (!response.ok || requestGeneration !== randomDealPoolRequestGeneration) return null;
+            return response.json().catch(() => null);
+        }).then(payload => {
+            if (!payload || !payload.ok || requestGeneration !== randomDealPoolRequestGeneration) return;
+            pollRandomDealPriorityPrecompute(candidates, requestGeneration);
+        }).catch(() => {});
+    } catch (_) {}
+}
+
+function pollRandomDealPriorityPrecompute(candidates, requestGeneration) {
+    const byId = new Map(candidates.map(deal => [String(deal.statisticalSeedId || ''), deal]));
+    const known = new Map();
+    const terminal = new Set();
+    const startedAt = Date.now();
+
+    const poll = async () => {
+        if (requestGeneration !== randomDealPoolRequestGeneration) return;
+        if (Date.now() - startedAt > RANDOM_DEAL_PRIORITY_POLL_MAX_MS) return;
+        const ids = Array.from(byId.keys()).filter(id => id && !terminal.has(id));
+        if (!ids.length) return;
+
+        const knownPayload = {};
+        for (const id of ids) if (known.has(id)) knownPayload[id] = known.get(id);
+
+        try {
+            const response = await fetch(RANDOM_DEAL_POOL_URL, {
+                method: 'POST',
+                cache: 'no-store',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'precompute-status', ids, known: knownPayload })
+            });
+            if (response.ok && requestGeneration === randomDealPoolRequestGeneration) {
+                const payload = await response.json().catch(() => null);
+                for (const row of (payload && Array.isArray(payload.jobs) ? payload.jobs : [])) {
+                    const id = String(row && row.statisticalSeedId || '');
+                    const deal = byId.get(id);
+                    if (!deal) continue;
+                    const progress = Number(row && row.progress || 0);
+                    if (Number.isFinite(progress)) known.set(id, Math.max(Number(known.get(id) || 0), progress));
+
+                    if (!deal.ddTable && contractChanceTableIsValid(row && row.ddTable)) {
+                        // Utiliser le point d'entrée normal afin que le DD distant bénéficie
+                        // exactement des mêmes rafraîchissements/relays que le DD local.
+                        applyDDResultToBoard(deal.board, row.ddTable);
+                    }
+
+                    const stat = row && row.precomputedStatV1;
+                    if (stat && typeof stat === 'object'
+                        && String(stat.statisticalSeedId || '') === String(deal.statisticalSeedId || '')) {
+                        deal.precomputedStatV1 = stat;
+                        contractChanceHydrateRemotePrecompute(deal);
+                    }
+
+                    if (row && (row.status === 'done' || row.status === 'error')) terminal.add(id);
+                }
+            }
+        } catch (_) {}
+
+        if (requestGeneration !== randomDealPoolRequestGeneration) return;
+        if (Array.from(byId.keys()).some(id => !terminal.has(id))
+            && Date.now() - startedAt <= RANDOM_DEAL_PRIORITY_POLL_MAX_MS) {
+            setTimeout(poll, RANDOM_DEAL_PRIORITY_POLL_INTERVAL_MS);
+        }
+    };
+
+    // Premier poll quasi immédiat : le DD exact peut arriver bien avant les 24 tirages.
+    setTimeout(poll, 350);
+}
+
 async function uiGenerateRandomDeals() {
     const countInput = document.getElementById('randomDealCount');
     const count = countInput ? parseInt(countInput.value, 10) : NaN;
@@ -2271,11 +2381,13 @@ async function uiGenerateRandomDeals() {
     setHostSetupMessage('Préparation des donnes…', true);
     let generated = await fetchRandomDealsFromPool(count, constraints);
     if (requestGeneration !== randomDealPoolRequestGeneration) return;
+    const generatedFromPool = !!generated;
     if (!generated) generated = generateRandomDeals(count, seatAssignment, constraints);
 
     pendingParsedSource = 'random';
     pendingParsedDeals = generated;
     refreshPendingOrderedDeals();
+    if (!generatedFromPool) startRandomDealPriorityPrecompute(generated, requestGeneration);
 
     // rien à prévisualiser pour du random (voir uiPreviewDeals) : bandeau vert sans son
     // bouton Prévisualiser. Le texte reste volontairement identique que les cartes viennent
@@ -3973,6 +4085,80 @@ function contractChanceHydratePoolFastPrimary(deal, fastState, target, declarer,
             fastState.entries.set(sampleIndex, tricks);
             added++;
         }
+    }
+    return added;
+}
+
+function contractChanceHydrateRemotePrecompute(deal) {
+    const payload = deal && deal.precomputedStatV1;
+    if (!payload || String(payload.statisticalSeedId || '') !== String(deal.statisticalSeedId || '')) return 0;
+    const expectedSampling = window.PlayStatisticalPar && window.PlayStatisticalPar.STATISTICAL_PAR_SAMPLING_SEED_VERSION;
+    if (!expectedSampling || String(payload.samplingSeedVersion || '') !== String(expectedSampling)) return 0;
+
+    let added = 0;
+
+    // Chemin rapide du PAR principal : le pool brut peut remplacer immédiatement tout
+    // échantillon local pas encore terminé. Un plan PONS conditionné reste strictement local.
+    const fastState = contractChanceFastPrimaryState(deal, false);
+    if (fastState && fastState.target && String(fastState.key || '').endsWith('|raw')) {
+        added += contractChanceHydratePoolFastPrimary(
+            deal, fastState, fastState.target, fastState.declarer, 'raw'
+        );
+    }
+
+    // Chemin contrat-seul R140 : hydrater aussi les cellules déjà créées. Celles créées
+    // plus tard liront naturellement deal.precomputedStatV1 dans leur constructeur.
+    const directMap = contractChanceDirectStateMap(deal, false);
+    if (directMap) {
+        for (const state of directMap.values()) {
+            if (!state || state.planKey !== 'raw' || !state.cell) continue;
+            const pooled = contractChancePoolRawEntriesForCell(
+                deal, state.cell.side, state.cell.strain, state.cell.declarer
+            );
+            if (!pooled) continue;
+            for (const [sampleIndex, tricks] of pooled.entries()) {
+                if (!state.entries.has(sampleIndex)) {
+                    state.entries.set(sampleIndex, tricks);
+                    added++;
+                }
+            }
+        }
+    }
+
+    // Fallback table complète (sacrifices / cas complexes). Ici les entrées stockent la
+    // table DD entière et non une seule cellule. Ne jamais injecter le brut si PONS a
+    // conditionné la population après l'enchère.
+    const generic = contractChanceDealState(deal, false);
+    if (generic && generic.generation === contractChanceGeneration) {
+        const auctionFinished = (() => {
+            try { return isAuctionOver(deal.auctionHistory || []); } catch (_) { return false; }
+        })();
+        for (const side of ['NS', 'EW']) {
+            if (contractChanceFastPrimaryPlanIdentity(deal, side, auctionFinished) !== 'raw') continue;
+            const rows = payload.sides && Array.isArray(payload.sides[side]) ? payload.sides[side] : [];
+            const sideState = generic.sides[side];
+            for (const row of rows) {
+                const sampleIndex = Number(row && row.sampleIndex);
+                if (!Number.isInteger(sampleIndex) || sampleIndex < 0 || sampleIndex >= CONTRACT_CHANCE_ADAPTIVE_MAX_TARGET) continue;
+                if (!contractChanceTableIsValid(row && row.table) || sideState.entries.has(sampleIndex)) continue;
+                sideState.entries.set(sampleIndex, {
+                    table: row.table,
+                    profiles: null,
+                    sampleIndex,
+                    fixedSide: side
+                });
+                sideState.queued.delete(sampleIndex);
+                added++;
+            }
+        }
+    }
+
+    if (added > 0) {
+        try { contractChanceUpdateAdaptiveTargets(deal); } catch (_) {}
+        scheduleContractChanceDisplayRefresh(deal, true);
+        // Repasser par l'ordonnanceur normal pour qu'il constate les indices déjà remplis
+        // et n'ajoute que les éventuels calculs encore réellement nécessaires.
+        setTimeout(() => contractChanceQueueForDeal(deal, 155), 0);
     }
     return added;
 }
