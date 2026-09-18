@@ -34,8 +34,17 @@ jobs:
             node --check "$file"
           done < <(find . -type f -name '*.js' -not -path './.git/*' -print0 | sort -z)
 
-      - name: Gate — non-régression PLAY
+      - name: Gate — non-régression PLAY (socle R133)
         run: node tests/regression-gate-r133.js
+
+      - name: Gate — non-régression PLAY (courante)
+        run: node tests/regression-gate.js
+
+      - name: Gate — moteur BRL
+        run: node tests/brl-engine-gate.js
+
+      - name: Gate — pool / pré-calcul statistique
+        run: node tests/deal-pool-gate.js
 
       - name: Bump automatique de CACHE_NAME dans sw.js
         # Chaque déploiement validé reçoit un cache unique dérivé du commit.

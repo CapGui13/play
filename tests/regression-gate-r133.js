@@ -1,11 +1,11 @@
 'use strict';
 
-// R133 — adaptateur temporaire de la gate historique.
+// R133 — adaptateur de compatibilité de la gate historique.
 //
-// On conserve intégralement tests/regression-gate.js et toutes ses assertions R120..R128.
-// La seule section devenue volontairement fausse est la section R131 qui exigeait les
-// endpoints DDS Vercel A/B. On remplace cette section EN MÉMOIRE par les invariants R133,
-// puis on exécute le reste du fichier sans modifier la couverture historique.
+// Depuis R143.2, tests/regression-gate.js est modernisée et exécutable directement par la
+// CI. Ce wrapper reste conservé pour compatibilité avec d'anciens paquets : s'il rencontre
+// encore la vieille section R131/Vercel, il la remplace en mémoire par les invariants R133 ;
+// sinon il exécute simplement la gate courante telle quelle.
 
 const fs = require('fs');
 const path = require('path');
@@ -14,6 +14,21 @@ const Module = require('module');
 const legacyPath = path.join(__dirname, 'regression-gate.js');
 const legacySource = fs.readFileSync(legacyPath, 'utf8');
 
+// R143.2 — le workflow de production doit réellement exécuter les gates présentes dans
+// le dépôt. Cette assertion vit dans la gate R133, elle-même appelée explicitement par le
+// workflow, afin qu'une suppression accidentelle de regression-gate.js / BRL / pool soit
+// détectée avant le déploiement.
+const workflowPath = path.join(__dirname, '..', '.github', 'workflows', 'deploy.yml');
+const workflowSource = fs.readFileSync(workflowPath, 'utf8');
+for (const command of [
+    'node tests/regression-gate-r133.js',
+    'node tests/regression-gate.js',
+    'node tests/brl-engine-gate.js',
+    'node tests/deal-pool-gate.js'
+]) {
+    if (!workflowSource.includes(command)) throw new Error(`R143.2 CI: gate non exécutée par deploy.yml: ${command}`);
+}
+
 // R139 CI compat — la gate historique compile contractChanceUpdateAdaptiveTargets()
 // isolément dans un vm. R138 lui a ajouté le helper d'ordonnancement PAR-first
 // contractChanceOrderedSides(), présent au runtime dans app.js mais absent de ce petit
@@ -21,10 +36,12 @@ const legacySource = fs.readFileSync(legacyPath, 'utf8');
 // il ne teste pas l'ordre des camps, seulement les transitions 24 -> 48 -> 72.
 const adaptiveContextNeedle = "contractChanceGeneration: 7,\n        contractChanceTargetsForDeal:";
 const adaptiveContextReplacement = "contractChanceGeneration: 7,\n        contractChanceOrderedSides: (_deal, sides) => Array.isArray(sides) ? sides : ['NS', 'EW'],\n        contractChanceTargetsForDeal:";
-let source = legacySource.replace(adaptiveContextNeedle, adaptiveContextReplacement);
-if (source === legacySource) {
-    throw new Error('R139 CI: contexte adaptatif historique introuvable');
-}
+// R143.2 : regression-gate.js contient désormais lui-même ce contexte, puisqu'il est
+// exécuté directement par la CI. Garder ce shim uniquement pour compatibilité avec une
+// ancienne copie de la gate, sans exiger que le vieux motif existe encore.
+let source = legacySource.includes(adaptiveContextNeedle)
+    ? legacySource.replace(adaptiveContextNeedle, adaptiveContextReplacement)
+    : legacySource;
 
 // R142 CI hardening — les tests historiques utilisent compileFunction() pour exécuter
 // une fonction d'app.js dans un vm minimal. Jusqu'ici, chaque nouveau helper appelé par
@@ -82,11 +99,11 @@ const resilientCompileFunction = `function compileFunction(source, name, context
     const program = scalarChunks.join('\\n') + '\\n' + functionChunks.join('\\n') + '\\n' + name + ';';
     return vm.runInNewContext(program, sandbox);
 }`;
-const sourceWithResilientCompiler = source.replace(legacyCompileFunction, resilientCompileFunction);
-if (sourceWithResilientCompiler === source) {
-    throw new Error('R142 CI: compileFunction historique introuvable');
+if (source.includes(legacyCompileFunction)) {
+    source = source.replace(legacyCompileFunction, resilientCompileFunction);
+} else if (!source.includes('const seenFunctions = new Set()')) {
+    throw new Error('R143.2 CI: compileFunction résilient introuvable');
 }
-source = sourceWithResilientCompiler;
 const localDdsWorkerPath = path.join(__dirname, '..', 'dds', 'local-dds-worker.js');
 const localDdsWorker = fs.readFileSync(localDdsWorkerPath, 'utf8');
 if (!localDdsWorker.includes("msg.type !== 'solve' && msg.type !== 'solve-contract'")) {
@@ -101,12 +118,10 @@ const startMarker = '// 8) R131 : parallélisme Vercel mesuré — une vague de 
 const endMarker = "console.log('PLAY regression gate PASS');";
 
 const start = source.indexOf(startMarker);
-const end = source.indexOf(endMarker, start);
+const end = start >= 0 ? source.indexOf(endMarker, start) : -1;
 
-if (start < 0 || end < 0 || end <= start) {
-    throw new Error('R133: section R131 historique introuvable dans regression-gate.js');
-}
-
+// R143.2 : regression-gate.js est désormais modernisée en dur. Conserver l'adaptateur
+// uniquement pour une ancienne copie qui contiendrait encore la section R131 historique.
 const replacement = String.raw`// ---------------------------------------------------------------------------
 // 8) R133 : DDS WebAssembly local — aucun calcul DDS Vercel
 // ---------------------------------------------------------------------------
@@ -213,10 +228,13 @@ assert(r140Cell.includes('scheduleContractChanceDisplayRefresh(deal, milestone)'
 
 console.log('PLAY regression gate PASS');`;
 
-const patched =
-    source.slice(0, start) +
-    replacement +
-    source.slice(end + endMarker.length);
+const patched = start >= 0 && end > start
+    ? source.slice(0, start) + replacement + source.slice(end + endMarker.length)
+    : source;
+
+if (start < 0 && !source.includes('// 8) R133 : DDS WebAssembly local — aucun calcul DDS Vercel')) {
+    throw new Error('R143.2: ni section R131 historique ni section R133 modernisée trouvée');
+}
 
 const compiled = new Module(legacyPath, module);
 compiled.filename = legacyPath;

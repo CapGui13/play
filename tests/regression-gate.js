@@ -61,11 +61,51 @@ function extractFunction(source, name) {
     fail(`Fin de fonction introuvable: ${name}`);
 }
 
+// R143.2 — compilateur de test résilient : embarque récursivement les helpers d'app.js
+// appelés par la fonction testée, ainsi que les constantes scalaires simples. Cela permet
+// d'exécuter cette gate directement en CI sans qu'un refactor interne casse artificiellement
+// le vm de test faute d'un helper ajouté manuellement au contexte.
 function compileFunction(source, name, context = {}) {
-    const fnText = extractFunction(source, name);
-    return vm.runInNewContext(`${fnText}\n${name};`, { ...context });
-}
+    const sandbox = { ...context };
+    const seenFunctions = new Set();
+    const functionChunks = [];
+    const scalarChunks = [];
+    const seenScalars = new Set();
 
+    function maybeCollectScalar(identifier) {
+        if (!/^[A-Z][A-Z0-9_]*$/.test(identifier)) return;
+        if (Object.prototype.hasOwnProperty.call(sandbox, identifier) || seenScalars.has(identifier)) return;
+        const re = new RegExp('(?:^|\\n)\\s*const\\s+' + identifier + '\\s*=\\s*([^;\\n]+)\\s*;', 'm');
+        const match = source.match(re);
+        if (!match) return;
+        const expression = String(match[1] || '').trim();
+        if (!/^(?:-?\d+(?:\.\d+)?|true|false|null|undefined|'[^'\n]*'|"[^"\n]*")$/.test(expression)) return;
+        seenScalars.add(identifier);
+        scalarChunks.push('const ' + identifier + ' = ' + expression + ';');
+    }
+
+    function collect(functionName) {
+        if (seenFunctions.has(functionName) || Object.prototype.hasOwnProperty.call(sandbox, functionName)) return;
+        const marker = 'function ' + functionName + '(';
+        if (!source.includes(marker)) return;
+        seenFunctions.add(functionName);
+        const text = extractFunction(source, functionName);
+        const identifiers = text.match(/\b[A-Za-z_$][A-Za-z0-9_$]*\b/g) || [];
+        for (const identifier of identifiers) maybeCollectScalar(identifier);
+        const callRe = /\b([A-Za-z_$][A-Za-z0-9_$]*)\s*\(/g;
+        let match;
+        while ((match = callRe.exec(text))) {
+            const dependency = match[1];
+            if (dependency !== functionName && source.includes('function ' + dependency + '(')) collect(dependency);
+        }
+        functionChunks.push(text);
+    }
+
+    collect(name);
+    if (!seenFunctions.has(name) && !Object.prototype.hasOwnProperty.call(sandbox, name)) fail('Fonction introuvable: ' + name);
+    const program = scalarChunks.join('\n') + '\n' + functionChunks.join('\n') + '\n' + name + ';';
+    return vm.runInNewContext(program, sandbox);
+}
 function extractSetValues(source, name) {
     const re = new RegExp(`const\\s+${name}\\s*=\\s*new\\s+Set\\s*\\(\\s*\\[([\\s\\S]*?)\\]\\s*\\)\\s*;`);
     const m = source.match(re);
@@ -168,6 +208,7 @@ assert(!needsRefine(54, 72, 72), 'R125: 72 est le plafond absolu');
         determineContract: () => ({ declarer: 'N' }),
         contractChanceDealState: () => state,
         contractChanceGeneration: 7,
+        contractChanceOrderedSides: (_deal, sides) => Array.isArray(sides) ? sides : ['NS', 'EW'],
         contractChanceTargetsForDeal: () => [
             { side: 'NS', isReferenceOnly: false },
             { side: 'EW', isReferenceOnly: false }
@@ -215,11 +256,51 @@ const parseBid = call => {
     return m ? { level: Number(m[1]), strain: m[2] } : null;
 };
 const sideFromDeclarer = d => (d === 'N' || d === 'S' || d === 'NS') ? 'NS' : ((d === 'E' || d === 'W' || d === 'EW') ? 'EW' : '');
+const bidCanEstablishDeclarer = compileFunction(app, 'contractChanceAuctionBidCanEstablishDeclarer');
+const auctionEstablishedDeclarer = compileFunction(app, 'contractChanceAuctionEstablishedDeclarer', {
+    parseBid,
+    contractChanceAuctionBidCanEstablishDeclarer: bidCanEstablishDeclarer
+});
 const established = compileFunction(app, 'contractChanceEstablishedDeclarerForStrain', {
     parseBid,
-    statisticalParSideFromDeclarer: sideFromDeclarer
+    statisticalParSideFromDeclarer: sideFromDeclarer,
+    contractChanceAuctionEstablishedDeclarer: auctionEstablishedDeclarer
 });
 assert(established({ auctionHistory: [{ seat: 'N', call: '1NT' }, { seat: 'E', call: 'PASS' }, { seat: 'S', call: '6NT' }] }, { declarer: 'N', strain: 'NT' }, 'NS', 'N') === 'N', 'R122: déclarant SA établi incorrect');
+
+// R143.2 : un contrôle ne peut plus établir le déclarant statistique.
+const controlDeal = {
+    hands: {
+        E: { S: 'AQJ973', H: '', D: 'A85', C: 'AQ76' },
+        W: { S: 'K65', H: 'Q65', D: 'KQJ', C: 'JT52' }
+    },
+    auctionHistory: [
+        { seat: 'W', call: '4D', explanation: 'Contrôle Carreau' },
+        { seat: 'E', call: '4H', explanation: 'Contrôle Cœur' },
+        { seat: 'W', call: '4S' },
+        { seat: 'E', call: '6S' }
+    ]
+};
+assert(auctionEstablishedDeclarer(controlDeal, 'EW', 'D') === '', 'R143.2: un contrôle 4K a établi le déclarant');
+assert(auctionEstablishedDeclarer(controlDeal, 'EW', 'H') === '', 'R143.2: un contrôle 4C a établi le déclarant');
+assert(auctionEstablishedDeclarer(controlDeal, 'EW', 'S') === 'E', 'R143.2: le contrôle 4P avec 3 cartes a masqué le vrai déclarant 6P');
+
+const naturalDeal = {
+    hands: { N: { H: 'AKJ87' }, S: { H: 'Q654' } },
+    auctionHistory: [{ seat: 'N', call: '1H' }, { seat: 'S', call: '4H' }]
+};
+assert(auctionEstablishedDeclarer(naturalDeal, 'NS', 'H') === 'N', 'R143.2: une enchère naturelle 1C n’établit plus le déclarant');
+
+const fastDeclarer = compileFunction(app, 'contractChanceFastPrimaryDeclarer', {
+    contractChanceAuctionEstablishedDeclarer: auctionEstablishedDeclarer
+});
+assert(fastDeclarer({ ...controlDeal, ddTable: { S: { E: 12, W: 10 } } }, { side: 'EW', strain: 'S', declarer: 'EW' }, true) === 'E', 'R143.2: le préchauffage n’utilise pas le vrai déclarant naturel');
+const controlOnlyDeal = {
+    hands: { E: { S: 'AQJ973' }, W: { S: 'K65' } },
+    auctionHistory: [{ seat: 'W', call: '4S', explanation: 'Contrôle Pique' }],
+    ddTable: { S: { E: 12, W: 10 } }
+};
+assert(fastDeclarer(controlOnlyDeal, { side: 'EW', strain: 'S', declarer: 'EW' }, true) === '', 'R143.2: un simple contrôle déclenche encore le préchauffage');
 
 const progressMap = new Map([['N', '75%'], ['S', '100%']]);
 const groupHtml = compileFunction(app, 'contractChanceSidecarSideGroupHtml', {
@@ -308,6 +389,22 @@ const primaryParTarget = compileFunction(app, 'contractChancePrimaryParTarget', 
 });
 const primaryMake = primaryParTarget({ ddTable: {} });
 assert(primaryMake && primaryMake.kind === 'make', 'R143: un sacrifice reste prioritaire dans le préchauffage statistique');
+
+// R143.2 : si DealerPar ne contient qu’un sacrifice, préchauffer le GROS contrat adverse,
+// pas la partielle du camp sacrifiant même si son fit obtient un meilleur rang logique.
+const sacrificeFallbackPrimary = compileFunction(app, 'contractChancePrimaryParTarget', {
+    contractChanceExactParTargets: () => [
+        { kind: 'sacrifice', side: 'NS', tier: 'sacrifice', level: 7, strain: 'H' }
+    ],
+    ddTableChanceTargetsForDeal: () => [
+        { kind: 'make', side: 'NS', tier: 'partial', level: 2, strain: 'H', isBestTableTarget: true },
+        { kind: 'make', side: 'EW', tier: 'slam', level: 6, strain: 'S', isBestTableTarget: true }
+    ],
+    contractChanceLogicalTargetRank: (_deal, target) => target.side === 'NS' ? 510 : 509
+});
+const fallbackBigContract = sacrificeFallbackPrimary({ ddTable: {} });
+assert(fallbackBigContract && fallbackBigContract.side === 'EW' && fallbackBigContract.tier === 'slam' && fallbackBigContract.level === 6,
+    'R143.2: une partielle sacrificielle est encore préchauffée avant le chelem adverse');
 
 // ---------------------------------------------------------------------------
 // 4) Frontière d'autorité réseau : un invité ne peut pas envoyer des commandes hôte
@@ -430,34 +527,107 @@ assert(!/const\s+ICE_CONFIG\s*=/.test(peer), 'R128: ancienne configuration ICE m
 
 
 // ---------------------------------------------------------------------------
-// 8) R131 : parallélisme Vercel mesuré — une vague de 24 = 6 lots de 4
+// 8) R133 : DDS WebAssembly local — aucun calcul DDS Vercel
 // ---------------------------------------------------------------------------
-assert(/const\s+CONTRACT_CHANCE_DD_CHUNK_SIZE\s*=\s*4\s*;/.test(app), 'R131: lot DDS doit être de 4');
-assert(/const\s+CONTRACT_CHANCE_MAX_HTTP\s*=\s*6\s*;/.test(app), 'R131: six lots locaux doivent pouvoir tourner en parallèle');
-assert(/const\s+CONTRACT_CHANCE_REMOTE_TIMEOUT_MS\s*=\s*30000\s*;/.test(app), 'R131: timeout hôte 30 s absent');
-assert(/const\s+CONTRACT_CHANCE_COLLAB_FETCH_TIMEOUT_MS\s*=\s*10000\s*;/.test(app), 'R131: timeout collaboration court absent');
-assert(/const\s+CONTRACT_CHANCE_TARGET\s*=\s*24\s*;/.test(app), 'R131: cible initiale 24 modifiée');
-assert(/const\s+CONTRACT_CHANCE_ADAPTIVE_MID_TARGET\s*=\s*48\s*;/.test(app), 'R131: cible 48 modifiée');
-assert(/const\s+CONTRACT_CHANCE_ADAPTIVE_MAX_TARGET\s*=\s*72\s*;/.test(app), 'R131: cible 72 modifiée');
+assert(/const\s+LOCAL_DDS_WORKER_URL\s*=\s*'dds\/local-dds-worker\.js'\s*;/.test(app), 'R133: Worker DDS local absent');
+assert(/const\s+LOCAL_DDS_BROWSER_ENABLED\s*=\s*typeof Worker === 'function'\s*;/.test(app), 'R133: détection Worker DDS local absente');
+assert(/const\s+LOCAL_DDS_MAX_DESKTOP_WORKERS\s*=\s*4\s*;/.test(app), 'R138: plafond desktop DDS local modifié');
+assert(/const\s+CONTRACT_CHANCE_LOCAL_DDS_ENABLED\s*=\s*LOCAL_DDS_BROWSER_ENABLED\s*;/.test(app), 'R133: PAR statistique non relié au DDS local');
+assert(/const\s+CONTRACT_CHANCE_REMOTE_DDS_ENABLED\s*=\s*false\s*;/.test(app), 'R133: DDS distant doit rester désactivé');
+assert(/const\s+CONTRACT_CHANCE_NATIVE_URLS\s*=\s*\[\s*\]\s*;/.test(app), 'R133: anciennes lanes DDS distantes encore configurées');
+assert(/const\s+CONTRACT_CHANCE_LEGACY_URL\s*=\s*''\s*;/.test(app), 'R133: fallback DDS distant encore configuré');
 
-const r131Solve = extractFunction(app, 'contractChanceSolveBatch');
-assert(r131Solve.includes('const primaryLaneIndex = contractChanceNativeLaneSequence++ % CONTRACT_CHANCE_NATIVE_URLS.length'), 'R131: alternance A/B primaire absente');
-assert(r131Solve.includes('const alternateLaneUrl = CONTRACT_CHANCE_NATIVE_URLS[(primaryLaneIndex + 1) % CONTRACT_CHANCE_NATIVE_URLS.length]'), 'R131: reprise sur lane native opposée absente');
-assert(!r131Solve.includes('laneBatches'), 'R131: ancien redécoupage interne du lot encore présent');
-assert(!r131Solve.includes('Promise.allSettled(lanePromises)'), 'R131: ancien double appel par lot encore présent');
-const primaryFetchAt = r131Solve.indexOf('contractChanceFetchLane(primaryLaneUrl, items)');
-const alternateFetchAt = r131Solve.indexOf('contractChanceFetchLane(alternateLaneUrl, missingItems)');
-const legacyFetchAt = r131Solve.indexOf('contractChanceFetchLane(CONTRACT_CHANCE_LEGACY_URL, missingItems)');
-assert(primaryFetchAt >= 0 && alternateFetchAt > primaryFetchAt && legacyFetchAt > alternateFetchAt, 'R131: ordre primaire -> alternate -> legacy incorrect');
-assert(r131Solve.includes('missingNow()'), 'R131: reprise ciblée des seules tables manquantes absente');
+assert(!app.includes('play-dds-native.vercel.app/api/dds-'), 'R133: endpoint play-dds-native encore présent');
+assert(!app.includes('api-gen-beta.vercel.app/api/dds'), 'R133: endpoint api-gen-beta DDS encore présent');
 
-const r131Pump = extractFunction(app, 'pumpContractChanceQueue');
-assert(r131Pump.includes('batch.length < CONTRACT_CHANCE_DD_CHUNK_SIZE'), 'R131: pump ne respecte plus la taille de lot');
-assert(r131Pump.includes('contractChanceActiveHttp < CONTRACT_CHANCE_MAX_HTTP'), 'R131: limite de concurrence locale absente');
+assert(/const\s+CONTRACT_CHANCE_TARGET\s*=\s*24\s*;/.test(app), 'R133: cible initiale 24 modifiée');
+assert(/const\s+CONTRACT_CHANCE_ADAPTIVE_MID_TARGET\s*=\s*48\s*;/.test(app), 'R133: cible 48 modifiée');
+assert(/const\s+CONTRACT_CHANCE_ADAPTIVE_MAX_TARGET\s*=\s*72\s*;/.test(app), 'R133: cible 72 modifiée');
 
-const r131Fetch = extractFunction(app, 'contractChanceFetchLane');
-assert(r131Fetch.includes('timeoutMs = CONTRACT_CHANCE_REMOTE_TIMEOUT_MS'), 'R131: timeout par appel non paramétrable');
-assert(app.includes('contractChanceFetchLane(CONTRACT_CHANCE_NATIVE_URLS[0], workItems, CONTRACT_CHANCE_COLLAB_FETCH_TIMEOUT_MS)'), 'R131: collaboration mobile ne conserve pas son timeout court');
-assert(app.includes('contractChanceFetchLane(CONTRACT_CHANCE_NATIVE_URLS[i % 2], chunk, CONTRACT_CHANCE_COLLAB_FETCH_TIMEOUT_MS)'), 'R131: collaboration desktop ne conserve pas son timeout court');
+const r133DesiredWorkers = extractFunction(app, 'localDdsDesiredWorkerCount');
+assert(r133DesiredWorkers.includes('if (isLikelyMobileDevice()) return 1'), 'R133: mobile doit rester à un seul Worker DDS');
+assert(r133DesiredWorkers.includes('return LOCAL_DDS_MAX_DESKTOP_WORKERS'), 'R138: pool DDS desktop adaptatif absent');
+
+const r133Solve = extractFunction(app, 'contractChanceSolveBatch');
+assert(r133Solve.includes('rows = await localDdsSolveItems(items, priority)'), 'R133: PAR statistique ne passe pas par DDS local');
+assert(!r133Solve.includes('contractChanceFetchLane('), 'R133: contractChanceSolveBatch contient encore un appel DDS distant');
+
+const r133Exact = extractFunction(app, 'sendDDChunk');
+assert(r133Exact.includes('const table = await localDdsSolveOne(item.pbn, priority)'), 'R133: table DD exacte ne passe pas par DDS local');
+assert(!r133Exact.includes('fetch('), 'R133: table DD exacte contient encore un fetch réseau');
+
+const r133Fetch = extractFunction(app, 'contractChanceFetchLane');
+assert(r133Fetch.includes('if (!CONTRACT_CHANCE_REMOTE_DDS_ENABLED) return []'), 'R133: coupe-circuit DDS distant absent');
+
+const r133Render = extractFunction(app, 'renderInlineParChances');
+assert(r133Render.includes('if (!CONTRACT_CHANCE_LOCAL_DDS_ENABLED) return'), 'R133: affichage PAR statistique non gardé par DDS local');
+
+const r133Final = extractFunction(app, 'ensureContractChanceFinalCalculation');
+assert(r133Final.includes('if (!CONTRACT_CHANCE_LOCAL_DDS_ENABLED) return'), 'R133: calcul final PAR statistique non gardé par DDS local');
+
+
+// R138 — ordonnanceur PAR-first + coopération locale.
+assert(app.includes('function contractChancePrimaryParTarget('), 'R138: sélection PAR principal absente');
+assert(app.includes('function contractChanceTaskPriorityForSide('), 'R138: priorité par camp absente');
+const r138Queue = extractFunction(app, 'contractChanceQueueForDeal');
+assert(r138Queue.includes('if (!deal.ddTable)'), 'R138: statistiques lancées avant le DD exact');
+assert(r138Queue.includes('contractChanceQueueFastPrimary(deal, auctionFinished)'), 'R139: contrat de PAR rapide non priorisé');
+assert(r138Queue.includes('if (!fastPrimaryReady) return'), 'R139: tables complètes peuvent passer avant les 24 rapides');
+assert(r138Queue.includes('if (!auctionFinished) return'), 'R139: tables statistiques complètes encore calculées pendant les enchères');
+const r139Fast = extractFunction(app, 'contractChanceQueueFastPrimary');
+assert(r139Fast.includes('localDdsSolveContract(pbn, targetStrain, declarer, allowConditioning ? 300 : 210, fastState.groupKey)'), 'R139: PAR principal ne passe pas par SolveBoard rapide');
+const r139Progress = extractFunction(app, 'contractChanceTargetProgress');
+assert(r139Progress.includes('contractChanceFastPrimaryStats(deal, target)'), 'R139: affichage ne consomme pas le résultat rapide');
+const r139Kickoff = extractFunction(app, 'kickOffBackgroundDD');
+assert(!r139Kickoff.includes('for (let i = 1; i < dealsList.length'), 'R139: DD des donnes futures peut encore monopoliser les Workers');
+const r138Adapt = extractFunction(app, 'contractChanceUpdateAdaptiveTargets');
+assert(r138Adapt.includes('CONTRACT_CHANCE_TARGET).length < CONTRACT_CHANCE_TARGET'), 'R138: 48/72 peut démarrer avant les bases 24');
+const r138Guest = extractFunction(app, 'contractChanceSolveGuestWork');
+assert(r138Guest.includes('localDdsSolveItems(workItems, 145)'), 'R138: invité ne résout pas le DDS en local');
+assert(!r138Guest.includes('contractChanceFetchLane('), 'R138: collaboration invitée contient encore un DDS distant');
+const r138Dispatch = extractFunction(app, 'contractChanceDispatchCollaborativeWork');
+assert(r138Dispatch.includes('if (!CONTRACT_CHANCE_LOCAL_DDS_ENABLED) return 0'), 'R138: collaboration locale non activée');
+
+// R140 — contrats secondaires par SolveBoard, groupés par couleur + déclarant.
+assert(app.includes('const CONTRACT_CHANCE_DIRECT_MAX_CELLS_PER_SIDE = 4'), 'R140: seuil direct par camp absent');
+assert(app.includes('function contractChanceDirectTargetCell('), 'R140: cellule DDS contrat-seul absente');
+assert(app.includes('function contractChanceDirectCellGroups('), 'R140: regroupement des niveaux par cellule absent');
+assert(app.includes('function contractChanceCanUseDirectTargetMode('), 'R140: sélection du mode direct absente');
+assert(app.includes('function contractChanceUpdateDirectAdaptiveTargets('), 'R140: adaptatif direct 24/48/72 absent');
+const r140Queue = extractFunction(app, 'contractChanceQueueForDeal');
+assert(r140Queue.includes('contractChanceCanUseDirectTargetMode(deal, contract)'), 'R140: chemin direct secondaire non branché');
+assert(r140Queue.includes('contractChanceQueueDirectTargetsForSide('), 'R140: cibles secondaires non envoyées à SolveBoard');
+const r140Cell = extractFunction(app, 'contractChanceQueueDirectCell');
+assert(r140Cell.includes('localDdsSolveContract('), 'R140: cellule secondaire ne passe pas par DDS contrat-seul');
+const r140Progress = extractFunction(app, 'contractChanceTargetProgress');
+assert(r140Progress.includes('contractChanceDirectTargetStats(deal, target)'), 'R140: affichage ne consomme pas le cache direct secondaire');
+assert(r138Dispatch.includes('contractChanceCanUseDirectTargetMode(deal, contract)'), 'R140: collaboration table peut encore concurrencer le mode direct');
+
+// R141 — cache DDS terminé + raffinement adaptatif indépendant par cellule.
+assert(app.includes('const LOCAL_DDS_CONTRACT_CACHE_LIMIT = 1536'), 'R141: cache DDS contrat absent');
+assert(app.includes('const LOCAL_DDS_TABLE_CACHE_LIMIT = 128'), 'R141: cache DDS table absent');
+const r141SolveContract = extractFunction(app, 'localDdsSolveContract');
+assert(r141SolveContract.includes('localDdsCacheGet(localDdsContractResultCache, cacheKey)'), 'R141: résultat contrat terminé non réutilisé');
+const r141SolveTable = extractFunction(app, 'localDdsSolveOne');
+assert(r141SolveTable.includes('localDdsCacheGet(localDdsTableResultCache, normalizedPbn)'), 'R141: résultat table terminé non réutilisé');
+const r141QueueDirect = extractFunction(app, 'contractChanceQueueDirectTargetsForSide');
+assert(r141QueueDirect.includes('state.adaptiveTarget'), 'R141: objectif direct encore piloté globalement par le camp');
+const r141AdaptDirect = extractFunction(app, 'contractChanceUpdateDirectAdaptiveTargets');
+assert(r141AdaptDirect.includes('cellState.adaptiveTarget'), 'R141: raffinement par cellule absent');
+assert(r141AdaptDirect.includes('cellState.adaptiveSettled = true'), 'R141: stabilisation indépendante par cellule absente');
+assert(r140Progress.includes("source === 'direct' && Number.isFinite(Number(directStats && directStats.goal))"), 'R141: affichage n’utilise pas l’objectif propre de la cellule');
+
+// R142 — pourcentage provisoire tôt + rafraîchissements UI/P2P regroupés.
+assert(/const\s+CONTRACT_CHANCE_EARLY_PCT_MIN_SAMPLES\s*=\s*8\s*;/.test(app), 'R142: seuil du premier pourcentage modifié');
+assert(/const\s+CONTRACT_CHANCE_REFRESH_THROTTLE_MS\s*=\s*90\s*;/.test(app), 'R142: throttle d’affichage absent');
+const r142Text = extractFunction(app, 'contractChanceProgressText');
+assert(r142Text.includes('n >= CONTRACT_CHANCE_EARLY_PCT_MIN_SAMPLES'), 'R142: pourcentage provisoire avant 24 absent');
+assert(r142Text.includes('pct.toFixed(0)') && r142Text.includes('CONTRACT_CHANCE_EARLY_PCT_MIN_SAMPLES'), 'R142: texte pourcentage + progression absent');
+assert(r142Text.includes('CONTRACT_CHANCE_TARGET'), 'R142: compteur initial avant seuil absent');
+const r142Schedule = extractFunction(app, 'scheduleContractChanceDisplayRefresh');
+assert(r142Schedule.includes('CONTRACT_CHANCE_REFRESH_THROTTLE_MS'), 'R142: scheduler n’utilise pas le throttle');
+assert(r142Schedule.includes('refreshContractChanceDisplayForDeal(deal)'), 'R142: scheduler ne rafraîchit pas l’affichage');
+assert(r139Fast.includes('scheduleContractChanceDisplayRefresh(deal, milestone)'), 'R142: primaire ne passe pas par le scheduler');
+assert(r140Cell.includes('scheduleContractChanceDisplayRefresh(deal, milestone)'), 'R142: secondaires ne passent pas par le scheduler');
 
 console.log('PLAY regression gate PASS');

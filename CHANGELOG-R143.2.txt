@@ -1,0 +1,19 @@
+PLAY R143.2 — CI complète + priorité PAR + déclarant naturel
+Date : 2026-09-19
+
+CORRECTIONS
+- GitHub Actions exécute désormais les 4 gates source avant tout déploiement :
+  regression-gate-r133.js, regression-gate.js, brl-engine-gate.js, deal-pool-gate.js.
+- regression-gate.js est modernisée pour être exécutable directement (helper vm résilient + invariants DDS local R133).
+- regression-gate-r133.js vérifie que deploy.yml continue réellement d’appeler les 4 gates.
+- Quand DealerPar ne fournit qu’un sacrifice, le préchauffage privilégie le camp adverse puis le palier :
+  chelem > manche > partielle. Une partielle sacrificielle ne passe donc plus devant le gros contrat qu’elle cherche à empêcher.
+- Le déclarant statistique n’est plus établi par toute enchère de la couleur : les contrôles/cue-bids explicites sont rejetés.
+- Pour une couleur au palier de 4+, une enchère ne peut établir le déclarant que si le joueur détient au moins 5 cartes ;
+  cela évite notamment qu’un 4♦/4♥/4♠ de contrôle déclenche un mauvais préchauffage.
+- Le même filtre est utilisé par le préchauffage rapide et par l’ordre d’affichage N/S ou E/O.
+- Cache Service Worker bumpé en R143.2.
+
+CONSERVÉ
+- R143 : aucune probabilité de sacrifice rentable n’est calculée ou affichée.
+- R143.1 : runtime statistique R141/R142 chargé et pré-caché.

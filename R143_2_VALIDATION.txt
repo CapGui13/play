@@ -1,0 +1,46 @@
+PLAY R143.2 — validation
+Date : 2026-09-19
+
+BASE
+- Base de travail : PLAY R143.1 complète, correspondant au main après commit ab6228bc23ef516a00db611b656281680d0506c1.
+- R143 conservé : aucune probabilité de sacrifice rentable n'est calculée ni affichée.
+- R143.1 conservé : statistical-par-runtime-patch.js reste chargé après app.js et pré-caché par le Service Worker.
+
+CORRECTIONS R143.2
+1. CI / GitHub Actions
+- deploy.yml exécute regression-gate-r133.js.
+- deploy.yml exécute regression-gate.js directement.
+- deploy.yml exécute brl-engine-gate.js.
+- deploy.yml exécute deal-pool-gate.js.
+- regression-gate-r133.js vérifie que ces quatre commandes restent présentes dans deploy.yml.
+- regression-gate.js est modernisée : compilateur vm récursif/résilient et section DDS local R133 intégrée en dur.
+
+2. Priorité du préchauffage quand DealerPar est uniquement sacrificiel
+- Le camp adverse au sacrifice passe en priorité.
+- À camp comparable : chelem > manche > partielle.
+- Régression couverte : une partielle NS très bien classée par le fit ne passe plus devant un 6P EO qu'elle cherche à sacrifier.
+
+3. Déclarant statistique / contrôles
+- Un contrôle/cue-bid explicitement décrit comme artificiel ne peut plus établir le déclarant.
+- Pour une couleur annoncée au palier de 4+, il faut au moins 5 cartes dans la main pour que l'annonce puisse établir le déclarant statistique.
+- Le même helper est utilisé par le préchauffage rapide et l'ordre d'affichage des probabilités N/S ou E/O.
+- Cas de régression inspiré de la donne signalée : 4K/4C/4P de contrôle ne détourne plus le déclarant de 6P ; Est reste retenu quand il nomme réellement 6P.
+
+VALIDATIONS
+PASS : node --check sur tous les .js du dépôt
+PASS : node tests/regression-gate-r133.js
+PASS : node tests/regression-gate.js
+PASS : node tests/brl-engine-gate.js
+PASS : node tests/deal-pool-gate.js
+PASS : construction d'un artefact Pages selon les exclusions du workflow
+PASS : node tests/deploy-artifact-gate.js _site
+
+FICHIERS MODIFIÉS DEPUIS R143.1
+- .github/workflows/deploy.yml
+- app.js
+- sw.js
+- tests/deal-pool-gate.js
+- tests/regression-gate.js
+- tests/regression-gate-r133.js
+- CHANGELOG-R143.2.txt (nouveau)
+- R143_2_VALIDATION.txt (nouveau)

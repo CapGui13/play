@@ -3945,13 +3945,22 @@ function contractChancePrimaryParTarget(deal) {
         return base;
     }
 
-    // Fallback pour un DealerPar uniquement sacrificiel OU un ancien PBN sans DealerPar
-    // exploitable : reprendre les contrats gagnants de la table DD visuelle. Le sacrifice
-    // reste dans le PAR exact, mais n'entre jamais dans la statistique de réussite.
-    // Donner la préférence aux meilleures cases et au fit majeur 8+.
+    // R143.2 — Fallback pour un DealerPar uniquement sacrificiel OU un ancien PBN sans
+    // DealerPar exploitable : reprendre les contrats gagnants de la table DD visuelle.
+    // Si le vrai DealerPar est un sacrifice, préchauffer EN PRIORITÉ le camp adverse :
+    // c'est son gros contrat que le sacrifice cherche à empêcher (ex. 2♥ NS contre 6♠ EO).
+    // Ensuite respecter le palier sportif : chelem > manche > partielle, puis seulement
+    // les préférences habituelles de meilleure case / fit.
+    const sacrificeSides = new Set(exactTargets
+        .filter(target => target && target.kind === 'sacrifice' && (target.side === 'NS' || target.side === 'EW'))
+        .map(target => target.side));
+    const sacrificeOpponentSides = new Set(Array.from(sacrificeSides).map(side => side === 'NS' ? 'EW' : 'NS'));
+    const tierRank = target => target && target.tier === 'slam' ? 3 : (target && target.tier === 'game' ? 2 : (target && target.tier === 'partial' ? 1 : 0));
     const tableTargets = ddTableChanceTargetsForDeal(deal)
         .filter(target => target && (target.isBestTableTarget || target.isSecondaryTableTarget));
-    tableTargets.sort((a, b) => Number(!!b.isBestTableTarget) - Number(!!a.isBestTableTarget)
+    tableTargets.sort((a, b) => Number(sacrificeOpponentSides.has(b.side)) - Number(sacrificeOpponentSides.has(a.side))
+        || tierRank(b) - tierRank(a)
+        || Number(!!b.isBestTableTarget) - Number(!!a.isBestTableTarget)
         || contractChanceLogicalTargetRank(deal, b) - contractChanceLogicalTargetRank(deal, a));
     return tableTargets[0] || null;
 }
@@ -3974,22 +3983,53 @@ function contractChanceFastPrimaryPlanIdentity(deal, side, allowConditioning) {
     return canCondition ? String(conditioning.key || `pons-public:${statisticalParAuctionSignature(deal)}`) : 'raw';
 }
 
+// R143.2 — Une enchère dans une couleur ne suffit pas à elle seule à établir le
+// déclarant statistique : un contrôle/cue-bid ne promet pas de jouer cette couleur.
+// On rejette d'abord les explications explicitement artificielles ; pour les couleurs,
+// la main réelle sert ensuite de garde-fou minimal. À partir du palier de 4, exiger 5+
+// cartes évite notamment qu'un contrôle 4♦/4♥/4♠ avec 0–4 cartes détourne le préchauffage.
+// Cette fonction reste volontairement conservative : en cas de doute, mieux vaut attendre
+// un vrai déclarant que préchauffer 24 DDS pour la mauvaise main.
+function contractChanceAuctionBidCanEstablishDeclarer(deal, entry, bid) {
+    if (!deal || !entry || !bid || !entry.seat) return false;
+    const explanation = String(entry.explanation || '').toLowerCase();
+    if (/(contr[oô]le|cue[ -]?bid|artific|splinter|stayman|texas|transfer|blackwood|rkcb|gerber)/i.test(explanation)) return false;
+    const strain = bid.strain === 'NT' ? 'N' : bid.strain;
+    if (strain === 'N') return true;
+    const hand = deal.hands && deal.hands[entry.seat];
+    if (!hand) return false;
+    const length = String(hand[strain] || '').length;
+    const level = Number(bid.level || 0);
+    if (level >= 4) return length >= 5;
+    const naturalMinimum = (strain === 'H' || strain === 'S') ? 4 : 3;
+    return length >= naturalMinimum;
+}
+
+function contractChanceAuctionEstablishedDeclarer(deal, side, strain) {
+    const normalizedSide = side === 'EW' ? 'EW' : (side === 'NS' ? 'NS' : '');
+    if (!deal || !normalizedSide) return '';
+    const seats = normalizedSide === 'NS' ? ['N', 'S'] : ['E', 'W'];
+    const normalizedStrain = strain === 'NT' ? 'N' : strain;
+    for (const entry of (deal.auctionHistory || [])) {
+        if (!entry || !seats.includes(entry.seat)) continue;
+        const bid = parseBid(entry.call || '');
+        const bidStrain = bid && (bid.strain === 'NT' ? 'N' : bid.strain);
+        if (bid && bidStrain === normalizedStrain && contractChanceAuctionBidCanEstablishDeclarer(deal, entry, bid)) {
+            return entry.seat;
+        }
+    }
+    return '';
+}
+
 function contractChanceFastPrimaryDeclarer(deal, target, requireAuctionEstablished = false) {
     if (!deal || !target) return '';
     const seats = target.side === 'NS' ? ['N', 'S'] : target.side === 'EW' ? ['E', 'W'] : [];
     if (!seats.length) return '';
     const strain = target.strain === 'NT' ? 'N' : target.strain;
-    // Dès qu'une couleur a été nommée par le camp, la règle normale du déclarant gagne :
-    // premier joueur du camp à avoir nommé cette dénomination.
-    for (const entry of (deal.auctionHistory || [])) {
-        if (!entry || !seats.includes(entry.seat)) continue;
-        const bid = parseBid(entry.call || '');
-        const bidStrain = bid && (bid.strain === 'NT' ? 'N' : bid.strain);
-        if (bid && bidStrain === strain) return entry.seat;
-    }
+    const auctionEstablished = contractChanceAuctionEstablishedDeclarer(deal, target.side, strain);
+    if (auctionEstablished) return auctionEstablished;
     // Pendant l'enchère, ne pas préchauffer un déclarant hypothétique qui pourrait
-    // changer au prochain tour. Dès que la dénomination est nommée une première fois,
-    // le déclarant devient irréversiblement connu et le préchauffage est sûr.
+    // changer au prochain tour. Une enchère artificielle de contrôle ne suffit plus.
     if (requireAuctionEstablished) return '';
     if (seats.includes(target.declarer)) return target.declarer;
     const row = deal.ddTable && deal.ddTable[strain];
@@ -5300,20 +5340,15 @@ function contractChanceSidecarTargetHtml(deal, contract, target, options = {}) {
     return `<span class="dd-chance-item">${prefix}<strong class="dd-chance-value${progress.done ? ' is-done' : ''}">${escapeHtml(valueText)}</strong></span>`;
 }
 
-// R122 — Déclarant statistique exact pour une ligne de la table DD.
-// L'ordre d'affichage suit le premier joueur du camp qui a nommé la dénomination dans
-// l'enchère (règle normale de détermination du déclarant). Si la dénomination n'a jamais
-// été nommée par ce camp, on garde l'ordre naturel N/S ou E/O.
+// R122 + R143.2 — Déclarant statistique exact pour une ligne de la table DD.
+// L'ordre d'affichage suit le premier joueur du camp qui a nommé NATURELLEMENT la
+// dénomination. Un contrôle/cue-bid ne peut plus établir le déclarant. Si aucun déclarant
+// naturel n'est déductible, le contrat réellement joué prime, puis l'ordre N/S ou E/O.
 function contractChanceEstablishedDeclarerForStrain(deal, contract, side, strain) {
     const normalizedStrain = strain === 'NT' ? 'N' : strain;
     const seats = side === 'NS' ? ['N', 'S'] : ['E', 'W'];
-    for (const entry of (deal && deal.auctionHistory || [])) {
-        const seat = entry && entry.seat;
-        if (!seats.includes(seat)) continue;
-        const bid = parseBid(entry && entry.call || '');
-        const bidStrain = bid && (bid.strain === 'NT' ? 'N' : bid.strain);
-        if (bid && bidStrain === normalizedStrain) return seat;
-    }
+    const auctionEstablished = contractChanceAuctionEstablishedDeclarer(deal, side, normalizedStrain);
+    if (auctionEstablished) return auctionEstablished;
     const contractStrain = contract && (contract.strain === 'NT' ? 'N' : contract.strain);
     if (contract && statisticalParSideFromDeclarer(contract.declarer) === side
         && contractStrain === normalizedStrain && seats.includes(contract.declarer)) {
