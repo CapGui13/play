@@ -1,0 +1,21 @@
+PLAY R143 — validation locale
+Date : 2026-09-18
+
+Base vérifiée : le app.js et tests/regression-gate.js du ZIP source ont exactement les mêmes Git blob SHA
+que la branche main GitHub lue au début de la correction.
+
+PASS : node --check sur tous les fichiers JavaScript du dépôt
+PASS : node tests/regression-gate-r133.js
+PASS : node tests/brl-engine-gate.js
+PASS : node tests/deal-pool-gate.js
+PASS : node tests/deploy-artifact-gate.js _site
+
+Nouvelles assertions R143 :
+- écart déclarants 9 points => affichage compact
+- écart déclarants 10 points => affichage des deux déclarants
+- une cible sacrifice injectée artificiellement ne s'affiche pas et ne casse pas la comparaison
+- aucune dépendance à announced.has() pour une partielle PAR/DD
+- aucun sacrifice dans contractChanceTargetsForDeal()
+- aucun calcul de rentabilité d'un sacrifice dans contractChanceComputeTargetStats()
+- contrat contré gagnant classé comme make ; contrat contré chuté classé comme sacrifice
+- cible primaire statistique = contrat gagnant même si un sacrifice est présent dans DealerPar

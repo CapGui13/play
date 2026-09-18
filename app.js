@@ -2935,6 +2935,9 @@ const CONTRACT_CHANCE_ADAPTIVE_MAX_TARGET = 72;
 // R142 — dès 8 résultats, afficher un pourcentage PROVISOIRE accompagné du
 // compteur x/24. Le résultat final reste strictement celui des paliers 24/48/72.
 const CONTRACT_CHANCE_EARLY_PCT_MIN_SAMPLES = 8;
+// R143 — n'afficher séparément les deux déclarants d'un même contrat que si l'écart
+// atteint au moins 10 points de pourcentage après la base de 24 tirages chacun.
+const CONTRACT_CHANCE_DECLARER_GAP_POINTS = 10;
 const CONTRACT_CHANCE_REFRESH_THROTTLE_MS = 90;
 const CONTRACT_CHANCE_ADAPTIVE_MARGIN_AFTER_24 = 0.13;
 const CONTRACT_CHANCE_ADAPTIVE_MARGIN_AFTER_48 = 0.10;
@@ -3849,11 +3852,13 @@ function contractChanceExactParTargets(deal) {
         const strain = contract.strain === 'NT' ? 'N' : contract.strain;
         const level = Number(contract.level || 0);
         if (!side || !STRAIN_ORDER.includes(strain) || !(level >= 1 && level <= 7)) continue;
+        const tricks = optimalContractTricks(deal.ddTable, contract);
+        const isSacrifice = !!contract.doubled && Number.isFinite(tricks) && tricks < level + 6;
         out.push({
             id: `exact-par:${side}:${level}${strain}:${contract.declarer || side}`,
-            kind: contract.doubled ? 'sacrifice' : 'make',
+            kind: isSacrifice ? 'sacrifice' : 'make',
             side,
-            tier: contract.doubled ? 'sacrifice' : contractChanceTierForContract({ level, strain }),
+            tier: isSacrifice ? 'sacrifice' : contractChanceTierForContract({ level, strain }),
             level,
             strain,
             declarer: contract.declarer || side,
@@ -3914,13 +3919,18 @@ function contractChanceLogicalTargetRank(deal, target) {
 function contractChancePrimaryParTarget(deal) {
     if (!deal || !deal.ddTable) return null;
     const exactTargets = contractChanceExactParTargets(deal);
-    if (exactTargets.length) {
-        // DealerPar peut donner plusieurs contrats équivalents. Tous appartiennent en
-        // pratique au même camp de primauté ; si ce sont des contrats gagnants, ouvrir
-        // aussi le petit ensemble des contrats "normaux" du même palier et ne préférer
-        // un fit majeur que si son score reste réellement proche du PAR (<= 30 points).
-        const base = exactTargets.slice().sort((a, b) => contractChanceLogicalTargetRank(deal, b) - contractChanceLogicalTargetRank(deal, a))[0];
-        if (base && base.kind === 'make' && (base.tier === 'game' || base.tier === 'slam')) {
+    const exactMakingTargets = exactTargets.filter(target => target && target.kind === 'make');
+    if (exactMakingTargets.length) {
+        // R143 — le calcul statistique mesure uniquement la probabilité de RÉALISER un
+        // contrat. Un sacrifice peut rester le vrai DealerPar de la donne, mais il ne doit
+        // jamais devenir la cible primaire statistique. Si DealerPar fournit aussi un
+        // contrat gagnant, celui-ci est prioritaire.
+        //
+        // DealerPar peut donner plusieurs contrats gagnants équivalents. Ouvrir aussi le
+        // petit ensemble des contrats "normaux" du même palier et ne préférer un fit majeur
+        // que si son score reste réellement proche du PAR (<= 30 points).
+        const base = exactMakingTargets.slice().sort((a, b) => contractChanceLogicalTargetRank(deal, b) - contractChanceLogicalTargetRank(deal, a))[0];
+        if (base && (base.tier === 'game' || base.tier === 'slam')) {
             const refScore = contractChanceTargetSideScore(deal, base);
             const alternatives = contractChanceNormalMakingAlternatives(deal, base.side, base.tier, base.level)
                 .filter(target => {
@@ -3935,8 +3945,10 @@ function contractChancePrimaryParTarget(deal) {
         return base;
     }
 
-    // Fallback pour un ancien PBN sans résultat DealerPar exploitable : reprendre la table
-    // DD visuelle, en donnant la préférence aux meilleures cases et au fit majeur 8+.
+    // Fallback pour un DealerPar uniquement sacrificiel OU un ancien PBN sans DealerPar
+    // exploitable : reprendre les contrats gagnants de la table DD visuelle. Le sacrifice
+    // reste dans le PAR exact, mais n'entre jamais dans la statistique de réussite.
+    // Donner la préférence aux meilleures cases et au fit majeur 8+.
     const tableTargets = ddTableChanceTargetsForDeal(deal)
         .filter(target => target && (target.isBestTableTarget || target.isSecondaryTableTarget));
     tableTargets.sort((a, b) => Number(!!b.isBestTableTarget) - Number(!!a.isBestTableTarget)
@@ -4816,15 +4828,6 @@ function ddTableChanceTargetsForDeal(deal) {
     return targets;
 }
 
-function contractChanceAuctionAnnouncedStrains(deal) {
-    const announced = new Set();
-    for (const entry of (deal && deal.auctionHistory || [])) {
-        const bid = parseBid(entry && entry.call || '');
-        if (bid) announced.add(bid.strain === 'NT' ? 'N' : bid.strain);
-    }
-    return announced;
-}
-
 function contractChanceAuctionMajorFits(deal) {
     const byStrain = { H: { NS: new Set(), EW: new Set() }, S: { NS: new Set(), EW: new Set() } };
     for (const entry of (deal && deal.auctionHistory || [])) {
@@ -4949,7 +4952,6 @@ function contractChanceSameStrainTableTarget(deal, contract) {
 function relevantContractChanceSidecarTargets(deal, contract) {
     const played = playedContractChanceTarget(contract);
     if (!played || !deal || !deal.ddTable) return [];
-    const announced = contractChanceAuctionAnnouncedStrains(deal);
     const tableTargets = ddTableChanceTargetsForDeal(deal);
     // R121 — La suppression d'une manche à SA au profit d'un fit majeur ne doit
     // s'appuyer que sur une manche majeure qui sera elle-même réellement retenue.
@@ -4994,22 +4996,26 @@ function relevantContractChanceSidecarTargets(deal, contract) {
             add(target);
             continue;
         }
-        if (target.side === otherSide && announced.has(target.strain)) add(target);
+        // R143 — une partielle retenue par le PAR/DD reste statistiquement pertinente
+        // même si sa couleur n'a jamais été nommée dans l'enchère. Une enchère de contrôle
+        // adverse ne doit ni créer ni supprimer cette statistique.
+        if (target.side === otherSide) add(target);
     }
     // R134 — 6SA n'écrase plus les autres chelems jouables dans un vrai fit 8+.
     // Toutes les couleurs admissibles sont conservées : deux fits => deux calculs.
     for (const target of contractChanceAdditionalFitSlamTargets(deal, tableTargets)) add(target);
 
-    for (const target of optimalContractTargetsForDeal(deal)) {
-        if (target.side === otherSide && target.kind === 'sacrifice' && announced.has(target.strain)) {
-            add({ ...target, isParTarget: true, isTableTarget: false });
-        }
-    }
+    // R143 — aucun sacrifice n'est une cible de "chance de gagner". Sa rentabilité reste
+    // du ressort du calcul de PAR exact et n'est ni calculée ni affichée ici.
     return targets;
 }
 
 function contractChanceTargetsForDeal(deal, contract) {
-    const displayTargets = relevantContractChanceSidecarTargets(deal, contract).map(target => ({ ...target, isPlayed: false, isReferenceOnly: false }));
+    // R143 — frontière stricte : ce pipeline calcule des probabilités de RÉALISATION,
+    // jamais des probabilités de rentabilité d'un sacrifice.
+    const displayTargets = relevantContractChanceSidecarTargets(deal, contract)
+        .filter(target => target && target.kind !== 'sacrifice')
+        .map(target => ({ ...target, isPlayed: false, isReferenceOnly: false }));
     const targets = displayTargets.slice();
     const add = target => {
         if (!target) return;
@@ -5019,27 +5025,7 @@ function contractChanceTargetsForDeal(deal, contract) {
         targets.push(target);
     };
     add(playedContractChanceTarget(contract));
-    const sacrifices = displayTargets.filter(target => target.kind === 'sacrifice');
-    if (sacrifices.length) {
-        const optimal = optimalContractTargetsForDeal(deal);
-        for (const sacrifice of sacrifices) {
-            const referenceSide = sacrifice.side === 'NS' ? 'EW' : 'NS';
-            for (const reference of optimal) {
-                if (reference.kind === 'make' && reference.side === referenceSide) {
-                    add({ ...reference, isParTarget: true, isPlayed: false, isReferenceOnly: true, isDisplayTarget: false });
-                }
-            }
-        }
-    }
     return targets;
-}
-
-function opponentReferenceScore(table, target, targets, vulnerability) {
-    const otherSide = target.side === 'NS' ? 'EW' : 'NS';
-    const refs = (targets || []).filter(t => t.kind === 'make' && t.side === otherSide && t.isParTarget !== false);
-    const scores = refs.map(t => optimalContractDuplicateScore(table, t, vulnerability)).filter(Number.isFinite);
-    if (!scores.length) return null;
-    return otherSide === 'NS' ? Math.max(...scores) : Math.min(...scores);
 }
 
 function contractChanceWilsonMargin95(successes, samples) {
@@ -5074,6 +5060,10 @@ function contractChanceSideGoal(deal, side) {
 }
 
 function contractChanceComputeTargetStats(deal, contract, target, rows, allTargets) {
+    // R143 — une cible sacrificielle n'a pas de "chance de gagner" dans ce pipeline.
+    // Retourner zéro observation empêche tout ancien appel résiduel de recréer une
+    // probabilité de sacrifice rentable.
+    if (!target || target.kind === 'sacrifice') return { successes: 0, samples: 0 };
     const targetTricks = Number(target.level || 0) + 6;
     let successes = 0;
     let samples = 0;
@@ -5082,14 +5072,7 @@ function contractChanceComputeTargetStats(deal, contract, target, rows, allTarge
         const tricks = optimalContractTricks(table, target);
         if (!Number.isFinite(tricks)) continue;
         samples++;
-        if (target.kind === 'sacrifice') {
-            const sacScore = optimalContractDuplicateScore(table, target, deal.vulnerable);
-            const refScore = opponentReferenceScore(table, target, allTargets, deal.vulnerable);
-            if (Number.isFinite(sacScore) && Number.isFinite(refScore)) {
-                const profitable = target.side === 'NS' ? sacScore >= refScore : sacScore <= refScore;
-                if (profitable) successes++;
-            }
-        } else if (tricks >= targetTricks) successes++;
+        if (tricks >= targetTricks) successes++;
     }
     return { successes, samples };
 }
@@ -5229,7 +5212,7 @@ function contractChanceBuildSnapshot(deal, contract) {
     if (!deal || !contract || !deal.ddTable) return null;
     const values = {};
     const targets = contractChanceTargetsForDeal(deal, contract)
-        .filter(target => target && !target.isReferenceOnly);
+        .filter(target => target && !target.isReferenceOnly && target.kind !== 'sacrifice');
     for (const target of targets) {
         const progress = contractChanceTargetProgress(deal, contract, target);
         values[optimalContractTargetKey(target)] = {
@@ -5340,7 +5323,9 @@ function contractChanceEstablishedDeclarerForStrain(deal, contract, side, strain
 }
 
 function contractChanceSidecarSideGroupHtml(deal, contract, targets) {
-    const rows = (Array.isArray(targets) ? targets : []).filter(Boolean);
+    // R143 — même si un ancien snapshot contient encore un sacrifice, il ne doit jamais
+    // pouvoir casser la comparaison des deux déclarants ni réapparaître dans l'UI.
+    const rows = (Array.isArray(targets) ? targets : []).filter(target => target && target.kind !== 'sacrifice');
     if (!rows.length) return '';
     const side = rows[0].side;
     const strain = rows[0].rowStrain || rows[0].strain;
@@ -5374,7 +5359,7 @@ function contractChanceSidecarSideGroupHtml(deal, contract, targets) {
         const secondPct = Number(secondProgress.successPct);
         const meaningfulDeclarerGap = bothPctVisible
             && Number.isFinite(firstPct) && Number.isFinite(secondPct)
-            && Math.abs(firstPct - secondPct) >= 10;
+            && Math.abs(firstPct - secondPct) >= CONTRACT_CHANCE_DECLARER_GAP_POINTS;
 
         // Tant que les deux séries n'ont pas au moins 24 observations, ou si leur écart
         // reste inférieur à 10 points, ne pas exposer un différentiel non significatif.

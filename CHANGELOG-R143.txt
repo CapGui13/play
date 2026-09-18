@@ -1,0 +1,18 @@
+PLAY R143 — PAR statistique : contrats gagnants uniquement
+Date : 2026-09-18
+
+CORRECTIONS
+- Les sacrifices restent pris en compte par le PAR exact, mais ne sont plus des cibles du PAR statistique.
+- Suppression complète des « chances de sacrifice rentable » : ni calcul, ni snapshot, ni affichage sidecar.
+- Une partielle PAR/DD pertinente est évaluée même si sa couleur n'a jamais été annoncée dans les enchères.
+  Une enchère de contrôle adverse ne peut donc plus créer artificiellement cette statistique.
+- Le préchauffage statistique privilégie toujours un contrat gagnant ; un DealerPar sacrificiel seul retombe sur
+  un contrat gagnant pertinent de la table DD.
+- Un contrat contré qui gagne n'est plus classé automatiquement comme sacrifice.
+- Comparaison des deux déclarants : affichage séparé seulement à partir de 10 points d'écart, après au moins
+  24 tirages chacun. Un ancien snapshot contenant un sacrifice ne peut plus casser cette logique.
+
+CAS MOTIVATEUR
+- Ligne 2♥ NS : 96 % / 94 % => un seul pourcentage affiché.
+- Le troisième pourcentage correspondant à la rentabilité d'un sacrifice disparaît complètement.
+- Si l'écart atteint 10 points ou plus, les deux déclarants sont affichés explicitement.

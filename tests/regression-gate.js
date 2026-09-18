@@ -224,6 +224,7 @@ assert(established({ auctionHistory: [{ seat: 'N', call: '1NT' }, { seat: 'E', c
 const progressMap = new Map([['N', '75%'], ['S', '100%']]);
 const groupHtml = compileFunction(app, 'contractChanceSidecarSideGroupHtml', {
     CONTRACT_CHANCE_TARGET: 24,
+    CONTRACT_CHANCE_DECLARER_GAP_POINTS: 10,
     contractChanceEstablishedDeclarerForStrain: established,
     contractChanceTargetProgress: (_deal, _contract, target) => ({ text: progressMap.get(target.declarer), done: true, n: 24, goal: 24, successPct: Number(String(progressMap.get(target.declarer)).replace('%', '')) }),
     contractChanceRoundedPctText: progress => `${Number(progress && progress.successPct || 0).toFixed(0)}%`,
@@ -242,6 +243,71 @@ assert(!split.includes('88%'), 'R122: moyenne N/S réintroduite');
 progressMap.set('N', '100%');
 const compact = groupHtml({ auctionHistory: [{ seat: 'N', call: '1NT' }] }, { declarer: 'N', strain: 'NT' }, splitTargets);
 assert(compact === '100%', 'R122: deux probabilités identiques doivent rester compactes');
+
+// R143 : seuil déclarant = 10 points, et un sacrifice ne doit jamais créer un 3e pourcentage.
+progressMap.set('N', '91%');
+progressMap.set('S', '100%');
+const gap9 = groupHtml({ auctionHistory: [{ seat: 'N', call: '1NT' }] }, { declarer: 'N', strain: 'NT' }, splitTargets);
+assert(gap9 === '91%', 'R143: écart de 9 points devrait rester compact');
+
+progressMap.set('N', '90%');
+const gap10 = groupHtml({ auctionHistory: [{ seat: 'N', call: '1NT' }] }, { declarer: 'N', strain: 'NT' }, splitTargets);
+assert(gap10.includes('N 90%') && gap10.includes('S 100%'), 'R143: écart de 10 points devrait afficher les deux déclarants');
+
+const withSacrifice = splitTargets.concat({
+    kind: 'sacrifice', side: 'NS', rowStrain: 'N', strain: 'N', level: 7, declarer: 'N', doubled: 'X'
+});
+const gap10WithSacrifice = groupHtml({ auctionHistory: [{ seat: 'N', call: '1NT' }] }, { declarer: 'N', strain: 'NT' }, withSacrifice);
+assert(gap10WithSacrifice === gap10, 'R143: un sacrifice ne doit ni être affiché ni casser la comparaison N/S');
+
+// R143 : la sélection statistique ne dépend plus d'une couleur annoncée et exclut les sacrifices.
+const relevantTargetsText = extractFunction(app, 'relevantContractChanceSidecarTargets');
+assert(!relevantTargetsText.includes('announced.has'), 'R143: une couleur annoncée conditionne encore une partielle PAR');
+assert(!relevantTargetsText.includes('optimalContractTargetsForDeal(deal)'), 'R143: le sidecar réinjecte encore des sacrifices');
+
+const targetKey = target => [target.kind || 'make', target.level, target.strain, target.declarer || '', target.doubled || '', target.side || ''].join(':');
+const targetsForDeal = compileFunction(app, 'contractChanceTargetsForDeal', {
+    relevantContractChanceSidecarTargets: () => [
+        { kind: 'make', side: 'NS', level: 2, strain: 'H', declarer: 'N' },
+        { kind: 'sacrifice', side: 'NS', level: 7, strain: 'H', declarer: 'N', doubled: 'X' }
+    ],
+    optimalContractTargetKey: targetKey,
+    playedContractChanceTarget: () => null
+});
+const statisticalTargets = targetsForDeal({}, {});
+assert(statisticalTargets.length === 1 && statisticalTargets[0].kind === 'make', 'R143: sacrifice encore présent dans les cibles statistiques');
+
+const computeTargetStats = compileFunction(app, 'contractChanceComputeTargetStats', {
+    optimalContractTricks: (_table, target) => Number(target.mockTricks || 0)
+});
+const leakedSac = computeTargetStats({}, {}, { kind: 'sacrifice', level: 7, mockTricks: 8 }, [{}, {}], []);
+assert(leakedSac.samples === 0 && leakedSac.successes === 0, 'R143: rentabilité de sacrifice encore calculable');
+
+// R143 : un contrat contré qui gagne reste un contrat à réaliser, pas un sacrifice.
+const exactParTargets = compileFunction(app, 'contractChanceExactParTargets', {
+    actualDealParFromKnownDeal: () => ({ contracts: [
+        { level: 2, strain: 'H', declarer: 'N', doubled: 'X', mockTricks: 8 },
+        { level: 3, strain: 'H', declarer: 'S', doubled: 'X', mockTricks: 8 }
+    ] }),
+    statisticalParSideFromDeclarer: sideFromDeclarer,
+    optimalContractTricks: (_table, target) => Number(target.mockTricks),
+    contractChanceTierForContract: () => 'partial',
+    STRAIN_ORDER: ['N', 'S', 'H', 'D', 'C']
+});
+const doubledTargets = exactParTargets({ ddTable: {} });
+assert(doubledTargets[0].kind === 'make', 'R143: contrat contré gagnant classé à tort comme sacrifice');
+assert(doubledTargets[1].kind === 'sacrifice', 'R143: contrat contré chuté non reconnu comme sacrifice');
+
+// R143 : même si DealerPar contient un sacrifice plus "haut", la cible primaire statistique est un contrat gagnant.
+const primaryParTarget = compileFunction(app, 'contractChancePrimaryParTarget', {
+    contractChanceExactParTargets: () => [
+        { kind: 'sacrifice', side: 'NS', tier: 'sacrifice', level: 7, strain: 'H' },
+        { kind: 'make', side: 'EW', tier: 'partial', level: 2, strain: 'S' }
+    ],
+    contractChanceLogicalTargetRank: (_deal, target) => target.kind === 'sacrifice' ? 9999 : 1
+});
+const primaryMake = primaryParTarget({ ddTable: {} });
+assert(primaryMake && primaryMake.kind === 'make', 'R143: un sacrifice reste prioritaire dans le préchauffage statistique');
 
 // ---------------------------------------------------------------------------
 // 4) Frontière d'autorité réseau : un invité ne peut pas envoyer des commandes hôte

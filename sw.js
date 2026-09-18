@@ -8,7 +8,7 @@
 // distribué ici n'embarque pas de workflow GitHub Actions qui la réécrive : elle doit donc
 // changer à chaque nouvelle release pour forcer l'installation du nouveau cache chez les
 // utilisateurs déjà passés par le Service Worker.
-const CACHE_NAME = 'bridge-encheres-brl-r142-20260917-semantic-conditioning-key';
+const CACHE_NAME = 'bridge-encheres-brl-r135-20260917-priority-precompute';
 
 // Ressources de la même origine : mises en cache de façon fiable via cache.addAll (un seul
 // échec fait échouer toute l'installation, ce qui est le comportement voulu ici — ce sont
@@ -18,7 +18,6 @@ const CORE_ASSETS = [
     './index.html',
     './styles.css',
     './app.js',
-    './statistical-par-runtime-patch.js',
     './ui-events.js',
     './bidding-rules.js',
     './brl/brl-engine.js',
