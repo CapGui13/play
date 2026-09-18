@@ -26,6 +26,8 @@ const required = [
     'bidding-rules.js',
     'dealer-par.js',
     'statistical-par.js',
+    // R143.1 : R141/R142 fait partie du runtime de production, pas d'un fichier de dev.
+    'statistical-par-runtime-patch.js',
     'deal-parser.js',
     'peer-connection.js',
     'session-storage.js',
@@ -95,6 +97,15 @@ const index = fs.readFileSync(path.join(SITE, 'index.html'), 'utf8');
 assert(!/\bbidding-engine\.js\b/.test(index),
     'R129: index.html référence encore bidding-engine.js');
 
+// R143.1 — le patch R141/R142 doit être CHARGÉ, et après app.js car il enveloppe
+// plusieurs fonctions définies dans app.js.
+const appScriptAt = index.indexOf('src="app.js"');
+const runtimePatchScriptAt = index.indexOf('src="statistical-par-runtime-patch.js"');
+assert(runtimePatchScriptAt >= 0,
+    'R143.1: statistical-par-runtime-patch.js n’est plus chargé par index.html');
+assert(appScriptAt >= 0 && runtimePatchScriptAt > appScriptAt,
+    'R143.1: statistical-par-runtime-patch.js doit être chargé après app.js');
+
 // Vérifie les src/href locaux statiques du shell. Les URL absolues, data:, mailto:,
 // ancres et ressources générées dynamiquement sont volontairement ignorées.
 for (const match of index.matchAll(/\b(?:src|href)=["']([^"']+)["']/g)) {
@@ -126,12 +137,25 @@ const coreAssetsSource = assetsMatch[1]
     .replace(/\/\/.*$/gm, '');
 const coreAssets = Array.from(coreAssetsSource.matchAll(/['"]([^'"]+)['"]/g), m => m[1]);
 
+// R143.1 — le Service Worker doit aussi pré-cacher ce runtime ; sinon une mise à jour
+// hors ligne / PWA peut charger app.js sans les garanties R141/R142.
+assert(coreAssets.includes('./statistical-par-runtime-patch.js'),
+    'R143.1: statistical-par-runtime-patch.js absent de CORE_ASSETS');
+
 for (let ref of coreAssets) {
     if (ref === './' || ref === '/') continue;
     ref = ref.split('#')[0].split('?')[0].replace(/^\.\//, '');
     assert(fs.existsSync(path.join(SITE, ref)),
         `R129: CORE_ASSETS référence une ressource absente: ${ref}`);
 }
+
+// R143.1 — garde fonctionnelle minimale des deux apports perdus lors du rollback :
+// reprise/persistance R141 et clé sémantique R142.
+const statRuntimePatch = fs.readFileSync(path.join(SITE, 'statistical-par-runtime-patch.js'), 'utf8');
+assert(statRuntimePatch.includes('statisticalChanceResumeV1'),
+    'R143.1: persistance/reprise R141 absente du runtime patch');
+assert(statRuntimePatch.includes('pons-public-semantic:'),
+    'R143.1: clé sémantique R142 absente du runtime patch');
 
 // Les deux fallbacks PONS lourds restent explicitement présents : R129 nettoie le
 // packaging, pas la résilience du moteur.

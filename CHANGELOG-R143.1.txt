@@ -1,0 +1,18 @@
+PLAY R143.1 — restauration du runtime statistique R141/R142
+Date : 2026-09-19
+
+CORRECTIONS
+- Conserve intégralement R143 : aucun calcul/affichage de rentabilité d'un sacrifice.
+- Restaure le chargement de statistical-par-runtime-patch.js après app.js.
+- Restaure statistical-par-runtime-patch.js dans le pré-cache du Service Worker.
+- Restaure le cache source sur une version R143.1 (le workflow le rebump ensuite par SHA de commit).
+- Conserve donc la reprise/persistance progressive R141 après refresh/fermeture mobile.
+- Conserve le préchauffage conditionné pendant l'enchère.
+- Conserve la clé sémantique R142 : un Passe sans nouvelle contrainte ne jette pas le préchauffage.
+- Renforce la gate de déploiement : fichier présent, script chargé après app.js, présent dans CORE_ASSETS,
+  et marqueurs fonctionnels R141/R142 vérifiés.
+
+PACKAGING
+- Le ZIP R143.1 repart du contenu de main R143 et réintègre les deux fichiers absents du précédent ZIP :
+  .github/workflows/deploy.yml et statistical-par-runtime-patch.js.
+- Les 6 PBN/export qui différaient uniquement par CRLF/LF sont normalisés pour correspondre au main GitHub.

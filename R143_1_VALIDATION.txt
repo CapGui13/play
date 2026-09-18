@@ -1,0 +1,35 @@
+PLAY R143.1 — validation
+Date : 2026-09-19
+
+BASE GITHUB AUDITEE
+- Dépôt : CapGui13/play
+- main au moment de l'audit : e5d99123f59a415f406d8e68a0e457e5afc303c3
+- app.js R143 conservé à l'identique : blob ea9ac07a80355c8eb687b28ab3691e1e0bd273ae
+- statistical-par-runtime-patch.js restauré depuis R142 et vérifié identique au main : blob df6e170c3ae76621ce4578516e57c18c4ca6a576
+- .github/workflows/deploy.yml restauré et vérifié identique au main : blob 74031b7bb7bf24bb33d1d5fc4d8854638c77f743
+
+RECONCILIATION DU ZIP
+- Le ZIP R143 précédent a été comparé fichier par fichier aux Git blobs de main.
+- 2 fichiers manquaient : .github/workflows/deploy.yml et statistical-par-runtime-patch.js.
+- 6 fichiers PBN/export différaient uniquement par CRLF/LF ; ils ont été normalisés et correspondent maintenant exactement au main.
+- Après restauration/normalisation : 0 fichier de main manquant.
+- Les seules différences volontaires par rapport à main R143 sont :
+  index.html, sw.js, tests/deal-pool-gate.js, tests/deploy-artifact-gate.js,
+  plus le nouveau CHANGELOG-R143.1.txt et ce rapport de validation.
+
+GARANTIES R143.1
+- index.html recharge statistical-par-runtime-patch.js après app.js.
+- sw.js pré-cache statistical-par-runtime-patch.js et porte un cache source R143.1.
+- Gate artefact : le runtime patch doit exister dans Pages.
+- Gate artefact : index.html doit le charger après app.js.
+- Gate artefact : CORE_ASSETS doit le pré-cacher.
+- Gate artefact : marqueurs R141 (statisticalChanceResumeV1) et R142 (pons-public-semantic:) obligatoires.
+- R143 reste inchangé : aucune chance de sacrifice rentable calculée/affichée ; seuil déclarants 10 points conservé.
+
+VALIDATIONS LOCALES
+PASS : node --check sur tous les fichiers JavaScript du dépôt
+PASS : node tests/regression-gate-r133.js
+PASS : node tests/brl-engine-gate.js
+PASS : node tests/deal-pool-gate.js
+PASS : construction d'un artefact Pages selon les exclusions du workflow
+PASS : node tests/deploy-artifact-gate.js _site
