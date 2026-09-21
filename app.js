@@ -2437,6 +2437,10 @@ function dealToPbnStringForDD(deal) {
 const LOCAL_DDS_WORKER_URL = 'dds/local-dds-worker.js';
 const LOCAL_DDS_BROWSER_ENABLED = typeof Worker === 'function';
 const LOCAL_DDS_MAX_DESKTOP_WORKERS = 4;
+// R143.4 — filet de sécurité contre un Worker WASM qui se fige sans onerror.
+// Une tâche DDS normale est très courte ; 20 s laisse une marge énorme tout en évitant
+// qu'un slot reste occupé indéfiniment et finisse par bloquer tout le PAR statistique.
+const LOCAL_DDS_TASK_TIMEOUT_MS = 20000;
 let localDdsWorkers = [];
 let localDdsQueue = [];
 let localDdsPendingByPbn = new Map();
@@ -2514,6 +2518,10 @@ function localDdsSchedulePump(delay = 0) {
 function localDdsFinishSlot(slot, ok, payload) {
     const task = slot && slot.current;
     if (!task) return;
+    if (slot.watchdog) {
+        clearTimeout(slot.watchdog);
+        slot.watchdog = null;
+    }
     slot.current = null;
     if (task.kind === 'contract') {
         if (localDdsPendingByContract.get(task.cacheKey) === task) localDdsPendingByContract.delete(task.cacheKey);
@@ -2542,7 +2550,7 @@ function localDdsSpawnWorker(index) {
     } catch (err) {
         return null;
     }
-    const slot = { index, worker, current: null };
+    const slot = { index, worker, current: null, watchdog: null };
     worker.onmessage = event => {
         const msg = event && event.data || {};
         const task = slot.current;
@@ -2615,6 +2623,18 @@ function localDdsPump() {
             } else {
                 slot.worker.postMessage({ type: 'solve', requestId: task.requestId, pbn: task.pbn });
             }
+            if (slot.watchdog) clearTimeout(slot.watchdog);
+            slot.watchdog = setTimeout(() => {
+                // Le Worker n'a ni répondu ni levé d'erreur : libérer la Promise, tuer
+                // l'instance potentiellement corrompue puis laisser ensureWorkers la remplacer.
+                const stuckTask = slot.current;
+                if (!stuckTask || stuckTask !== task) return;
+                localDdsFinishSlot(slot, false, new Error('Timeout Worker DDS local'));
+                try { slot.worker.terminate(); } catch (_) {}
+                const pos = localDdsWorkers.indexOf(slot);
+                if (pos >= 0) localDdsWorkers.splice(pos, 1);
+                localDdsSchedulePump(0);
+            }, LOCAL_DDS_TASK_TIMEOUT_MS);
         } catch (err) {
             localDdsFinishSlot(slot, false, err);
         }
@@ -2677,6 +2697,11 @@ function localDdsSolveContract(pbn, strain, declarer, priority = 200, groupKey =
     const existing = localDdsPendingByContract.get(cacheKey);
     if (existing) {
         existing.priority = Math.max(Number(existing.priority || 0), Number(priority || 0));
+        // R143.4 — une même tâche dédupliquée peut être attendue par plusieurs plans.
+        // Mémoriser tous les propriétaires empêche l'annulation d'un ancien plan de
+        // rejeter la Promise encore utile au nouveau.
+        if (!(existing.groupKeys instanceof Set)) existing.groupKeys = new Set(existing.groupKey ? [existing.groupKey] : []);
+        if (groupKey) existing.groupKeys.add(String(groupKey));
         localDdsPump();
         return existing.promise;
     }
@@ -2695,6 +2720,7 @@ function localDdsSolveContract(pbn, strain, declarer, priority = 200, groupKey =
         declarer: normalizedDeclarer,
         cacheKey,
         groupKey: String(groupKey || ''),
+        groupKeys: new Set(groupKey ? [String(groupKey)] : []),
         priority: Number(priority || 0),
         seq: ++localDdsTaskSequence,
         resolve: resolveTask,
@@ -2712,7 +2738,12 @@ function localDdsCancelQueuedContractGroup(groupKey) {
     if (!key) return 0;
     let cancelled = 0;
     localDdsQueue = localDdsQueue.filter(task => {
-        if (!task || task.kind !== 'contract' || task.groupKey !== key) return true;
+        if (!task || task.kind !== 'contract') return true;
+        if (!(task.groupKeys instanceof Set)) task.groupKeys = new Set(task.groupKey ? [task.groupKey] : []);
+        if (!task.groupKeys.has(key)) return true;
+        task.groupKeys.delete(key);
+        // Si un autre plan partage la même Promise DDS, la tâche reste valide pour lui.
+        if (task.groupKeys.size) return true;
         if (localDdsPendingByContract.get(task.cacheKey) === task) localDdsPendingByContract.delete(task.cacheKey);
         cancelled++;
         try { task.reject(new Error('DDS contrat préchauffé remplacé')); } catch (_) {}
@@ -2948,6 +2979,9 @@ const CONTRACT_CHANCE_ADAPTIVE_MARGIN_AFTER_48 = 0.10;
 const CONTRACT_CHANCE_DD_CHUNK_SIZE = 4;
 const CONTRACT_CHANCE_MAX_HTTP = 6;
 const CONTRACT_CHANCE_MAX_ATTEMPTS = 2160;
+// R143.4 — deux relances maximum par échantillon après une erreur/timeout DDS.
+const CONTRACT_CHANCE_DDS_RETRY_LIMIT = 2;
+const CONTRACT_CHANCE_DDS_RETRY_DELAY_MS = 250;
 const CONTRACT_CHANCE_RETRY_DELAY_MS = 1800;
 const CONTRACT_CHANCE_REMOTE_TIMEOUT_MS = 30000;
 const CONTRACT_CHANCE_COLLAB_FETCH_TIMEOUT_MS = 10000;
@@ -3088,7 +3122,10 @@ function contractChanceBuildCandidates(deal, side, allowConditioning = true, tar
     // au premier affichage puis devient disponible, un plan brut temporaire ne doit pas
     // figer définitivement la donne dans ce mode.
     const conditioningKey = canCondition ? String(conditioning.key || 'pons-public') : 'raw';
-    const cacheKey = `${side === 'EW' ? 'EW' : 'NS'}|${signature}|${conditioningKey}`;
+    // R143.4 — conditioningKey est déjà une identité sémantique des contraintes PONS
+    // (patch R142). Ne pas réinjecter la signature textuelle : un Passe qui ne modifie
+    // aucune contrainte doit réutiliser exactement le même plan de candidats.
+    const cacheKey = `${side === 'EW' ? 'EW' : 'NS'}|${conditioningKey}`;
     const cached = perDeal.get(cacheKey);
     if (cached && cached.length >= requestedCount) return cached.slice(0, requestedCount);
 
@@ -3155,11 +3192,19 @@ function resetContractChancePrewarmPipeline() {
 }
 
 function contractChanceMustYieldToPons() {
+    // R143.3 — ne jamais bloquer le PAR statistique de la donne courante simplement
+    // parce que PONS pré-calcule les enchères d'une AUTRE donne de la série.
+    //
+    // Avant ce correctif, `robotBoardsResolving.size > 0` suffisait à faire céder le PAR.
+    // Sur une série (8/16 donnes), le pré-calcul robot des donnes futures pouvait donc
+    // maintenir ce Set non vide pendant longtemps et laisser le compteur du PAR courant
+    // figé à 0/24. On ne cède désormais que si PONS travaille réellement sur la donne
+    // affichée ; les calculs d'arrière-plan des autres donnes ne peuvent plus affamer DDS.
     try {
-        if (robotBoardsResolving && robotBoardsResolving.size) return true;
+        if (robotBoardsResolving && robotBoardsResolving.has(boardIndex)) return true;
     } catch (_) {}
     // Ne pas lancer le conditionnement PONS statistique juste avant une vraie décision
-    // robot : la décision d'enchère garde toujours la priorité CPU.
+    // robot SUR LA DONNE COURANTE : la décision d'enchère garde toujours la priorité CPU.
     try {
         const deal = currentDeal();
         if (!deal || isAuctionOver(deal.auctionHistory || [])) return false;
@@ -4046,7 +4091,7 @@ function contractChanceFastPrimaryState(deal, create = false) {
     if (!deal) return null;
     let state = contractChanceFastPrimaryStates.get(deal) || null;
     if (!state && create) {
-        state = { key: '', groupKey: '', target: null, declarer: '', entries: new Map(), pending: new Set(), failures: 0 };
+        state = { key: '', groupKey: '', target: null, declarer: '', entries: new Map(), pending: new Set(), retryCounts: new Map(), failures: 0 };
         contractChanceFastPrimaryStates.set(deal, state);
     }
     return state;
@@ -4233,6 +4278,8 @@ function contractChanceQueueFastPrimary(deal, allowConditioning) {
         fastState.declarer = declarer;
         fastState.entries.clear();
         fastState.pending.clear();
+        if (!(fastState.retryCounts instanceof Map)) fastState.retryCounts = new Map();
+        fastState.retryCounts.clear();
         fastState.failures = 0;
     }
     // V2 du réservoir : les 24 résultats bruts du contrat principal peuvent déjà avoir
@@ -4251,6 +4298,7 @@ function contractChanceQueueFastPrimary(deal, allowConditioning) {
     for (const candidate of wanted) {
         const sampleIndex = Number(candidate.sampleIndex);
         if (!Number.isInteger(sampleIndex) || fastState.entries.has(sampleIndex) || fastState.pending.has(sampleIndex)) continue;
+        if (Number((fastState.retryCounts instanceof Map && fastState.retryCounts.get(sampleIndex)) || 0) > CONTRACT_CHANCE_DDS_RETRY_LIMIT) continue;
         fastState.pending.add(sampleIndex);
         const pbn = dealToPbnStringForDD({ hands: candidate.hands });
         localDdsSolveContract(pbn, targetStrain, declarer, allowConditioning ? 300 : 210, fastState.groupKey)
@@ -4277,6 +4325,17 @@ function contractChanceQueueFastPrimary(deal, allowConditioning) {
                 if (!current || current.key !== key) return;
                 current.pending.delete(sampleIndex);
                 current.failures++;
+                if (!(current.retryCounts instanceof Map)) current.retryCounts = new Map();
+                const retries = Number(current.retryCounts.get(sampleIndex) || 0) + 1;
+                current.retryCounts.set(sampleIndex, retries);
+                if (retries <= CONTRACT_CHANCE_DDS_RETRY_LIMIT) {
+                    setTimeout(() => {
+                        const latest = contractChanceFastPrimaryState(deal, false);
+                        if (latest && latest.key === key && !latest.entries.has(sampleIndex) && !latest.pending.has(sampleIndex)) {
+                            contractChanceQueueFastPrimary(deal, allowConditioning);
+                        }
+                    }, CONTRACT_CHANCE_DDS_RETRY_DELAY_MS * retries);
+                }
             });
     }
     return fastState.entries.size >= CONTRACT_CHANCE_TARGET;
@@ -4338,6 +4397,7 @@ function contractChanceDirectStateForTarget(deal, target, create = false) {
             groupKey: `direct-par:${dealToPbnStringForDD(deal)}|${stateKey}`,
             entries: new Map(),
             pending: new Set(),
+            retryCounts: new Map(),
             failures: 0,
             adaptiveTarget: CONTRACT_CHANCE_TARGET,
             adaptiveSettled: false
@@ -4454,6 +4514,7 @@ function contractChanceQueueDirectCell(deal, target, goal, priority) {
     for (const candidate of candidates.slice(0, requestedCount)) {
         const sampleIndex = Number(candidate.sampleIndex);
         if (!Number.isInteger(sampleIndex) || state.entries.has(sampleIndex) || state.pending.has(sampleIndex)) continue;
+        if (Number((state.retryCounts instanceof Map && state.retryCounts.get(sampleIndex)) || 0) > CONTRACT_CHANCE_DDS_RETRY_LIMIT) continue;
         state.pending.add(sampleIndex);
         const pbn = dealToPbnStringForDD({ hands: candidate.hands });
         localDdsSolveContract(pbn, state.cell.strain, state.cell.declarer, priority, state.groupKey)
@@ -4477,6 +4538,17 @@ function contractChanceQueueDirectCell(deal, target, goal, priority) {
                 if (!current || current.key !== state.key) return;
                 current.pending.delete(sampleIndex);
                 current.failures++;
+                if (!(current.retryCounts instanceof Map)) current.retryCounts = new Map();
+                const retries = Number(current.retryCounts.get(sampleIndex) || 0) + 1;
+                current.retryCounts.set(sampleIndex, retries);
+                if (retries <= CONTRACT_CHANCE_DDS_RETRY_LIMIT) {
+                    setTimeout(() => {
+                        const latest = contractChanceDirectStateForTarget(deal, target, false);
+                        if (latest && latest.key === state.key && !latest.entries.has(sampleIndex) && !latest.pending.has(sampleIndex)) {
+                            contractChanceQueueDirectCell(deal, target, requestedCount, priority);
+                        }
+                    }, CONTRACT_CHANCE_DDS_RETRY_DELAY_MS * retries);
+                }
             });
     }
     return state.entries.size >= requestedCount;

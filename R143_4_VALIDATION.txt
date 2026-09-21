@@ -1,0 +1,21 @@
+PLAY R143.4 — VALIDATION
+Date: 21/09/2026
+
+Contrôles exécutés :
+- node --check app.js : PASS
+- node --check statistical-par-runtime-patch.js : PASS
+- node --check sw.js : PASS
+- tests/stat-par-r1434-gate.js : PASS
+- tests/regression-gate.js : PASS
+- tests/brl-engine-gate.js : PASS
+- tests/deal-pool-gate.js : PASS
+
+Corrections vérifiées statiquement :
+- priorité PONS limitée à la donne courante (correctif R143.3 intégré)
+- watchdog DDS 20 s + remplacement du Worker bloqué
+- retry borné fast/direct
+- sampleIndex de reprise jusqu'à 2159
+- hydratation différée sûre
+- cache candidats basé sur contraintes PONS sémantiques
+- ownership multi-groupes des tâches DDS dédupliquées
+- cache Service Worker bumpé R143.4

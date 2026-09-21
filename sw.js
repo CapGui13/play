@@ -8,7 +8,7 @@
 // distribué ici n'embarque pas de workflow GitHub Actions qui la réécrive : elle doit donc
 // changer à chaque nouvelle release pour forcer l'installation du nouveau cache chez les
 // utilisateurs déjà passés par le Service Worker.
-const CACHE_NAME = 'bridge-encheres-brl-r1432-20260919-ci-priority-declarer';
+const CACHE_NAME = 'bridge-encheres-brl-r1434-20260921-statpar-hardening';
 
 // Ressources de la même origine : mises en cache de façon fiable via cache.addAll (un seul
 // échec fait échouer toute l'installation, ce qui est le comportement voulu ici — ce sont
@@ -220,7 +220,7 @@ self.addEventListener('fetch', (event) => {
     );
 });
 
-// Pas de listener `skipWaiting` volontairement. C'est aussi une protection de migration :
-// une page encore chargée avec l'ancien app.js R1 peut tenter d'envoyer ce message au
-// nouveau worker R2 ; R2 l'ignore, reste waiting et ne peut donc pas provoquer de
-// controllerchange/reload dans cet ancien onglet.
+// R143.4 — le worker accepte explicitement le message `skipWaiting` (voir plus haut)
+// et appelle aussi skipWaiting() après un pré-cache réussi. Ce commentaire reflète donc
+// désormais le comportement réel : activation rapide, mais uniquement après installation
+// complète du nouveau cache versionné.

@@ -1,0 +1,14 @@
+PLAY R143.4 — Robustesse PAR statistique — 21/09/2026
+
+Corrections intégrées :
+1. Le PAR de la donne courante ne cède plus devant le pré-calcul PONS des autres donnes de la série.
+2. Persistance/reprise des sampleIndex conditionnés jusqu’à 2159 (au lieu de tronquer/rejeter au-delà de 71/1000).
+3. Watchdog 20 s sur chaque tâche DDS locale ; un Worker bloqué est détruit et remplacé.
+4. Réutilisation réelle du plan PONS quand une Passe ne modifie pas les contraintes sémantiques.
+5. Hydratation différée : une donne sans sauvegarde compatible n’est plus marquée prématurément comme déjà hydratée.
+6. Retry borné (2 relances par échantillon) pour les calculs DDS fast/direct en échec ou timeout.
+7. Déduplication DDS multi-propriétaires : annuler un ancien groupe ne rejette plus une tâche partagée par un nouveau plan.
+8. Service Worker versionné R143.4 pour forcer la propagation de app.js/runtime patch.
+9. Commentaire skipWaiting du Service Worker remis en cohérence avec le code réel.
+
+Cette version inclut également le correctif R143.3 livré lors de la passe précédente.

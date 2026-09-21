@@ -1,4 +1,4 @@
-// R141 — persistance progressive + préchauffage conditionné pendant l'enchère.
+// R143.4 — persistance progressive + préchauffage conditionné pendant l'enchère.
 // Chargé après app.js ; ne modifie ni le moteur statistique ni les règles PONS.
 (function () {
     'use strict';
@@ -57,7 +57,8 @@
         if (!(map instanceof Map)) return [];
         const rows = [];
         for (const [sampleIndex, value] of map.entries()) {
-            const idx = finiteInt(sampleIndex, 0, 1000);
+            const maxSampleIndex = (typeof CONTRACT_CHANCE_MAX_ATTEMPTS === 'number' ? CONTRACT_CHANCE_MAX_ATTEMPTS : 2160) - 1;
+            const idx = finiteInt(sampleIndex, 0, maxSampleIndex);
             if (idx === null) continue;
             const serialized = valueSerializer(value, idx);
             if (serialized !== null && serialized !== undefined) rows.push([idx, serialized]);
@@ -155,7 +156,8 @@
         let added = 0;
         for (const row of rows) {
             if (!Array.isArray(row) || row.length < 2) continue;
-            const idx = finiteInt(row[0], 0, CONTRACT_CHANCE_ADAPTIVE_MAX_TARGET - 1);
+            const maxSampleIndex = (typeof CONTRACT_CHANCE_MAX_ATTEMPTS === 'number' ? CONTRACT_CHANCE_MAX_ATTEMPTS : 2160) - 1;
+            const idx = finiteInt(row[0], 0, maxSampleIndex);
             if (idx === null || map.has(idx)) continue;
             const value = valueFactory(row[1], idx);
             if (value === null || value === undefined) continue;
@@ -167,9 +169,12 @@
 
     function hydrateDealResume(deal) {
         if (!deal || hydratedDeals.has(deal)) return 0;
-        hydratedDeals.add(deal);
         const resume = deal.statisticalChanceResumeV1;
+        // R143.4 — ne marquer la donne comme hydratée qu'une fois une sauvegarde réellement
+        // présente ET compatible. Ainsi une restauration/cloud arrivée un peu plus tard
+        // reste réhydratable au prochain passage de l'ordonnanceur.
         if (!resumeCompatible(deal, resume)) return 0;
+        hydratedDeals.add(deal);
 
         let added = 0;
         try {
@@ -182,6 +187,8 @@
                     fast.declarer = String(resume.fast.declarer || '');
                     fast.failures = Number(resume.fast.failures || 0);
                     fast.pending.clear();
+                    if (!(fast.retryCounts instanceof Map)) fast.retryCounts = new Map();
+                    else fast.retryCounts.clear();
                     added += restoreEntries(resume.fast.entries, fast.entries, value => validTricks(value));
                 }
             }
@@ -203,6 +210,7 @@
                             groupKey: `direct-par:${dealToPbnStringForDD(deal)}|${saved.key}`,
                             entries: new Map(),
                             pending: new Set(),
+                            retryCounts: new Map(),
                             failures: Number(saved.failures || 0),
                             adaptiveTarget: Number(saved.adaptiveTarget || CONTRACT_CHANCE_TARGET),
                             adaptiveSettled: !!saved.adaptiveSettled
@@ -371,5 +379,5 @@
         } catch (_) {}
     }, { capture: true });
 
-    try { recordPlayPerfMilestone('stat-par-runtime-patch-ready', 'R141'); } catch (_) {}
+    try { recordPlayPerfMilestone('stat-par-runtime-patch-ready', 'R143.4'); } catch (_) {}
 })();
