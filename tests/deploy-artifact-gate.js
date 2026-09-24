@@ -149,13 +149,13 @@ for (let ref of coreAssets) {
         `R129: CORE_ASSETS référence une ressource absente: ${ref}`);
 }
 
-// R143.1 — garde fonctionnelle minimale des deux apports perdus lors du rollback :
-// reprise/persistance R141 et clé sémantique R142.
+// R144/R145 — reprise dans le patch chargé après app.js ; identité sémantique
+// des contraintes PONS désormais native dans app.js (plus dans le patch).
 const statRuntimePatch = fs.readFileSync(path.join(SITE, 'statistical-par-runtime-patch.js'), 'utf8');
 assert(statRuntimePatch.includes('statisticalChanceResumeV1'),
-    'R143.1: persistance/reprise R141 absente du runtime patch');
-assert(statRuntimePatch.includes('pons-public-semantic:'),
-    'R143.1: clé sémantique R142 absente du runtime patch');
+    'R145: persistance/reprise absente du runtime patch');
+assert(appJs.includes('pons-public-semantic:'),
+    'R145: clé sémantique PONS absente de app.js');
 
 // Les deux fallbacks PONS lourds restent explicitement présents : R129 nettoie le
 // packaging, pas la résilience du moteur.
