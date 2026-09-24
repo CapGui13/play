@@ -1,0 +1,28 @@
+PLAY R145 — VALIDATION
+Date: 21/09/2026
+
+Contrôles exécutés :
+- node --check sur tous les .js racine : PASS
+- tests/regression-gate.js : PASS
+- tests/brl-engine-gate.js : PASS
+- tests/deal-pool-gate.js : PASS
+- tests/stat-par-r1434-gate.js : PASS
+- tests/stat-par-r144-consolidation-gate.js : PASS
+- tests/stat-par-r145-resilience-gate.js : PASS
+- tests/stat-par-r145-stress.js : PASS (50 000 états supervisés)
+
+Résilience R145 :
+- watchdog Worker individuel 20 s conservé : PASS
+- soft recovery après 8 s sans progrès : PASS
+- hard recovery après 15 s sans progrès : PASS
+- recyclage ciblé des Workers >12 s : PASS
+- maximum 3 reprises par phase de blocage : PASS
+- remise à zéro sur progrès réel : PASS
+- remise à zéro sur changement de plan RAW/PONS : PASS
+- diagnostic console window.getStatParDiagnostic() : PASS
+- aucun panneau / bouton / texte de diagnostic ajouté au DOM : PASS
+
+Contrôle interface :
+- SHA256 index.html = 65bfba944e467a6aff1b24a99940afdb37adb080250079992c8dfabc3befb6f7
+- SHA256 styles.css = e1f64ebe4341d1f71f3138f7bffe049fe58c2de88c7ee5897614e0dc5f9c8c11
+=> strictement identiques à R144.

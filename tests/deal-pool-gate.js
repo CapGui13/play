@@ -16,8 +16,8 @@ assert(app.includes("dealsList.filter(deal => deal && !deal.par && !deal.ddTable
 assert(app.includes('contractChancePoolRawEntriesForCell'), 'réutilisation V2 absente');
 assert(app.includes("action: 'enqueue-precompute'"), 'enqueue pré-calcul prioritaire absent');
 assert(app.includes("action: 'precompute-status'"), 'poll pré-calcul prioritaire absent');
-assert(app.includes('contractChanceHydrateRemotePrecompute'), 'hydratation progressive distante absente');
-assert(sw.includes('bridge-encheres-brl-r1434-20260921-statpar-hardening'), 'cache service worker non versionné');
+assert(app.includes('contractChanceHydratePoolPrecompute'), 'hydratation progressive distante absente');
+assert(/bridge-encheres-brl-r14[45]-20260921-statpar-(?:consolidation|resilience)/.test(sw), 'cache service worker non versionné');
 
 const hands = {
   N: { S: 'AKQJ', H: 'AKQ', D: 'AKQ', C: 'AKQ' },

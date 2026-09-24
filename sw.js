@@ -8,7 +8,7 @@
 // distribué ici n'embarque pas de workflow GitHub Actions qui la réécrive : elle doit donc
 // changer à chaque nouvelle release pour forcer l'installation du nouveau cache chez les
 // utilisateurs déjà passés par le Service Worker.
-const CACHE_NAME = 'bridge-encheres-brl-r1434-20260921-statpar-hardening';
+const CACHE_NAME = 'bridge-encheres-brl-r145-20260921-statpar-resilience';
 
 // Ressources de la même origine : mises en cache de façon fiable via cache.addAll (un seul
 // échec fait échouer toute l'installation, ce qui est le comportement voulu ici — ce sont
@@ -220,7 +220,7 @@ self.addEventListener('fetch', (event) => {
     );
 });
 
-// R143.4 — le worker accepte explicitement le message `skipWaiting` (voir plus haut)
+// R144 — le worker accepte explicitement le message `skipWaiting` (voir plus haut)
 // et appelle aussi skipWaiting() après un pré-cache réussi. Ce commentaire reflète donc
 // désormais le comportement réel : activation rapide, mais uniquement après installation
 // complète du nouveau cache versionné.

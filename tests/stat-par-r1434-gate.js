@@ -12,5 +12,5 @@ must(app.includes('CONTRACT_CHANCE_DDS_RETRY_LIMIT = 2'), 'bounded retry missing
 must(app.includes("const cacheKey = `${side === 'EW' ? 'EW' : 'NS'}|${conditioningKey}`"), 'semantic candidate cache key missing');
 must(runtime.includes('CONTRACT_CHANCE_MAX_ATTEMPTS'), 'resume max sample range missing');
 must(runtime.indexOf('if (!resumeCompatible(deal, resume)) return 0;') < runtime.indexOf('hydratedDeals.add(deal);'), 'hydration marking order is unsafe');
-must(sw.includes('r1434-20260921-statpar-hardening'), 'service worker cache version not bumped');
+must(/r14[45]-20260921-statpar-(?:consolidation|resilience)/.test(sw), 'service worker cache version not bumped');
 console.log('Stat PAR R143.4 gate: PASS');

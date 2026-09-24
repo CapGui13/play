@@ -1,0 +1,18 @@
+PLAY R145 — Résilience et diagnostic PAR statistique
+Date : 21/09/2026
+
+Objectif : durcir le runtime consolidé R144 sans modifier l'interface.
+
+- Ajout d'un superviseur de progression du PAR visible (toutes les 2,5 s).
+- Détection d'un blocage réel : récupération douce après 8 s sans progrès, récupération forte après 15 s.
+- Nombre de récupérations borné à 3 par phase de blocage ; remise à zéro dès qu'un progrès réel reprend.
+- Le changement de plan RAW/PONS remet proprement le chronomètre à zéro afin de ne pas confondre changement de population et blocage.
+- Récupération douce : remontée de priorité de la donne visible + réveil des ordonnanceurs DDS/PAR.
+- Récupération forte : recyclage ciblé des Workers DDS sans réponse depuis >=12 s + remise à zéro des budgets de retry fast/direct + réordonnancement prioritaire.
+- Conservation du watchdog individuel Worker à 20 s : le superviseur s'ajoute au filet existant, il ne le remplace pas.
+- Diagnostic caché disponible dans la console : window.getStatParDiagnostic(). Aucun panneau, bouton ou texte ajouté à l'UI.
+- Journal circulaire des 20 derniers événements de supervision exposé dans le diagnostic.
+- Nouveau gate tests/stat-par-r145-resilience-gate.js.
+- Service Worker bump R145.
+
+Interface : index.html et styles.css strictement inchangés par rapport à R144.

@@ -1,0 +1,28 @@
+PLAY R144 — Consolidation architecture PAR statistique — 21/09/2026
+
+Objectif : rationaliser le pipeline PAR sans aucune modification d'interface.
+
+Consolidations effectuées :
+1. Suppression définitive du legacy DDS HTTP R131 dans le runtime statistique : plus de lanes/URLs/fetch DDS distants ni de compteur "HTTP" détourné pour le local.
+2. Ordonnanceur renommé et explicité en lots DDS locaux : 6 lots max de 4 redistributions, résolus par le pool WASM navigateur.
+3. Identité sémantique PONS intégrée nativement dans app.js. Le runtime patch ne monkey-patche plus statisticalParPublicConditioning().
+4. Ajout d'une source unique contractChancePopulationPlan() pour partager la même identité RAW/PONS et les mêmes candidats entre : primaire rapide, cellules directes et fallback full-table.
+5. Protection supplémentaire : une cellule directe refuse d'absorber des candidats si son planKey a changé entre création et lancement de vague.
+6. Rôle du serveur clarifié : pour une donne générée localement, PLAY arrête le polling runtime dès que DD exact + 24 RAW NS + 24 RAW EW sont disponibles. Les raffinements 48/72 et PONS restent la responsabilité du DDS local.
+7. Renommage contractChanceHydrateRemotePrecompute -> contractChanceHydratePoolPrecompute afin de distinguer clairement le cache de pool du calcul P2P.
+8. Commentaires historiques R131/R133 nettoyés pour refléter l'architecture réellement exécutée.
+9. Nouveau gate tests/stat-par-r144-consolidation-gate.js.
+10. Service Worker bumpé R144.
+
+Héritage conservé volontairement :
+- deterministic statisticalSeedId ;
+- règle population PONS complète ou fallback RAW complet ;
+- fastPrimary pour la priorité du premier pourcentage ;
+- directTarget comme chemin normal après le primaire ;
+- full-table uniquement comme fallback de compatibilité pour les cas non représentables en cellules directes ;
+- coopération P2P des invités ;
+- watchdog/retries/reprise R143.4.
+
+Interface :
+- index.html inchangé bit pour bit par rapport à R143.4 ;
+- styles.css inchangé bit pour bit par rapport à R143.4.

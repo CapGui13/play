@@ -1,5 +1,5 @@
-// R143.4 — persistance progressive + préchauffage conditionné pendant l'enchère.
-// Chargé après app.js ; ne modifie ni le moteur statistique ni les règles PONS.
+// R144 — reprise/persistance progressive + réveil du préchauffage conditionné.
+// Chargé après app.js ; l'identité de population RAW/PONS vit désormais dans app.js.
 (function () {
     'use strict';
 
@@ -11,35 +11,9 @@
     const lastSavedFingerprint = new WeakMap();
     const lastAuctionSignature = new WeakMap();
 
-    // R142 — la population conditionnée doit être identifiée par CE QUE PONS a
-    // effectivement déduit, pas par le texte brut de l'enchère. En R141, la clé
-    // `pons-public:<signature>` changeait à chaque Passe : trois passes de clôture
-    // pouvaient donc jeter un préchauffage déjà avancé alors que les contraintes PONS
-    // étaient strictement identiques. Une sérialisation canonique des contraintes garde
-    // le même plan tant que la population statistique ne change réellement pas.
-    function stableJson(value) {
-        if (value === null || value === undefined) return String(value);
-        if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'string') {
-            return JSON.stringify(value);
-        }
-        if (Array.isArray(value)) return '[' + value.map(stableJson).join(',') + ']';
-        if (typeof value === 'object') {
-            return '{' + Object.keys(value).sort().map(key => JSON.stringify(key) + ':' + stableJson(value[key])).join(',') + '}';
-        }
-        return JSON.stringify(String(value));
-    }
-
-    try {
-        const originalPublicConditioning = statisticalParPublicConditioning;
-        statisticalParPublicConditioning = function (deal, config) {
-            const result = originalPublicConditioning(deal, config);
-            if (!result || !result.informative || !result.constraints) return result;
-            return {
-                ...result,
-                key: `pons-public-semantic:${stableJson(result.constraints)}`
-            };
-        };
-    } catch (_) {}
+    // R144 — l'identité sémantique RAW/PONS est désormais native dans app.js.
+    // Ce patch ne modifie plus le moteur statistique : il ne gère que reprise/persistance
+    // et le réveil du préchauffage conditionné pendant l'enchère.
 
     function finiteInt(value, min, max) {
         const n = Number(value);
@@ -379,5 +353,5 @@
         } catch (_) {}
     }, { capture: true });
 
-    try { recordPlayPerfMilestone('stat-par-runtime-patch-ready', 'R143.4'); } catch (_) {}
+    try { recordPlayPerfMilestone('stat-par-runtime-patch-ready', 'R144'); } catch (_) {}
 })();

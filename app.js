@@ -2255,14 +2255,33 @@ function triggerRandomDealPoolReplenish() {
     } catch (_) {}
 }
 
-// ===== Pré-calcul GitHub prioritaire des donnes générées localement =====
+// ===== Pré-calcul GitHub des donnes générées localement — cache de base R144 =====
 //
-// Invisible pour l'utilisateur : dès qu'un fallback local a produit les cartes, PLAY les
-// place dans une file Redis. GitHub calcule DD exact puis 24/48/72 tables statistiques et
-// PLAY absorbe les paliers au fil de l'eau. Le calcul DDS local reste actif en parallèle :
-// aucune dépendance réseau et aucune attente supplémentaire n'est imposée au joueur.
+// Le serveur prépare le DD exact et une BASE RAW de 24 tirages par camp. PLAY peut absorber
+// cette base si elle arrive à temps, mais le navigateur reste le moteur de référence pour
+// PONS et les raffinements 48/72. Une fois DD + 24 NS + 24 EW disponibles, le polling de
+// cette donne s'arrête : GitHub peut finir son travail de pool sans rester une voie critique
+// du runtime courant. Aucune dépendance réseau n'est introduite.
 const RANDOM_DEAL_PRIORITY_POLL_INTERVAL_MS = 1800;
 const RANDOM_DEAL_PRIORITY_POLL_MAX_MS = 5 * 60 * 1000;
+
+function randomDealRuntimeBaselineReady(deal) {
+    if (!deal || !contractChanceTableIsValid(deal.ddTable)) return false;
+    const stat = deal.precomputedStatV1;
+    if (!stat || !stat.sides) return false;
+    for (const side of ['NS', 'EW']) {
+        const rows = Array.isArray(stat.sides[side]) ? stat.sides[side] : [];
+        const indexes = new Set();
+        for (const row of rows) {
+            const idx = Number(row && row.sampleIndex);
+            if (Number.isInteger(idx) && idx >= 0 && idx < CONTRACT_CHANCE_TARGET && contractChanceTableIsValid(row && row.table)) {
+                indexes.add(idx);
+            }
+        }
+        if (indexes.size < CONTRACT_CHANCE_TARGET) return false;
+    }
+    return true;
+}
 
 function startRandomDealPriorityPrecompute(list, requestGeneration) {
     if (!Array.isArray(list) || !list.length) return;
@@ -2323,8 +2342,8 @@ function pollRandomDealPriorityPrecompute(candidates, requestGeneration) {
                     if (Number.isFinite(progress)) known.set(id, Math.max(Number(known.get(id) || 0), progress));
 
                     if (!deal.ddTable && contractChanceTableIsValid(row && row.ddTable)) {
-                        // Utiliser le point d'entrée normal afin que le DD distant bénéficie
-                        // exactement des mêmes rafraîchissements/relays que le DD local.
+                        // Utiliser le point d'entrée normal afin que le DD issu du pré-calcul de pool
+                        // bénéficie exactement des mêmes rafraîchissements/relays que le DD local.
                         applyDDResultToBoard(deal.board, row.ddTable);
                     }
 
@@ -2332,10 +2351,14 @@ function pollRandomDealPriorityPrecompute(candidates, requestGeneration) {
                     if (stat && typeof stat === 'object'
                         && String(stat.statisticalSeedId || '') === String(deal.statisticalSeedId || '')) {
                         deal.precomputedStatV1 = stat;
-                        contractChanceHydrateRemotePrecompute(deal);
+                        contractChanceHydratePoolPrecompute(deal);
                     }
 
-                    if (row && (row.status === 'done' || row.status === 'error')) terminal.add(id);
+                    // R144 — pour la partie en cours, le serveur n'est qu'un fournisseur
+                    // de baseline RAW. Les raffinements 48/72 et PONS appartiennent au DDS
+                    // local ; inutile de continuer à poller une fois 24+24 disponibles.
+                    if (randomDealRuntimeBaselineReady(deal)) terminal.add(id);
+                    else if (row && (row.status === 'done' || row.status === 'error')) terminal.add(id);
                 }
             }
         } catch (_) {}
@@ -2507,6 +2530,32 @@ function localDdsDiagnostic() {
 }
 if (typeof window !== 'undefined') window.getLocalDdsDiagnostic = localDdsDiagnostic;
 
+
+// R145 — rotation ciblée d'un Worker qui n'a plus produit de réponse. Le watchdog
+// de tâche à 20 s reste la dernière barrière ; le superviseur PAR peut intervenir plus
+// tôt (12 s) uniquement lorsque le PAR visible n'avance réellement plus.
+function localDdsRecycleStuckWorkers(maxAgeMs = CONTRACT_CHANCE_SUPERVISOR_WORKER_RECYCLE_MS) {
+    const now = Date.now();
+    let recycled = 0;
+    for (const slot of [...localDdsWorkers]) {
+        if (!slot || !slot.current || !slot.startedAt) continue;
+        if (now - Number(slot.startedAt || 0) < Math.max(1000, Number(maxAgeMs || 0))) continue;
+        const task = slot.current;
+        localDdsFinishSlot(slot, false, new Error('Worker DDS recyclé par le superviseur PAR'));
+        try { slot.worker.terminate(); } catch (_) {}
+        const pos = localDdsWorkers.indexOf(slot);
+        if (pos >= 0) localDdsWorkers.splice(pos, 1);
+        recycled++;
+        // La Promise rejetée repasse par le mécanisme de retry du consommateur.
+        if (task && task.priority) localDdsSchedulePump(0);
+    }
+    if (recycled) {
+        localDdsEnsureWorkers();
+        localDdsSchedulePump(0);
+    }
+    return recycled;
+}
+
 function localDdsSchedulePump(delay = 0) {
     if (localDdsPumpTimer) return;
     localDdsPumpTimer = setTimeout(() => {
@@ -2523,6 +2572,7 @@ function localDdsFinishSlot(slot, ok, payload) {
         slot.watchdog = null;
     }
     slot.current = null;
+    slot.startedAt = 0;
     if (task.kind === 'contract') {
         if (localDdsPendingByContract.get(task.cacheKey) === task) localDdsPendingByContract.delete(task.cacheKey);
     } else if (localDdsPendingByPbn.get(task.pbn) === task) {
@@ -2550,7 +2600,7 @@ function localDdsSpawnWorker(index) {
     } catch (err) {
         return null;
     }
-    const slot = { index, worker, current: null, watchdog: null };
+    const slot = { index, worker, current: null, watchdog: null, startedAt: 0 };
     worker.onmessage = event => {
         const msg = event && event.data || {};
         const task = slot.current;
@@ -2611,6 +2661,7 @@ function localDdsPump() {
         if (!slot || slot.current) continue;
         const task = localDdsQueue.shift();
         slot.current = task;
+        slot.startedAt = Date.now();
         try {
             if (task.kind === 'contract') {
                 slot.worker.postMessage({
@@ -2972,36 +3023,36 @@ const CONTRACT_CHANCE_DECLARER_GAP_POINTS = 10;
 const CONTRACT_CHANCE_REFRESH_THROTTLE_MS = 90;
 const CONTRACT_CHANCE_ADAPTIVE_MARGIN_AFTER_24 = 0.13;
 const CONTRACT_CHANCE_ADAPTIVE_MARGIN_AFTER_48 = 0.10;
-// Online R131 — benchmark réel Vercel sur une vague adaptative de 24 DDS :
-// 6 lots de 4 en parallèle donnent la meilleure médiane, sans modifier ni l'échantillon
-// ni l'ordre 24 -> 48 -> 72. Chaque lot utilise une seule lane native A/B, puis l'autre
-// lane uniquement en reprise ; l'ancien endpoint api-gen reste le dernier secours.
-const CONTRACT_CHANCE_DD_CHUNK_SIZE = 4;
-const CONTRACT_CHANCE_MAX_HTTP = 6;
+// R144 — ordonnanceur local consolidé. Le PAR statistique n'a plus aucune notion
+// de « lane HTTP » : il forme au maximum 6 lots locaux de 4 redistributions, ensuite
+// résolus par le pool DDS WebAssembly du navigateur. 24 -> 48 -> 72 reste inchangé.
+const CONTRACT_CHANCE_LOCAL_BATCH_SIZE = 4;
+const CONTRACT_CHANCE_MAX_LOCAL_BATCHES = 6;
 const CONTRACT_CHANCE_MAX_ATTEMPTS = 2160;
 // R143.4 — deux relances maximum par échantillon après une erreur/timeout DDS.
 const CONTRACT_CHANCE_DDS_RETRY_LIMIT = 2;
 const CONTRACT_CHANCE_DDS_RETRY_DELAY_MS = 250;
 const CONTRACT_CHANCE_RETRY_DELAY_MS = 1800;
-const CONTRACT_CHANCE_REMOTE_TIMEOUT_MS = 30000;
+// R145 — superviseur de haut niveau : le watchdog Worker protège une tâche isolée,
+// tandis que ce superviseur vérifie que le PAR visible progresse réellement. Il ne
+// modifie jamais le DOM : diagnostic uniquement via window.getStatParDiagnostic().
+const CONTRACT_CHANCE_SUPERVISOR_INTERVAL_MS = 2500;
+const CONTRACT_CHANCE_SUPERVISOR_SOFT_STALL_MS = 8000;
+const CONTRACT_CHANCE_SUPERVISOR_HARD_STALL_MS = 15000;
+const CONTRACT_CHANCE_SUPERVISOR_MAX_RECOVERIES = 3;
+const CONTRACT_CHANCE_SUPERVISOR_WORKER_RECYCLE_MS = 12000;
 const CONTRACT_CHANCE_COLLAB_FETCH_TIMEOUT_MS = 10000;
 const CONTRACT_CHANCE_COLLAB_MOBILE_BATCH = 2;
 const CONTRACT_CHANCE_COLLAB_DESKTOP_BATCH = 6;
 const CONTRACT_CHANCE_COLLAB_JOB_TIMEOUT_MS = 12000;
 const CONTRACT_CHANCE_COLLAB_COOLDOWN_MS = 15000;
-// R133 — les URLs DDS Vercel ont été retirées du runtime. Le drapeau distant reste à
-// false comme filet de sécurité pour les anciens chemins collaboratifs R131 encore
-// présents pour compatibilité protocolaire avec un onglet plus ancien.
-const CONTRACT_CHANCE_NATIVE_URLS = [];
-const CONTRACT_CHANCE_LEGACY_URL = '';
-const CONTRACT_CHANCE_REMOTE_DDS_ENABLED = false;
+// R144 — aucune route DDS distante n'existe plus dans le runtime statistique.
 const CONTRACT_CHANCE_LOCAL_DDS_ENABLED = LOCAL_DDS_BROWSER_ENABLED;
 
 let contractChanceGeneration = 0;
 let contractChanceTaskSequence = 0;
-let contractChanceNativeLaneSequence = 0;
 let contractChanceQueue = [];
-let contractChanceActiveHttp = 0;
+let contractChanceActiveBatches = 0;
 let contractChancePreparedList = null;
 let contractChanceStates = new WeakMap();
 let contractChanceAdvancedDeals = new WeakSet();
@@ -3017,6 +3068,9 @@ let contractChanceRemoteJobs = new Map();
 let contractChanceRemoteJobSequence = 0;
 let contractChanceGuestActiveJobs = new Set();
 let contractChancePumpTimer = null;
+let contractChanceSupervisorTimer = null;
+let contractChanceSupervisorStates = new WeakMap();
+let contractChanceSupervisorRecoveries = 0;
 
 function statisticalParSideFromDeclarer(declarer) {
     const d = String(declarer || '');
@@ -3051,6 +3105,16 @@ function statisticalParAuctionSignature(deal) {
         .join(' ');
 }
 
+function statisticalParStableJson(value) {
+    if (value === null || value === undefined) return String(value);
+    if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'string') return JSON.stringify(value);
+    if (Array.isArray(value)) return '[' + value.map(statisticalParStableJson).join(',') + ']';
+    if (typeof value === 'object') {
+        return '{' + Object.keys(value).sort().map(key => JSON.stringify(key) + ':' + statisticalParStableJson(value[key])).join(',') + '}';
+    }
+    return JSON.stringify(String(value));
+}
+
 function statisticalParPublicConditioning(deal, config) {
     const signature = statisticalParAuctionSignature(deal);
     if (!signature || !window.PonsEngine || typeof window.PonsEngine.infer !== 'function'
@@ -3073,7 +3137,7 @@ function statisticalParPublicConditioning(deal, config) {
             ? window.PlayStatisticalPar.constraintsAreInformative(config, constraints)
             : !!constraints;
         return {
-            key: informative ? `pons-public:${signature}` : 'raw',
+            key: informative ? `pons-public-semantic:${statisticalParStableJson(constraints)}` : 'raw',
             informative,
             constraints: informative ? constraints : null,
             signature,
@@ -3101,8 +3165,9 @@ function contractChanceBuildCandidates(deal, side, allowConditioning = true, tar
     };
     const rawPlan = count => Array.from({ length: count }, (_, sampleIndex) => buildOne(sampleIndex));
 
-    // Pendant l'enchère : préchauffage brut et seulement 24 tirages. Aucun coût adaptatif
-    // ni conditionnement PONS ne doit concurrencer une décision d'enchère réelle.
+    // Le paramètre allowConditioning décrit explicitement la population demandée.
+    // L'ordonnanceur peut rester RAW pendant l'enchère, ou autoriser PONS plus tôt si le
+    // déclarant est déjà irréversiblement établi. Ce moteur ne décide jamais lui-même.
     if (!allowConditioning) return rawPlan(requestedCount);
 
     // Après l'enchère, la population doit rester IDENTIQUE quand on passe de 24 à 48/72.
@@ -3170,11 +3235,10 @@ function contractChanceDealState(deal, create = false) {
 
 function resetContractChancePrewarmPipeline() {
     contractChanceGeneration++;
-    contractChanceNativeLaneSequence = 0;
     contractChancePreparedList = null;
     contractChanceQueue = [];
-    // Les fetch de l'ancienne génération ne sont pas annulables côté serveur : on garde
-    // leur compteur actif jusqu'à leur vrai retour pour ne jamais dépasser la limite HTTP.
+    // Les tâches DDS d'une ancienne génération sont ignorées par leur generation id ;
+    // les Workers locaux déjà engagés terminent naturellement sans réinjecter de résultat.
     contractChanceStates = new WeakMap();
     contractChanceAdvancedDeals = new WeakSet();
     contractChanceDeferredDeals = new WeakSet();
@@ -3182,6 +3246,7 @@ function resetContractChancePrewarmPipeline() {
     contractChanceCandidatePlanCache = new WeakMap();
     contractChanceFastPrimaryStates = new WeakMap();
     contractChanceDirectTargetStates = new WeakMap();
+    contractChanceSupervisorStates = new WeakMap();
     for (const job of contractChanceRemoteJobs.values()) {
         if (job && job.timer) clearTimeout(job.timer);
     }
@@ -3189,6 +3254,228 @@ function resetContractChancePrewarmPipeline() {
     contractChanceGuestActiveJobs.clear();
     if (contractChancePumpTimer) clearTimeout(contractChancePumpTimer);
     contractChancePumpTimer = null;
+}
+
+
+// ===== R145 — supervision / diagnostic du PAR statistique (sans interface visible) =====
+const contractChanceSupervisorEvents = [];
+
+function contractChanceSupervisorLog(type, deal, extra = {}) {
+    const event = {
+        at: Date.now(),
+        type: String(type || ''),
+        board: deal && deal.board != null ? deal.board : null,
+        ...extra
+    };
+    contractChanceSupervisorEvents.push(event);
+    if (contractChanceSupervisorEvents.length > 50) contractChanceSupervisorEvents.shift();
+    return event;
+}
+
+function contractChanceDiagnosticForDeal(deal) {
+    if (!deal) return null;
+    const fast = contractChanceFastPrimaryState(deal, false);
+    const directMap = contractChanceDirectStateMap(deal, false);
+    const generic = contractChanceDealState(deal, false);
+    const direct = [];
+    if (directMap instanceof Map) {
+        for (const state of directMap.values()) {
+            if (!state) continue;
+            direct.push({
+                cell: state.cell ? { ...state.cell } : null,
+                planKey: String(state.planKey || ''),
+                samples: state.entries instanceof Map ? state.entries.size : 0,
+                pending: state.pending instanceof Set ? state.pending.size : 0,
+                target: Number(state.adaptiveTarget || CONTRACT_CHANCE_TARGET),
+                failures: Number(state.failures || 0)
+            });
+        }
+    }
+    const genericSides = {};
+    for (const side of ['NS', 'EW']) {
+        const sideState = generic && generic.sides && generic.sides[side];
+        genericSides[side] = sideState ? {
+            samples: sideState.entries instanceof Map ? sideState.entries.size : 0,
+            queued: sideState.queued instanceof Set ? sideState.queued.size : 0,
+            active: sideState.active instanceof Set ? sideState.active.size : 0,
+            remotePending: sideState.remotePending instanceof Set ? sideState.remotePending.size : 0,
+            target: Number(sideState.adaptiveTarget || CONTRACT_CHANCE_TARGET),
+            failures: Number(sideState.failures || 0)
+        } : null;
+    }
+    const ownQueued = contractChanceQueue.filter(task => task && task.deal === deal && task.generation === contractChanceGeneration).length;
+    const score = (fast && fast.entries instanceof Map ? fast.entries.size : 0)
+        + direct.reduce((sum, state) => sum + Number(state.samples || 0), 0)
+        + ['NS', 'EW'].reduce((sum, side) => sum + Number(genericSides[side] && genericSides[side].samples || 0), 0);
+    const pending = (fast && fast.pending instanceof Set ? fast.pending.size : 0)
+        + direct.reduce((sum, state) => sum + Number(state.pending || 0), 0)
+        + ['NS', 'EW'].reduce((sum, side) => sum + Number(genericSides[side] && ((genericSides[side].queued || 0) + (genericSides[side].active || 0) + (genericSides[side].remotePending || 0)) || 0), 0)
+        + ownQueued;
+    const supervisor = contractChanceSupervisorStates.get(deal) || null;
+    const planFingerprint = [
+        fast ? String(fast.key || '') : '',
+        ...direct.map(state => `${state.cell && state.cell.key || ''}:${state.planKey || ''}:${state.target || CONTRACT_CHANCE_TARGET}`)
+    ].join('|');
+    return {
+        board: deal.board,
+        statisticalParMode: !!deal.statisticalParMode,
+        auctionOver: (() => { try { return isAuctionOver(deal.auctionHistory || []); } catch (_) { return false; } })(),
+        score,
+        pending,
+        planFingerprint,
+        fast: fast ? {
+            key: String(fast.key || ''),
+            samples: fast.entries instanceof Map ? fast.entries.size : 0,
+            pending: fast.pending instanceof Set ? fast.pending.size : 0,
+            failures: Number(fast.failures || 0)
+        } : null,
+        direct,
+        generic: genericSides,
+        localDds: localDdsDiagnostic(),
+        scheduler: {
+            generation: contractChanceGeneration,
+            queuedForDeal: ownQueued,
+            activeBatches: contractChanceActiveBatches
+        },
+        supervisor: supervisor ? { ...supervisor } : null
+    };
+}
+
+function contractChanceCurrentDiagnostic() {
+    let deal = null;
+    try { deal = currentDeal(); } catch (_) {}
+    return {
+        current: contractChanceDiagnosticForDeal(deal),
+        localDds: localDdsDiagnostic(),
+        supervisorRecoveries: contractChanceSupervisorRecoveries,
+        recentEvents: contractChanceSupervisorEvents.slice(-20)
+    };
+}
+if (typeof window !== 'undefined') window.getStatParDiagnostic = contractChanceCurrentDiagnostic;
+
+function contractChanceSupervisorNeedsWork(deal, diagnostic) {
+    if (!deal || !diagnostic || !deal.statisticalParMode || !deal.ddTable) return false;
+    if (!diagnostic.auctionOver) return false;
+    if (diagnostic.pending > 0) return true;
+    // Dès que les cellules directes existent, elles sont la source de vérité du rendu :
+    // le fast-primary n'est plus qu'un préchauffage et ne doit pas maintenir artificiellement
+    // le superviseur actif si une cellule directe équivalente a déjà terminé.
+    if (diagnostic.direct.length) {
+        if (diagnostic.direct.some(state => Number(state.samples || 0) < Number(state.target || CONTRACT_CHANCE_TARGET))) return true;
+    } else if (diagnostic.fast && diagnostic.fast.key && diagnostic.fast.samples < CONTRACT_CHANCE_TARGET) {
+        return true;
+    }
+    for (const side of ['NS', 'EW']) {
+        const state = diagnostic.generic && diagnostic.generic[side];
+        if (!state) continue;
+        if ((state.samples > 0 || state.failures > 0 || state.queued > 0 || state.active > 0)
+            && Number(state.samples || 0) < Number(state.target || CONTRACT_CHANCE_TARGET)) return true;
+    }
+    // Si aucun état n'a encore été créé après la fin de l'enchère, le scheduler doit
+    // encore lancer la première vague (cas typique du 0/24 figé).
+    if (!diagnostic.fast && diagnostic.direct.length === 0 && diagnostic.score === 0) return true;
+    return false;
+}
+
+function contractChanceSupervisorResetRetryBudgets(deal) {
+    const fast = contractChanceFastPrimaryState(deal, false);
+    if (fast) {
+        if (fast.pending instanceof Set) fast.pending.clear();
+        if (fast.retryCounts instanceof Map) fast.retryCounts.clear();
+    }
+    const direct = contractChanceDirectStateMap(deal, false);
+    if (direct instanceof Map) {
+        for (const state of direct.values()) {
+            if (!state) continue;
+            if (state.pending instanceof Set) state.pending.clear();
+            if (state.retryCounts instanceof Map) state.retryCounts.clear();
+        }
+    }
+}
+
+function contractChanceSupervisorRecover(deal, hard = false, stallMs = 0) {
+    if (!deal) return;
+    const state = contractChanceSupervisorStates.get(deal);
+    if (!state || Number(state.recoveries || 0) >= CONTRACT_CHANCE_SUPERVISOR_MAX_RECOVERIES) return;
+    state.recoveries = Number(state.recoveries || 0) + 1;
+    state.lastRecoveryAt = Date.now();
+    contractChanceSupervisorRecoveries++;
+    let recycled = 0;
+    if (hard) {
+        recycled = localDdsRecycleStuckWorkers(CONTRACT_CHANCE_SUPERVISOR_WORKER_RECYCLE_MS);
+        contractChanceSupervisorResetRetryBudgets(deal);
+    }
+    localDdsEnsureWorkers();
+    localDdsSchedulePump(0);
+    contractChanceSchedulePump(0);
+    // Priorité supérieure aux préchauffages des donnes suivantes, sans annuler leurs
+    // résultats déjà calculés ni changer la population statistique.
+    contractChanceQueueForDeal(deal, hard ? 320 : 260);
+    contractChanceSupervisorLog(hard ? 'hard-recovery' : 'soft-recovery', deal, {
+        stallMs: Math.round(Number(stallMs || 0)),
+        recovery: state.recoveries,
+        recycledWorkers: recycled
+    });
+}
+
+function contractChanceSupervisorDecision(stallMs, recoveries, sinceRecovery) {
+    const stall = Math.max(0, Number(stallMs || 0));
+    const count = Math.max(0, Number(recoveries || 0));
+    const since = Math.max(0, Number(sinceRecovery || 0));
+    if (count >= CONTRACT_CHANCE_SUPERVISOR_MAX_RECOVERIES) return 'none';
+    if (stall >= CONTRACT_CHANCE_SUPERVISOR_HARD_STALL_MS) {
+        return since >= CONTRACT_CHANCE_SUPERVISOR_INTERVAL_MS ? 'hard' : 'none';
+    }
+    if (stall >= CONTRACT_CHANCE_SUPERVISOR_SOFT_STALL_MS && count === 0) return 'soft';
+    return 'none';
+}
+
+function contractChanceSupervisorTick() {
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+    if (typeof myRole !== 'undefined' && myRole !== 'host') return;
+    let deal = null;
+    try { deal = currentDeal(); } catch (_) { return; }
+    if (!deal || !deal.statisticalParMode) return;
+    const diagnostic = contractChanceDiagnosticForDeal(deal);
+    if (!diagnostic || !diagnostic.auctionOver || !deal.ddTable) return;
+    const now = Date.now();
+    let state = contractChanceSupervisorStates.get(deal);
+    if (!state) {
+        state = { score: diagnostic.score, planFingerprint: diagnostic.planFingerprint, lastProgressAt: now, recoveries: 0, lastRecoveryAt: 0 };
+        contractChanceSupervisorStates.set(deal, state);
+        return;
+    }
+    if (String(state.planFingerprint || '') !== String(diagnostic.planFingerprint || '')) {
+        state.score = diagnostic.score;
+        state.planFingerprint = diagnostic.planFingerprint;
+        state.lastProgressAt = now;
+        state.recoveries = 0;
+        contractChanceSupervisorLog('plan-change', deal, { score: diagnostic.score });
+        return;
+    }
+    if (diagnostic.score > Number(state.score || 0)) {
+        state.score = diagnostic.score;
+        state.lastProgressAt = now;
+        state.recoveries = 0;
+        contractChanceSupervisorLog('progress', deal, { score: diagnostic.score });
+        return;
+    }
+    if (!contractChanceSupervisorNeedsWork(deal, diagnostic)) {
+        state.score = diagnostic.score;
+        state.lastProgressAt = now;
+        state.recoveries = 0;
+        return;
+    }
+    const stallMs = now - Number(state.lastProgressAt || now);
+    const sinceRecovery = now - Number(state.lastRecoveryAt || 0);
+    const decision = contractChanceSupervisorDecision(stallMs, state.recoveries, sinceRecovery);
+    if (decision === 'hard') contractChanceSupervisorRecover(deal, true, stallMs);
+    else if (decision === 'soft') contractChanceSupervisorRecover(deal, false, stallMs);
+}
+
+function contractChanceSupervisorEnsureRunning() {
+    if (contractChanceSupervisorTimer || typeof setInterval !== 'function') return;
+    contractChanceSupervisorTimer = setInterval(contractChanceSupervisorTick, CONTRACT_CHANCE_SUPERVISOR_INTERVAL_MS);
 }
 
 function contractChanceMustYieldToPons() {
@@ -3257,6 +3544,7 @@ function contractChanceMarkSessionDeals(list) {
 }
 
 function contractChanceQueueForDeal(deal, priority = 20) {
+    contractChanceSupervisorEnsureRunning();
     if (!CONTRACT_CHANCE_LOCAL_DDS_ENABLED) return;
     if (myRole !== 'host' || !deal || !deal.hands || !deal.statisticalParMode) return;
     if (!window.PlayStatisticalPar || typeof window.PlayStatisticalPar.sampleHandsDeterministic !== 'function') return;
@@ -3299,11 +3587,10 @@ function contractChanceQueueForDeal(deal, priority = 20) {
 
     const contract = determineContract(deal.auctionHistory || []);
 
-    // R141 — chemin normal : après le PAR principal, résoudre directement chaque cellule
-    // réellement affichée. Jusqu'à 4 cellules par camp, SolveBoard reste moins coûteux
-    // qu'une table 20-cellules et les pourcentages arrivent l'un après l'autre au lieu
-    // d'attendre une table complète. Les sacrifices gardent le chemin table, car leur
-    // rentabilité exige de comparer simultanément les deux camps sur la même distribution.
+    // R144 — chemin normal unique : après le PAR principal, résoudre directement chaque
+    // cellule réellement affichée. Les sacrifices ne font plus partie du pipeline de
+    // probabilités ; le fallback full-table ne subsiste que pour les rares cas où le jeu
+    // de cibles ne peut pas être représenté proprement en cellules directes.
     if (contract && contractChanceCanUseDirectTargetMode(deal, contract)) {
         const adaptiveChanged = contractChanceUpdateDirectAdaptiveTargets(deal, contract);
         const allowedSides = contractChanceFinalUsefulSides(deal);
@@ -3314,7 +3601,7 @@ function contractChanceQueueForDeal(deal, priority = 20) {
         return;
     }
 
-    // Fallback R139 : sacrifices ou trop de cellules distinctes => table DD complète.
+    // Fallback de compatibilité : trop de cellules distinctes / cible non représentable => table DD complète.
     const allowedSides = contractChanceFinalUsefulSides(deal);
     contractChanceUpdateAdaptiveTargets(deal);
     contractChanceDispatchCollaborativeWork(deal);
@@ -3323,8 +3610,8 @@ function contractChanceQueueForDeal(deal, priority = 20) {
     for (const side of orderedSides) {
         const sideState = state.sides[side];
         const requestedCount = Math.max(CONTRACT_CHANCE_TARGET, Number(sideState.adaptiveTarget || CONTRACT_CHANCE_TARGET));
-        let candidates = [];
-        try { candidates = contractChanceBuildCandidates(deal, side, true, requestedCount); } catch (_) { candidates = []; }
+        const populationPlan = contractChancePopulationPlan(deal, side, true, requestedCount);
+        const candidates = populationPlan.candidates;
         const wanted = new Set(candidates.map(candidate => Number(candidate.sampleIndex)));
         contractChanceQueue = contractChanceQueue.filter(task => {
             if (!task || task.generation !== contractChanceGeneration || task.deal !== deal || task.side !== side) return true;
@@ -3355,11 +3642,10 @@ function contractChanceQueueForDeal(deal, priority = 20) {
 function contractChanceCandidatesReady(deal, side) {
     const state = contractChanceDealState(deal, false);
     if (!state || state.generation !== contractChanceGeneration) return false;
-    let candidates = [];
     const auctionFinished = (() => {
         try { return isAuctionOver(deal.auctionHistory || []); } catch (_) { return false; }
     })();
-    try { candidates = contractChanceBuildCandidates(deal, side, auctionFinished, CONTRACT_CHANCE_TARGET); } catch (_) { return false; }
+    const candidates = contractChancePopulationPlan(deal, side, auctionFinished, CONTRACT_CHANCE_TARGET).candidates;
     return candidates.length >= CONTRACT_CHANCE_TARGET
         && candidates.every(candidate => state.sides[side].entries.has(Number(candidate.sampleIndex)));
 }
@@ -3391,13 +3677,13 @@ function contractChanceSchedulePump(delay = 0) {
 }
 
 function pumpContractChanceQueue() {
-    if (contractChanceActiveHttp >= CONTRACT_CHANCE_MAX_HTTP || !contractChanceQueue.length) return;
+    if (contractChanceActiveBatches >= CONTRACT_CHANCE_MAX_LOCAL_BATCHES || !contractChanceQueue.length) return;
     if (contractChanceMustYieldToPons()) {
         contractChanceSchedulePump(100);
         return;
     }
 
-    while (contractChanceActiveHttp < CONTRACT_CHANCE_MAX_HTTP && contractChanceQueue.length) {
+    while (contractChanceActiveBatches < CONTRACT_CHANCE_MAX_LOCAL_BATCHES && contractChanceQueue.length) {
         contractChanceQueue.sort((a, b) => Number(b.priority || 0) - Number(a.priority || 0) || a.seq - b.seq);
         const first = contractChanceQueue.shift();
         if (!first || first.generation !== contractChanceGeneration) continue;
@@ -3409,7 +3695,7 @@ function pumpContractChanceQueue() {
         }
 
         const batch = [first];
-        for (let i = 0; i < contractChanceQueue.length && batch.length < CONTRACT_CHANCE_DD_CHUNK_SIZE;) {
+        for (let i = 0; i < contractChanceQueue.length && batch.length < CONTRACT_CHANCE_LOCAL_BATCH_SIZE;) {
             const task = contractChanceQueue[i];
             if (task && task.generation === first.generation && task.deal === first.deal && task.side === first.side) {
                 batch.push(task);
@@ -3420,47 +3706,17 @@ function pumpContractChanceQueue() {
             sideState.queued.delete(task.sampleIndex);
             sideState.active.add(task.sampleIndex);
         }
-        contractChanceActiveHttp++;
+        contractChanceActiveBatches++;
         contractChanceSolveBatch(batch)
             .catch(() => {})
             .finally(() => {
-                contractChanceActiveHttp = Math.max(0, contractChanceActiveHttp - 1);
+                contractChanceActiveBatches = Math.max(0, contractChanceActiveBatches - 1);
                 contractChanceSchedulePump(0);
             });
     }
 }
 
-async function contractChanceFetchLane(url, items, timeoutMs = CONTRACT_CHANCE_REMOTE_TIMEOUT_MS) {
-    // Filet de sécurité R132 : même un ancien chemin d'appel ou un job collaboratif
-    // tardif ne peut plus consommer du CPU Vercel.
-    if (!CONTRACT_CHANCE_REMOTE_DDS_ENABLED) return [];
-    if (!items || !items.length) return [];
-    const controller = typeof AbortController === 'function' ? new AbortController() : null;
-    let timeout = null;
-    try {
-        if (controller) timeout = setTimeout(() => {
-            try { controller.abort(); } catch (_) {}
-        }, Math.max(1000, Number(timeoutMs || CONTRACT_CHANCE_REMOTE_TIMEOUT_MS)));
-        const response = await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ items }),
-            signal: controller ? controller.signal : undefined
-        });
-        if (!response.ok) {
-            const err = new Error('HTTP ' + response.status);
-            err.httpStatus = response.status;
-            const retryAfter = Number(response.headers && response.headers.get && response.headers.get('Retry-After') || 0);
-            if (retryAfter > 0) err.retryAfterMs = retryAfter * 1000;
-            throw err;
-        }
-        const data = await response.json();
-        return data && Array.isArray(data.results) ? data.results : [];
-    } finally {
-        if (timeout) clearTimeout(timeout);
-    }
-}
-
+// R144 — ancien chemin contractChanceFetchLane supprimé : le DDS statistique est 100 % local.
 
 function contractChanceTableIsValid(table) {
     if (!table || typeof table !== 'object') return false;
@@ -3829,8 +4085,7 @@ async function contractChanceSolveBatch(batch) {
 
     // R125 adaptatif : une fois le palier 24 (ou 48) réellement atteint par le calcul
     // local, décider immédiatement s'il faut étendre à 48/72 et injecter ces nouveaux
-    // tirages. Le chemin serveur R131 ne faisait cette transition que lors d'un retour
-    // collaboratif ; le moteur local la rend explicite et déterministe.
+    // tirages. Le moteur local rend cette transition explicite et déterministe.
     const adaptiveChanged = contractChanceUpdateAdaptiveTargets(deal);
     scheduleContractChanceDisplayRefresh(deal, adaptiveChanged);
     if (adaptiveChanged) contractChanceQueueForDeal(deal, 110);
@@ -4028,6 +4283,32 @@ function contractChanceFastPrimaryPlanIdentity(deal, side, allowConditioning) {
     return canCondition ? String(conditioning.key || `pons-public:${statisticalParAuctionSignature(deal)}`) : 'raw';
 }
 
+
+// R144 — source unique de vérité pour la population statistique. Les chemins primaire,
+// direct et full-table demandent désormais le même objet de plan au lieu de recalculer
+// séparément identité RAW/PONS et candidats. Cela empêche les divergences de population.
+function contractChancePopulationPlan(deal, side, allowConditioning, targetCount) {
+    const normalizedSide = side === 'EW' ? 'EW' : 'NS';
+    const requestedCount = Math.max(1, Math.min(
+        CONTRACT_CHANCE_ADAPTIVE_MAX_TARGET,
+        Number(targetCount || CONTRACT_CHANCE_TARGET)
+    ));
+    const planKey = contractChanceFastPrimaryPlanIdentity(deal, normalizedSide, !!allowConditioning);
+    let candidates = [];
+    try {
+        candidates = contractChanceBuildCandidates(deal, normalizedSide, !!allowConditioning, requestedCount);
+    } catch (_) {
+        candidates = [];
+    }
+    return {
+        side: normalizedSide,
+        planKey,
+        mode: planKey === 'raw' ? 'raw' : 'pons',
+        requestedCount,
+        candidates
+    };
+}
+
 // R143.2 — Une enchère dans une couleur ne suffit pas à elle seule à établir le
 // déclarant statistique : un contrôle/cue-bid ne promet pas de jouer cette couleur.
 // On rejette d'abord les explications explicitement artificielles ; pour les couleurs,
@@ -4186,7 +4467,7 @@ function contractChanceHydratePoolFastPrimary(deal, fastState, target, declarer,
     return added;
 }
 
-function contractChanceHydrateRemotePrecompute(deal) {
+function contractChanceHydratePoolPrecompute(deal) {
     const payload = deal && deal.precomputedStatV1;
     if (!payload || String(payload.statisticalSeedId || '') !== String(deal.statisticalSeedId || '')) return 0;
     const expectedSampling = window.PlayStatisticalPar && window.PlayStatisticalPar.STATISTICAL_PAR_SAMPLING_SEED_VERSION;
@@ -4266,7 +4547,8 @@ function contractChanceQueueFastPrimary(deal, allowConditioning) {
     if (!target || target.kind === 'sacrifice' || !['NS', 'EW'].includes(target.side)) return true;
     const declarer = contractChanceFastPrimaryDeclarer(deal, target, !allowConditioning);
     if (!declarer) return true;
-    const planKey = contractChanceFastPrimaryPlanIdentity(deal, target.side, !!allowConditioning);
+    const populationPlan = contractChancePopulationPlan(deal, target.side, !!allowConditioning, CONTRACT_CHANCE_TARGET);
+    const planKey = populationPlan.planKey;
     const targetStrain = target.strain === 'NT' ? 'N' : target.strain;
     const key = `${target.side}|${target.level}${targetStrain}|${declarer}|${planKey}`;
     const fastState = contractChanceFastPrimaryState(deal, true);
@@ -4288,13 +4570,7 @@ function contractChanceQueueFastPrimary(deal, allowConditioning) {
     // chemin local afin de ne jamais mélanger deux populations statistiques différentes.
     contractChanceHydratePoolFastPrimary(deal, fastState, target, declarer, planKey);
 
-    let candidates = [];
-    try {
-        candidates = contractChanceBuildCandidates(deal, target.side, !!allowConditioning, CONTRACT_CHANCE_TARGET);
-    } catch (_) {
-        candidates = [];
-    }
-    const wanted = candidates.slice(0, CONTRACT_CHANCE_TARGET);
+    const wanted = populationPlan.candidates.slice(0, CONTRACT_CHANCE_TARGET);
     for (const candidate of wanted) {
         const sampleIndex = Number(candidate.sampleIndex);
         if (!Number.isInteger(sampleIndex) || fastState.entries.has(sampleIndex) || fastState.pending.has(sampleIndex)) continue;
@@ -4509,9 +4785,15 @@ function contractChanceQueueDirectCell(deal, target, goal, priority) {
     const state = contractChanceDirectStateForTarget(deal, target, true);
     if (!state) return false;
     const requestedCount = Math.max(CONTRACT_CHANCE_TARGET, Math.min(CONTRACT_CHANCE_ADAPTIVE_MAX_TARGET, Number(goal || CONTRACT_CHANCE_TARGET)));
-    let candidates = [];
-    try { candidates = contractChanceBuildCandidates(deal, state.cell.side, true, requestedCount); } catch (_) { candidates = []; }
-    for (const candidate of candidates.slice(0, requestedCount)) {
+    const populationPlan = contractChancePopulationPlan(deal, state.cell.side, true, requestedCount);
+    // Si les contraintes PONS ont changé entre la création de l'état et cette vague,
+    // repasser par le constructeur afin de ne jamais alimenter une ancienne population.
+    if (populationPlan.planKey !== state.planKey) {
+        const refreshed = contractChanceDirectStateForTarget(deal, target, true);
+        if (!refreshed || refreshed === state) return false;
+        return contractChanceQueueDirectCell(deal, target, requestedCount, priority);
+    }
+    for (const candidate of populationPlan.candidates.slice(0, requestedCount)) {
         const sampleIndex = Number(candidate.sampleIndex);
         if (!Number.isInteger(sampleIndex) || state.entries.has(sampleIndex) || state.pending.has(sampleIndex)) continue;
         if (Number((state.retryCounts instanceof Map && state.retryCounts.get(sampleIndex)) || 0) > CONTRACT_CHANCE_DDS_RETRY_LIMIT) continue;

@@ -129,9 +129,9 @@ assert(/const\s+LOCAL_DDS_WORKER_URL\s*=\s*'dds\/local-dds-worker\.js'\s*;/.test
 assert(/const\s+LOCAL_DDS_BROWSER_ENABLED\s*=\s*typeof Worker === 'function'\s*;/.test(app), 'R133: détection Worker DDS local absente');
 assert(/const\s+LOCAL_DDS_MAX_DESKTOP_WORKERS\s*=\s*4\s*;/.test(app), 'R138: plafond desktop DDS local modifié');
 assert(/const\s+CONTRACT_CHANCE_LOCAL_DDS_ENABLED\s*=\s*LOCAL_DDS_BROWSER_ENABLED\s*;/.test(app), 'R133: PAR statistique non relié au DDS local');
-assert(/const\s+CONTRACT_CHANCE_REMOTE_DDS_ENABLED\s*=\s*false\s*;/.test(app), 'R133: DDS distant doit rester désactivé');
-assert(/const\s+CONTRACT_CHANCE_NATIVE_URLS\s*=\s*\[\s*\]\s*;/.test(app), 'R133: anciennes lanes DDS distantes encore configurées');
-assert(/const\s+CONTRACT_CHANCE_LEGACY_URL\s*=\s*''\s*;/.test(app), 'R133: fallback DDS distant encore configuré');
+assert(!/CONTRACT_CHANCE_REMOTE_DDS_ENABLED/.test(app), 'R144: drapeau DDS distant legacy encore présent');
+assert(!/CONTRACT_CHANCE_NATIVE_URLS/.test(app), 'R144: lanes DDS distantes legacy encore présentes');
+assert(!/CONTRACT_CHANCE_LEGACY_URL/.test(app), 'R144: URL DDS legacy encore présente');
 
 assert(!app.includes('play-dds-native.vercel.app/api/dds-'), 'R133: endpoint play-dds-native encore présent');
 assert(!app.includes('api-gen-beta.vercel.app/api/dds'), 'R133: endpoint api-gen-beta DDS encore présent');
@@ -152,8 +152,7 @@ const r133Exact = extractFunction(app, 'sendDDChunk');
 assert(r133Exact.includes('const table = await localDdsSolveOne(item.pbn, priority)'), 'R133: table DD exacte ne passe pas par DDS local');
 assert(!r133Exact.includes('fetch('), 'R133: table DD exacte contient encore un fetch réseau');
 
-const r133Fetch = extractFunction(app, 'contractChanceFetchLane');
-assert(r133Fetch.includes('if (!CONTRACT_CHANCE_REMOTE_DDS_ENABLED) return []'), 'R133: coupe-circuit DDS distant absent');
+assert(!app.includes('function contractChanceFetchLane'), 'R144: ancien fetch DDS distant encore présent');
 
 const r133Render = extractFunction(app, 'renderInlineParChances');
 assert(r133Render.includes('if (!CONTRACT_CHANCE_LOCAL_DDS_ENABLED) return'), 'R133: affichage PAR statistique non gardé par DDS local');
