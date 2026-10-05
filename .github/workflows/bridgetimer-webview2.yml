@@ -57,7 +57,7 @@ jobs:
           Copy-Item go.mod dist/go.mod
           if (Test-Path go.sum) { Copy-Item go.sum dist/go.sum }
           @"
-          Bridge Timer — WebView2 1.7.1
+          Bridge Timer — WebView2 1.7.2
 
           Fenêtre native Win32.
           WebView2/Chromium est intégré DANS la fenêtre : aucun Edge externe.
