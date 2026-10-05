@@ -38,6 +38,13 @@ const (
 	swpNoZOrder = 0x0004
 	swpFrameChanged = 0x0020
 	swpNoOwnerZOrder = 0x0200
+
+	gwlpWndProc = ^uintptr(3) // -4
+	wmActivate = 0x0006
+	wmShowWindow = 0x0018
+	wmThemeChanged = 0x031A
+	wmAppDarkTitle = 0x8061
+	waInactive = 0
 )
 
 type point struct{ X, Y int32 }
@@ -67,12 +74,17 @@ var (
 	monitorFromWindow = user32.NewProc("MonitorFromWindow")
 	getMonitorInfoW = user32.NewProc("GetMonitorInfoW")
 	setWindowPos = user32.NewProc("SetWindowPos")
+	callWindowProcW = user32.NewProc("CallWindowProcW")
+	postMessageW = user32.NewProc("PostMessageW")
 	dwmSetWindowAttribute = dwmapi.NewProc("DwmSetWindowAttribute")
 
 	fullscreenMu sync.Mutex
 	fullscreen bool
 	savedStyle uintptr
 	savedPlace windowPlacement
+
+	originalWndProc uintptr
+	darkWndProcCallback uintptr
 )
 
 func appDataPath() string {
@@ -102,19 +114,36 @@ func applyDarkTitleBar(hwnd uintptr) {
 	setWindowPos.Call(hwnd, 0, 0, 0, 0, 0, swpNoMove|swpNoSize|swpNoZOrder|swpNoOwnerZOrder|swpFrameChanged)
 }
 
-func stabilizeDarkTitleBar(hwnd uintptr) {
-	// WebView2 creates/shows parts of its native window asynchronously.
-	// Applying DWM attributes only once, before the first activation, can leave
-	// the title bar white until Windows later repaints the non-client area
-	// (for example after Alt-Tab). Re-apply shortly after startup.
-	go func() {
-		for _, delay := range []time.Duration{120 * time.Millisecond, 450 * time.Millisecond, 1200 * time.Millisecond} {
-			time.Sleep(delay)
-			applyDarkTitleBar(hwnd)
+func darkTitleWndProc(hwnd, msg, wp, lp uintptr) uintptr {
+	switch msg {
+	case wmActivate:
+		if wp&0xFFFF != waInactive {
+			postMessageW.Call(hwnd, wmAppDarkTitle, 0, 0)
 		}
-	}()
+	case wmShowWindow, wmThemeChanged:
+		postMessageW.Call(hwnd, wmAppDarkTitle, 0, 0)
+	case wmAppDarkTitle:
+		applyDarkTitleBar(hwnd)
+	}
+	if originalWndProc != 0 {
+		r, _, _ := callWindowProcW.Call(originalWndProc, hwnd, msg, wp, lp)
+		return r
+	}
+	return 0
 }
 
+func installDarkTitleHook(hwnd uintptr) {
+	if darkWndProcCallback == 0 {
+		darkWndProcCallback = syscall.NewCallback(darkTitleWndProc)
+	}
+	if originalWndProc == 0 {
+		prev, _, _ := setWindowLongPtrW.Call(hwnd, gwlpWndProc, darkWndProcCallback)
+		originalWndProc = prev
+	}
+	// Queue one repaint after the subclass is installed. From then on,
+	// WM_ACTIVATE/WM_SHOWWINDOW keep the non-client frame correct.
+	postMessageW.Call(hwnd, wmAppDarkTitle, 0, 0)
+}
 func toggleNativeFullscreen(hwnd uintptr) bool {
 	fullscreenMu.Lock()
 	defer fullscreenMu.Unlock()
@@ -222,7 +251,7 @@ func main() {
 
 	hwnd := uintptr(w.Window())
 	applyDarkTitleBar(hwnd)
-	stabilizeDarkTitleBar(hwnd)
+	installDarkTitleHook(hwnd)
 	if err := w.Bind("nativeFullscreen", func() bool {
 		return toggleNativeFullscreen(hwnd)
 	}); err != nil {
