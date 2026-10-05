@@ -32,8 +32,12 @@ jobs:
       - name: Resolve WebView2
         shell: pwsh
         run: |
-          go get github.com/jchv/go-webview2@master
+          go get github.com/jchv/go-webview2@56598839c808a2340edee99204db479f410e9bf4
           go mod tidy
+
+      - name: Patch WebView2 before first ShowWindow
+        shell: pwsh
+        run: python patch_webview_dark.py
 
       - name: Vet
         shell: pwsh
@@ -53,7 +57,7 @@ jobs:
           Copy-Item go.mod dist/go.mod
           if (Test-Path go.sum) { Copy-Item go.sum dist/go.sum }
           @"
-          Bridge Timer — WebView2 intégré
+          Bridge Timer — WebView2 1.7.1
 
           Fenêtre native Win32.
           WebView2/Chromium est intégré DANS la fenêtre : aucun Edge externe.
