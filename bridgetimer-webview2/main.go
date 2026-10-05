@@ -102,6 +102,19 @@ func applyDarkTitleBar(hwnd uintptr) {
 	setWindowPos.Call(hwnd, 0, 0, 0, 0, 0, swpNoMove|swpNoSize|swpNoZOrder|swpNoOwnerZOrder|swpFrameChanged)
 }
 
+func stabilizeDarkTitleBar(hwnd uintptr) {
+	// WebView2 creates/shows parts of its native window asynchronously.
+	// Applying DWM attributes only once, before the first activation, can leave
+	// the title bar white until Windows later repaints the non-client area
+	// (for example after Alt-Tab). Re-apply shortly after startup.
+	go func() {
+		for _, delay := range []time.Duration{120 * time.Millisecond, 450 * time.Millisecond, 1200 * time.Millisecond} {
+			time.Sleep(delay)
+			applyDarkTitleBar(hwnd)
+		}
+	}()
+}
+
 func toggleNativeFullscreen(hwnd uintptr) bool {
 	fullscreenMu.Lock()
 	defer fullscreenMu.Unlock()
@@ -147,6 +160,7 @@ func toggleNativeFullscreen(hwnd uintptr) bool {
 		swpNoMove|swpNoSize|swpNoZOrder|swpNoOwnerZOrder|swpFrameChanged,
 	)
 	fullscreen = false
+	applyDarkTitleBar(hwnd)
 	return false
 }
 
@@ -208,6 +222,7 @@ func main() {
 
 	hwnd := uintptr(w.Window())
 	applyDarkTitleBar(hwnd)
+	stabilizeDarkTitleBar(hwnd)
 	if err := w.Bind("nativeFullscreen", func() bool {
 		return toggleNativeFullscreen(hwnd)
 	}); err != nil {
