@@ -1,0 +1,39 @@
+{
+  "FixedFileInfo": {
+    "FileVersion": {
+      "Major": 1,
+      "Minor": 7,
+      "Patch": 4,
+      "Build": 0
+    },
+    "ProductVersion": {
+      "Major": 1,
+      "Minor": 7,
+      "Patch": 4,
+      "Build": 0
+    },
+    "FileFlagsMask": "3f",
+    "FileFlags ": "00",
+    "FileOS": "40004",
+    "FileType": "01",
+    "FileSubType": "00"
+  },
+  "StringFileInfo": {
+    "Comments": "Bridge tournament timer",
+    "CompanyName": "Bridge Club du Roy René",
+    "FileDescription": "Bridge Timer — minuterie de tournoi de bridge",
+    "FileVersion": "1.7.4.0",
+    "InternalName": "BridgeTimer",
+    "LegalCopyright": "© 2026 Bridge Club du Roy René",
+    "OriginalFilename": "BridgeTimer.exe",
+    "ProductName": "Bridge Timer",
+    "ProductVersion": "1.7.4"
+  },
+  "VarFileInfo": {
+    "Translation": {
+      "LangID": "040c",
+      "CharsetID": "04b0"
+    }
+  },
+  "ManifestPath": "BridgeTimer.manifest"
+}

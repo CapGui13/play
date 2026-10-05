@@ -39,6 +39,12 @@ jobs:
         shell: pwsh
         run: python patch_webview_dark.py
 
+      - name: Generate Windows metadata
+        shell: pwsh
+        run: |
+          go install github.com/josephspurrier/goversioninfo/cmd/goversioninfo@latest
+          goversioninfo -o resource_windows_amd64.syso versioninfo.json
+
       - name: Vet
         shell: pwsh
         run: go vet ./...
@@ -57,7 +63,7 @@ jobs:
           Copy-Item go.mod dist/go.mod
           if (Test-Path go.sum) { Copy-Item go.sum dist/go.sum }
           @"
-          Bridge Timer — WebView2 1.7.3
+          Bridge Timer — WebView2 1.7.4
 
           Fenêtre native Win32.
           WebView2/Chromium est intégré DANS la fenêtre : aucun Edge externe.
