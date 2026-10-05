@@ -46,6 +46,10 @@ input[type=color]{width:100%;height:40px;border:0;background:transparent}input[t
 #undoToast.on{opacity:1;pointer-events:auto;transform:translateX(-50%) translateY(0)}
 #undoToast button{padding:7px 11px}
 
+body.preview .controls{display:none}
+body.preview #messageBtn{display:none}
+body.preview #settingsBtn{opacity:1!important;pointer-events:auto!important}
+
 body.fs #hint{display:none}
 body.fs .bottom{min-height:66px;padding:0 190px}
 body.fs .controls{position:absolute;left:50%;bottom:9px;transform:translateX(-50%) translateY(8px);margin:0;z-index:8;opacity:0;pointer-events:none;transition:opacity .18s,transform .18s}
@@ -66,7 +70,7 @@ body.fs #undoToast{bottom:78px}
 <body>
 <section id="settings">
 <div class="wrap">
-  <div class="head"><div><h1>Bridge Timer</h1><div class="sub">Timer indépendant et personnalisable — WebView2 1.5</div></div><div class="sub">Hors ligne • sauvegarde automatique</div></div>
+  <div class="head"><div><h1>Bridge Timer</h1><div class="sub">Timer indépendant et personnalisable — WebView2 1.6</div></div><div class="sub">Hors ligne • sauvegarde automatique</div></div>
 
   <div class="card"><h2>Tournoi</h2><div class="grid">
     <label>Durée par position</label><div class="row3"><input id="hours" type="number" min="0" value="0" title="heures"><input id="minutes" type="number" min="0" max="59" value="7" title="minutes"><input id="seconds" type="number" min="0" max="59" value="0" title="secondes"></div>
@@ -111,6 +115,7 @@ body.fs #undoToast{bottom:78px}
     </div>
     <div class="actions">
       <button id="fresh" class="btn primary">Lancer / réinitialiser</button>
+      <button id="preview" class="btn">Aperçu 10 s</button>
       <button id="apply" class="btn">Appliquer et revenir</button>
       <button id="save" class="btn">Enregistrer</button>
       <button id="defaults" class="btn danger">Valeurs par défaut</button>
@@ -168,7 +173,7 @@ body.fs #undoToast{bottom:78px}
 <script>
 const $=id=>document.getElementById(id), KEY="bridgeTimerV2.settings", LKEY="bridgeTimerV2.logo", STATEKEY="bridgeTimerV3.state", PROFILEKEY="bridgeTimerWebView2.profiles";
 const def={hours:0,minutes:7,seconds:0,positions:6,startPosition:1,between:15,mode:"4",mainMessage:"Bonne partie !",endMessage:"Fin du tournoi — merci à tous !",jumpRound:0,jumpMessage:"ATTENTION : à cette position, les EO sautent une table",sound:true,warnMinutes:5,warnSeconds:0,dangerMinutes:2,dangerSeconds:0,dangerMessage:"Merci de terminer la donne en cours",finishSec:30,finishMessage:"Terminez la donne en cours",quickMessage:"Merci de saisir les scores",quickMessageSecs:15,projectionMonitor:1,clubName:"Bridge Club du Roy René",eventName:"",accent:"#0ea5e9",background:"#0f172a",menu:"#111827",text:"#f8fafc"};
-let s={...def},logoData="",profiles=[],st={pos:1,phase:"round",remaining:420,running:false,endAt:null,interval:null,started:false};let wakeLock=null,resumeAfterSettings=false,undoState=null,undoTimer=null,controlsTimer=null,tempMessageUntil=0,tempMessageTimer=null;
+let s={...def},logoData="",profiles=[],st={pos:1,phase:"round",remaining:420,running:false,endAt:null,interval:null,started:false};let wakeLock=null,resumeAfterSettings=false,undoState=null,undoTimer=null,controlsTimer=null,tempMessageUntil=0,tempMessageTimer=null,previewMode=false,previewSavedState=null,previewTimer=null;
 const clamp=(n,a,b)=>Math.max(a,Math.min(b,n)), val=id=>Number($(id).value||0);
 function duration(){return s.hours*3600+s.minutes*60+s.seconds}
 function warnThreshold(){return Math.max(0,(Number(s.warnMinutes)||0)*60+(Number(s.warnSeconds)||0))}
@@ -183,6 +188,7 @@ function stateSnapshot(){
  return {pos:st.pos,phase:st.phase,remaining:Math.max(0,st.remaining),running:!!st.running,started:!!st.started,savedAt:Date.now()};
 }
 function persistState(){
+ if(previewMode)return;
  if(!st.started){localStorage.removeItem(STATEKEY);return}
  try{localStorage.setItem(STATEKEY,JSON.stringify(stateSnapshot()))}catch(e){}
 }
@@ -353,6 +359,29 @@ async function releaseWakeLock(){
 }
 document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible"&&st.running)acquireWakeLock()});
 
+function startPreview(){
+ read();save();
+ clearTempMessage();
+ previewSavedState={...st,interval:null,endAt:null};
+ previewMode=true;
+ document.body.classList.add("preview");
+ const p=Math.max(1,Math.min(3,s.positions));
+ st={pos:p,phase:"round",remaining:duration(),running:false,endAt:null,interval:null,started:true};
+ $("settingsBtn").textContent="Retour";
+ showTimer();render();
+ clearTimeout(previewTimer);
+ previewTimer=setTimeout(endPreview,10000)
+}
+function endPreview(){
+ if(!previewMode)return;
+ clearTimeout(previewTimer);previewTimer=null;
+ previewMode=false;document.body.classList.remove("preview");
+ if(previewSavedState)st={...previewSavedState};
+ previewSavedState=null;
+ $("settingsBtn").textContent="Paramètres";
+ $("timer").classList.add("hidden");$("settings").classList.remove("hidden");
+ fill()
+}
 function showTimer(){$("settings").classList.add("hidden");$("timer").classList.remove("hidden");render()}
 function showSettings(reset=false){
  resumeAfterSettings=!reset&&st.running;
@@ -447,9 +476,10 @@ function render(){theme();let t=$("timer");t.classList.remove("warning","dangerS
  else if(st.phase==="finish"){t.classList.add("dangerState");$("status").textContent="FIN DE POSITION";$("msg").textContent=s.finishMessage||"Terminez la donne en cours";$("submsg").textContent=st.pos>=s.positions?"Fin du tournoi à suivre":"Changement de position à suivre";total=s.finishSec}
  else if(st.phase==="break"){t.classList.add("breakState");$("status").textContent="CHANGEMENT DE POSITION";$("msg").textContent="Changez de table";$("submsg").textContent=`Prochaine position : ${st.pos+1}`;total=s.between;if(s.jumpRound&&st.pos+1===s.jumpRound){$("alert").className="on";$("alert").textContent=s.jumpMessage}}
  else{t.classList.add("endState");$("status").textContent="TERMINÉ";$("round").textContent="TOURNOI TERMINÉ";$("msg").textContent=s.endMessage;$("submsg").textContent="";$("clock").textContent="00:00";$("pause").textContent="Terminé";total=0}
+ if(previewMode){$("status").textContent="APERÇU D’AFFICHAGE • retour automatique dans 10 s";$("round").textContent=`APERÇU • TOUR ${st.pos} sur ${s.positions}`;}
  if(tempMessageActive()&&st.phase!=="ended"){const left=Math.max(0,Math.ceil((tempMessageUntil-Date.now())/1000));$("msg").textContent=s.quickMessage||"Merci de saisir les scores";$("submsg").textContent=`Message temporaire • ${left} s`;$("alert").className="";$("alert").textContent=""}
  $("bar").style.width=(total?clamp(st.remaining/total*100,0,100):0)+"%";
- const paused=st.started&&!st.running&&st.phase!=="ended"&&!$("timer").classList.contains("hidden");
+ const paused=st.started&&!st.running&&st.phase!=="ended"&&!previewMode&&!$("timer").classList.contains("hidden");
  $("pauseOverlay").classList.toggle("on",paused)
 }
 async function syncNativeMonitor(){
@@ -498,7 +528,7 @@ document.addEventListener("fullscreenchange",()=>{
  if(on){clearTimeout(controlsTimer);controlsTimer=setTimeout(()=>document.body.classList.remove("showControls"),3500)}
  else document.body.classList.remove("showControls")
 })
-$("fresh").onclick=fresh;$("apply").onclick=apply;$("save").onclick=()=>{save();alert("Paramètres enregistrés.")};$("defaults").onclick=()=>{if(confirm("Revenir aux valeurs par défaut ?")){s={...def};logoData="";localStorage.removeItem(LKEY);fill();save();syncNativeMonitor()}}
+$("fresh").onclick=fresh;$("preview").onclick=startPreview;$("apply").onclick=apply;$("save").onclick=()=>{save();alert("Paramètres enregistrés.")};$("defaults").onclick=()=>{if(confirm("Revenir aux valeurs par défaut ?")){s={...def};logoData="";localStorage.removeItem(LKEY);fill();save();syncNativeMonitor()}}
 for(let i=0;i<3;i++){
  $("profileSave"+i).onclick=()=>saveProfile(i);
  $("profileLoad"+i).onclick=()=>loadProfile(i);
@@ -508,11 +538,13 @@ for(let i=0;i<3;i++){
 $("resetColors").onclick=resetOriginalColors;
 $("exportConfig").onclick=exportConfiguration;
 $("importConfig").onclick=importConfiguration;
-$("messageBtn").onclick=showTempMessage;$("screenBtn").onclick=cycleNativeMonitor;$("settingsBtn").onclick=()=>showSettings(false);$("fsBtn").onclick=fs;$("pause").onclick=toggle;$("minus").onclick=()=>adjust(-60);$("plus").onclick=()=>adjust(60);$("next").onclick=next;$("resetRound").onclick=resetRound;$("undoBtn").onclick=undoNext;
+$("messageBtn").onclick=showTempMessage;$("screenBtn").onclick=cycleNativeMonitor;$("settingsBtn").onclick=()=>previewMode?endPreview():showSettings(false);$("fsBtn").onclick=fs;$("pause").onclick=toggle;$("minus").onclick=()=>adjust(-60);$("plus").onclick=()=>adjust(60);$("next").onclick=next;$("resetRound").onclick=resetRound;$("undoBtn").onclick=undoNext;
 $("logoInput").onchange=e=>{let f=e.target.files?.[0];if(!f)return;if(f.size>2000000)return alert("Choisis une image de moins de 2 Mo.");let r=new FileReader();r.onload=()=>{logoData=r.result;try{localStorage.setItem(LKEY,logoData)}catch(e){alert("Logo trop volumineux pour être mémorisé.")}theme()};r.readAsDataURL(f)}
 $("removeLogo").onclick=()=>{logoData="";localStorage.removeItem(LKEY);$("logoInput").value="";theme()}
 ["clubName","eventName","accent","background"].forEach(id=>$(id).oninput=()=>{read();render()})
 document.addEventListener("keydown",e=>{
+ if(previewMode&&e.key==="Escape"){e.preventDefault();endPreview();return}
+ if(previewMode&&e.key!=="f"&&e.key!=="F"&&e.key!=="F11"){return}
  let tag=(document.activeElement?.tagName||"").toLowerCase(),edit=["input","select","textarea"].includes(tag);
  if(edit&&!["F7","F8","F9","F10"].includes(e.key))return;
  let tv=!$("timer").classList.contains("hidden");
