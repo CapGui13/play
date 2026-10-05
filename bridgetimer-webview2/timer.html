@@ -59,7 +59,7 @@ body.fs #undoToast{bottom:78px}
 <body>
 <section id="settings">
 <div class="wrap">
-  <div class="head"><div><h1>Bridge Timer</h1><div class="sub">Timer indépendant et personnalisable — V3</div></div><div class="sub">Hors ligne • sauvegarde automatique</div></div>
+  <div class="head"><div><h1>Bridge Timer</h1><div class="sub">Timer indépendant et personnalisable — WebView2 1.1</div></div><div class="sub">Hors ligne • sauvegarde automatique</div></div>
 
   <div class="card"><h2>Tournoi</h2><div class="grid">
     <label>Durée par position</label><div class="row3"><input id="hours" type="number" min="0" value="0" title="heures"><input id="minutes" type="number" min="0" max="59" value="7" title="minutes"><input id="seconds" type="number" min="0" max="59" value="0" title="secondes"></div>
@@ -78,6 +78,11 @@ body.fs #undoToast{bottom:78px}
     <label>Passage en orange à</label><div><input id="warnMinutes" type="number" min="0" value="5"><div class="small">minutes restantes</div></div>
     <label>Passage en rouge à</label><div><input id="dangerMinutes" type="number" min="0" value="2"><div class="small">minutes restantes</div></div>
     <label>Message en zone rouge</label><input id="dangerMessage" type="text" value="Merci de terminer la donne en cours">
+  </div></div>
+
+  <div class="card"><h2>Message temporaire</h2><div class="grid">
+    <label>Message</label><input id="quickMessage" type="text" value="Merci de saisir les scores">
+    <label>Durée du message</label><div><input id="quickMessageSecs" type="number" min="1" max="300" value="15"><div class="small">secondes</div></div>
   </div></div>
 
   <div class="card"><h2>Personnalisation</h2>
@@ -101,13 +106,14 @@ body.fs #undoToast{bottom:78px}
     <div class="shortcut"><kbd>F7</kbd>− 1 minute</div><div class="shortcut"><kbd>F8</kbd>+ 1 minute</div>
     <div class="shortcut"><kbd>F9</kbd>Paramètres sans réinitialiser</div><div class="shortcut"><kbd>F10</kbd>Paramètres + réinitialisation</div>
     <div class="shortcut"><kbd>F</kbd>Plein écran</div><div class="shortcut"><kbd>R</kbd>Recommencer la position</div>
+    <div class="shortcut"><kbd>M</kbd>Message temporaire</div><div class="shortcut"><kbd>U</kbd>Annuler le tour suivant</div>
   </div></div>
 </div></section>
 
 <section id="timer" class="hidden">
   <div class="top">
     <div class="identity"><img id="logo" class="nol" alt=""><div><div id="club">Bridge Timer</div><div id="event"></div></div></div>
-    <div class="topBtns"><button id="settingsBtn" class="btn">Paramètres</button><button id="fsBtn" class="btn">Plein écran</button></div>
+    <div class="topBtns"><button id="messageBtn" class="btn">Message</button><button id="settingsBtn" class="btn">Paramètres</button><button id="fsBtn" class="btn">Plein écran</button></div>
   </div>
   <div class="main">
     <div id="status">POSITION EN COURS</div>
@@ -122,7 +128,7 @@ body.fs #undoToast{bottom:78px}
     <div class="bottom">
       <div class="controls"><button id="minus" class="btn">− 1 min</button><button id="pause" class="btn primary">Pause</button><button id="plus" class="btn">+ 1 min</button><button id="next" class="btn">Position suivante</button><button id="resetRound" class="btn">Recommencer</button></div>
       <div id="localTime">00:00:00</div>
-      <div id="hint">Espace : pause · F : plein écran · F7/F8 : −/+ 1 min · → : position suivante</div>
+      <div id="hint">Espace : pause · M : message · F : plein écran · F7/F8 : −/+ 1 min · → : position suivante</div>
       <div id="round">TOUR 1 sur 6</div>
     </div>
   </div>
@@ -131,8 +137,8 @@ body.fs #undoToast{bottom:78px}
 
 <script>
 const $=id=>document.getElementById(id), KEY="bridgeTimerV2.settings", LKEY="bridgeTimerV2.logo", STATEKEY="bridgeTimerV3.state";
-const def={hours:0,minutes:7,seconds:0,positions:6,startPosition:1,between:15,mode:"4",mainMessage:"Bonne partie !",endMessage:"Fin du tournoi — merci à tous !",jumpRound:0,jumpMessage:"ATTENTION : à cette position, les EO sautent une table",sound:true,warnMinutes:5,dangerMinutes:2,dangerMessage:"Merci de terminer la donne en cours",clubName:"Bridge Club du Roy René",eventName:"",accent:"#0ea5e9",background:"#0f172a"};
-let s={...def},logoData="",st={pos:1,phase:"round",remaining:420,running:false,endAt:null,interval:null,started:false};let wakeLock=null,resumeAfterSettings=false,undoState=null,undoTimer=null,controlsTimer=null;
+const def={hours:0,minutes:7,seconds:0,positions:6,startPosition:1,between:15,mode:"4",mainMessage:"Bonne partie !",endMessage:"Fin du tournoi — merci à tous !",jumpRound:0,jumpMessage:"ATTENTION : à cette position, les EO sautent une table",sound:true,warnMinutes:5,dangerMinutes:2,dangerMessage:"Merci de terminer la donne en cours",quickMessage:"Merci de saisir les scores",quickMessageSecs:15,clubName:"Bridge Club du Roy René",eventName:"",accent:"#0ea5e9",background:"#0f172a"};
+let s={...def},logoData="",st={pos:1,phase:"round",remaining:420,running:false,endAt:null,interval:null,started:false};let wakeLock=null,resumeAfterSettings=false,undoState=null,undoTimer=null,controlsTimer=null,tempMessageUntil=0,tempMessageTimer=null;
 const clamp=(n,a,b)=>Math.max(a,Math.min(b,n)), val=id=>Number($(id).value||0);
 function duration(){return s.hours*3600+s.minutes*60+s.seconds}
 function stateSnapshot(){
@@ -172,7 +178,7 @@ function tryRecoverState(){
 
 function fmt(x){x=Math.max(0,Math.ceil(x));let h=Math.floor(x/3600),m=Math.floor(x%3600/60),sec=x%60;return h?`${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}:${String(sec).padStart(2,"0")}`:`${String(m).padStart(2,"0")}:${String(sec).padStart(2,"0")}`}
 function read(){
- s={hours:clamp(val("hours"),0,12),minutes:clamp(val("minutes"),0,59),seconds:clamp(val("seconds"),0,59),positions:clamp(val("positions"),1,99),startPosition:clamp(val("startPosition"),1,99),between:clamp(val("between"),0,240),mode:$("mode").value,mainMessage:$("mainMessage").value.trim(),endMessage:$("endMessage").value.trim(),jumpRound:clamp(val("jumpRound"),0,99),jumpMessage:$("jumpMessage").value.trim(),sound:$("sound").checked,warnMinutes:clamp(val("warnMinutes"),0,60),dangerMinutes:clamp(val("dangerMinutes"),0,60),dangerMessage:$("dangerMessage").value.trim(),clubName:$("clubName").value.trim()||"Bridge Timer",eventName:$("eventName").value.trim(),accent:$("accent").value,background:$("background").value};
+ s={hours:clamp(val("hours"),0,12),minutes:clamp(val("minutes"),0,59),seconds:clamp(val("seconds"),0,59),positions:clamp(val("positions"),1,99),startPosition:clamp(val("startPosition"),1,99),between:clamp(val("between"),0,240),mode:$("mode").value,mainMessage:$("mainMessage").value.trim(),endMessage:$("endMessage").value.trim(),jumpRound:clamp(val("jumpRound"),0,99),jumpMessage:$("jumpMessage").value.trim(),sound:$("sound").checked,warnMinutes:clamp(val("warnMinutes"),0,60),dangerMinutes:clamp(val("dangerMinutes"),0,60),dangerMessage:$("dangerMessage").value.trim(),quickMessage:$("quickMessage").value.trim(),quickMessageSecs:clamp(val("quickMessageSecs"),1,300),clubName:$("clubName").value.trim()||"Bridge Timer",eventName:$("eventName").value.trim(),accent:$("accent").value,background:$("background").value};
  s.startPosition=Math.min(s.startPosition,s.positions);if(s.warnMinutes&&s.dangerMinutes>s.warnMinutes)s.dangerMinutes=s.warnMinutes;theme()
 }
 function fill(){Object.entries(s).forEach(([k,v])=>{let e=$(k);if(e){if(e.type==="checkbox")e.checked=!!v;else e.value=v}});theme()}
@@ -268,10 +274,22 @@ function next(){
 }
 function adjust(x){if(st.phase==="ended")return;st.remaining=Math.max(0,st.remaining+x);if(st.running)st.endAt=Date.now()+st.remaining*1000;render();persistState()}
 function resetRound(){if(st.phase==="ended")return;st.phase="round";st.remaining=duration();if(st.running)st.endAt=Date.now()+st.remaining*1000;render();persistState()}
+function tempMessageActive(){return tempMessageUntil>Date.now()}
+function clearTempMessage(){tempMessageUntil=0;if(tempMessageTimer){clearInterval(tempMessageTimer);tempMessageTimer=null}}
+function showTempMessage(){
+ if(!st.started||st.phase==="ended")return;
+ const msg=(s.quickMessage||"Merci de saisir les scores").trim();
+ if(!msg)return;
+ tempMessageUntil=Date.now()+clamp(Number(s.quickMessageSecs)||15,1,300)*1000;
+ if(tempMessageTimer)clearInterval(tempMessageTimer);
+ tempMessageTimer=setInterval(()=>{if(!tempMessageActive()){clearTempMessage()}render()},200);
+ render();
+}
 function render(){theme();let t=$("timer");t.classList.remove("warning","dangerState","breakState","endState");$("alert").className="";$("alert").textContent="";$("clock").textContent=fmt(st.remaining);$("round").textContent=`TOUR ${st.pos} sur ${s.positions}`;let total=duration();
  if(st.phase==="round"){$("status").textContent="POSITION EN COURS";$("msg").textContent=s.mainMessage;$("submsg").textContent=s.mode==="4"?"Tour par quatre":"Tour par paires";let mins=st.remaining/60;if(s.dangerMinutes&&mins<=s.dangerMinutes){t.classList.add("dangerState");if(s.dangerMessage){$("alert").className="on";$("alert").textContent=s.dangerMessage}}else if(s.warnMinutes&&mins<=s.warnMinutes)t.classList.add("warning");if(s.jumpRound&&st.pos===s.jumpRound)$("submsg").textContent=s.jumpMessage}
  else if(st.phase==="break"){t.classList.add("breakState");$("status").textContent="CHANGEMENT DE POSITION";$("msg").textContent="Changez de table";$("submsg").textContent=`Prochaine position : ${st.pos+1}`;total=s.between;if(s.jumpRound&&st.pos+1===s.jumpRound){$("alert").className="on";$("alert").textContent=s.jumpMessage}}
  else{t.classList.add("endState");$("status").textContent="TERMINÉ";$("round").textContent="TOURNOI TERMINÉ";$("msg").textContent=s.endMessage;$("submsg").textContent="";$("clock").textContent="00:00";$("pause").textContent="Terminé";total=0}
+ if(tempMessageActive()&&st.phase!=="ended"){const left=Math.max(0,Math.ceil((tempMessageUntil-Date.now())/1000));$("msg").textContent=s.quickMessage||"Merci de saisir les scores";$("submsg").textContent=`Message temporaire • ${left} s`;$("alert").className="";$("alert").textContent=""}
  $("bar").style.width=(total?clamp(st.remaining/total*100,0,100):0)+"%";
  const paused=st.started&&!st.running&&st.phase!=="ended"&&!$("timer").classList.contains("hidden");
  $("pauseOverlay").classList.toggle("on",paused)
@@ -305,7 +323,7 @@ document.addEventListener("fullscreenchange",()=>{
  else document.body.classList.remove("showControls")
 })
 $("fresh").onclick=fresh;$("apply").onclick=apply;$("save").onclick=()=>{save();alert("Paramètres enregistrés.")};$("defaults").onclick=()=>{if(confirm("Revenir aux valeurs par défaut ?")){s={...def};logoData="";localStorage.removeItem(LKEY);fill();save()}}
-$("settingsBtn").onclick=()=>showSettings(false);$("fsBtn").onclick=fs;$("pause").onclick=toggle;$("minus").onclick=()=>adjust(-60);$("plus").onclick=()=>adjust(60);$("next").onclick=next;$("resetRound").onclick=resetRound;$("undoBtn").onclick=undoNext;
+$("messageBtn").onclick=showTempMessage;$("settingsBtn").onclick=()=>showSettings(false);$("fsBtn").onclick=fs;$("pause").onclick=toggle;$("minus").onclick=()=>adjust(-60);$("plus").onclick=()=>adjust(60);$("next").onclick=next;$("resetRound").onclick=resetRound;$("undoBtn").onclick=undoNext;
 $("logoInput").onchange=e=>{let f=e.target.files?.[0];if(!f)return;if(f.size>2000000)return alert("Choisis une image de moins de 2 Mo.");let r=new FileReader();r.onload=()=>{logoData=r.result;try{localStorage.setItem(LKEY,logoData)}catch(e){alert("Logo trop volumineux pour être mémorisé.")}theme()};r.readAsDataURL(f)}
 $("removeLogo").onclick=()=>{logoData="";localStorage.removeItem(LKEY);$("logoInput").value="";theme()}
 ["clubName","eventName","accent","background"].forEach(id=>$(id).oninput=()=>{read();render()})
@@ -321,6 +339,7 @@ document.addEventListener("keydown",e=>{
  else if(tv&&(e.key==="f"||e.key==="F")){e.preventDefault();fs()}
  else if(tv&&e.key==="ArrowRight"){e.preventDefault();next()}
  else if(tv&&(e.key==="r"||e.key==="R")){e.preventDefault();resetRound()}
+ else if(tv&&(e.key==="m"||e.key==="M")){e.preventDefault();showTempMessage()}
  else if(tv&&(e.key==="u"||e.key==="U")&&undoState){e.preventDefault();undoNext()}
 })
 function updateLocalTime(){const d=new Date();$("localTime").textContent=`${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}:${String(d.getSeconds()).padStart(2,"0")}`;}

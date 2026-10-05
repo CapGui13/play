@@ -59,6 +59,7 @@ type monitorInfo struct {
 
 var (
 	user32 = syscall.NewLazyDLL("user32.dll")
+	dwmapi = syscall.NewLazyDLL("dwmapi.dll")
 	getWindowLongPtrW = user32.NewProc("GetWindowLongPtrW")
 	setWindowLongPtrW = user32.NewProc("SetWindowLongPtrW")
 	getWindowPlacement = user32.NewProc("GetWindowPlacement")
@@ -66,6 +67,7 @@ var (
 	monitorFromWindow = user32.NewProc("MonitorFromWindow")
 	getMonitorInfoW = user32.NewProc("GetMonitorInfoW")
 	setWindowPos = user32.NewProc("SetWindowPos")
+	dwmSetWindowAttribute = dwmapi.NewProc("DwmSetWindowAttribute")
 
 	fullscreenMu sync.Mutex
 	fullscreen bool
@@ -81,6 +83,23 @@ func appDataPath() string {
 	p := filepath.Join(base, "BridgeTimerWebView2")
 	_ = os.MkdirAll(p, 0700)
 	return p
+}
+
+func applyDarkTitleBar(hwnd uintptr) {
+	enabled := int32(1)
+	for _, attr := range []uintptr{20, 19} {
+		r, _, _ := dwmSetWindowAttribute.Call(hwnd, attr, uintptr(unsafe.Pointer(&enabled)), unsafe.Sizeof(enabled))
+		if r == 0 {
+			break
+		}
+	}
+	caption := uint32(0x0025140D)
+	text := uint32(0x00FCFAF8)
+	border := uint32(0x00554433)
+	dwmSetWindowAttribute.Call(hwnd, 35, uintptr(unsafe.Pointer(&caption)), unsafe.Sizeof(caption))
+	dwmSetWindowAttribute.Call(hwnd, 36, uintptr(unsafe.Pointer(&text)), unsafe.Sizeof(text))
+	dwmSetWindowAttribute.Call(hwnd, 34, uintptr(unsafe.Pointer(&border)), unsafe.Sizeof(border))
+	setWindowPos.Call(hwnd, 0, 0, 0, 0, 0, swpNoMove|swpNoSize|swpNoZOrder|swpNoOwnerZOrder|swpFrameChanged)
 }
 
 func toggleNativeFullscreen(hwnd uintptr) bool {
@@ -188,6 +207,7 @@ func main() {
 	defer w.Destroy()
 
 	hwnd := uintptr(w.Window())
+	applyDarkTitleBar(hwnd)
 	if err := w.Bind("nativeFullscreen", func() bool {
 		return toggleNativeFullscreen(hwnd)
 	}); err != nil {
