@@ -1,0 +1,70 @@
+name: Build BridgeTimer WebView2
+
+on:
+  push:
+    branches:
+      - bridgetimer-webview2-build
+    paths:
+      - 'bridgetimer-webview2/**'
+      - '.github/workflows/bridgetimer-webview2.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: bridgetimer-webview2
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+          cache: false
+
+      - name: Resolve WebView2
+        shell: pwsh
+        run: |
+          go get github.com/jchv/go-webview2@master
+          go mod tidy
+
+      - name: Vet
+        shell: pwsh
+        run: go vet ./...
+
+      - name: Build
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          go build -trimpath -ldflags "-H=windowsgui -s -w" -o dist/BridgeTimer.exe .
+
+      - name: Package source notes
+        shell: pwsh
+        run: |
+          Copy-Item timer.html dist/timer_v3_reference.html
+          Copy-Item main.go dist/main.go
+          Copy-Item go.mod dist/go.mod
+          if (Test-Path go.sum) { Copy-Item go.sum dist/go.sum }
+          @"
+          Bridge Timer — WebView2 intégré
+
+          Fenêtre native Win32.
+          WebView2/Chromium est intégré DANS la fenêtre : aucun Edge externe.
+          Le timer est rendu par le vrai HTML/CSS V3.
+          Le bouton F/Plein écran pilote la fenêtre native.
+          Les réglages HTML sont persistants via localStorage.
+          "@ | Set-Content -Encoding UTF8 dist/README.txt
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: BridgeTimer-WebView2-Native
+          path: bridgetimer-webview2/dist/
+          if-no-files-found: error
