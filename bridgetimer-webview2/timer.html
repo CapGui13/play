@@ -13,7 +13,7 @@ h1{margin:0;color:var(--accent);font-size:42px}.sub{color:var(--muted);font-size
 .card{margin-top:20px;padding:20px;border:1px solid var(--line);border-radius:16px;background:var(--panel);box-shadow:0 16px 50px #0005}
 .card h2{margin:0 0 16px;color:var(--accent);font-size:20px}
 .grid{display:grid;grid-template-columns:.9fr 1.1fr;gap:13px 22px;align-items:center}.grid label{font-weight:700}
-.row3{display:grid;grid-template-columns:repeat(3,1fr);gap:9px}
+.row3{display:grid;grid-template-columns:repeat(3,1fr);gap:9px}.row2{display:grid;grid-template-columns:repeat(2,1fr);gap:9px}
 input[type=number],input[type=text],select{width:100%;padding:10px 11px;border-radius:9px;border:1px solid var(--line);background:var(--field);color:var(--text)}
 input[type=color]{width:100%;height:40px;border:0;background:transparent}input[type=file]{width:100%;color:var(--muted)}
 .check{display:flex;align-items:center;gap:8px}.small{font-size:12px;color:var(--muted)}
@@ -66,7 +66,7 @@ body.fs #undoToast{bottom:78px}
 <body>
 <section id="settings">
 <div class="wrap">
-  <div class="head"><div><h1>Bridge Timer</h1><div class="sub">Timer indépendant et personnalisable — WebView2 1.4</div></div><div class="sub">Hors ligne • sauvegarde automatique</div></div>
+  <div class="head"><div><h1>Bridge Timer</h1><div class="sub">Timer indépendant et personnalisable — WebView2 1.5</div></div><div class="sub">Hors ligne • sauvegarde automatique</div></div>
 
   <div class="card"><h2>Tournoi</h2><div class="grid">
     <label>Durée par position</label><div class="row3"><input id="hours" type="number" min="0" value="0" title="heures"><input id="minutes" type="number" min="0" max="59" value="7" title="minutes"><input id="seconds" type="number" min="0" max="59" value="0" title="secondes"></div>
@@ -82,9 +82,14 @@ body.fs #undoToast{bottom:78px}
   </div></div>
 
   <div class="card"><h2>Alertes de fin de position</h2><div class="grid">
-    <label>Passage en orange à</label><div><input id="warnMinutes" type="number" min="0" value="5"><div class="small">minutes restantes</div></div>
-    <label>Passage en rouge à</label><div><input id="dangerMinutes" type="number" min="0" value="2"><div class="small">minutes restantes</div></div>
+    <label>Passage en orange à</label><div class="row2"><input id="warnMinutes" type="number" min="0" max="60" value="5" title="minutes"><input id="warnSeconds" type="number" min="0" max="59" value="0" title="secondes"></div>
+    <label>Passage en rouge à</label><div class="row2"><input id="dangerMinutes" type="number" min="0" max="60" value="2" title="minutes"><input id="dangerSeconds" type="number" min="0" max="59" value="0" title="secondes"></div>
     <label>Message en zone rouge</label><input id="dangerMessage" type="text" value="Merci de terminer la donne en cours">
+  </div></div>
+
+  <div class="card"><h2>Fin de position</h2><div class="grid">
+    <label>Délai de fin</label><div><input id="finishSec" type="number" min="0" max="300" value="30"><div class="small">secondes avant le changement de position</div></div>
+    <label>Message pendant ce délai</label><input id="finishMessage" type="text" value="Terminez la donne en cours">
   </div></div>
 
   <div class="card"><h2>Message temporaire</h2><div class="grid">
@@ -162,10 +167,18 @@ body.fs #undoToast{bottom:78px}
 
 <script>
 const $=id=>document.getElementById(id), KEY="bridgeTimerV2.settings", LKEY="bridgeTimerV2.logo", STATEKEY="bridgeTimerV3.state", PROFILEKEY="bridgeTimerWebView2.profiles";
-const def={hours:0,minutes:7,seconds:0,positions:6,startPosition:1,between:15,mode:"4",mainMessage:"Bonne partie !",endMessage:"Fin du tournoi — merci à tous !",jumpRound:0,jumpMessage:"ATTENTION : à cette position, les EO sautent une table",sound:true,warnMinutes:5,dangerMinutes:2,dangerMessage:"Merci de terminer la donne en cours",quickMessage:"Merci de saisir les scores",quickMessageSecs:15,projectionMonitor:1,clubName:"Bridge Club du Roy René",eventName:"",accent:"#0ea5e9",background:"#0f172a",menu:"#111827",text:"#f8fafc"};
+const def={hours:0,minutes:7,seconds:0,positions:6,startPosition:1,between:15,mode:"4",mainMessage:"Bonne partie !",endMessage:"Fin du tournoi — merci à tous !",jumpRound:0,jumpMessage:"ATTENTION : à cette position, les EO sautent une table",sound:true,warnMinutes:5,warnSeconds:0,dangerMinutes:2,dangerSeconds:0,dangerMessage:"Merci de terminer la donne en cours",finishSec:30,finishMessage:"Terminez la donne en cours",quickMessage:"Merci de saisir les scores",quickMessageSecs:15,projectionMonitor:1,clubName:"Bridge Club du Roy René",eventName:"",accent:"#0ea5e9",background:"#0f172a",menu:"#111827",text:"#f8fafc"};
 let s={...def},logoData="",profiles=[],st={pos:1,phase:"round",remaining:420,running:false,endAt:null,interval:null,started:false};let wakeLock=null,resumeAfterSettings=false,undoState=null,undoTimer=null,controlsTimer=null,tempMessageUntil=0,tempMessageTimer=null;
 const clamp=(n,a,b)=>Math.max(a,Math.min(b,n)), val=id=>Number($(id).value||0);
 function duration(){return s.hours*3600+s.minutes*60+s.seconds}
+function warnThreshold(){return Math.max(0,(Number(s.warnMinutes)||0)*60+(Number(s.warnSeconds)||0))}
+function dangerThreshold(){return Math.max(0,(Number(s.dangerMinutes)||0)*60+(Number(s.dangerSeconds)||0))}
+function transitionAfterFinish(){
+ if(st.pos>=s.positions){st.phase="ended";st.remaining=0;st.running=false;clearInterval(st.interval);st.interval=null;releaseWakeLock();return false}
+ if(s.between>0){st.phase="break";st.remaining=s.between}
+ else{st.pos++;st.phase="round";st.remaining=duration()}
+ return true
+}
 function stateSnapshot(){
  return {pos:st.pos,phase:st.phase,remaining:Math.max(0,st.remaining),running:!!st.running,started:!!st.started,savedAt:Date.now()};
 }
@@ -180,6 +193,11 @@ function advanceRecoveredState(x){
  let pos=Math.max(1,Number(x.pos)||1),phase=x.phase||"round";
  while(rem<=0 && phase!=="ended"){
    if(phase==="round"){
+     if(s.finishSec>0){phase="finish";rem+=s.finishSec}
+     else if(pos>=s.positions){phase="ended";rem=0;break}
+     else if(s.between>0){phase="break";rem+=s.between}
+     else{pos++;phase="round";rem+=duration()}
+   }else if(phase==="finish"){
      if(pos>=s.positions){phase="ended";rem=0;break}
      if(s.between>0){phase="break";rem+=s.between}
      else{pos++;phase="round";rem+=duration()}
@@ -203,8 +221,8 @@ function tryRecoverState(){
 
 function fmt(x){x=Math.max(0,Math.ceil(x));let h=Math.floor(x/3600),m=Math.floor(x%3600/60),sec=x%60;return h?`${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}:${String(sec).padStart(2,"0")}`:`${String(m).padStart(2,"0")}:${String(sec).padStart(2,"0")}`}
 function read(){
- s={hours:clamp(val("hours"),0,12),minutes:clamp(val("minutes"),0,59),seconds:clamp(val("seconds"),0,59),positions:clamp(val("positions"),1,99),startPosition:clamp(val("startPosition"),1,99),between:clamp(val("between"),0,240),mode:$("mode").value,mainMessage:$("mainMessage").value.trim(),endMessage:$("endMessage").value.trim(),jumpRound:clamp(val("jumpRound"),0,99),jumpMessage:$("jumpMessage").value.trim(),sound:$("sound").checked,warnMinutes:clamp(val("warnMinutes"),0,60),dangerMinutes:clamp(val("dangerMinutes"),0,60),dangerMessage:$("dangerMessage").value.trim(),quickMessage:$("quickMessage").value.trim(),quickMessageSecs:clamp(val("quickMessageSecs"),1,300),projectionMonitor:Math.max(1,Number(s.projectionMonitor)||1),clubName:$("clubName").value.trim()||"Bridge Timer",eventName:$("eventName").value.trim(),accent:$("accent").value,background:$("background").value,menu:$("menu").value,text:$("text").value};
- s.startPosition=Math.min(s.startPosition,s.positions);if(s.warnMinutes&&s.dangerMinutes>s.warnMinutes)s.dangerMinutes=s.warnMinutes;theme()
+ s={hours:clamp(val("hours"),0,12),minutes:clamp(val("minutes"),0,59),seconds:clamp(val("seconds"),0,59),positions:clamp(val("positions"),1,99),startPosition:clamp(val("startPosition"),1,99),between:clamp(val("between"),0,240),mode:$("mode").value,mainMessage:$("mainMessage").value.trim(),endMessage:$("endMessage").value.trim(),jumpRound:clamp(val("jumpRound"),0,99),jumpMessage:$("jumpMessage").value.trim(),sound:$("sound").checked,warnMinutes:clamp(val("warnMinutes"),0,60),warnSeconds:clamp(val("warnSeconds"),0,59),dangerMinutes:clamp(val("dangerMinutes"),0,60),dangerSeconds:clamp(val("dangerSeconds"),0,59),dangerMessage:$("dangerMessage").value.trim(),finishSec:clamp(val("finishSec"),0,300),finishMessage:$("finishMessage").value.trim(),quickMessage:$("quickMessage").value.trim(),quickMessageSecs:clamp(val("quickMessageSecs"),1,300),projectionMonitor:Math.max(1,Number(s.projectionMonitor)||1),clubName:$("clubName").value.trim()||"Bridge Timer",eventName:$("eventName").value.trim(),accent:$("accent").value,background:$("background").value,menu:$("menu").value,text:$("text").value};
+ s.startPosition=Math.min(s.startPosition,s.positions);let wt=warnThreshold(),dt=dangerThreshold();if(wt>0&&dt>wt){s.dangerMinutes=Math.floor(wt/60);s.dangerSeconds=wt%60;$("dangerMinutes").value=s.dangerMinutes;$("dangerSeconds").value=s.dangerSeconds}theme()
 }
 function fill(){Object.entries(s).forEach(([k,v])=>{let e=$(k);if(e){if(e.type==="checkbox")e.checked=!!v;else e.value=v}});theme()}
 function hexRgb(h){
@@ -375,11 +393,14 @@ function tick(){
 function advance(){
  if(st.phase==="round"){
    beep(880);setTimeout(()=>beep(1100),280);
-   if(st.pos>=s.positions){
-     st.phase="ended";st.running=false;clearInterval(st.interval);st.interval=null;releaseWakeLock();render();persistState();return
-   }
-   if(s.between>0){st.phase="break";st.remaining=s.between}else{st.pos++;st.remaining=duration()}
- }else{st.pos++;st.phase="round";st.remaining=duration();beep(1100)}
+   if(s.finishSec>0){st.phase="finish";st.remaining=s.finishSec}
+   else if(!transitionAfterFinish()){render();persistState();return}
+ }else if(st.phase==="finish"){
+   if(!transitionAfterFinish()){render();persistState();return}
+   if(st.phase==="round")beep(1100)
+ }else if(st.phase==="break"){
+   st.pos++;st.phase="round";st.remaining=duration();beep(1100)
+ }else return;
  st.endAt=Date.now()+st.remaining*1000;render();persistState()
 }
 function captureForUndo(){return {pos:st.pos,phase:st.phase,remaining:st.remaining,running:st.running,started:st.started}}
@@ -422,7 +443,8 @@ function showTempMessage(){
  render();
 }
 function render(){theme();let t=$("timer");t.classList.remove("warning","dangerState","breakState","endState");$("alert").className="";$("alert").textContent="";$("clock").textContent=fmt(st.remaining);$("round").textContent=`TOUR ${st.pos} sur ${s.positions}`;let total=duration();
- if(st.phase==="round"){$("status").textContent="POSITION EN COURS";$("msg").textContent=s.mainMessage;$("submsg").textContent=s.mode==="4"?"Tour par quatre":"Tour par paires";let mins=st.remaining/60;if(s.dangerMinutes&&mins<=s.dangerMinutes){t.classList.add("dangerState");if(s.dangerMessage){$("alert").className="on";$("alert").textContent=s.dangerMessage}}else if(s.warnMinutes&&mins<=s.warnMinutes)t.classList.add("warning");if(s.jumpRound&&st.pos===s.jumpRound)$("submsg").textContent=s.jumpMessage}
+ if(st.phase==="round"){$("status").textContent="POSITION EN COURS";$("msg").textContent=s.mainMessage;$("submsg").textContent=s.mode==="4"?"Tour par quatre":"Tour par paires";const ds=dangerThreshold(),ws=warnThreshold();if(ds>0&&st.remaining<=ds){t.classList.add("dangerState");if(s.dangerMessage){$("alert").className="on";$("alert").textContent=s.dangerMessage}}else if(ws>0&&st.remaining<=ws)t.classList.add("warning");if(s.jumpRound&&st.pos===s.jumpRound)$("submsg").textContent=s.jumpMessage}
+ else if(st.phase==="finish"){t.classList.add("dangerState");$("status").textContent="FIN DE POSITION";$("msg").textContent=s.finishMessage||"Terminez la donne en cours";$("submsg").textContent=st.pos>=s.positions?"Fin du tournoi à suivre":"Changement de position à suivre";total=s.finishSec}
  else if(st.phase==="break"){t.classList.add("breakState");$("status").textContent="CHANGEMENT DE POSITION";$("msg").textContent="Changez de table";$("submsg").textContent=`Prochaine position : ${st.pos+1}`;total=s.between;if(s.jumpRound&&st.pos+1===s.jumpRound){$("alert").className="on";$("alert").textContent=s.jumpMessage}}
  else{t.classList.add("endState");$("status").textContent="TERMINÉ";$("round").textContent="TOURNOI TERMINÉ";$("msg").textContent=s.endMessage;$("submsg").textContent="";$("clock").textContent="00:00";$("pause").textContent="Terminé";total=0}
  if(tempMessageActive()&&st.phase!=="ended"){const left=Math.max(0,Math.ceil((tempMessageUntil-Date.now())/1000));$("msg").textContent=s.quickMessage||"Merci de saisir les scores";$("submsg").textContent=`Message temporaire • ${left} s`;$("alert").className="";$("alert").textContent=""}
