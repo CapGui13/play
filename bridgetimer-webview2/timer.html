@@ -70,7 +70,7 @@ body.fs #undoToast{bottom:78px}
 <body>
 <section id="settings">
 <div class="wrap">
-  <div class="head"><div><h1>Bridge Timer</h1><div class="sub">Timer indépendant et personnalisable — WebView2 1.6</div></div><div class="sub">Hors ligne • sauvegarde automatique</div></div>
+  <div class="head"><div><h1>Bridge Timer</h1><div class="sub">Timer indépendant et personnalisable — WebView2 1.7</div></div><div class="sub">Hors ligne • sauvegarde automatique</div></div>
 
   <div class="card"><h2>Tournoi</h2><div class="grid">
     <label>Durée par position</label><div class="row3"><input id="hours" type="number" min="0" value="0" title="heures"><input id="minutes" type="number" min="0" max="59" value="7" title="minutes"><input id="seconds" type="number" min="0" max="59" value="0" title="secondes"></div>
@@ -173,7 +173,7 @@ body.fs #undoToast{bottom:78px}
 <script>
 const $=id=>document.getElementById(id), KEY="bridgeTimerV2.settings", LKEY="bridgeTimerV2.logo", STATEKEY="bridgeTimerV3.state", PROFILEKEY="bridgeTimerWebView2.profiles";
 const def={hours:0,minutes:7,seconds:0,positions:6,startPosition:1,between:15,mode:"4",mainMessage:"Bonne partie !",endMessage:"Fin du tournoi — merci à tous !",jumpRound:0,jumpMessage:"ATTENTION : à cette position, les EO sautent une table",sound:true,warnMinutes:5,warnSeconds:0,dangerMinutes:2,dangerSeconds:0,dangerMessage:"Merci de terminer la donne en cours",finishSec:30,finishMessage:"Terminez la donne en cours",quickMessage:"Merci de saisir les scores",quickMessageSecs:15,projectionMonitor:1,clubName:"Bridge Club du Roy René",eventName:"",accent:"#0ea5e9",background:"#0f172a",menu:"#111827",text:"#f8fafc"};
-let s={...def},logoData="",profiles=[],st={pos:1,phase:"round",remaining:420,running:false,endAt:null,interval:null,started:false};let wakeLock=null,resumeAfterSettings=false,undoState=null,undoTimer=null,controlsTimer=null,tempMessageUntil=0,tempMessageTimer=null,previewMode=false,previewSavedState=null,previewTimer=null;
+let s={...def},logoData="",profiles=[],st={pos:1,phase:"round",remaining:420,running:false,endAt:null,interval:null,started:false};let wakeLock=null,resumeAfterSettings=false,undoState=null,undoTimer=null,controlsTimer=null,tempMessageUntil=0,tempMessageTimer=null,previewMode=false,previewSavedState=null,previewTimer=null,autosaveTimer=null;
 const clamp=(n,a,b)=>Math.max(a,Math.min(b,n)), val=id=>Number($(id).value||0);
 function duration(){return s.hours*3600+s.minutes*60+s.seconds}
 function warnThreshold(){return Math.max(0,(Number(s.warnMinutes)||0)*60+(Number(s.warnSeconds)||0))}
@@ -264,6 +264,10 @@ function theme(){
 function save(){read();localStorage.setItem(KEY,JSON.stringify(s))}
 function load(){try{let x=JSON.parse(localStorage.getItem(KEY)||"null");if(x)s={...def,...x}}catch(e){}logoData=localStorage.getItem(LKEY)||"";fill()}
 
+function scheduleAutosave(){
+ clearTimeout(autosaveTimer);
+ autosaveTimer=setTimeout(()=>{if(!$("settings").classList.contains("hidden"))save()},450)
+}
 function resetOriginalColors(){
  s.accent=def.accent;s.background=def.background;s.menu=def.menu;s.text=def.text;
  fill();save()
@@ -535,6 +539,11 @@ for(let i=0;i<3;i++){
  $("profileClear"+i).onclick=()=>clearProfile(i);
  $("profileName"+i).onchange=()=>renameProfile(i)
 }
+document.querySelectorAll("#settings input:not([type=file]),#settings select").forEach(el=>{
+ if(el.id&&el.id.startsWith("profileName"))return;
+ el.addEventListener("input",scheduleAutosave);
+ el.addEventListener("change",scheduleAutosave)
+});
 $("resetColors").onclick=resetOriginalColors;
 $("exportConfig").onclick=exportConfiguration;
 $("importConfig").onclick=importConfiguration;

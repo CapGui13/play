@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	_ "embed"
 	"fmt"
 	"log"
@@ -45,6 +46,7 @@ const (
 	wmActivate = 0x0006
 	wmShowWindow = 0x0018
 	wmThemeChanged = 0x031A
+	wmClose = 0x0010
 	wmAppDarkTitle = 0x8061
 	waInactive = 0
 )
@@ -94,6 +96,7 @@ type openFileNameW struct {
 
 
 var (
+	kernel32 = syscall.NewLazyDLL("kernel32.dll")
 	user32 = syscall.NewLazyDLL("user32.dll")
 	dwmapi = syscall.NewLazyDLL("dwmapi.dll")
 	comdlg32 = syscall.NewLazyDLL("comdlg32.dll")
@@ -107,6 +110,12 @@ var (
 	enumDisplayMonitors = user32.NewProc("EnumDisplayMonitors")
 	callWindowProcW = user32.NewProc("CallWindowProcW")
 	postMessageW = user32.NewProc("PostMessageW")
+	findWindowW = user32.NewProc("FindWindowW")
+	showWindow = user32.NewProc("ShowWindow")
+	setForegroundWindow = user32.NewProc("SetForegroundWindow")
+	monitorFromRect = user32.NewProc("MonitorFromRect")
+	createMutexW = kernel32.NewProc("CreateMutexW")
+	closeHandle = kernel32.NewProc("CloseHandle")
 	dwmSetWindowAttribute = dwmapi.NewProc("DwmSetWindowAttribute")
 	getSaveFileNameW = comdlg32.NewProc("GetSaveFileNameW")
 	getOpenFileNameW = comdlg32.NewProc("GetOpenFileNameW")
@@ -122,6 +131,7 @@ var (
 	monitorEnumCallback uintptr
 	monitorScratch []uintptr
 	selectedMonitor int
+	instanceMutex uintptr
 )
 
 func appDataPath() string {
@@ -132,6 +142,87 @@ func appDataPath() string {
 	p := filepath.Join(base, "BridgeTimerWebView2")
 	_ = os.MkdirAll(p, 0700)
 	return p
+}
+
+func acquireSingleInstance() bool {
+	name, _ := syscall.UTF16FromString("Local\\BridgeTimerWebView2")
+	h, _, err := createMutexW.Call(0, 0, uintptr(unsafe.Pointer(&name[0])))
+	if h == 0 {
+		return true
+	}
+	if err == syscall.Errno(183) {
+		title, _ := syscall.UTF16FromString(appTitle)
+		wnd, _, _ := findWindowW.Call(0, uintptr(unsafe.Pointer(&title[0])))
+		if wnd != 0 {
+			showWindow.Call(wnd, 9) // SW_RESTORE
+			setForegroundWindow.Call(wnd)
+		}
+		closeHandle.Call(h)
+		return false
+	}
+	instanceMutex = h
+	return true
+}
+
+func releaseSingleInstance() {
+	if instanceMutex != 0 {
+		closeHandle.Call(instanceMutex)
+		instanceMutex = 0
+	}
+}
+
+func windowStatePath() string {
+	return filepath.Join(appDataPath(), "window.json")
+}
+
+func loadWindowState() (savedWindowState, bool) {
+	var x savedWindowState
+	b, err := os.ReadFile(windowStatePath())
+	if err != nil || json.Unmarshal(b, &x) != nil {
+		return x, false
+	}
+	if x.Right-x.Left < 640 || x.Bottom-x.Top < 480 {
+		return x, false
+	}
+	r := rect{Left: x.Left, Top: x.Top, Right: x.Right, Bottom: x.Bottom}
+	mon, _, _ := monitorFromRect.Call(uintptr(unsafe.Pointer(&r)), 0) // MONITOR_DEFAULTTONULL
+	if mon == 0 {
+		return x, false
+	}
+	return x, true
+}
+
+func restoreWindowState(hwnd uintptr) {
+	x, ok := loadWindowState()
+	if !ok {
+		return
+	}
+	setWindowPos.Call(
+		hwnd, 0,
+		uintptr(x.Left), uintptr(x.Top),
+		uintptr(x.Right-x.Left), uintptr(x.Bottom-x.Top),
+		swpNoZOrder|swpNoOwnerZOrder|swpFrameChanged,
+	)
+	if x.ShowCmd == 3 {
+		showWindow.Call(hwnd, 3) // SW_MAXIMIZE
+	}
+}
+
+func saveWindowState(hwnd uintptr) {
+	wp := windowPlacement{Length: uint32(unsafe.Sizeof(windowPlacement{}))}
+	ok, _, _ := getWindowPlacement.Call(hwnd, uintptr(unsafe.Pointer(&wp)))
+	if ok == 0 {
+		return
+	}
+	x := savedWindowState{
+		Left: wp.RcNormalPosition.Left, Top: wp.RcNormalPosition.Top,
+		Right: wp.RcNormalPosition.Right, Bottom: wp.RcNormalPosition.Bottom,
+		ShowCmd: wp.ShowCmd,
+	}
+	b, err := json.Marshal(x)
+	if err == nil {
+		_ = os.WriteFile(windowStatePath(), b, 0600)
+	}
 }
 
 func applyDarkTitleBar(hwnd uintptr) {
@@ -153,6 +244,8 @@ func applyDarkTitleBar(hwnd uintptr) {
 
 func darkTitleWndProc(hwnd, msg, wp, lp uintptr) uintptr {
 	switch msg {
+	case wmClose:
+		saveWindowState(hwnd)
 	case wmActivate:
 		if wp&0xFFFF != waInactive {
 			postMessageW.Call(hwnd, wmAppDarkTitle, 0, 0)
@@ -181,6 +274,14 @@ func installDarkTitleHook(hwnd uintptr) {
 	// WM_ACTIVATE/WM_SHOWWINDOW keep the non-client frame correct.
 	postMessageW.Call(hwnd, wmAppDarkTitle, 0, 0)
 }
+type savedWindowState struct {
+	Left    int32 `json:"left"`
+	Top     int32 `json:"top"`
+	Right   int32 `json:"right"`
+	Bottom  int32 `json:"bottom"`
+	ShowCmd uint32 `json:"show_cmd"`
+}
+
 type nativeMonitorStatus struct {
 	Selected int `json:"selected"`
 	Count    int `json:"count"`
@@ -454,6 +555,11 @@ func main() {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
+	if !acquireSingleInstance() {
+		return
+	}
+	defer releaseSingleInstance()
+
 	srv, url, err := startLocalServer()
 	if err != nil {
 		log.Printf("Bridge Timer local server: %v", err)
@@ -482,6 +588,7 @@ func main() {
 	defer w.Destroy()
 
 	hwnd := uintptr(w.Window())
+	restoreWindowState(hwnd)
 	applyDarkTitleBar(hwnd)
 	installDarkTitleHook(hwnd)
 	if err := w.Bind("nativeFullscreen", func() bool {
