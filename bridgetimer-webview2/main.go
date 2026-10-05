@@ -14,6 +14,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unicode/utf16"
 	"unsafe"
 
 	webview "github.com/jchv/go-webview2"
@@ -65,9 +66,37 @@ type monitorInfo struct {
 	DwFlags uint32
 }
 
+type openFileNameW struct {
+	LStructSize       uint32
+	HwndOwner         uintptr
+	HInstance         uintptr
+	LpstrFilter       *uint16
+	LpstrCustomFilter *uint16
+	NMaxCustFilter    uint32
+	NFilterIndex      uint32
+	LpstrFile         *uint16
+	NMaxFile          uint32
+	LpstrFileTitle    *uint16
+	NMaxFileTitle     uint32
+	LpstrInitialDir   *uint16
+	LpstrTitle        *uint16
+	Flags             uint32
+	NFileOffset       uint16
+	NFileExtension    uint16
+	LpstrDefExt       *uint16
+	LCustData         uintptr
+	LpfnHook          uintptr
+	LpTemplateName    *uint16
+	PvReserved        uintptr
+	DwReserved        uint32
+	FlagsEx           uint32
+}
+
+
 var (
 	user32 = syscall.NewLazyDLL("user32.dll")
 	dwmapi = syscall.NewLazyDLL("dwmapi.dll")
+	comdlg32 = syscall.NewLazyDLL("comdlg32.dll")
 	getWindowLongPtrW = user32.NewProc("GetWindowLongPtrW")
 	setWindowLongPtrW = user32.NewProc("SetWindowLongPtrW")
 	getWindowPlacement = user32.NewProc("GetWindowPlacement")
@@ -79,6 +108,8 @@ var (
 	callWindowProcW = user32.NewProc("CallWindowProcW")
 	postMessageW = user32.NewProc("PostMessageW")
 	dwmSetWindowAttribute = dwmapi.NewProc("DwmSetWindowAttribute")
+	getSaveFileNameW = comdlg32.NewProc("GetSaveFileNameW")
+	getOpenFileNameW = comdlg32.NewProc("GetOpenFileNameW")
 
 	fullscreenMu sync.Mutex
 	fullscreen bool
@@ -318,6 +349,82 @@ func toggleNativeFullscreen(hwnd uintptr) bool {
 	return false
 }
 
+
+func utf16Multi(s string) []uint16 {
+	out := utf16.Encode([]rune(s))
+	return append(out, 0)
+}
+
+func bridgeTimerDialogFilter() []uint16 {
+	return utf16Multi("Fichier Bridge Timer (*.bridge-timer)\x00*.bridge-timer\x00Tous les fichiers (*.*)\x00*.*\x00")
+}
+
+func exportBridgeTimerFile(hwnd uintptr, payload string) bool {
+	buf := make([]uint16, 1024)
+	defaultName, _ := syscall.UTF16FromString("BridgeTimer.bridge-timer")
+	copy(buf, defaultName)
+	filter := bridgeTimerDialogFilter()
+	title, _ := syscall.UTF16FromString("Exporter la configuration Bridge Timer")
+	defExt, _ := syscall.UTF16FromString("bridge-timer")
+
+	ofn := openFileNameW{
+		LStructSize:  uint32(unsafe.Sizeof(openFileNameW{})),
+		HwndOwner:    hwnd,
+		LpstrFilter:  &filter[0],
+		NFilterIndex: 1,
+		LpstrFile:    &buf[0],
+		NMaxFile:     uint32(len(buf)),
+		LpstrTitle:   &title[0],
+		LpstrDefExt:  &defExt[0],
+		Flags:        0x00000002 | 0x00000008 | 0x00000800 | 0x00080000, // overwrite/nochangedir/pathmustexist/explorer
+	}
+	ok, _, _ := getSaveFileNameW.Call(uintptr(unsafe.Pointer(&ofn)))
+	if ok == 0 {
+		return false
+	}
+	path := syscall.UTF16ToString(buf)
+	if filepath.Ext(path) == "" {
+		path += ".bridge-timer"
+	}
+	if err := os.WriteFile(path, []byte(payload), 0600); err != nil {
+		log.Printf("export config: %v", err)
+		return false
+	}
+	return true
+}
+
+func importBridgeTimerFile(hwnd uintptr) string {
+	buf := make([]uint16, 1024)
+	filter := bridgeTimerDialogFilter()
+	title, _ := syscall.UTF16FromString("Importer une configuration Bridge Timer")
+
+	ofn := openFileNameW{
+		LStructSize:  uint32(unsafe.Sizeof(openFileNameW{})),
+		HwndOwner:    hwnd,
+		LpstrFilter:  &filter[0],
+		NFilterIndex: 1,
+		LpstrFile:    &buf[0],
+		NMaxFile:     uint32(len(buf)),
+		LpstrTitle:   &title[0],
+		Flags:        0x00000008 | 0x00000800 | 0x00001000 | 0x00080000, // nochangedir/pathmustexist/filemustexist/explorer
+	}
+	ok, _, _ := getOpenFileNameW.Call(uintptr(unsafe.Pointer(&ofn)))
+	if ok == 0 {
+		return ""
+	}
+	path := syscall.UTF16ToString(buf)
+	fi, err := os.Stat(path)
+	if err != nil || fi.Size() > 8*1024*1024 {
+		return ""
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		log.Printf("import config: %v", err)
+		return ""
+	}
+	return string(b)
+}
+
 func startLocalServer() (*http.Server, string, error) {
 	addr := fmt.Sprintf("%s:%d", host, port)
 	ln, err := net.Listen("tcp", addr)
@@ -391,6 +498,16 @@ func main() {
 		return cycleProjectionMonitor(hwnd)
 	}); err != nil {
 		log.Printf("monitor cycle bind: %v", err)
+	}
+	if err := w.Bind("nativeExportConfig", func(payload string) bool {
+		return exportBridgeTimerFile(hwnd, payload)
+	}); err != nil {
+		log.Printf("export config bind: %v", err)
+	}
+	if err := w.Bind("nativeImportConfig", func() string {
+		return importBridgeTimerFile(hwnd)
+	}); err != nil {
+		log.Printf("import config bind: %v", err)
 	}
 
 	w.Navigate(url)
