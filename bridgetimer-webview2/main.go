@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"sync"
 	"syscall"
 	"time"
@@ -74,6 +75,7 @@ var (
 	monitorFromWindow = user32.NewProc("MonitorFromWindow")
 	getMonitorInfoW = user32.NewProc("GetMonitorInfoW")
 	setWindowPos = user32.NewProc("SetWindowPos")
+	enumDisplayMonitors = user32.NewProc("EnumDisplayMonitors")
 	callWindowProcW = user32.NewProc("CallWindowProcW")
 	postMessageW = user32.NewProc("PostMessageW")
 	dwmSetWindowAttribute = dwmapi.NewProc("DwmSetWindowAttribute")
@@ -85,6 +87,10 @@ var (
 
 	originalWndProc uintptr
 	darkWndProcCallback uintptr
+
+	monitorEnumCallback uintptr
+	monitorScratch []uintptr
+	selectedMonitor int
 )
 
 func appDataPath() string {
@@ -144,6 +150,120 @@ func installDarkTitleHook(hwnd uintptr) {
 	// WM_ACTIVATE/WM_SHOWWINDOW keep the non-client frame correct.
 	postMessageW.Call(hwnd, wmAppDarkTitle, 0, 0)
 }
+type nativeMonitorStatus struct {
+	Selected int `json:"selected"`
+	Count    int `json:"count"`
+}
+
+type nativeMonitor struct {
+	Handle  uintptr
+	Rect    rect
+	Primary bool
+}
+
+func enumMonitorProc(hmon, hdc, lprc, data uintptr) uintptr {
+	monitorScratch = append(monitorScratch, hmon)
+	return 1
+}
+
+func enumerateMonitors() []nativeMonitor {
+	if monitorEnumCallback == 0 {
+		monitorEnumCallback = syscall.NewCallback(enumMonitorProc)
+	}
+	monitorScratch = monitorScratch[:0]
+	enumDisplayMonitors.Call(0, 0, monitorEnumCallback, 0)
+
+	out := make([]nativeMonitor, 0, len(monitorScratch))
+	for _, h := range monitorScratch {
+		mi := monitorInfo{CbSize: uint32(unsafe.Sizeof(monitorInfo{}))}
+		ok, _, _ := getMonitorInfoW.Call(h, uintptr(unsafe.Pointer(&mi)))
+		if ok != 0 {
+			out = append(out, nativeMonitor{
+				Handle: h,
+				Rect: mi.RcMonitor,
+				Primary: mi.DwFlags&1 != 0,
+			})
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Primary != out[j].Primary {
+			return out[i].Primary
+		}
+		if out[i].Rect.Top != out[j].Rect.Top {
+			return out[i].Rect.Top < out[j].Rect.Top
+		}
+		return out[i].Rect.Left < out[j].Rect.Left
+	})
+	return out
+}
+
+func monitorStatusLocked() nativeMonitorStatus {
+	mons := enumerateMonitors()
+	if len(mons) == 0 {
+		selectedMonitor = 0
+		return nativeMonitorStatus{Selected: 1, Count: 1}
+	}
+	if selectedMonitor < 0 || selectedMonitor >= len(mons) {
+		selectedMonitor = 0
+	}
+	return nativeMonitorStatus{Selected: selectedMonitor + 1, Count: len(mons)}
+}
+
+func moveFullscreenToSelectedLocked(hwnd uintptr) {
+	mons := enumerateMonitors()
+	if len(mons) == 0 {
+		return
+	}
+	if selectedMonitor < 0 || selectedMonitor >= len(mons) {
+		selectedMonitor = 0
+	}
+	r := mons[selectedMonitor].Rect
+	setWindowPos.Call(
+		hwnd, 0,
+		uintptr(r.Left), uintptr(r.Top),
+		uintptr(r.Right-r.Left), uintptr(r.Bottom-r.Top),
+		swpNoZOrder|swpNoOwnerZOrder|swpFrameChanged,
+	)
+}
+
+func setProjectionMonitor(hwnd uintptr, requested int) nativeMonitorStatus {
+	fullscreenMu.Lock()
+	defer fullscreenMu.Unlock()
+
+	mons := enumerateMonitors()
+	if len(mons) == 0 {
+		selectedMonitor = 0
+		return nativeMonitorStatus{Selected: 1, Count: 1}
+	}
+	if requested < 1 {
+		requested = 1
+	}
+	if requested > len(mons) {
+		requested = len(mons)
+	}
+	selectedMonitor = requested - 1
+	if fullscreen {
+		moveFullscreenToSelectedLocked(hwnd)
+	}
+	return nativeMonitorStatus{Selected: selectedMonitor + 1, Count: len(mons)}
+}
+
+func cycleProjectionMonitor(hwnd uintptr) nativeMonitorStatus {
+	fullscreenMu.Lock()
+	defer fullscreenMu.Unlock()
+
+	mons := enumerateMonitors()
+	if len(mons) == 0 {
+		selectedMonitor = 0
+		return nativeMonitorStatus{Selected: 1, Count: 1}
+	}
+	selectedMonitor = (selectedMonitor + 1) % len(mons)
+	if fullscreen {
+		moveFullscreenToSelectedLocked(hwnd)
+	}
+	return nativeMonitorStatus{Selected: selectedMonitor + 1, Count: len(mons)}
+}
+
 func toggleNativeFullscreen(hwnd uintptr) bool {
 	fullscreenMu.Lock()
 	defer fullscreenMu.Unlock()
@@ -157,25 +277,30 @@ func toggleNativeFullscreen(hwnd uintptr) bool {
 		savedPlace = windowPlacement{Length: uint32(unsafe.Sizeof(windowPlacement{}))}
 		getWindowPlacement.Call(hwnd, uintptr(unsafe.Pointer(&savedPlace)))
 
-		mon, _, _ := monitorFromWindow.Call(hwnd, monitorDefaultToNearest)
-		mi := monitorInfo{CbSize: uint32(unsafe.Sizeof(monitorInfo{}))}
-		if mon == 0 {
-			return false
-		}
-		ok, _, _ := getMonitorInfoW.Call(mon, uintptr(unsafe.Pointer(&mi)))
-		if ok == 0 {
-			return false
-		}
-
 		newStyle := style &^ uintptr(wsCaption|wsThickFrame|wsMinimizeBox|wsMaximizeBox|wsSysMenu)
 		setWindowLongPtrW.Call(hwnd, uintptr(styleIndex), newStyle)
-		setWindowPos.Call(
-			hwnd, 0,
-			uintptr(mi.RcMonitor.Left), uintptr(mi.RcMonitor.Top),
-			uintptr(mi.RcMonitor.Right-mi.RcMonitor.Left),
-			uintptr(mi.RcMonitor.Bottom-mi.RcMonitor.Top),
-			swpNoZOrder|swpNoOwnerZOrder|swpFrameChanged,
-		)
+
+		mons := enumerateMonitors()
+		if len(mons) == 0 {
+			mon, _, _ := monitorFromWindow.Call(hwnd, monitorDefaultToNearest)
+			mi := monitorInfo{CbSize: uint32(unsafe.Sizeof(monitorInfo{}))}
+			if mon == 0 {
+				return false
+			}
+			ok, _, _ := getMonitorInfoW.Call(mon, uintptr(unsafe.Pointer(&mi)))
+			if ok == 0 {
+				return false
+			}
+			setWindowPos.Call(
+				hwnd, 0,
+				uintptr(mi.RcMonitor.Left), uintptr(mi.RcMonitor.Top),
+				uintptr(mi.RcMonitor.Right-mi.RcMonitor.Left),
+				uintptr(mi.RcMonitor.Bottom-mi.RcMonitor.Top),
+				swpNoZOrder|swpNoOwnerZOrder|swpFrameChanged,
+			)
+		} else {
+			moveFullscreenToSelectedLocked(hwnd)
+		}
 		fullscreen = true
 		return true
 	}
@@ -256,6 +381,16 @@ func main() {
 		return toggleNativeFullscreen(hwnd)
 	}); err != nil {
 		log.Printf("fullscreen bind: %v", err)
+	}
+	if err := w.Bind("nativeSetMonitor", func(index int) nativeMonitorStatus {
+		return setProjectionMonitor(hwnd, index)
+	}); err != nil {
+		log.Printf("monitor select bind: %v", err)
+	}
+	if err := w.Bind("nativeCycleMonitor", func() nativeMonitorStatus {
+		return cycleProjectionMonitor(hwnd)
+	}); err != nil {
+		log.Printf("monitor cycle bind: %v", err)
 	}
 
 	w.Navigate(url)

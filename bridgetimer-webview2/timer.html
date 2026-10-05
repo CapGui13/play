@@ -59,7 +59,7 @@ body.fs #undoToast{bottom:78px}
 <body>
 <section id="settings">
 <div class="wrap">
-  <div class="head"><div><h1>Bridge Timer</h1><div class="sub">Timer indépendant et personnalisable — WebView2 1.1.2.2</div></div><div class="sub">Hors ligne • sauvegarde automatique</div></div>
+  <div class="head"><div><h1>Bridge Timer</h1><div class="sub">Timer indépendant et personnalisable — WebView2 1.2.2</div></div><div class="sub">Hors ligne • sauvegarde automatique</div></div>
 
   <div class="card"><h2>Tournoi</h2><div class="grid">
     <label>Durée par position</label><div class="row3"><input id="hours" type="number" min="0" value="0" title="heures"><input id="minutes" type="number" min="0" max="59" value="7" title="minutes"><input id="seconds" type="number" min="0" max="59" value="0" title="secondes"></div>
@@ -113,7 +113,7 @@ body.fs #undoToast{bottom:78px}
 <section id="timer" class="hidden">
   <div class="top">
     <div class="identity"><img id="logo" class="nol" alt=""><div><div id="club">Bridge Timer</div><div id="event"></div></div></div>
-    <div class="topBtns"><button id="messageBtn" class="btn">Message</button><button id="settingsBtn" class="btn">Paramètres</button><button id="fsBtn" class="btn">Plein écran</button></div>
+    <div class="topBtns"><button id="messageBtn" class="btn">Message</button><button id="screenBtn" class="btn">Écran 1/1</button><button id="settingsBtn" class="btn">Paramètres</button><button id="fsBtn" class="btn">Plein écran</button></div>
   </div>
   <div class="main">
     <div id="status">POSITION EN COURS</div>
@@ -137,7 +137,7 @@ body.fs #undoToast{bottom:78px}
 
 <script>
 const $=id=>document.getElementById(id), KEY="bridgeTimerV2.settings", LKEY="bridgeTimerV2.logo", STATEKEY="bridgeTimerV3.state";
-const def={hours:0,minutes:7,seconds:0,positions:6,startPosition:1,between:15,mode:"4",mainMessage:"Bonne partie !",endMessage:"Fin du tournoi — merci à tous !",jumpRound:0,jumpMessage:"ATTENTION : à cette position, les EO sautent une table",sound:true,warnMinutes:5,dangerMinutes:2,dangerMessage:"Merci de terminer la donne en cours",quickMessage:"Merci de saisir les scores",quickMessageSecs:15,clubName:"Bridge Club du Roy René",eventName:"",accent:"#0ea5e9",background:"#0f172a"};
+const def={hours:0,minutes:7,seconds:0,positions:6,startPosition:1,between:15,mode:"4",mainMessage:"Bonne partie !",endMessage:"Fin du tournoi — merci à tous !",jumpRound:0,jumpMessage:"ATTENTION : à cette position, les EO sautent une table",sound:true,warnMinutes:5,dangerMinutes:2,dangerMessage:"Merci de terminer la donne en cours",quickMessage:"Merci de saisir les scores",quickMessageSecs:15,projectionMonitor:1,clubName:"Bridge Club du Roy René",eventName:"",accent:"#0ea5e9",background:"#0f172a"};
 let s={...def},logoData="",st={pos:1,phase:"round",remaining:420,running:false,endAt:null,interval:null,started:false};let wakeLock=null,resumeAfterSettings=false,undoState=null,undoTimer=null,controlsTimer=null,tempMessageUntil=0,tempMessageTimer=null;
 const clamp=(n,a,b)=>Math.max(a,Math.min(b,n)), val=id=>Number($(id).value||0);
 function duration(){return s.hours*3600+s.minutes*60+s.seconds}
@@ -178,7 +178,7 @@ function tryRecoverState(){
 
 function fmt(x){x=Math.max(0,Math.ceil(x));let h=Math.floor(x/3600),m=Math.floor(x%3600/60),sec=x%60;return h?`${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}:${String(sec).padStart(2,"0")}`:`${String(m).padStart(2,"0")}:${String(sec).padStart(2,"0")}`}
 function read(){
- s={hours:clamp(val("hours"),0,12),minutes:clamp(val("minutes"),0,59),seconds:clamp(val("seconds"),0,59),positions:clamp(val("positions"),1,99),startPosition:clamp(val("startPosition"),1,99),between:clamp(val("between"),0,240),mode:$("mode").value,mainMessage:$("mainMessage").value.trim(),endMessage:$("endMessage").value.trim(),jumpRound:clamp(val("jumpRound"),0,99),jumpMessage:$("jumpMessage").value.trim(),sound:$("sound").checked,warnMinutes:clamp(val("warnMinutes"),0,60),dangerMinutes:clamp(val("dangerMinutes"),0,60),dangerMessage:$("dangerMessage").value.trim(),quickMessage:$("quickMessage").value.trim(),quickMessageSecs:clamp(val("quickMessageSecs"),1,300),clubName:$("clubName").value.trim()||"Bridge Timer",eventName:$("eventName").value.trim(),accent:$("accent").value,background:$("background").value};
+ s={hours:clamp(val("hours"),0,12),minutes:clamp(val("minutes"),0,59),seconds:clamp(val("seconds"),0,59),positions:clamp(val("positions"),1,99),startPosition:clamp(val("startPosition"),1,99),between:clamp(val("between"),0,240),mode:$("mode").value,mainMessage:$("mainMessage").value.trim(),endMessage:$("endMessage").value.trim(),jumpRound:clamp(val("jumpRound"),0,99),jumpMessage:$("jumpMessage").value.trim(),sound:$("sound").checked,warnMinutes:clamp(val("warnMinutes"),0,60),dangerMinutes:clamp(val("dangerMinutes"),0,60),dangerMessage:$("dangerMessage").value.trim(),quickMessage:$("quickMessage").value.trim(),quickMessageSecs:clamp(val("quickMessageSecs"),1,300),projectionMonitor:Math.max(1,Number(s.projectionMonitor)||1),clubName:$("clubName").value.trim()||"Bridge Timer",eventName:$("eventName").value.trim(),accent:$("accent").value,background:$("background").value};
  s.startPosition=Math.min(s.startPosition,s.positions);if(s.warnMinutes&&s.dangerMinutes>s.warnMinutes)s.dangerMinutes=s.warnMinutes;theme()
 }
 function fill(){Object.entries(s).forEach(([k,v])=>{let e=$(k);if(e){if(e.type==="checkbox")e.checked=!!v;else e.value=v}});theme()}
@@ -294,6 +294,24 @@ function render(){theme();let t=$("timer");t.classList.remove("warning","dangerS
  const paused=st.started&&!st.running&&st.phase!=="ended"&&!$("timer").classList.contains("hidden");
  $("pauseOverlay").classList.toggle("on",paused)
 }
+async function syncNativeMonitor(){
+ try{
+   if(!window.nativeSetMonitor){$("screenBtn").textContent="Écran 1/1";return}
+   const x=await window.nativeSetMonitor(Math.max(1,Number(s.projectionMonitor)||1));
+   s.projectionMonitor=x.selected||1;
+   $("screenBtn").textContent=`Écran ${x.selected||1}/${x.count||1}`;
+   localStorage.setItem(KEY,JSON.stringify(s))
+ }catch(e){$("screenBtn").textContent="Écran 1/1"}
+}
+async function cycleNativeMonitor(){
+ try{
+   if(!window.nativeCycleMonitor)return;
+   const x=await window.nativeCycleMonitor();
+   s.projectionMonitor=x.selected||1;
+   $("screenBtn").textContent=`Écran ${x.selected||1}/${x.count||1}`;
+   localStorage.setItem(KEY,JSON.stringify(s))
+ }catch(e){}
+}
 async function fs(){try{
       if(window.nativeFullscreen){
         const on=await window.nativeFullscreen();
@@ -322,8 +340,8 @@ document.addEventListener("fullscreenchange",()=>{
  if(on){clearTimeout(controlsTimer);controlsTimer=setTimeout(()=>document.body.classList.remove("showControls"),3500)}
  else document.body.classList.remove("showControls")
 })
-$("fresh").onclick=fresh;$("apply").onclick=apply;$("save").onclick=()=>{save();alert("Paramètres enregistrés.")};$("defaults").onclick=()=>{if(confirm("Revenir aux valeurs par défaut ?")){s={...def};logoData="";localStorage.removeItem(LKEY);fill();save()}}
-$("messageBtn").onclick=showTempMessage;$("settingsBtn").onclick=()=>showSettings(false);$("fsBtn").onclick=fs;$("pause").onclick=toggle;$("minus").onclick=()=>adjust(-60);$("plus").onclick=()=>adjust(60);$("next").onclick=next;$("resetRound").onclick=resetRound;$("undoBtn").onclick=undoNext;
+$("fresh").onclick=fresh;$("apply").onclick=apply;$("save").onclick=()=>{save();alert("Paramètres enregistrés.")};$("defaults").onclick=()=>{if(confirm("Revenir aux valeurs par défaut ?")){s={...def};logoData="";localStorage.removeItem(LKEY);fill();save();syncNativeMonitor()}}
+$("messageBtn").onclick=showTempMessage;$("screenBtn").onclick=cycleNativeMonitor;$("settingsBtn").onclick=()=>showSettings(false);$("fsBtn").onclick=fs;$("pause").onclick=toggle;$("minus").onclick=()=>adjust(-60);$("plus").onclick=()=>adjust(60);$("next").onclick=next;$("resetRound").onclick=resetRound;$("undoBtn").onclick=undoNext;
 $("logoInput").onchange=e=>{let f=e.target.files?.[0];if(!f)return;if(f.size>2000000)return alert("Choisis une image de moins de 2 Mo.");let r=new FileReader();r.onload=()=>{logoData=r.result;try{localStorage.setItem(LKEY,logoData)}catch(e){alert("Logo trop volumineux pour être mémorisé.")}theme()};r.readAsDataURL(f)}
 $("removeLogo").onclick=()=>{logoData="";localStorage.removeItem(LKEY);$("logoInput").value="";theme()}
 ["clubName","eventName","accent","background"].forEach(id=>$(id).oninput=()=>{read();render()})
@@ -344,8 +362,10 @@ document.addEventListener("keydown",e=>{
 })
 function updateLocalTime(){const d=new Date();$("localTime").textContent=`${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}:${String(d.getSeconds()).padStart(2,"0")}`;}
 updateLocalTime();setInterval(updateLocalTime,1000);
+window.addEventListener("focus",syncNativeMonitor);
 window.addEventListener("beforeunload",persistState);
 load();
+syncNativeMonitor();
 st.pos=s.startPosition;st.remaining=duration();render();
 tryRecoverState();
 </script>
