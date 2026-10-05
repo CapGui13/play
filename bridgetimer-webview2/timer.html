@@ -5,44 +5,44 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Bridge Timer</title>
 <style>
-:root{--bg:#0f172a;--panel:#111827;--text:#f8fafc;--muted:#cbd5e1;--accent:#0ea5e9;--warn:#f59e0b;--danger:#ef4444;--ok:#22c55e;--line:#334155}
+:root{--bg:#0f172a;--panel:#111827;--field:#0b1220;--button:#1f2937;--band:#0002;--pausebg:#020617cc;--toastbg:#0b1220ee;--track:#ffffff20;--text:#f8fafc;--muted:#cbd5e1;--accent:#0ea5e9;--warn:#f59e0b;--danger:#ef4444;--ok:#22c55e;--line:#334155}
 *{box-sizing:border-box}html,body{margin:0;min-height:100%;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}body{background:var(--bg);color:var(--text)}
 .hidden{display:none!important}button,input,select{font:inherit}button{cursor:pointer}
 .wrap{max-width:1120px;margin:auto;padding:24px}.head{display:flex;justify-content:space-between;align-items:center;gap:15px;border-bottom:1px solid var(--line);padding-bottom:16px}
 h1{margin:0;color:var(--accent);font-size:42px}.sub{color:var(--muted);font-size:13px}
-.card{margin-top:20px;padding:20px;border:1px solid var(--line);border-radius:16px;background:#111827;box-shadow:0 16px 50px #0005}
+.card{margin-top:20px;padding:20px;border:1px solid var(--line);border-radius:16px;background:var(--panel);box-shadow:0 16px 50px #0005}
 .card h2{margin:0 0 16px;color:var(--accent);font-size:20px}
 .grid{display:grid;grid-template-columns:.9fr 1.1fr;gap:13px 22px;align-items:center}.grid label{font-weight:700}
 .row3{display:grid;grid-template-columns:repeat(3,1fr);gap:9px}
-input[type=number],input[type=text],select{width:100%;padding:10px 11px;border-radius:9px;border:1px solid var(--line);background:#0b1220;color:var(--text)}
+input[type=number],input[type=text],select{width:100%;padding:10px 11px;border-radius:9px;border:1px solid var(--line);background:var(--field);color:var(--text)}
 input[type=color]{width:100%;height:40px;border:0;background:transparent}input[type=file]{width:100%;color:var(--muted)}
 .check{display:flex;align-items:center;gap:8px}.small{font-size:12px;color:var(--muted)}
-.custom{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.custom label{font-size:12px;color:var(--muted)}
+.custom{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.custom label{font-size:12px;color:var(--muted)}
 .actions,.controls{display:flex;justify-content:center;gap:10px;flex-wrap:wrap;margin-top:20px}
-.btn{border:1px solid var(--line);border-radius:10px;padding:10px 15px;background:#1f2937;color:var(--text);font-weight:800}.btn.primary{background:var(--accent);color:#00131f;border-color:transparent}.btn.danger{background:#451a1a;color:#fecaca}
-.shortcuts{display:grid;grid-template-columns:1fr 1fr;gap:9px 20px}.shortcut{display:flex;gap:12px;align-items:center;color:var(--muted)}kbd{min-width:70px;text-align:center;padding:5px;border:1px solid var(--line);border-radius:7px;background:#0b1220;color:var(--text);font-weight:900}
+.btn{border:1px solid var(--line);border-radius:10px;padding:10px 15px;background:var(--button);color:var(--text);font-weight:800}.btn.primary{background:var(--accent);color:#00131f;border-color:transparent}.btn.danger{background:#451a1a;color:#fecaca}
+.shortcuts{display:grid;grid-template-columns:1fr 1fr;gap:9px 20px}.shortcut{display:flex;gap:12px;align-items:center;color:var(--muted)}kbd{min-width:70px;text-align:center;padding:5px;border:1px solid var(--line);border-radius:7px;background:var(--field);color:var(--text);font-weight:900}
 #timer{min-height:100vh;display:grid;grid-template-rows:auto 1fr auto;background:var(--bg);transition:.2s}
-.top{display:grid;grid-template-columns:1fr auto;align-items:center;gap:15px;padding:14px 22px;border-bottom:1px solid var(--line);background:#0002}
+.top{display:grid;grid-template-columns:1fr auto;align-items:center;gap:15px;padding:14px 22px;border-bottom:1px solid var(--line);background:var(--band)}
 .identity{display:flex;gap:12px;align-items:center;min-width:0}#logo{width:52px;height:52px;object-fit:contain;border-radius:9px;background:#fff1;padding:3px}.nol{display:none}
 #club{font-weight:950;font-size:clamp(18px,2vw,30px);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}#event{color:var(--muted);font-size:13px}
 .topBtns{justify-self:end;display:flex;gap:8px}.topBtns .btn{padding:8px 10px;font-size:13px}
 .main{display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;padding:24px 16px;gap:12px}
 #status{font-weight:950;letter-spacing:.16em;color:var(--muted);font-size:clamp(15px,1.7vw,24px)}
 #clock{font-variant-numeric:tabular-nums;font-weight:1000;font-size:clamp(110px,24vw,350px);line-height:.84;letter-spacing:-.07em;white-space:nowrap}
-.progress{width:min(1100px,88vw);height:15px;border-radius:99px;background:#ffffff20;overflow:hidden}#bar{height:100%;width:100%;background:var(--accent);transition:width .18s,background .2s}
+.progress{width:min(1100px,88vw);height:15px;border-radius:99px;background:var(--track);overflow:hidden}#bar{height:100%;width:100%;background:var(--accent);transition:width .18s,background .2s}
 #msg{font-weight:950;font-size:clamp(26px,4.2vw,64px);line-height:1.05;min-height:1.1em;max-width:1300px}
 #submsg{font-weight:800;font-size:clamp(18px,2.3vw,36px);color:var(--muted);min-height:1em;max-width:1300px}
 #alert{min-height:70px;display:flex;align-items:center;justify-content:center;text-align:center;padding:10px 20px;font-weight:1000;font-size:clamp(18px,2.3vw,34px)}
 #alert.on{background:var(--danger)}.bottom{position:relative;padding:11px 190px 15px;border-top:1px solid var(--line);background:#0002;min-height:82px}.controls{margin-top:0}.controls .btn{min-width:118px}#localTime,#round{position:absolute;bottom:13px;font-weight:950;line-height:1;white-space:nowrap}#localTime{left:22px;font-size:clamp(24px,2.4vw,42px);font-variant-numeric:tabular-nums}#round{right:22px;font-size:clamp(24px,2.7vw,46px);text-align:right}
 #hint{text-align:center;color:var(--muted);font-size:12px;margin-top:8px}
 #timer.warning #clock{color:var(--warn)}#timer.warning #bar{background:var(--warn)}#timer.dangerState #clock{color:var(--danger)}#timer.dangerState #bar{background:var(--danger)}
-#timer.breakState{background:#111827}#timer.breakState #clock{color:var(--accent)}#timer.endState{background:#052e16}#timer.endState #clock{color:var(--ok)}
+#timer.breakState{background:var(--panel)}#timer.breakState #clock{color:var(--accent)}#timer.endState{background:#052e16}#timer.endState #clock{color:var(--ok)}
 .main{position:relative}
-#pauseOverlay{position:absolute;inset:0;z-index:12;display:none;align-items:center;justify-content:center;flex-direction:column;gap:10px;background:#020617cc;backdrop-filter:blur(2px);pointer-events:none}
+#pauseOverlay{position:absolute;inset:0;z-index:12;display:none;align-items:center;justify-content:center;flex-direction:column;gap:10px;background:var(--pausebg);backdrop-filter:blur(2px);pointer-events:none}
 #pauseOverlay.on{display:flex}
 #pauseOverlay .pauseBig{font-size:clamp(70px,15vw,210px);font-weight:1000;line-height:.85;letter-spacing:.04em;color:#facc15;text-shadow:0 8px 35px #0008}
 #pauseOverlay .pauseSmall{font-size:clamp(16px,2vw,30px);font-weight:850;color:#fef3c7}
-#undoToast{position:fixed;z-index:40;left:50%;bottom:105px;transform:translateX(-50%) translateY(15px);display:flex;align-items:center;gap:14px;padding:11px 14px 11px 18px;border:1px solid #475569;border-radius:12px;background:#0b1220ee;box-shadow:0 12px 40px #0008;opacity:0;pointer-events:none;transition:.18s;white-space:nowrap}
+#undoToast{position:fixed;z-index:40;left:50%;bottom:105px;transform:translateX(-50%) translateY(15px);display:flex;align-items:center;gap:14px;padding:11px 14px 11px 18px;border:1px solid #475569;border-radius:12px;background:var(--toastbg);box-shadow:0 12px 40px #0008;opacity:0;pointer-events:none;transition:.18s;white-space:nowrap}
 #undoToast.on{opacity:1;pointer-events:auto;transform:translateX(-50%) translateY(0)}
 #undoToast button{padding:7px 11px}
 
@@ -66,7 +66,7 @@ body.fs #undoToast{bottom:78px}
 <body>
 <section id="settings">
 <div class="wrap">
-  <div class="head"><div><h1>Bridge Timer</h1><div class="sub">Timer indépendant et personnalisable — WebView2 1.3</div></div><div class="sub">Hors ligne • sauvegarde automatique</div></div>
+  <div class="head"><div><h1>Bridge Timer</h1><div class="sub">Timer indépendant et personnalisable — WebView2 1.4</div></div><div class="sub">Hors ligne • sauvegarde automatique</div></div>
 
   <div class="card"><h2>Tournoi</h2><div class="grid">
     <label>Durée par position</label><div class="row3"><input id="hours" type="number" min="0" value="0" title="heures"><input id="minutes" type="number" min="0" max="59" value="7" title="minutes"><input id="seconds" type="number" min="0" max="59" value="0" title="secondes"></div>
@@ -98,8 +98,12 @@ body.fs #undoToast{bottom:78px}
       <label>Nom de l'événement<input id="eventName" type="text" value=""></label>
       <label>Couleur principale<input id="accent" type="color" value="#0ea5e9"></label>
       <label>Fond<input id="background" type="color" value="#0f172a"></label>
+      <label>Menu<input id="menu" type="color" value="#111827"></label>
+      <label>Texte<input id="text" type="color" value="#f8fafc"></label>
     </div>
-    <div style="margin-top:15px" class="grid"><label>Logo optionnel</label><div><input id="logoInput" type="file" accept="image/*"> <button id="removeLogo" class="btn" type="button">Retirer</button></div></div>
+    <div style="margin-top:15px" class="grid"><label>Logo optionnel</label><div><input id="logoInput" type="file" accept="image/*"> <button id="removeLogo" class="btn" type="button">Retirer</button></div>
+      <label>Palette</label><div><button id="resetColors" class="btn" type="button">Couleurs d’origine</button></div>
+    </div>
     <div class="actions">
       <button id="fresh" class="btn primary">Lancer / réinitialiser</button>
       <button id="apply" class="btn">Appliquer et revenir</button>
@@ -158,7 +162,7 @@ body.fs #undoToast{bottom:78px}
 
 <script>
 const $=id=>document.getElementById(id), KEY="bridgeTimerV2.settings", LKEY="bridgeTimerV2.logo", STATEKEY="bridgeTimerV3.state", PROFILEKEY="bridgeTimerWebView2.profiles";
-const def={hours:0,minutes:7,seconds:0,positions:6,startPosition:1,between:15,mode:"4",mainMessage:"Bonne partie !",endMessage:"Fin du tournoi — merci à tous !",jumpRound:0,jumpMessage:"ATTENTION : à cette position, les EO sautent une table",sound:true,warnMinutes:5,dangerMinutes:2,dangerMessage:"Merci de terminer la donne en cours",quickMessage:"Merci de saisir les scores",quickMessageSecs:15,projectionMonitor:1,clubName:"Bridge Club du Roy René",eventName:"",accent:"#0ea5e9",background:"#0f172a"};
+const def={hours:0,minutes:7,seconds:0,positions:6,startPosition:1,between:15,mode:"4",mainMessage:"Bonne partie !",endMessage:"Fin du tournoi — merci à tous !",jumpRound:0,jumpMessage:"ATTENTION : à cette position, les EO sautent une table",sound:true,warnMinutes:5,dangerMinutes:2,dangerMessage:"Merci de terminer la donne en cours",quickMessage:"Merci de saisir les scores",quickMessageSecs:15,projectionMonitor:1,clubName:"Bridge Club du Roy René",eventName:"",accent:"#0ea5e9",background:"#0f172a",menu:"#111827",text:"#f8fafc"};
 let s={...def},logoData="",profiles=[],st={pos:1,phase:"round",remaining:420,running:false,endAt:null,interval:null,started:false};let wakeLock=null,resumeAfterSettings=false,undoState=null,undoTimer=null,controlsTimer=null,tempMessageUntil=0,tempMessageTimer=null;
 const clamp=(n,a,b)=>Math.max(a,Math.min(b,n)), val=id=>Number($(id).value||0);
 function duration(){return s.hours*3600+s.minutes*60+s.seconds}
@@ -199,14 +203,47 @@ function tryRecoverState(){
 
 function fmt(x){x=Math.max(0,Math.ceil(x));let h=Math.floor(x/3600),m=Math.floor(x%3600/60),sec=x%60;return h?`${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}:${String(sec).padStart(2,"0")}`:`${String(m).padStart(2,"0")}:${String(sec).padStart(2,"0")}`}
 function read(){
- s={hours:clamp(val("hours"),0,12),minutes:clamp(val("minutes"),0,59),seconds:clamp(val("seconds"),0,59),positions:clamp(val("positions"),1,99),startPosition:clamp(val("startPosition"),1,99),between:clamp(val("between"),0,240),mode:$("mode").value,mainMessage:$("mainMessage").value.trim(),endMessage:$("endMessage").value.trim(),jumpRound:clamp(val("jumpRound"),0,99),jumpMessage:$("jumpMessage").value.trim(),sound:$("sound").checked,warnMinutes:clamp(val("warnMinutes"),0,60),dangerMinutes:clamp(val("dangerMinutes"),0,60),dangerMessage:$("dangerMessage").value.trim(),quickMessage:$("quickMessage").value.trim(),quickMessageSecs:clamp(val("quickMessageSecs"),1,300),projectionMonitor:Math.max(1,Number(s.projectionMonitor)||1),clubName:$("clubName").value.trim()||"Bridge Timer",eventName:$("eventName").value.trim(),accent:$("accent").value,background:$("background").value};
+ s={hours:clamp(val("hours"),0,12),minutes:clamp(val("minutes"),0,59),seconds:clamp(val("seconds"),0,59),positions:clamp(val("positions"),1,99),startPosition:clamp(val("startPosition"),1,99),between:clamp(val("between"),0,240),mode:$("mode").value,mainMessage:$("mainMessage").value.trim(),endMessage:$("endMessage").value.trim(),jumpRound:clamp(val("jumpRound"),0,99),jumpMessage:$("jumpMessage").value.trim(),sound:$("sound").checked,warnMinutes:clamp(val("warnMinutes"),0,60),dangerMinutes:clamp(val("dangerMinutes"),0,60),dangerMessage:$("dangerMessage").value.trim(),quickMessage:$("quickMessage").value.trim(),quickMessageSecs:clamp(val("quickMessageSecs"),1,300),projectionMonitor:Math.max(1,Number(s.projectionMonitor)||1),clubName:$("clubName").value.trim()||"Bridge Timer",eventName:$("eventName").value.trim(),accent:$("accent").value,background:$("background").value,menu:$("menu").value,text:$("text").value};
  s.startPosition=Math.min(s.startPosition,s.positions);if(s.warnMinutes&&s.dangerMinutes>s.warnMinutes)s.dangerMinutes=s.warnMinutes;theme()
 }
 function fill(){Object.entries(s).forEach(([k,v])=>{let e=$(k);if(e){if(e.type==="checkbox")e.checked=!!v;else e.value=v}});theme()}
-function theme(){document.documentElement.style.setProperty("--accent",s.accent);document.documentElement.style.setProperty("--bg",s.background);$("club").textContent=s.clubName;$("event").textContent=s.eventName;if(logoData){$("logo").src=logoData;$("logo").classList.remove("nol")}else{$("logo").classList.add("nol")}}
+function hexRgb(h){
+ h=String(h||"").replace("#","");if(h.length!==6)return [17,24,39];
+ return [parseInt(h.slice(0,2),16),parseInt(h.slice(2,4),16),parseInt(h.slice(4,6),16)]
+}
+function rgbHex(a){return "#"+a.map(x=>Math.max(0,Math.min(255,Math.round(x))).toString(16).padStart(2,"0")).join("")}
+function mixHex(a,b,p){const x=hexRgb(a),y=hexRgb(b);return rgbHex(x.map((v,i)=>v+(y[i]-v)*p))}
+function rgbaHex(h,a){const x=hexRgb(h);return "rgba("+x[0]+","+x[1]+","+x[2]+","+a+")"}
+function theme(){
+ const root=document.documentElement.style;
+ root.setProperty("--accent",s.accent);
+ root.setProperty("--bg",s.background);
+ root.setProperty("--text",s.text||def.text);
+ const menu=s.menu||def.menu;
+ if(menu.toLowerCase()===def.menu.toLowerCase()){
+   root.setProperty("--panel","#111827");root.setProperty("--field","#0b1220");root.setProperty("--button","#1f2937");
+   root.setProperty("--line","#334155");root.setProperty("--band","#0002");root.setProperty("--pausebg","#020617cc");
+   root.setProperty("--toastbg","#0b1220ee");root.setProperty("--track","#ffffff20");
+ }else{
+   root.setProperty("--panel",menu);
+   root.setProperty("--field",mixHex(menu,"#000000",.30));
+   root.setProperty("--button",mixHex(menu,"#ffffff",.10));
+   root.setProperty("--line",mixHex(menu,"#ffffff",.24));
+   root.setProperty("--band",rgbaHex(menu,.48));
+   root.setProperty("--pausebg",rgbaHex(mixHex(menu,"#000000",.50),.88));
+   root.setProperty("--toastbg",rgbaHex(mixHex(menu,"#000000",.30),.94));
+   root.setProperty("--track",rgbaHex(mixHex(menu,"#ffffff",.28),.42));
+ }
+ $("club").textContent=s.clubName;$("event").textContent=s.eventName;
+ if(logoData){$("logo").src=logoData;$("logo").classList.remove("nol")}else{$("logo").classList.add("nol")}
+}
 function save(){read();localStorage.setItem(KEY,JSON.stringify(s))}
 function load(){try{let x=JSON.parse(localStorage.getItem(KEY)||"null");if(x)s={...def,...x}}catch(e){}logoData=localStorage.getItem(LKEY)||"";fill()}
 
+function resetOriginalColors(){
+ s.accent=def.accent;s.background=def.background;s.menu=def.menu;s.text=def.text;
+ fill();save()
+}
 function emptyProfiles(){return [0,1,2].map(i=>({name:"Profil "+(i+1),data:null}))}
 function loadProfiles(){
  profiles=emptyProfiles();
@@ -446,6 +483,7 @@ for(let i=0;i<3;i++){
  $("profileClear"+i).onclick=()=>clearProfile(i);
  $("profileName"+i).onchange=()=>renameProfile(i)
 }
+$("resetColors").onclick=resetOriginalColors;
 $("exportConfig").onclick=exportConfiguration;
 $("importConfig").onclick=importConfiguration;
 $("messageBtn").onclick=showTempMessage;$("screenBtn").onclick=cycleNativeMonitor;$("settingsBtn").onclick=()=>showSettings(false);$("fsBtn").onclick=fs;$("pause").onclick=toggle;$("minus").onclick=()=>adjust(-60);$("plus").onclick=()=>adjust(60);$("next").onclick=next;$("resetRound").onclick=resetRound;$("undoBtn").onclick=undoNext;
