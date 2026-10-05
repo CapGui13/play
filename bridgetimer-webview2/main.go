@@ -113,6 +113,8 @@ var (
 	findWindowW = user32.NewProc("FindWindowW")
 	showWindow = user32.NewProc("ShowWindow")
 	setForegroundWindow = user32.NewProc("SetForegroundWindow")
+	setProcessDpiAwarenessContext = user32.NewProc("SetProcessDpiAwarenessContext")
+	setProcessDPIAware = user32.NewProc("SetProcessDPIAware")
 	monitorFromRect = user32.NewProc("MonitorFromRect")
 	createMutexW = kernel32.NewProc("CreateMutexW")
 	closeHandle = kernel32.NewProc("CloseHandle")
@@ -133,6 +135,22 @@ var (
 	selectedMonitor int
 	instanceMutex uintptr
 )
+
+func enableNativeDPIAwareness() {
+	// WebView2 must be created by a DPI-aware process. Otherwise Windows can
+	// bitmap-scale the whole composition surface, which visibly stair-steps
+	// the huge timer digits on 125%/150% displays.
+	const perMonitorAwareV2 = ^uintptr(3) // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 (-4)
+	if err := setProcessDpiAwarenessContext.Find(); err == nil {
+		if ok, _, _ := setProcessDpiAwarenessContext.Call(perMonitorAwareV2); ok != 0 {
+			return
+		}
+	}
+	// Fallback for older Windows.
+	if err := setProcessDPIAware.Find(); err == nil {
+		setProcessDPIAware.Call()
+	}
+}
 
 func appDataPath() string {
 	base := os.Getenv("LOCALAPPDATA")
@@ -554,6 +572,8 @@ func startLocalServer() (*http.Server, string, error) {
 func main() {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
+
+	enableNativeDPIAwareness()
 
 	if !acquireSingleInstance() {
 		return
