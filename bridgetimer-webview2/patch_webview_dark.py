@@ -1,11 +1,14 @@
 from pathlib import Path
 import subprocess
+import os
+import stat
 
 cache = Path(subprocess.check_output(['go','env','GOMODCACHE'], text=True).strip())
 roots = list((cache / 'github.com' / 'jchv').glob('go-webview2@*'))
 if not roots:
     raise SystemExit('go-webview2 module not found')
 p = roots[0] / 'webview.go'
+os.chmod(p, stat.S_IWRITE)
 src = p.read_text(encoding='utf-8')
 
 create_marker = 'func (w *webview) CreateWithOptions(opts WindowOptions) bool {'
