@@ -1504,11 +1504,9 @@ function uiToggleLedgerNames() {
     const mobileBiddingAnchor = captureHandDisplayOptionViewportAnchor();
     showLedgerNames = !showLedgerNames;
     saveBoolPref('bridgeBidShowLedgerNames', showLedgerNames);
-    const btn = document.getElementById('ledgerNamesToggleBtn');
-    if (btn) {
-        btn.classList.toggle('is-active', showLedgerNames);
-        btn.setAttribute('aria-pressed', showLedgerNames ? 'true' : 'false');
-    }
+    // Un seul endroit synchronise l'état des options, y compris après rotation
+    // et toute réactualisation de l'écran de jeu.
+    renderHandDisplayOptionButtons();
     if (deals) {
         renderAuctionLedger();
         // Voir échange avec Guillaume : le diagramme des 4 mains (buildAllHandsHtml)
@@ -1570,6 +1568,15 @@ function renderHandDisplayOptionButtons() {
     if (handStripBtn) {
         handStripBtn.classList.toggle('is-active', showHandStrip);
         handStripBtn.setAttribute('aria-pressed', showHandStrip ? 'true' : 'false');
+    }
+
+    // NOM fait partie des préférences locales, tout comme Bandeau/HCP/K&R.
+    // Il doit être réaffirmé à CHAQUE renderBoard(), notamment sur les deux
+    // navigateurs lorsqu'une rotation 90° déclenche un rafraîchissement.
+    const ledgerNamesBtn = document.getElementById('ledgerNamesToggleBtn');
+    if (ledgerNamesBtn) {
+        ledgerNamesBtn.classList.toggle('is-active', showLedgerNames);
+        ledgerNamesBtn.setAttribute('aria-pressed', showLedgerNames ? 'true' : 'false');
     }
 
     const hostSeeAllBtn = document.getElementById('hostSeeAllHandsBtn');

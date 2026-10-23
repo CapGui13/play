@@ -43,6 +43,9 @@ jobs:
       - name: Gate — copie du lien de salle sur mobile
         run: node tests/share-link-copy-gate.js
 
+      - name: Gate — persistance Noms après rotation 90°
+        run: node tests/rotation-ledger-names-gate.js
+
       - name: Gate — moteur BRL
         run: node tests/brl-engine-gate.js
 
