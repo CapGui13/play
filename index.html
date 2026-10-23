@@ -538,6 +538,9 @@
                 <button id="hcpToggleBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" data-ui-click="toggle-hcp" aria-pressed="false"><span class="btn-label-full">Afficher HCP</span><span class="btn-label-short">HCP</span></button>
                 <button id="krToggleBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" data-ui-click="toggle-kr" aria-pressed="false"><span class="btn-label-full">Afficher Kaplan-Rubens</span><span class="btn-label-short">K&amp;R</span></button>
                 <button id="hostSeeAllHandsBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" style="display:none;" data-ui-click="toggle-all-hands" title="Réservé à vous : ne change rien pour les autres joueurs" aria-pressed="false"><span class="btn-label-full">👁 Voir les 4 mains</span><span class="btn-label-short">👁 4 mains</span></button>
+                <!-- Option locale visible uniquement pendant le mode 4 mains : affiche le PAR
+                     sans clic supplementaire lorsqu'il devient disponible. -->
+                <button id="autoParFourHandsBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" style="display:none;" data-ui-click="toggle-auto-par-four-hands" title="Afficher automatiquement le PAR dès son calcul, uniquement dans votre vue 4 mains. Vous pouvez revenir aux enchères à tout moment." aria-pressed="false"><span class="btn-label-full">📊 PAR auto</span><span class="btn-label-short">PAR auto</span></button>
             </div>
             <!-- En desktop, Bandeau et Noms restent groupés dans la colonne centrale,
                  Bandeau immédiatement à gauche de Noms. Sur mobile, le wrapper disparaît
