@@ -545,18 +545,9 @@
                  visuellement (display:contents) afin que toutes les options restent sur la
                  même ligne horizontale, dans le même ordre. -->
             <div class="hand-display-options-right">
-                <!-- A cote du mode 4 mains, mais dans le groupe droit pour ne pas
-                     faire deborder les options du panneau gauche (620px). -->
-                <button id="autoParFourHandsBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" style="display:none;" data-ui-click="toggle-auto-par-four-hands" title="Afficher automatiquement le PAR dès son calcul, uniquement dans votre vue 4 mains. Vous pouvez revenir aux enchères à tout moment." aria-pressed="false"><span class="btn-label-full">📊 PAR auto</span><span class="btn-label-short">PAR auto</span></button>
                 <button id="handStripToggleBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" data-ui-click="toggle-hand-strip" aria-pressed="false" title="Afficher votre main sur une seule ligne"><span class="btn-label-full">Affichage bandeau</span><span class="btn-label-short">Bandeau</span></button>
                 <button id="ledgerNamesToggleBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" data-ui-click="toggle-ledger-names" aria-pressed="false"><span class="btn-label-full">Noms des joueurs</span><span class="btn-label-short">Noms</span></button>
             </div>
-        </div>
-
-        <!-- Sur mobile, PAR auto a sa propre ligne pour rester visible sans
-             devoir faire defiler horizontalement les options des mains. -->
-        <div id="autoParFourHandsMobileRow" class="auto-par-mobile-row">
-            <button id="autoParFourHandsMobileBtn" type="button" class="btn btn-secondary btn-small hand-option-btn" style="display:none;" data-ui-click="toggle-auto-par-four-hands" title="Afficher le PAR dès son calcul quand les 4 mains sont visibles" aria-pressed="false">📊 PAR auto</button>
         </div>
 
         <div class="game-content-row">
