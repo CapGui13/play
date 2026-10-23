@@ -42,12 +42,12 @@
     --suit-orange: #f0a04b;
     --suit-blue: #4f8de0;
 
-    /* Couleurs relationnelles : turquoise pour soi, mauve pour le partenaire,
-       orange pour les adversaires. Le vert et le rouge sont réservés aux
-       barres de vulnérabilité. */
+    /* Couleurs relationnelles : turquoise pour soi, bleu d'origine pour le
+       partenaire, orange franc pour les adversaires. Le vert et le rouge
+       restent reserves aux barres de vulnerabilite. */
     --relation-mine: #35d0c5;
-    --relation-partner: #b388ff;
-    --relation-opponent: #ffb347;
+    --relation-partner: #2f9dff;
+    --relation-opponent: #ff8c00;
 }
 
 @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Work+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap');
