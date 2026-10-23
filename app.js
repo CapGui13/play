@@ -1626,12 +1626,18 @@ function renderHandDisplayOptionButtons() {
         hostSeeAllBtn.setAttribute('aria-pressed', hostSeeAllHands ? 'true' : 'false');
     }
 
-    const autoParBtn = document.getElementById('autoParFourHandsBtn');
-    if (autoParBtn) {
-        autoParBtn.style.display = isFourHandsModeLocallyActive() ? '' : 'none';
+    const autoParAvailable = isFourHandsModeLocallyActive();
+    // Un meme etat pour le bouton desktop et sa version mobile, placee hors
+    // de la barre a scroll horizontal. Aucun changement de privilege.
+    for (const id of ['autoParFourHandsBtn', 'autoParFourHandsMobileBtn']) {
+        const autoParBtn = document.getElementById(id);
+        if (!autoParBtn) continue;
+        autoParBtn.style.display = autoParAvailable ? '' : 'none';
         autoParBtn.classList.toggle('is-active', autoParWithFourHands);
         autoParBtn.setAttribute('aria-pressed', autoParWithFourHands ? 'true' : 'false');
     }
+    const autoParMobileRow = document.getElementById('autoParFourHandsMobileRow');
+    if (autoParMobileRow) autoParMobileRow.classList.toggle('has-auto-par-option', autoParAvailable);
 }
 let deals = null;           // tableau de donnes parsées
 let boardIndex = 0;
