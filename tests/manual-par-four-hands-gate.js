@@ -125,4 +125,71 @@ assert(app.includes('function gotoBoard(newIndex) {\n    showParDuringAuction = 
     'navigation locale a perdu son reset PAR');
 c.showParDuringAuction = false;
 
+// Parcourir aussi les vrais blocs de réception P2P, avec les rendus/réseau simulés.
+// Le simple test de helper ne détecterait pas un appel oublié dans le switch.
+const networkContext = {
+    showParDuringAuction: true,
+    boardIndex: 0,
+    deals: [{ board: 1, auctionHistory: [] }, { board: 2, auctionHistory: [] }],
+    deferredRoomMode: false,
+    chatPanelOpen: true,
+    guestIndex: 0,
+    isNewJoiner: false,
+    recordSyncTrace() {},
+    rejectPeerProtocolMessage() { throw Error('message réseau valide rejeté'); },
+    clearUndoUiState() {},
+    renderBoard() { networkContext.rendered = (networkContext.rendered || 0) + 1; },
+    positionNextBoardAfterParNavigation() {},
+    relayIfHost() {},
+    enterGameScreen() { networkContext.entered = (networkContext.entered || 0) + 1; },
+    announceContractChanceCapability() {},
+    primeDeferredGuestCloudAccess() {},
+    startDeferredPolling() {},
+    uiToggleChat() { throw Error('ouverture du chat non attendue'); }
+};
+vm.createContext(networkContext);
+vm.runInContext(
+    remoteBoardHelper +
+    '\nfunction receiveBoardNetwork(msg) { switch (msg.type) {\n' +
+    gotoCase + '\n' + resyncCase + '\n} }',
+    networkContext
+);
+networkContext.receiveBoardNetwork({ type: 'goto-board', boardIndex: 1, auctionHistory: [] });
+assert(networkContext.boardIndex === 1 && networkContext.showParDuringAuction === false &&
+    networkContext.rendered === 1, 'goto-board distant laisse le PAR ouvert');
+
+networkContext.showParDuringAuction = true;
+networkContext.receiveBoardNetwork({ type: 'goto-board', boardIndex: 1, auctionHistory: [] });
+assert(networkContext.showParDuringAuction === true, 'reception du meme goto-board ferme le PAR');
+
+networkContext.receiveBoardNetwork({ type: 'goto-board', boardIndex: 999 });
+assert(networkContext.boardIndex === 1 && networkContext.showParDuringAuction,
+    'goto-board invalide modifie la vue');
+
+networkContext.deferredRoomMode = true;
+networkContext.receiveBoardNetwork({ type: 'goto-board', boardIndex: 0, auctionHistory: [] });
+assert(networkContext.boardIndex === 1 && networkContext.showParDuringAuction,
+    'goto-board en differe modifie une vue locale');
+
+networkContext.receiveBoardNetwork({
+    type: 'resync', deals: [{ board: 1, auctionHistory: [] }, { board: 2, auctionHistory: [] }],
+    boardIndex: 0, yourSeats: [], botSeats: [], deferredRoomMode: true
+});
+assert(networkContext.boardIndex === 1 && networkContext.showParDuringAuction,
+    'resync differe deplace la donne ou ferme un PAR manuel');
+
+networkContext.receiveBoardNetwork({
+    type: 'resync', deals: [{ board: 1, auctionHistory: [] }, { board: 2, auctionHistory: [] }],
+    boardIndex: 0, yourSeats: [], botSeats: [], deferredRoomMode: false
+});
+assert(networkContext.boardIndex === 0 && networkContext.showParDuringAuction === false,
+    'resync live ne remet pas les encheres lors du changement de donne');
+
+networkContext.showParDuringAuction = true;
+networkContext.receiveBoardNetwork({
+    type: 'resync', deals: [{ board: 1, auctionHistory: [] }, { board: 2, auctionHistory: [] }],
+    boardIndex: 0, yourSeats: [], botSeats: [], deferredRoomMode: false
+});
+assert(networkContext.showParDuringAuction === true, 'resync live de la meme donne ferme le PAR');
+
 console.log('PLAY PAR manuel / 4 mains gate PASS');
