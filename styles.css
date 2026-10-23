@@ -2539,6 +2539,11 @@ button.kibitz-chip {
     flex-shrink: 0;
 }
 
+/* Version mobile du PAR auto : masquee en desktop. */
+.auto-par-mobile-row {
+    display: none;
+}
+
 .hand-option-btn {
     opacity: 0.75;
 }
