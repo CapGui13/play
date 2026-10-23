@@ -42,11 +42,11 @@
     --suit-orange: #f0a04b;
     --suit-blue: #4f8de0;
 
-    /* Couleurs relationnelles : turquoise pour soi, bleu d'origine pour le
-       partenaire, orange franc pour les adversaires. Le vert et le rouge
-       restent reserves aux barres de vulnerabilite. */
-    --relation-mine: #35d0c5;
-    --relation-partner: #2f9dff;
+    /* Code couleur des places, du point de vue de chaque joueur :
+       bleu d'origine pour soi, mauve pour le partenaire, orange pour les
+       adversaires. Les barres de vulnerabilite gardent leur vert/rouge. */
+    --relation-mine: #2f9dff;
+    --relation-partner: #b388ff;
     --relation-opponent: #ff8c00;
 }
 
@@ -2745,9 +2745,9 @@ button.kibitz-chip {
 .ledger-seat-label.name-long { font-size: 0.78rem; }
 .ledger-seat-label.name-very-long { font-size: 0.68rem; }
 
-/* Le turquoise/mauve/orange suit l'identité relative de chaque joueur.
-   Sur le fond clair de la colonne active, la couleur est légèrement assombrie
-   pour conserver le contraste. */
+/* Le bleu/mauve/orange suit l'identite relative de chaque joueur.
+   Sur le fond clair de la colonne active, la teinte est assombrie
+   pour conserver un contraste lisible pendant le pulse. */
 .auction-ledger th.seat-relation-mine .ledger-seat-label { color: var(--relation-mine); }
 .auction-ledger th.seat-relation-partner .ledger-seat-label { color: var(--relation-partner); }
 .auction-ledger th.seat-relation-opponent .ledger-seat-label { color: var(--relation-opponent); }
@@ -2756,15 +2756,15 @@ button.kibitz-chip {
 .auction-ledger th.turn-col.seat-relation-partner .ledger-seat-label { color: color-mix(in srgb, var(--relation-partner) 70%, var(--card)); }
 .auction-ledger th.turn-col.seat-relation-opponent .ledger-seat-label { color: color-mix(in srgb, var(--relation-opponent) 70%, var(--card)); }
 
-/* Tour en cours : conserver la couleur d'identite du joueur et faire pulser
-   uniquement son intensite, sans vert ni changement de teinte. */
+/* Le nom du joueur actif pulse en restant dans sa couleur (bleu pour soi).
+   Un ecart doux d'opacite evite de faire disparaitre les pseudos sur fond clair. */
 .auction-ledger th.turn-col.local-turn-attention .ledger-seat-label {
     animation: turn-name-pulse 2.4s ease-in-out infinite;
 }
 
 @keyframes turn-name-pulse {
     0%, 100% { opacity: 1; }
-    50% { opacity: 0.55; }
+    50% { opacity: 0.82; }
 }
 
 .vuln-bar {
@@ -2825,14 +2825,15 @@ button.kibitz-chip {
     border: 1px solid var(--border);
 }
 
-/* Toutes les cases sous le joueur dont c'est le tour pulsent vers le rouge. */
+/* La colonne d'encheres du joueur actif pulse en bleu feutre, pas en rouge.
+   La teinte est moderee pour ne pas masquer les annonces. */
 .auction-ledger td.turn-column-cell {
-    animation: turn-column-red-pulse 2.4s ease-in-out infinite;
+    animation: turn-column-accent-pulse 2.4s ease-in-out infinite;
 }
 
-@keyframes turn-column-red-pulse {
+@keyframes turn-column-accent-pulse {
     0%, 100% { background-color: var(--card); }
-    50% { background-color: #6b1f24; }
+    50% { background-color: color-mix(in srgb, var(--relation-mine) 22%, var(--card)); }
 }
 
 /* Flash bref sur la toute dernière enchère jouée (voir renderAuctionLedger dans app.js,
@@ -3229,21 +3230,18 @@ table.dd-table td.dd-secondary-contract {
     border-radius: 6px;
 }
 
-/* Voir échange avec Guillaume ("À vous d'enchérir devrait avoir une couleur plus
-   marquée") : le vert précédent (color-mix avec #2f8f5b) se fondait trop dans le feutre
-   vert profond du fond (--felt-deep/--bg). Basculé sur l'accent doré déjà établi dans
-   l'identité visuelle de l'app (--brass-bright), qui tranche nettement mieux sur ce fond
-   — plus lisible en un coup d'œil, sans introduire une couleur étrangère à la palette. */
+/* Les rappels "A vous d'encherir" et la boite d'encheres partagent un
+   halo bleu doux, synchronise avec le nom et la colonne d'encheres. */
 .turn-indicator.my-turn {
-    background: color-mix(in srgb, var(--brass-bright) 26%, var(--card));
-    color: var(--brass-bright);
+    background: color-mix(in srgb, var(--relation-mine) 18%, var(--card));
+    color: var(--relation-mine);
     font-weight: 700;
     animation: turn-glow 2.4s ease-in-out infinite;
 }
 
 @keyframes turn-glow {
-    0%, 100% { box-shadow: 0 0 0 0 rgba(224, 188, 74, 0); }
-    50% { box-shadow: 0 0 14px 2px rgba(224, 188, 74, 0.45); }
+    0%, 100% { box-shadow: 0 0 0 0 rgba(47, 157, 255, 0); }
+    50% { box-shadow: 0 0 12px 2px rgba(47, 157, 255, 0.32); }
 }
 
 .turn-indicator.their-turn {
@@ -3378,7 +3376,7 @@ table.dd-table td.dd-secondary-contract {
 }
 
 .room-board-wizz-btn.is-confirmed {
-    background: rgba(61, 220, 115, 0.28);
+    background: color-mix(in srgb, var(--relation-mine) 20%, transparent);
     outline: 2px solid var(--relation-mine);
     outline-offset: 1px;
     animation: wizz-bell-confirm 0.5s ease-out both;
