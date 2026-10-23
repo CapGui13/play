@@ -9958,6 +9958,7 @@ const PEER_TYPES_FROM_GUEST = new Set([
     'call',
     'chat',
     'wizz',
+    'wizz-ack',
     'undo-request',
     'become-host-ready',
     'become-host-failed',
@@ -9978,6 +9979,7 @@ const PEER_TYPES_FROM_HOST = new Set([
     'call',
     'chat',
     'wizz',
+    'wizz-ack',
     'precalc-board',
     'dd-result',
     'contract-chance-result',
@@ -10646,33 +10648,11 @@ function handlePeerData(msg, guestIndex) {
         // invités) ; un invité, lui, ne reçoit jamais un wizz qui ne lui est pas destiné
         // (l'hôte a déjà fait ce tri avant de relayer), donc l'applique directement.
         case 'wizz': {
-            let wizzMsg = msg;
-            if (myRole === 'host') {
-                const senderId = authenticatedGuestId(guestIndex);
-                const sender = participants.find(p => p.id === senderId);
-                if (!senderId || !sender) {
-                    rejectPeerProtocolMessage(msg, guestIndex, 'wizz provenant d’une identité inconnue');
-                    break;
-                }
-                wizzMsg = { ...msg, senderName: sender.name };
-            }
-            if (myRole === 'host' && wizzMsg.targetId !== 'host') {
-                const targetGuestIndex = guestIndexByToken[wizzMsg.targetId];
-                // Voir échange avec Guillaume ("le wizz ne marche pas, aucune trace même
-                // juste après") : trace ajoutée ici aussi — si le relais échoue
-                // silencieusement (cible plus dans guestIndexByToken, ou send() qui
-                // échoue contre une connexion pas tout à fait ouverte), rien ne le disait
-                // jusqu'ici.
-                if (targetGuestIndex !== undefined) {
-                    peerConn.send(wizzMsg, targetGuestIndex);
-                    pushDebugLog(`Wizz reçu de ${wizzMsg.senderName || '?'}, relayé vers ${wizzMsg.targetId.slice(0, 10)}… (index ${targetGuestIndex}).`);
-                } else {
-                    pushDebugLog(`Wizz reçu de ${wizzMsg.senderName || '?'} pour ${wizzMsg.targetId.slice(0, 10)}… : relais abandonné, cible plus dans guestIndexByToken.`);
-                }
-                break;
-            }
-            pushDebugLog(`Wizz reçu de ${wizzMsg.senderName || '?'} — déclenchement de l'effet.`);
-            triggerWizzEffect();
+            handleIncomingWizz(msg, guestIndex);
+            break;
+        }
+        case 'wizz-ack': {
+            handleIncomingWizzAck(msg, guestIndex);
             break;
         }
 
@@ -12103,63 +12083,190 @@ function isWizzTargetReachable(targetId) {
     return peerConn.isConnected();
 }
 
-function uiSendWizz(targetId) {
-    // Voir échange avec Guillaume ("le wizz ne marche pas, aucune trace dans le journal
-    // même juste après avoir cliqué") : log de départ ajouté ici, avant même le premier
-    // retour anticipé — jusqu'ici, seul le cas "connexion pas encore prête" laissait une
-    // trace ; tous les autres retours silencieux (peerConn absent, cooldown, envoi
-    // "réussi" mais peut-être jamais reçu côté destinataire) ne laissaient absolument
-    // rien, rendant impossible de savoir jusqu'où le clic était allé.
-    pushDebugLog(`Wizz vers ${targetId.slice(0, 10)}… : clic reçu.`);
-    if (!peerConn) {
-        pushDebugLog(`Wizz vers ${targetId.slice(0, 10)}… abandonné : aucune connexion (peerConn absent).`);
+// Un accusé de réception est émis PAR le destinataire après déclenchement de
+// l'effet. L'expéditeur ne confond donc plus "envoyé au réseau" et "reçu".
+const WIZZ_RECEIPT_WAIT_MS = 5500;
+let wizzRequestSequence = 0;
+const pendingWizzReceipts = new Map(); // id -> { targetId, name, timeoutId }
+
+function wizzTargetName(targetId) {
+    const participant = participants.find(p => p.id === targetId);
+    return participant && participant.name ? participant.name : 'ce joueur';
+}
+
+function showWizzSenderFeedback(text, status = 'sending') {
+    let toast = document.getElementById('wizzSenderToast');
+    if (!toast) {
+        toast = document.createElement('div');
+        toast.id = 'wizzSenderToast';
+        toast.className = 'wizz-sender-toast';
+        toast.setAttribute('role', 'status');
+        toast.setAttribute('aria-live', 'polite');
+        document.body.appendChild(toast);
+    }
+    toast.textContent = text;
+    toast.className = 'wizz-sender-toast is-' + status + ' visible';
+    clearTimeout(toast._hideTimer);
+    // L'état "en attente" reste affiché jusqu'au reçu ou au timeout.
+    if (status !== 'sending') {
+        toast._hideTimer = setTimeout(() => toast.classList.remove('visible'), 3300);
+    }
+}
+
+function animateWizzBell(button, className = 'is-ringing') {
+    if (!button || !button.classList) return;
+    button.classList.remove(className);
+    void button.offsetWidth;
+    button.classList.add(className);
+    setTimeout(() => button.classList.remove(className), 850);
+}
+
+function confirmWizzReceipt(requestId, recipientId) {
+    const pending = pendingWizzReceipts.get(requestId);
+    if (!pending || pending.targetId !== recipientId) return false;
+    clearTimeout(pending.timeoutId);
+    pendingWizzReceipts.delete(requestId);
+    showWizzSenderFeedback('✅ ' + pending.name + ' a reçu le wizz !', 'received');
+    // Le panneau peut avoir été reconstruit entre-temps : retrouver la bonne cloche.
+    document.querySelectorAll('[data-ui-click="send-wizz"]').forEach(button => {
+        if (button.dataset.participantId === recipientId) {
+            animateWizzBell(button, 'is-confirmed');
+        }
+    });
+    pushDebugLog('Wizz : accusé de réception de ' + pending.name + '.');
+    return true;
+}
+
+function handleIncomingWizz(msg, guestIndex) {
+    let validMsg = msg;
+    if (myRole === 'host') {
+        const senderId = authenticatedGuestId(guestIndex);
+        const sender = participants.find(p => p.id === senderId);
+        if (!senderId || !sender) {
+            rejectPeerProtocolMessage(msg, guestIndex, 'wizz provenant d’une identité inconnue');
+            return;
+        }
+        // L'identité reçue ne peut pas être choisie arbitrairement par l'invité.
+        validMsg = { ...msg, senderId, senderName: sender.name };
+    }
+    if (myRole === 'host' && validMsg.targetId !== myParticipantId) {
+        const targetIndex = guestIndexByToken[validMsg.targetId];
+        const targetConn = targetIndex === undefined ? null : peerConn.conns && peerConn.conns[targetIndex];
+        if (targetConn && targetConn.open) {
+            peerConn.send(validMsg, targetIndex);
+            pushDebugLog('Wizz relayé vers ' + validMsg.targetId.slice(0, 10) + '…');
+        } else {
+            pushDebugLog('Wizz non relayé : destinataire déconnecté.');
+        }
         return;
     }
-    if (targetId === myParticipantId) {
-        pushDebugLog(`Wizz vers ${targetId.slice(0, 10)}… abandonné : cible = moi-même (ne devrait pas arriver depuis ce bouton).`);
+    if (validMsg.targetId !== myParticipantId) return;
+
+    triggerWizzEffect();
+    // Ancienne version de PLAY : pas de requestId, on conserve tout de même l'effet.
+    if (typeof validMsg.requestId !== 'string' || !/^[a-z0-9-]{1,80}$/i.test(validMsg.requestId)) return;
+    const senderId = myRole === 'host' ? authenticatedGuestId(guestIndex) : validMsg.senderId;
+    if (typeof senderId !== 'string' || !senderId || !peerConn) return;
+    const receipt = {
+        type: 'wizz-ack',
+        requestId: validMsg.requestId,
+        senderId,
+        recipientId: myParticipantId
+    };
+    try {
+        if (myRole === 'host') peerConn.send(receipt, guestIndex);
+        else peerConn.send(receipt);
+    } catch (err) {
+        pushDebugLog('Wizz : envoi accusé de réception impossible : ' + String(err));
+    }
+}
+
+function handleIncomingWizzAck(msg, guestIndex) {
+    if (typeof msg.requestId !== 'string' || !/^[a-z0-9-]{1,80}$/i.test(msg.requestId)) return;
+    if (typeof msg.senderId !== 'string' || typeof msg.recipientId !== 'string') return;
+    if (myRole === 'host') {
+        const actualRecipient = authenticatedGuestId(guestIndex);
+        if (!actualRecipient || msg.recipientId !== actualRecipient) {
+            rejectPeerProtocolMessage(msg, guestIndex, 'accusé de réception wizz invalide');
+            return;
+        }
+        if (msg.senderId === myParticipantId) {
+            confirmWizzReceipt(msg.requestId, actualRecipient);
+            return;
+        }
+        // Wizz invité -> invité : relais de l'accusé seulement vers son expéditeur.
+        const senderIndex = guestIndexByToken[msg.senderId];
+        const conn = senderIndex === undefined ? null : peerConn.conns && peerConn.conns[senderIndex];
+        if (conn && conn.open) {
+            peerConn.send({
+                type: 'wizz-ack', requestId: msg.requestId,
+                senderId: msg.senderId, recipientId: actualRecipient
+            }, senderIndex);
+        }
+        return;
+    }
+    if (myRole === 'guest' && msg.senderId === myParticipantId) {
+        confirmWizzReceipt(msg.requestId, msg.recipientId);
+    }
+}
+
+function uiSendWizz(targetId, triggerBtn) {
+    if (typeof targetId !== 'string' || !targetId) return;
+    const name = wizzTargetName(targetId);
+    const fail = reason => {
+        showWizzSenderFeedback('⚠️ ' + reason, 'error');
+        pushDebugLog('Wizz vers ' + targetId.slice(0, 10) + '… : ' + reason);
+    };
+    if (!peerConn || targetId === myParticipantId) {
+        fail('Wizz impossible pour ' + name);
         return;
     }
     const now = Date.now();
     if (wizzCooldownUntil[targetId] && now < wizzCooldownUntil[targetId]) {
-        pushDebugLog(`Wizz vers ${targetId.slice(0, 10)}… abandonné : encore en sablier (${Math.ceil((wizzCooldownUntil[targetId] - now) / 1000)}s restantes).`);
+        fail('Patiente un instant avant de re-wizzer ' + name);
         return;
     }
-
-    // Voir échange avec Guillaume (session du 8 août — "le wizz ne marchait plus, je
-    // pouvais juste pas le faire") : bug trouvé — le cooldown était posé AVANT même de
-    // savoir si l'envoi allait réussir. peerConn.send() abandonne silencieusement un
-    // message si la connexion cible n'est pas encore pleinement ouverte (voir conn.open
-    // dans peer-connection.js) — un cas plausible juste après une reconnexion, où le
-    // statut semble déjà "connecté" mais la DataConnection elle-même termine encore son
-    // établissement. Sans ce contrôle, un envoi raté posait quand même le cooldown,
-    // empêchant toute nouvelle tentative pendant 4s de plus, alors que rien n'était
-    // jamais parti.
     if (!isWizzTargetReachable(targetId)) {
-        pushDebugLog(`Wizz vers ${targetId.slice(0, 10)}… abandonné : connexion pas encore prête.`);
+        fail('Connexion avec ' + name + ' indisponible');
         return;
     }
-    wizzCooldownUntil[targetId] = now + WIZZ_COOLDOWN_MS;
 
     const me = participants.find(p => p.id === myParticipantId);
     const senderName = me ? me.name : '?';
-    const msg = { type: 'wizz', targetId, senderName };
+    const requestId = now.toString(36) + '-' + (++wizzRequestSequence).toString(36)
+        + '-' + Math.random().toString(36).slice(2, 10);
+    const msg = { type: 'wizz', targetId, senderId: myParticipantId, senderName, requestId };
 
-    if (myRole === 'host') {
-        // L'hôte connaît directement la connexion du destinataire : envoi ciblé, pas de
-        // relais nécessaire.
-        const guestIndex = guestIndexByToken[targetId];
-        if (guestIndex === undefined) {
-            pushDebugLog(`Wizz vers ${targetId.slice(0, 10)}… abandonné : plus dans guestIndexByToken (déconnecté entre-temps ?).`);
-            return; // plus connecté entre-temps, tant pis
+    try {
+        if (myRole === 'host') {
+            const targetIndex = guestIndexByToken[targetId];
+            const conn = targetIndex === undefined ? null : peerConn.conns && peerConn.conns[targetIndex];
+            if (!conn || !conn.open) {
+                fail('Connexion avec ' + name + ' indisponible');
+                return;
+            }
+            peerConn.send(msg, targetIndex);
+        } else {
+            peerConn.send(msg);
         }
-        peerConn.send(msg, guestIndex);
-        pushDebugLog(`Wizz vers ${targetId.slice(0, 10)}… envoyé (ciblé, index ${guestIndex}).`);
-    } else {
-        // Invité : un seul destinataire réseau possible (l'hôte), qui relaiera si besoin
-        // (voir handlePeerData, cas 'wizz' avec targetId !== 'host').
-        peerConn.send(msg);
-        pushDebugLog(`Wizz vers ${targetId.slice(0, 10)}… envoyé à l'hôte (à charge pour lui de relayer si besoin).`);
+    } catch (err) {
+        fail('Envoi vers ' + name + ' impossible');
+        pushDebugLog('Wizz : ' + String(err));
+        return;
     }
+
+    // Le cooldown ne s'applique qu'APRÈS la tentative d'envoi effective.
+    wizzCooldownUntil[targetId] = now + WIZZ_COOLDOWN_MS;
+    animateWizzBell(triggerBtn);
+    showWizzSenderFeedback('🔔 Wizz envoyé à ' + name + '…', 'sending');
+    const timeoutId = setTimeout(() => {
+        if (!pendingWizzReceipts.has(requestId)) return;
+        pendingWizzReceipts.delete(requestId);
+        showWizzSenderFeedback('⚠️ Pas de confirmation de ' + name, 'error');
+        pushDebugLog('Wizz : pas d’accusé de réception de ' + name + '.');
+    }, WIZZ_RECEIPT_WAIT_MS);
+    pendingWizzReceipts.set(requestId, { targetId, name, timeoutId });
+    pushDebugLog('Wizz vers ' + targetId.slice(0, 10) + '… transmis au réseau ; attente de réception.');
 }
 
 // Effet visuel + sonore reçu quand on se fait wizzer : tremblement bref de l'écran et un
@@ -12186,17 +12293,17 @@ function triggerWizzEffect() {
         document.documentElement.style.overflow = 'hidden';
         const animation = document.body.animate([
             { transform: 'translate(0, 0)' },
-            { transform: 'translate(-6px, 2px)' },
-            { transform: 'translate(5px, -3px)' },
-            { transform: 'translate(-5px, -2px)' },
-            { transform: 'translate(6px, 3px)' },
-            { transform: 'translate(-4px, 2px)' },
-            { transform: 'translate(4px, -2px)' },
-            { transform: 'translate(-3px, 1px)' },
-            { transform: 'translate(3px, -1px)' },
+            { transform: 'translate(-10px, 3px) rotate(-0.4deg)' },
+            { transform: 'translate(9px, -4px) rotate(0.4deg)' },
+            { transform: 'translate(-9px, -3px) rotate(-0.35deg)' },
+            { transform: 'translate(10px, 4px) rotate(0.35deg)' },
+            { transform: 'translate(-7px, 3px)' },
+            { transform: 'translate(7px, -2px)' },
+            { transform: 'translate(-4px, 1px)' },
+            { transform: 'translate(4px, -1px)' },
             { transform: 'translate(-2px, 1px)' },
             { transform: 'translate(0, 0)' }
-        ], { duration: 1200, easing: 'ease-in-out' });
+        ], { duration: 850, easing: 'ease-in-out' });
         animation.finished.then(() => {
             document.documentElement.style.overflow = previousOverflow;
         }).catch(() => {

@@ -111,7 +111,7 @@
             }
             case 'transfer-host': return call('uiTransferHost', el.dataset.participantId || '');
             case 'self-wizz': return call('uiSelfWizz');
-            case 'send-wizz': return call('uiSendWizz', el.dataset.participantId || '');
+            case 'send-wizz': return call('uiSendWizz', el.dataset.participantId || '', el);
             case 'select-bid-level': return call('uiSelectBidLevel', Number(el.dataset.level));
             case 'select-bid-strain': return call('uiSelectBidStrain', el.dataset.strain || '');
             case 'make-call': return call('uiMakeCall', el.dataset.call || '');

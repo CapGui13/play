@@ -3367,12 +3367,72 @@ table.dd-table td.dd-secondary-contract {
     border-radius: 4px;
     padding: 1px 4px;
     margin-left: 2px;
+    transform-origin: 50% 10%;
     transition: background 0.15s ease;
 }
 
 .room-board-wizz-btn:hover,
 .room-board-wizz-btn:active {
     background: rgba(224, 188, 74, 0.18);
+}
+
+.room-board-wizz-btn.is-ringing {
+    background: rgba(224, 188, 74, 0.32);
+    animation: wizz-bell-ring 0.65s ease-out both;
+}
+
+.room-board-wizz-btn.is-confirmed {
+    background: rgba(61, 220, 115, 0.28);
+    outline: 2px solid var(--relation-mine);
+    outline-offset: 1px;
+    animation: wizz-bell-confirm 0.5s ease-out both;
+}
+
+@keyframes wizz-bell-ring {
+    0%, 100% { transform: rotate(0) scale(1); }
+    15%, 45% { transform: rotate(22deg) scale(1.22); }
+    30%, 60% { transform: rotate(-22deg) scale(1.22); }
+    75% { transform: rotate(9deg) scale(1.06); }
+}
+@keyframes wizz-bell-confirm {
+    0% { transform: scale(1); }
+    50% { transform: scale(1.35); }
+    100% { transform: scale(1); }
+}
+
+/* Retour visible côté expéditeur. Seul un reçu P2P autorise le statut vert. */
+.wizz-sender-toast {
+    position: fixed;
+    bottom: calc(20px + env(safe-area-inset-bottom, 0px));
+    left: 50%;
+    transform: translateX(-50%) translateY(12px);
+    z-index: 510;
+    max-width: min(92vw, 390px);
+    padding: 11px 16px;
+    border: 1px solid var(--brass);
+    border-radius: 12px;
+    background: var(--card);
+    color: var(--cream);
+    font-weight: 700;
+    font-size: 0.88rem;
+    line-height: 1.35;
+    text-align: center;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.38);
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.2s ease, transform 0.2s ease;
+}
+.wizz-sender-toast.visible {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+}
+.wizz-sender-toast.is-received { border-color: var(--relation-mine); }
+.wizz-sender-toast.is-error { border-color: var(--suit-red); }
+
+@media (prefers-reduced-motion: reduce) {
+    .room-board-wizz-btn.is-ringing,
+    .room-board-wizz-btn.is-confirmed { animation: none; }
+    .wizz-sender-toast { transition: none; }
 }
 
 /* Bandeau temporaire annonçant qui a envoyé le wizz (voir flashWizzToast) : centré en

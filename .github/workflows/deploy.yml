@@ -46,6 +46,9 @@ jobs:
       - name: Gate — persistance Noms après rotation 90°
         run: node tests/rotation-ledger-names-gate.js
 
+      - name: Gate — retour et accusé de réception du wizz
+        run: node tests/wizz-feedback-gate.js
+
       - name: Gate — moteur BRL
         run: node tests/brl-engine-gate.js
 
