@@ -3808,6 +3808,26 @@ table.dd-table td.dd-secondary-contract {
         white-space: nowrap;
     }
 
+    /* Le PAR auto ne doit plus disparaitre a droite dans le scroll horizontal
+       (barre de defilement intentionnellement masquee). On le place juste en
+       dessous, sur une ligne mobile visible, sans toucher aux autres options. */
+    .hand-display-options #autoParFourHandsBtn {
+        display: none !important;
+    }
+
+    .auto-par-mobile-row.has-auto-par-option {
+        display: flex;
+        align-items: center;
+        justify-content: flex-start;
+        margin: 0 0 9px;
+    }
+
+    .auto-par-mobile-row .hand-option-btn {
+        padding: 6px 11px;
+        font-size: 0.78rem;
+        min-height: 36px;
+        white-space: nowrap;
+    }
 
     /* Indicateur de tour resserré (padding/police réduits). */
     #turnIndicator {
