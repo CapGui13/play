@@ -75,7 +75,7 @@ const ctx = {
     },
     document: {
         getElementById(){ return el.id==='wizzSenderToast'?el:null; },
-        createElement(){return {...el,setAttribute() {}};},
+        createElement(){return el;},
         body:{appendChild(e){el.id=e.id;}},
         querySelectorAll(){return [bell];}
     },
@@ -131,6 +131,8 @@ assert.strictEqual(sends.at(-1).msg.recipientId,'g2');
 ctx.myRole='host';ctx.myParticipantId='host';ctx.peerConn={
  conns:[{open:true},{open:true}],send(msg,index){sends.push({msg,index});}
 };
+// Avance logique du cooldown pour tester un deuxième envoi indépendant.
+ctx.wizzCooldownUntil.g2 = 0;
 ctx.uiSendWizz('g2',bell);
 const lastId=sends.at(-1).msg.requestId;
 const pending=ctx.pendingWizzReceipts.get(lastId);
