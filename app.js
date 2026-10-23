@@ -14198,6 +14198,21 @@ function restoreMobileAuctionEndViewportAnchor(anchor) {
     });
 }
 
+// Synchronise la vue PAR automatique sur la seule donne courante. Le clic manuel
+// "Voir les encheres" pose un veto pour cette donne, jamais pour les suivantes.
+// Le PAR ne peut etre revele qu'une fois le DD reel disponible.
+function syncAutoParForCurrentDeal(deal, showAllHandsEarly, canViewParDuringAuction, ddTableHtml) {
+    if (autoParOpenedDeal === deal && (!autoParWithFourHands || !showAllHandsEarly || !canViewParDuringAuction)) {
+        showParDuringAuction = false;
+        autoParOpenedDeal = null;
+    }
+    if (ddTableHtml && autoParWithFourHands && showAllHandsEarly &&
+        canViewParDuringAuction && autoParDismissedDeal !== deal && !showParDuringAuction) {
+        showParDuringAuction = true;
+        autoParOpenedDeal = deal;
+    }
+}
+
 function uiToggleParBiddingView() {
     if (!deals || isAuctionOver(auctionHistory)) return;
     const deal = currentDeal();
@@ -14252,18 +14267,7 @@ function checkAuctionEnd(renderOptions = {}) {
         const toggleBtn = document.getElementById('parBiddingToggleBtn');
         const ddTableHtml = canViewParDuringAuction ? renderDDTable(deal.ddTable, deal.vulnerable) : '';
 
-        // L'arrivee du DD de cette donne declenche le PAR automatiquement
-        // uniquement si les 4 mains sont encore visibles et que l'utilisateur
-        // n'a pas explicitement choisi de revenir aux encheres sur cette donne.
-        if (autoParOpenedDeal === deal && (!autoParWithFourHands || !showAllHandsEarly || !canViewParDuringAuction)) {
-            showParDuringAuction = false;
-            autoParOpenedDeal = null;
-        }
-        if (ddTableHtml && autoParWithFourHands && showAllHandsEarly &&
-            canViewParDuringAuction && autoParDismissedDeal !== deal && !showParDuringAuction) {
-            showParDuringAuction = true;
-            autoParOpenedDeal = deal;
-        }
+        syncAutoParForCurrentDeal(deal, showAllHandsEarly, canViewParDuringAuction, ddTableHtml);
 
         if (showAllHandsEarly) {
             const wasDiagramHidden = getComputedStyle(diagramEl).display === 'none';
