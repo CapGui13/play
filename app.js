@@ -7742,27 +7742,93 @@ function renderReconnectButton() {
 }
 
 let copyShareLinkTimeoutId = null;
-// `triggerBtn` : l'élément bouton qui vient de déclencher la copie, pour y afficher la
-// confirmation temporaire au bon endroit — repli sur le bouton du salon (copyShareLinkBtn)
-// si appelé sans argument, pour ne rien casser des appels existants.
+let copyShareLinkFeedbackBtn = null;
+let copyShareLinkFeedbackLabel = null;
+
+// Un même lien peut être copié depuis le salon ou depuis l'en-tête de partie.
+// Même en cas de doubles clics / changement de bouton, restaurer le bon libellé.
+function showShareLinkCopyStatus(triggerBtn, message) {
+    const btn = triggerBtn || document.getElementById('copyShareLinkBtn');
+    if (!btn) return;
+    if (copyShareLinkTimeoutId !== null) clearTimeout(copyShareLinkTimeoutId);
+    if (copyShareLinkFeedbackBtn && copyShareLinkFeedbackBtn !== btn) {
+        copyShareLinkFeedbackBtn.textContent = copyShareLinkFeedbackLabel;
+    }
+    if (copyShareLinkFeedbackBtn !== btn) copyShareLinkFeedbackLabel = btn.textContent;
+    copyShareLinkFeedbackBtn = btn;
+    btn.textContent = message;
+    copyShareLinkTimeoutId = setTimeout(() => {
+        if (copyShareLinkFeedbackBtn !== btn) return;
+        btn.textContent = copyShareLinkFeedbackLabel;
+        copyShareLinkFeedbackBtn = null;
+        copyShareLinkFeedbackLabel = null;
+        copyShareLinkTimeoutId = null;
+    }, 2200);
+}
+
+// Secours pour Safari/iOS ancien et les navigateurs sans Clipboard API.
+// Doit être tenté immédiatement pendant le clic lorsque l'API moderne est absente.
+function tryLegacyShareLinkCopy(link) {
+    const helper = document.createElement('textarea');
+    helper.value = link;
+    helper.style.position = 'fixed';
+    helper.style.left = '0';
+    helper.style.top = '0';
+    helper.style.width = '1px';
+    helper.style.height = '1px';
+    helper.style.opacity = '0';
+    helper.style.fontSize = '16px'; // évite le zoom automatique iOS sur focus
+    document.body.appendChild(helper);
+    try {
+        helper.focus();
+        helper.select();
+        helper.setSelectionRange(0, link.length);
+        return document.execCommand('copy') === true;
+    } catch (_) {
+        return false;
+    } finally {
+        document.body.removeChild(helper);
+    }
+}
+
+// Ne pas sélectionner shareLinkInput avant l'appel à writeText : ce champ est
+// volontairement invisible et la sélection peut interférer avec l'activation mobile.
 function uiCopyShareLink(triggerBtn) {
     const input = document.getElementById('shareLinkInput');
-    input.select();
-    input.setSelectionRange(0, 99999);
-    if (!navigator.clipboard) return;
+    let link = input && input.value ? input.value.trim() : '';
+    if (!link && currentRoomCode) {
+        try {
+            link = buildRoomShareUrl(currentRoomCode).toString();
+            if (input) input.value = link;
+        } catch (_) { /* code absent ou invalide */ }
+    }
+    if (!link) {
+        showShareLinkCopyStatus(triggerBtn, '⚠️ Lien indisponible');
+        return;
+    }
 
-    navigator.clipboard.writeText(input.value).then(() => {
-        // Confirmation temporaire directement sur le bouton (pas de toast à part à
-        // gérer) : le libellé change le temps d'un instant, puis revient à la normale.
-        const btn = triggerBtn || document.getElementById('copyShareLinkBtn');
-        if (!btn) return;
-        const originalLabel = btn.textContent;
-        clearTimeout(copyShareLinkTimeoutId);
-        btn.textContent = '✅ Lien copié !';
-        copyShareLinkTimeoutId = setTimeout(() => {
-            btn.textContent = originalLabel;
-        }, 1800);
-    }).catch(() => { /* échec silencieux (permission navigateur, etc.) : pas de fausse confirmation */ });
+    const success = () => showShareLinkCopyStatus(triggerBtn, '✅ Lien copié !');
+    const failure = () => {
+        if (tryLegacyShareLinkCopy(link)) {
+            success();
+            return;
+        }
+        showShareLinkCopyStatus(triggerBtn, '⚠️ Copie manuelle');
+        // Dernier recours : l'utilisateur peut sélectionner/copier ce lien lui-même.
+        // Ne jamais laisser un échec de permission navigateur sans explication.
+        if (typeof window.prompt === 'function') {
+            window.prompt('Copie ce lien (appui long puis Copier) :', link);
+        }
+    };
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+        try {
+            Promise.resolve(navigator.clipboard.writeText(link)).then(success, failure);
+        } catch (_) {
+            failure();
+        }
+    } else {
+        failure();
+    }
 }
 
 // ===== Salon d'attente =====
