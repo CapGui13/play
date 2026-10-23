@@ -2745,26 +2745,35 @@ button.kibitz-chip {
 .ledger-seat-label.name-long { font-size: 0.78rem; }
 .ledger-seat-label.name-very-long { font-size: 0.68rem; }
 
-/* Le bleu/mauve/orange suit l'identite relative de chaque joueur.
-   Sur le fond clair de la colonne active, la teinte est assombrie
-   pour conserver un contraste lisible pendant le pulse. */
+/* Teintes relationnelles vives sur fond sombre ; sur la colonne active
+   (fond creme), utiliser les variantes foncees validees pour garantir
+   au moins 4.5:1 de contraste, sans changer la palette ailleurs. */
 .auction-ledger th.seat-relation-mine .ledger-seat-label { color: var(--relation-mine); }
 .auction-ledger th.seat-relation-partner .ledger-seat-label { color: var(--relation-partner); }
 .auction-ledger th.seat-relation-opponent .ledger-seat-label { color: var(--relation-opponent); }
 
-.auction-ledger th.turn-col.seat-relation-mine .ledger-seat-label { color: color-mix(in srgb, var(--relation-mine) 70%, var(--card)); }
-.auction-ledger th.turn-col.seat-relation-partner .ledger-seat-label { color: color-mix(in srgb, var(--relation-partner) 70%, var(--card)); }
-.auction-ledger th.turn-col.seat-relation-opponent .ledger-seat-label { color: color-mix(in srgb, var(--relation-opponent) 70%, var(--card)); }
+.auction-ledger th.turn-col.seat-relation-mine .ledger-seat-label {
+    color: #26679b;
+    --turn-name-glow: rgba(38, 103, 155, 0.28);
+}
+.auction-ledger th.turn-col.seat-relation-partner .ledger-seat-label {
+    color: #6f5b9b;
+    --turn-name-glow: rgba(111, 91, 155, 0.28);
+}
+.auction-ledger th.turn-col.seat-relation-opponent .ledger-seat-label {
+    color: #995d0e;
+    --turn-name-glow: rgba(153, 93, 14, 0.28);
+}
 
-/* Le nom du joueur actif pulse en restant dans sa couleur (bleu pour soi).
-   Un ecart doux d'opacite evite de faire disparaitre les pseudos sur fond clair. */
+/* Pulse sur le halo du nom actif (meme cycle 2.4s), jamais sur l'opacite
+   des lettres : le contraste du texte reste stable tout au long du tour. */
 .auction-ledger th.turn-col.local-turn-attention .ledger-seat-label {
     animation: turn-name-pulse 2.4s ease-in-out infinite;
 }
 
 @keyframes turn-name-pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.82; }
+    0%, 100% { text-shadow: 0 0 0 transparent; }
+    50% { text-shadow: 0 0 3px var(--turn-name-glow, rgba(38, 103, 155, 0.28)); }
 }
 
 .vuln-bar {
