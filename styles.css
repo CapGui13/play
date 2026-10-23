@@ -2761,14 +2761,15 @@ button.kibitz-chip {
 .auction-ledger th.turn-col.seat-relation-partner .ledger-seat-label { color: color-mix(in srgb, var(--relation-partner) 70%, var(--card)); }
 .auction-ledger th.turn-col.seat-relation-opponent .ledger-seat-label { color: color-mix(in srgb, var(--relation-opponent) 70%, var(--card)); }
 
-/* Tour en cours : le nom pulse du vert vers presque noir, tout en gardant le fond clair. */
+/* Tour en cours : conserver la couleur d'identite du joueur et faire pulser
+   uniquement son intensite, sans vert ni changement de teinte. */
 .auction-ledger th.turn-col.local-turn-attention .ledger-seat-label {
     animation: turn-name-pulse 2.4s ease-in-out infinite;
 }
 
 @keyframes turn-name-pulse {
-    0%, 100% { color: #22c55e; }
-    50% { color: #101612; }
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.55; }
 }
 
 .vuln-bar {
