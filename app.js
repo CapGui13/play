@@ -1213,8 +1213,12 @@ let showLedgerNames = loadBoolPref('bridgeBidShowLedgerNames', false); // noms d
 // (Hôte uniquement) Voir les 4 mains à tout moment pendant la partie, même en pleine
 // enchère — voir uiToggleHostSeeAllHands. Jamais envoyé aux autres joueurs.
 let hostSeeAllHands = loadBoolPref('bridgeBidHostSeeAllHands', false);
-// Pendant une enchère avec les 4 mains visibles et un PAR disponible : false = enchères, true = PAR.
+// PAR auto : option locale, desactivee par defaut. Ne modifie pas les vues des autres.
+let autoParWithFourHands = loadBoolPref('bridgeBidAutoParFourHands', false);
+// Enchere/PAR courant et choix manuel "Voir les encheres" pour cette donne.
 let showParDuringAuction = false;
+let autoParOpenedDeal = null;
+let autoParDismissedDeal = null;
 let allPassInProgress = false;
 
 const FRENCH_RANK_LETTER = { K: 'R', Q: 'D', J: 'V', T: 'X' };
@@ -1545,6 +1549,35 @@ function uiToggleHostSeeAllHands() {
     else scheduleMobileLedgerViewportRestore(mobileViewportAnchor);
 }
 
+// Le mode 4 mains peut etre demande par le vrai hote ou deja actif chez un kibbitz.
+function isFourHandsModeLocallyActive() {
+    return !!deals && ((isTrueOriginalHost() && hostSeeAllHands) || isKibbitz());
+}
+
+// Le PAR exact reste normalement cache si l'analyse statistique est active.
+// Seule l'option explicite PAR auto, pendant l'affichage des 4 mains, leve cette
+// restriction sur l'appareil autorise a voir les quatre mains.
+function canViewExactParDuringAuction(deal, fourHandsEarly) {
+    return !!deal && (isTrueOriginalHost() || isKibbitz()) &&
+        (!deal.statisticalParMode || (autoParWithFourHands && fourHandsEarly));
+}
+
+function uiToggleAutoParFourHands() {
+    if (!isFourHandsModeLocallyActive()) return;
+    const deal = currentDeal();
+    autoParWithFourHands = !autoParWithFourHands;
+    saveBoolPref('bridgeBidAutoParFourHands', autoParWithFourHands);
+    autoParDismissedDeal = null;
+    // Desactiver l'option restaure les encheres uniquement si l'ouverture du
+    // PAR etait automatique, sans annuler un PAR ouvert manuellement.
+    if (!autoParWithFourHands && autoParOpenedDeal === deal) {
+        showParDuringAuction = false;
+        autoParOpenedDeal = null;
+    }
+    renderHandDisplayOptionButtons();
+    checkAuctionEnd();
+}
+
 function renderHandDisplayOptionButtons() {
     const frBtn = document.getElementById('frenchRanksToggleBtn');
     if (frBtn) {
@@ -1591,6 +1624,13 @@ function renderHandDisplayOptionButtons() {
         hostSeeAllBtn.style.display = isTrueOriginalHost() ? '' : 'none';
         hostSeeAllBtn.classList.toggle('is-active', hostSeeAllHands);
         hostSeeAllBtn.setAttribute('aria-pressed', hostSeeAllHands ? 'true' : 'false');
+    }
+
+    const autoParBtn = document.getElementById('autoParFourHandsBtn');
+    if (autoParBtn) {
+        autoParBtn.style.display = isFourHandsModeLocallyActive() ? '' : 'none';
+        autoParBtn.classList.toggle('is-active', autoParWithFourHands);
+        autoParBtn.setAttribute('aria-pressed', autoParWithFourHands ? 'true' : 'false');
     }
 }
 let deals = null;           // tableau de donnes parsées
@@ -14007,6 +14047,8 @@ let lastAuctionVisualMode = null;
 // première donne entraient alors dans le crossfade de 325 ms, perçu comme une latence.
 function resetAuctionVisualModeForNewSession() {
     lastAuctionVisualMode = null;
+    autoParOpenedDeal = null;
+    autoParDismissedDeal = null;
     const stack = document.getElementById('auctionViewStack');
     const resultEl = document.getElementById('contractResult');
     const biddingViewEl = document.getElementById('auctionBiddingView');
@@ -14158,12 +14200,14 @@ function restoreMobileAuctionEndViewportAnchor(anchor) {
 
 function uiToggleParBiddingView() {
     if (!deals || isAuctionOver(auctionHistory)) return;
-    // Le PAR pendant l'enchère est un privilège du vrai hôte, même s'il n'a PAS activé
-    // « Voir les 4 mains ». Un kibbitz y a également accès. Ne pas lier ce bouton à
-    // hostSeeAllHands : sinon l'hôte peut perdre le bouton alors qu'il reste l'organisateur.
-    const canViewParDuringAuction = isTrueOriginalHost() || isKibbitz();
-    if (!canViewParDuringAuction || !currentDeal() || !currentDeal().ddTable) return;
-    showParDuringAuction = !showParDuringAuction;
+    const deal = currentDeal();
+    if (!canViewExactParDuringAuction(deal, isFourHandsModeLocallyActive()) || !deal.ddTable) return;
+    const wasShowingPar = showParDuringAuction;
+    showParDuringAuction = !wasShowingPar;
+    autoParOpenedDeal = null;
+    // "Voir les encheres" est toujours prioritaire pour la donne courante :
+    // ne pas reactiver le PAR auto au prochain rafraichissement reseau.
+    autoParDismissedDeal = (wasShowingPar && autoParWithFourHands) ? deal : null;
     renderBiddingBox();
     checkAuctionEnd();
 }
@@ -14199,14 +14243,27 @@ function checkAuctionEnd(renderOptions = {}) {
     const showAllHandsEarly = hostForcedReveal || isKibbitz();
     // Avec les chances statistiques systématiquement actives, le vrai DD/PAR de la
     // distribution réelle reste masqué pendant l'enchère pour ne pas contaminer l'analyse.
-    const statisticalModeActive = !!(currentDeal() && currentDeal().statisticalParMode);
-    const canViewParDuringAuction = !statisticalModeActive && (isTrueOriginalHost() || isKibbitz());
+    const deal = currentDeal();
+    const canViewParDuringAuction = canViewExactParDuringAuction(deal, showAllHandsEarly);
 
     if (!auctionOver) {
         const myHandsEl = document.getElementById('myHandsContainer');
         const toggleWrap = document.getElementById('parBiddingToggleWrap');
         const toggleBtn = document.getElementById('parBiddingToggleBtn');
-        const ddTableHtml = canViewParDuringAuction ? renderDDTable(currentDeal().ddTable, currentDeal().vulnerable) : '';
+        const ddTableHtml = canViewParDuringAuction ? renderDDTable(deal.ddTable, deal.vulnerable) : '';
+
+        // L'arrivee du DD de cette donne declenche le PAR automatiquement
+        // uniquement si les 4 mains sont encore visibles et que l'utilisateur
+        // n'a pas explicitement choisi de revenir aux encheres sur cette donne.
+        if (autoParOpenedDeal === deal && (!autoParWithFourHands || !showAllHandsEarly || !canViewParDuringAuction)) {
+            showParDuringAuction = false;
+            autoParOpenedDeal = null;
+        }
+        if (ddTableHtml && autoParWithFourHands && showAllHandsEarly &&
+            canViewParDuringAuction && autoParDismissedDeal !== deal && !showParDuringAuction) {
+            showParDuringAuction = true;
+            autoParOpenedDeal = deal;
+        }
 
         if (showAllHandsEarly) {
             const wasDiagramHidden = getComputedStyle(diagramEl).display === 'none';
