@@ -136,7 +136,7 @@ const networkContext = {
     guestIndex: 0,
     isNewJoiner: false,
     recordSyncTrace() {},
-    rejectPeerProtocolMessage() { throw Error('message réseau valide rejeté'); },
+    rejectPeerProtocolMessage() { networkContext.rejected = (networkContext.rejected || 0) + 1; },
     clearUndoUiState() {},
     renderBoard() { networkContext.rendered = (networkContext.rendered || 0) + 1; },
     positionNextBoardAfterParNavigation() {},
