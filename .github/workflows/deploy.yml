@@ -40,8 +40,8 @@ jobs:
       - name: Gate — non-régression PLAY (courante)
         run: node tests/regression-gate.js
 
-      - name: Gate — PAR automatique dans Voir les 4 mains
-        run: node tests/auto-par-four-hands-gate.js
+      - name: Gate — PAR manuel dans Voir les 4 mains
+        run: node tests/manual-par-four-hands-gate.js
 
       - name: Gate — copie du lien de salle sur mobile
         run: node tests/share-link-copy-gate.js
