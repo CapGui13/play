@@ -3998,6 +3998,16 @@ table.dd-table td.dd-secondary-contract {
     min-width: 0;
 }
 
+/* Reouverture des 4 mains en cours d'enchere : pas de PAR transitoire.
+   La pile garde sa geometrie normale. Cette protection n'est activee que
+   pendant le rendu de l'option 4 mains ; le fondu manuel reste intact. */
+.auction-view-stack.suppress-par-reveal > .contract-result {
+    opacity: 0 !important;
+    visibility: hidden !important;
+    pointer-events: none !important;
+    transition: none !important;
+}
+
 .auction-bidding-view {
     min-width: 0;
 }
