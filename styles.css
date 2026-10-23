@@ -42,13 +42,12 @@
     --suit-orange: #f0a04b;
     --suit-blue: #4f8de0;
 
-    /* Voir échange avec Guillaume ("chaque joueur voit son nom en vert, son partenaire en
-       bleu, les 2 adversaires en rouge — pas des couleurs ternes, bien vives") : distinctes
-       des --suit-* ci-dessus (volontairement plus sourdes, pensées pour du texte de
-       couleur de carte, pas pour une alerte relationnelle qui doit sauter aux yeux). */
-    --relation-mine: #3ddc73;
-    --relation-partner: #2f9dff;
-    --relation-opponent: #ff4d4d;
+    /* Couleurs relationnelles : turquoise pour soi, mauve pour le partenaire,
+       orange pour les adversaires. Le vert et le rouge sont réservés aux
+       barres de vulnérabilité. */
+    --relation-mine: #35d0c5;
+    --relation-partner: #b388ff;
+    --relation-opponent: #ffb347;
 }
 
 @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Work+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap');
@@ -2746,13 +2745,9 @@ button.kibitz-chip {
 .ledger-seat-label.name-long { font-size: 0.78rem; }
 .ledger-seat-label.name-very-long { font-size: 0.68rem; }
 
-/* Voir échange avec Guillaume ("chaque joueur voit son nom en vert, son partenaire en
-   bleu, les 2 adversaires en rouge — bien vives") : posées sur le <th> (voir
-   seatRelationClass dans app.js), pas seulement sur .ledger-seat-label, pour pouvoir
-   ajuster le contraste quand ce même siège a AUSSI turn-col (fond clair inversé, voir
-   règle .turn-col plus haut) — un vert/bleu/rouge pensé pour un fond sombre perd trop de
-   lisibilité tel quel sur fond clair, donc légèrement assombri dans ce cas précis
-   (color-mix vers --card) plutôt que réutilisé identique. */
+/* Le turquoise/mauve/orange suit l'identité relative de chaque joueur.
+   Sur le fond clair de la colonne active, la couleur est légèrement assombrie
+   pour conserver le contraste. */
 .auction-ledger th.seat-relation-mine .ledger-seat-label { color: var(--relation-mine); }
 .auction-ledger th.seat-relation-partner .ledger-seat-label { color: var(--relation-partner); }
 .auction-ledger th.seat-relation-opponent .ledger-seat-label { color: var(--relation-opponent); }
