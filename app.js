@@ -1547,10 +1547,34 @@ function uiToggleHostSeeAllHands() {
     const mobileViewportAnchor = parViewActive
         ? captureVisibleMobileViewportAnchor(document.querySelector('.auction-panel'))
         : captureMobileLedgerViewportAnchor();
+
+    // Lorsque les 4 mains sont reactives pendant que les encheres sont visibles,
+    // le panneau PAR peut repasser en display:block pour reserver sa hauteur.
+    // Sur mobile, sa transition d'opacite de 325 ms laissait voir le PAR furtivement.
+    // Le masquer de facon stricte pendant CE rendu seulement, puis restaurer les
+    // transitions habituelles une fois le layout stabilise.
+    const reopeningIntoBidding = !hostSeeAllHands && !parViewActive &&
+        !!deals && !isAuctionOver(auctionHistory);
+    const auctionStack = reopeningIntoBidding
+        ? document.getElementById('auctionViewStack') : null;
+    if (auctionStack) {
+        showParDuringAuction = false;
+        auctionStack.classList.add('suppress-par-reveal');
+    }
+
     hostSeeAllHands = !hostSeeAllHands;
     saveBoolPref('bridgeBidHostSeeAllHands', hostSeeAllHands);
     renderHandDisplayOptionButtons();
-    if (deals) checkAuctionEnd();
+    try {
+        if (deals) checkAuctionEnd();
+    } finally {
+        if (auctionStack) {
+            // Force le navigateur a valider l'etat masque AVANT de rendre
+            // l'animation a la bascule explicite Voir le PAR / Voir les encheres.
+            void auctionStack.offsetWidth;
+            auctionStack.classList.remove('suppress-par-reveal');
+        }
+    }
     if (parViewActive) restoreVisibleMobileViewportAnchor(mobileViewportAnchor);
     else scheduleMobileLedgerViewportRestore(mobileViewportAnchor);
 }
