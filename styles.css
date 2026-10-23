@@ -2539,11 +2539,6 @@ button.kibitz-chip {
     flex-shrink: 0;
 }
 
-/* Version mobile du PAR auto : masquee en desktop. */
-.auto-par-mobile-row {
-    display: none;
-}
-
 .hand-option-btn {
     opacity: 0.75;
 }
@@ -3805,27 +3800,6 @@ table.dd-table td.dd-secondary-contract {
         padding: 4px 6px;
         font-size: 0.68rem;
         flex: 0 0 auto;
-        white-space: nowrap;
-    }
-
-    /* Le PAR auto ne doit plus disparaitre a droite dans le scroll horizontal
-       (barre de defilement intentionnellement masquee). On le place juste en
-       dessous, sur une ligne mobile visible, sans toucher aux autres options. */
-    .hand-display-options #autoParFourHandsBtn {
-        display: none !important;
-    }
-
-    .auto-par-mobile-row.has-auto-par-option {
-        display: flex;
-        align-items: center;
-        justify-content: flex-start;
-        margin: 0 0 9px;
-    }
-
-    .auto-par-mobile-row .hand-option-btn {
-        padding: 6px 11px;
-        font-size: 0.78rem;
-        min-height: 36px;
         white-space: nowrap;
     }
 
