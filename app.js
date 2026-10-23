@@ -1215,6 +1215,16 @@ let showLedgerNames = loadBoolPref('bridgeBidShowLedgerNames', false); // noms d
 let hostSeeAllHands = loadBoolPref('bridgeBidHostSeeAllHands', false);
 // Vue PAR durant l'enchere : activation manuelle par "Voir le PAR".
 let showParDuringAuction = false;
+
+// Un changement de donne recu du reseau doit revenir aux encheres, comme gotoBoard()
+// le fait deja sur l'appareil de l'hote. Un simple resync de la MEME donne ne doit pas
+// fermer un PAR que l'utilisateur vient d'ouvrir volontairement.
+function resetParViewOnRemoteBoardChange(previousIndex, nextIndex, previousBoardNumber, nextBoardNumber) {
+    if (previousIndex !== nextIndex || previousBoardNumber !== nextBoardNumber) {
+        showParDuringAuction = false;
+    }
+}
+
 let allPassInProgress = false;
 
 const FRENCH_RANK_LETTER = { K: 'R', Q: 'D', J: 'V', T: 'X' };
@@ -10528,6 +10538,8 @@ function handlePeerData(msg, guestIndex) {
             // l'hôte reste l'autorité de table partagée.
             const localBoardBeforeResync = Number.isInteger(boardIndex) ? boardIndex : 0;
             const hadLocalGameBeforeResync = Array.isArray(deals) && deals.length > 0;
+            const previousBoardNumber = hadLocalGameBeforeResync && deals[localBoardBeforeResync]
+                ? deals[localBoardBeforeResync].board : null;
             deals = msg.deals;
             mySeats = msg.yourSeats;
             autoPassSeats = msg.botSeats || [];
@@ -10539,6 +10551,10 @@ function handlePeerData(msg, guestIndex) {
             } else {
                 boardIndex = Number.isInteger(msg.boardIndex) && deals[msg.boardIndex] ? msg.boardIndex : 0;
             }
+            resetParViewOnRemoteBoardChange(
+                localBoardBeforeResync, boardIndex, previousBoardNumber, deals[boardIndex].board
+            );
+            if (!hadLocalGameBeforeResync) showParDuringAuction = false;
             if (!deals[boardIndex].auctionHistory) deals[boardIndex].auctionHistory = [];
             auctionHistory = deals[boardIndex].auctionHistory;
             // Voir ARCHITECTURE-P2P-SERVEUR.md (étape 4) : voir le commentaire
@@ -10819,6 +10835,11 @@ function handlePeerData(msg, guestIndex) {
                 rejectPeerProtocolMessage(msg, guestIndex, 'index de donne invalide');
                 break;
             }
+            resetParViewOnRemoteBoardChange(
+                boardIndex, targetBoardIndex,
+                deals[boardIndex] ? deals[boardIndex].board : null,
+                deals[targetBoardIndex].board
+            );
             boardIndex = targetBoardIndex;
             // Depuis le pré-calcul progressif au lancement, goto-board transporte aussi
             // l'historique AUTORITAIRE de la donne cible. Ainsi un saut très rapide vers
