@@ -46,11 +46,11 @@ const c = {
     isTrueOriginalHost: () => true,
     isKibbitz: () => false,
     isAuctionOver: () => false,
-    currentDeal() { return this.current; },
+    currentDeal() { return c.current; },
     renderBiddingBox() {},
     checkAuctionEnd() {},
     renderHandDisplayOptionButtons() {},
-    saveBoolPref(k, v) { this.saved = [k, v]; }
+    saveBoolPref(k, v) { c.saved = [k, v]; }
 };
 vm.createContext(c);
 vm.runInContext([
