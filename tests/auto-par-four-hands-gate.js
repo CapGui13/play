@@ -9,6 +9,7 @@ const root = path.join(__dirname, '..');
 const app = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
 const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 const ui = fs.readFileSync(path.join(root, 'ui-events.js'), 'utf8');
+const css = fs.readFileSync(path.join(root, 'styles.css'), 'utf8');
 
 function extract(name) {
     const start = app.indexOf('function ' + name + '(');
@@ -104,5 +105,55 @@ c.uiToggleParBiddingView();
 assert(c.showParDuringAuction === true, 'PAR manuel non accessible quand auto desactive');
 c.uiToggleAutoParFourHands(); // reactiver option ne doit pas casser la selection manuelle
 assert(c.showParDuringAuction === true, 'activation de PAR auto ferme un PAR manuel');
+
+// Rendu mobile : la barre existante scrolle horizontalement avec scrollbar
+// cachee. Le controle mobile doit donc exister hors de cette barre et etre
+// synchronise avec le bouton desktop et les memes autorisations.
+assert(html.includes('id="autoParFourHandsMobileRow"') &&
+    html.includes('id="autoParFourHandsMobileBtn"'), 'controle mobile manquant');
+assert(html.indexOf('id="autoParFourHandsMobileRow"') > html.indexOf('class="hand-display-options"') &&
+    html.indexOf('id="autoParFourHandsMobileRow"') < html.indexOf('class="game-content-row"'),
+    'controle mobile non place entre options et mains');
+assert(css.includes('.hand-display-options #autoParFourHandsBtn') &&
+    css.includes('display: none !important;') &&
+    css.includes('.auto-par-mobile-row.has-auto-par-option'),
+    'CSS mobile PAR auto non protege contre scroll horizontal');
+
+const makeElement = () => ({
+    style: { display: 'none' },
+    classList: {
+        states: new Map(),
+        toggle(key, value) { this.states.set(key, value); }
+    },
+    attrs: {},
+    setAttribute(key, value) { this.attrs[key] = value; }
+});
+const desktopOption = makeElement();
+const mobileOption = makeElement();
+const mobileRow = makeElement();
+const elements = {
+    autoParFourHandsBtn: desktopOption,
+    autoParFourHandsMobileBtn: mobileOption,
+    autoParFourHandsMobileRow: mobileRow
+};
+c.document = { getElementById: id => elements[id] || null };
+c.useFrenchRanks = false;
+c.showHcp = false;
+c.showKr = false;
+c.showHandStrip = false;
+c.showLedgerNames = false;
+vm.runInContext(extract('renderHandDisplayOptionButtons'), c);
+c.renderHandDisplayOptionButtons();
+for (const btn of [desktopOption, mobileOption]) {
+    assert(btn.style.display === '', 'PAR auto non affiche avec 4 mains actives');
+    assert(btn.attrs['aria-pressed'] === 'true', 'etat PAR auto non synchronise');
+}
+assert(mobileRow.classList.states.get('has-auto-par-option'), 'ligne PAR auto mobile non revelee');
+c.hostSeeAllHands = false;
+c.renderHandDisplayOptionButtons();
+for (const btn of [desktopOption, mobileOption]) {
+    assert(btn.style.display === 'none', 'PAR auto visible sans mode 4 mains');
+}
+assert(!mobileRow.classList.states.get('has-auto-par-option'), 'ligne mobile visible sans 4 mains');
 
 console.log('PLAY PAR auto / 4 mains gate PASS');
