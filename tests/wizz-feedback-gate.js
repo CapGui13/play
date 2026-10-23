@@ -139,4 +139,29 @@ const pending=ctx.pendingWizzReceipts.get(lastId);
 timers.get(pending.timeoutId).fn();
 assert.strictEqual(el.textContent,'⚠️ Pas de confirmation de Bob');
 assert(!ctx.pendingWizzReceipts.has(lastId));
+// Le bandeau d'envoi est ancré exactement comme celui de réception :
+function cssBlock(selector) {
+    const begin = css.indexOf(selector + ' {');
+    assert(begin >= 0, 'Bloc CSS absent : ' + selector);
+    const end = css.indexOf('}', begin);
+    assert(end > begin, 'Bloc CSS incomplet : ' + selector);
+    return css.slice(begin, end);
+}
+function cssValue(selector, property) {
+    const line = cssBlock(selector).split('\n').find(line => line.trim().startsWith(property + ':'));
+    assert(line, property + ' absent dans ' + selector);
+    return line.split(':').slice(1).join(':').replace(';', '').trim();
+}
+for (const [sender, recipient, props] of [
+    ['.wizz-sender-toast', '.wizz-toast', ['position', 'top', 'left', 'transform']],
+    ['.wizz-sender-toast.visible', '.wizz-toast.visible', ['transform']]
+]) {
+    for (const prop of props) {
+        assert.strictEqual(cssValue(sender, prop), cssValue(recipient, prop),
+            'Bandeaux envoi/réception non alignés : ' + prop);
+    }
+}
+assert(!cssBlock('.wizz-sender-toast').includes('bottom:'),
+    'Le retour d’envoi ne doit plus s’afficher en bas');
+
 console.log('PLAY : Wizz confirmation P2P/feedback gate PASS');

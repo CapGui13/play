@@ -3402,10 +3402,11 @@ table.dd-table td.dd-secondary-contract {
 
 /* Retour visible côté expéditeur. Seul un reçu P2P autorise le statut vert. */
 .wizz-sender-toast {
+    /* Même position et même entrée que le message du wizz reçu. */
     position: fixed;
-    bottom: calc(20px + env(safe-area-inset-bottom, 0px));
+    top: 14px;
     left: 50%;
-    transform: translateX(-50%) translateY(12px);
+    transform: translateX(-50%) translateY(-20px);
     z-index: 510;
     max-width: min(92vw, 390px);
     padding: 11px 16px;
