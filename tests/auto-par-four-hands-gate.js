@@ -42,6 +42,7 @@ const c = {
     showParDuringAuction: false,
     current: board1,
     deals: [board1, board2],
+    auctionHistory: [],
     isTrueOriginalHost: () => true,
     isKibbitz: () => false,
     isAuctionOver: () => false,
