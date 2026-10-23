@@ -93,4 +93,36 @@ c.isKibbitz = () => true;
 assert(c.canViewExactParDuringAuction(deal, true), 'PAR refuse au spectateur');
 assert(c.isFourHandsModeLocallyActive(), '4 mains refuses au spectateur');
 
+// Régression PAR après déplacement réseau : seuls les changements de donne
+// réinitialisent la bascule manuelle, comme le chemin local gotoBoard().
+const remoteBoardHelper = extract('resetParViewOnRemoteBoardChange');
+vm.runInContext(remoteBoardHelper, c);
+c.showParDuringAuction = true;
+c.resetParViewOnRemoteBoardChange(0, 0, 1, 1); // resync sans mouvement
+assert(c.showParDuringAuction, 'resync sur la meme donne ferme le PAR manuel');
+c.resetParViewOnRemoteBoardChange(0, 1, 1, 2);
+assert(!c.showParDuringAuction, 'goto-board distant conserve le PAR ancien');
+
+c.showParDuringAuction = true;
+c.resetParViewOnRemoteBoardChange(0, 0, 1, 2); // snapshot remplace la donne
+assert(!c.showParDuringAuction, 'resync remplacant la donne conserve le PAR ancien');
+
+c.showParDuringAuction = true;
+c.resetParViewOnRemoteBoardChange(0, 0, 2, 2); // meme donne : preference conservee
+assert(c.showParDuringAuction, 'double reception sur la meme donne change la vue');
+
+const gotoCase = app.slice(app.indexOf("case 'goto-board': {"), app.indexOf('// --- Demande d\'annulation', app.indexOf("case 'goto-board': {")));
+const resyncCase = app.slice(app.indexOf("case 'resync': {"), app.indexOf("case 'call': {", app.indexOf("case 'resync': {")));
+assert(gotoCase.includes('resetParViewOnRemoteBoardChange('), 'goto-board distant sans reset PAR');
+assert(gotoCase.indexOf('resetParViewOnRemoteBoardChange(') < gotoCase.indexOf('boardIndex = targetBoardIndex'),
+    'reset du PAR effectue apres le changement de donne');
+assert(gotoCase.indexOf('if (deferredRoomMode)') < gotoCase.indexOf('resetParViewOnRemoteBoardChange('),
+    'reception differee modifie le PAR alors que goto-board doit etre ignore');
+assert(resyncCase.includes('resetParViewOnRemoteBoardChange(') &&
+    resyncCase.indexOf('resetParViewOnRemoteBoardChange(') < resyncCase.indexOf('enterGameScreen();'),
+    'resync ne restaure pas le PAR avant le rendu');
+assert(app.includes('function gotoBoard(newIndex) {\n    showParDuringAuction = false;'),
+    'navigation locale a perdu son reset PAR');
+c.showParDuringAuction = false;
+
 console.log('PLAY PAR manuel / 4 mains gate PASS');
