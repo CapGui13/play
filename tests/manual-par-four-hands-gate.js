@@ -192,4 +192,72 @@ networkContext.receiveBoardNetwork({
 });
 assert(networkContext.showParDuringAuction === true, 'resync live de la meme donne ferme le PAR');
 
+
+// Regres​sion visuelle : reactivation des 4 mains ne doit pas faire clignoter
+// le panneau PAR lorsqu'il revient dans la pile d'affichage mobile.
+assert(css.includes('.auction-view-stack.suppress-par-reveal > .contract-result') &&
+    css.includes('visibility: hidden !important;') &&
+    css.includes('transition: none !important;'),
+    'PAR non masque pendant la reactivation de Voir les 4 mains');
+assert(css.includes('transition: opacity var(--ui-view-fade-duration) ease;'),
+    'le fondu normal du bouton PAR a ete supprime');
+
+function classListStub() {
+    const values = new Set();
+    return {
+        add(key) { values.add(key); },
+        remove(key) { values.delete(key); },
+        contains(key) { return values.has(key); }
+    };
+}
+const stackForReveal = { classList: classListStub(), offsetWidth: 350 };
+const reveal = {
+    deals: [deal],
+    auctionHistory: [],
+    hostSeeAllHands: false,
+    showParDuringAuction: true, // peut provenir d'une ancienne vue
+    isTrueOriginalHost: () => true,
+    isAuctionParViewActive: () => false,
+    captureMobileLedgerViewportAnchor: () => null,
+    captureVisibleMobileViewportAnchor: () => null,
+    isAuctionOver: () => false,
+    document: {
+        getElementById(id) { return id === 'auctionViewStack' ? stackForReveal : null; },
+        querySelector() { return null; }
+    },
+    saveBoolPref() {},
+    renderHandDisplayOptionButtons() {},
+    scheduleMobileLedgerViewportRestore() {},
+    restoreVisibleMobileViewportAnchor() {},
+    checkAuctionEnd() {
+        reveal.renderCount = (reveal.renderCount || 0) + 1;
+        reveal.suppressedDuringRender = stackForReveal.classList.contains('suppress-par-reveal');
+    }
+};
+vm.createContext(reveal);
+vm.runInContext(extract('uiToggleHostSeeAllHands'), reveal);
+reveal.uiToggleHostSeeAllHands();
+assert(reveal.hostSeeAllHands && !reveal.showParDuringAuction,
+    'ouvrir 4 mains ne redemarre pas sur les encheres');
+assert(reveal.suppressedDuringRender, 'PAR non protege lors de la reactivation');
+assert(!stackForReveal.classList.contains('suppress-par-reveal'),
+    'protection PAR reste active apres le rendu');
+
+reveal.uiToggleHostSeeAllHands();
+assert(!reveal.hostSeeAllHands && !reveal.suppressedDuringRender,
+    'fermer les 4 mains applique a tort la protection');
+reveal.isAuctionParViewActive = () => true;
+reveal.showParDuringAuction = true;
+reveal.uiToggleHostSeeAllHands();
+assert(reveal.hostSeeAllHands && reveal.showParDuringAuction && !reveal.suppressedDuringRender,
+    'ouvrir 4 mains pendant un PAR explicite modifie ce dernier');
+
+// Les nouvelles protections de vue ne doivent jamais rester bloquees apres erreur.
+reveal.isAuctionParViewActive = () => false;
+reveal.hostSeeAllHands = false;
+reveal.checkAuctionEnd = () => { throw Error('erreur volontaire de rendu'); };
+assert.throws(() => reveal.uiToggleHostSeeAllHands(), /erreur volontaire de rendu/);
+assert(!stackForReveal.classList.contains('suppress-par-reveal'),
+    'erreur de rendu laisse le panneau PAR invisible');
+
 console.log('PLAY PAR manuel / 4 mains gate PASS');
