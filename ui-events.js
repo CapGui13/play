@@ -85,6 +85,7 @@
             case 'toggle-hcp': return call('uiToggleShowHcp');
             case 'toggle-kr': return call('uiToggleShowKr');
             case 'toggle-all-hands': return call('uiToggleHostSeeAllHands');
+            case 'toggle-auto-par-four-hands': return call('uiToggleAutoParFourHands');
             case 'toggle-hand-strip': return call('uiToggleHandStrip');
             case 'toggle-ledger-names': return call('uiToggleLedgerNames');
             case 'toggle-par': return call('uiToggleParBiddingView');
